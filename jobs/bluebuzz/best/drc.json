@@ -1,7 +1,7 @@
 {
   "$schema": "https://schemas.kicad.org/drc.v1.json",
   "coordinate_units": "mm",
-  "date": "2026-10-22T21:09:02.40010734Z",
+  "date": "2026-10-22T22:00:45.697180248Z",
   "kicad_version": "N/A",
   "copperroute_version": "Copperroute 0.1.0",
   "source": "bluebuzz-rm2.dsn",
@@ -3370,229 +3370,6 @@
       "type": "unconnected_items"
     },
     {
-      "description": "Unconnected items: Pin [MOTOR1_SW] and Pin [MOTOR1_SW] (27 total items in net)",
-      "items": [
-        {
-          "description": "Pin [MOTOR1_SW]",
-          "pos": {
-            "x": 92.9625,
-            "y": -123.3
-          },
-          "uuid": "1786"
-        },
-        {
-          "description": "Pin [MOTOR1_SW]",
-          "pos": {
-            "x": 91.85,
-            "y": -126.5
-          },
-          "uuid": "1841"
-        },
-        {
-          "description": "Trace [MOTOR1_SW]",
-          "pos": {
-            "x": 91.85,
-            "y": -126.275
-          },
-          "uuid": "3391"
-        },
-        {
-          "description": "Trace [MOTOR1_SW]",
-          "pos": {
-            "x": 91.9,
-            "y": -126
-          },
-          "uuid": "3392"
-        },
-        {
-          "description": "Trace [MOTOR1_SW]",
-          "pos": {
-            "x": 91.95,
-            "y": -125.2
-          },
-          "uuid": "3393"
-        },
-        {
-          "description": "Trace [MOTOR1_SW]",
-          "pos": {
-            "x": 92.2,
-            "y": -124.2
-          },
-          "uuid": "3394"
-        },
-        {
-          "description": "Trace [MOTOR1_SW]",
-          "pos": {
-            "x": 92.45,
-            "y": -123.9
-          },
-          "uuid": "3395"
-        },
-        {
-          "description": "Trace [MOTOR1_SW]",
-          "pos": {
-            "x": 92.6,
-            "y": -123.7
-          },
-          "uuid": "3396"
-        },
-        {
-          "description": "Trace [MOTOR1_SW]",
-          "pos": {
-            "x": 92.75,
-            "y": -123.5
-          },
-          "uuid": "3397"
-        },
-        {
-          "description": "Trace [MOTOR1_SW]",
-          "pos": {
-            "x": 92.85625,
-            "y": -123.375
-          },
-          "uuid": "3398"
-        },
-        {
-          "description": "Trace [MOTOR1_SW]",
-          "pos": {
-            "x": 99.925,
-            "y": -124.425
-          },
-          "uuid": "3399"
-        },
-        {
-          "description": "Trace [MOTOR1_SW]",
-          "pos": {
-            "x": 99.85,
-            "y": -124.5
-          },
-          "uuid": "3400"
-        },
-        {
-          "description": "Trace [MOTOR1_SW]",
-          "pos": {
-            "x": 99.5,
-            "y": -124.9
-          },
-          "uuid": "3401"
-        },
-        {
-          "description": "Trace [MOTOR1_SW]",
-          "pos": {
-            "x": 98.6,
-            "y": -125.25
-          },
-          "uuid": "3402"
-        },
-        {
-          "description": "Trace [MOTOR1_SW]",
-          "pos": {
-            "x": 97.9,
-            "y": -125.4
-          },
-          "uuid": "3403"
-        },
-        {
-          "description": "Trace [MOTOR1_SW]",
-          "pos": {
-            "x": 96.05,
-            "y": -125.55
-          },
-          "uuid": "3404"
-        },
-        {
-          "description": "Trace [MOTOR1_SW]",
-          "pos": {
-            "x": 94.15,
-            "y": -125.75
-          },
-          "uuid": "3405"
-        },
-        {
-          "description": "Trace [MOTOR1_SW]",
-          "pos": {
-            "x": 93.65,
-            "y": -125.95
-          },
-          "uuid": "3406"
-        },
-        {
-          "description": "Trace [MOTOR1_SW]",
-          "pos": {
-            "x": 93.3,
-            "y": -126
-          },
-          "uuid": "3407"
-        },
-        {
-          "description": "Trace [MOTOR1_SW]",
-          "pos": {
-            "x": 92.9,
-            "y": -126.05
-          },
-          "uuid": "3408"
-        },
-        {
-          "description": "Trace [MOTOR1_SW]",
-          "pos": {
-            "x": 92.5,
-            "y": -126.1
-          },
-          "uuid": "3409"
-        },
-        {
-          "description": "Trace [MOTOR1_SW]",
-          "pos": {
-            "x": 92.35,
-            "y": -126.15
-          },
-          "uuid": "3410"
-        },
-        {
-          "description": "Trace [MOTOR1_SW]",
-          "pos": {
-            "x": 92.2,
-            "y": -126.2
-          },
-          "uuid": "3411"
-        },
-        {
-          "description": "Trace [MOTOR1_SW]",
-          "pos": {
-            "x": 92.1,
-            "y": -126.25
-          },
-          "uuid": "3412"
-        },
-        {
-          "description": "Trace [MOTOR1_SW]",
-          "pos": {
-            "x": 91.95,
-            "y": -126.375
-          },
-          "uuid": "3413"
-        },
-        {
-          "description": "Trace [MOTOR1_SW]",
-          "pos": {
-            "x": 100,
-            "y": -123.8
-          },
-          "uuid": "3672"
-        },
-        {
-          "description": "Pin [MOTOR1_SW]",
-          "pos": {
-            "x": 100,
-            "y": -123.8
-          },
-          "uuid": "991"
-        }
-      ],
-      "severity": "warning",
-      "type": "unconnected_items"
-    },
-    {
       "description": "Unconnected items: Pin [MOTOR2_PWM] and Pin [MOTOR2_PWM] (6 total items in net)",
       "items": [
         {
@@ -3840,12 +3617,12 @@
             "x": 107.03775,
             "y": -123.3
           },
-          "uuid": "3870"
+          "uuid": "3871"
         },
         {
           "description": "Pin [MOTOR2_SW]",
           "pos": {
-            "x": 102,
+            "x": 101.5,
             "y": -123.8
           },
           "uuid": "992"
@@ -5020,7 +4797,7 @@
             "x": 101.73775,
             "y": -123.65
           },
-          "uuid": "3887"
+          "uuid": "3888"
         },
         {
           "description": "Trace [USB_DM]",
@@ -5028,7 +4805,7 @@
             "x": 101.73775,
             "y": -125.35
           },
-          "uuid": "3888"
+          "uuid": "3889"
         },
         {
           "description": "Pin [USB_DM]",
@@ -6073,7 +5850,7 @@
             "x": 97.55,
             "y": -128.5525
           },
-          "uuid": "3891"
+          "uuid": "3892"
         },
         {
           "description": "Trace [VBUS]",
@@ -6081,7 +5858,7 @@
             "x": 102.45,
             "y": -128.5525
           },
-          "uuid": "3892"
+          "uuid": "3893"
         },
         {
           "description": "Pin [VBUS]",
@@ -7525,5 +7302,5 @@
     }
   ],
   "schematic_parity": [],
-  "quality_score": 781.240478515625
+  "quality_score": 786.44873046875
 }
