@@ -34,3 +34,22 @@ Source: `~/pcb/rp2350-motor-controller/hardware/tools` (branch `rev-b-fixes`) an
 - pcbnew courtyard polygons are about 45 µm smaller than what DRC tests.
 - Uniform position scaling is illegal at any k > 1.
 - Net-length caps need an absolute floor.
+
+## Status (2026-10-22)
+
+Ported into `copper-morph` (fork branch `governance`), each with tests that check the result against the independent DRC:
+
+| settle piece | Rust | Notes |
+|---|---|---|
+| Admissibility oracle, floors, grandfathering, line search | `MoveOracle::line_search` | Exact shape gaps against the stricter of the router's clearance matrix and the DRC's net-class rule. Grandfathered pairs may not lose distance |
+| Pressure | `push` | Blocked parts push free blockers aside, recursively |
+| Group pass | `group_step` | Wedged parts move as a convoy |
+| Copper pass | `translate_shoving` | The router's own forced-pad push-and-shove; attached traces dragged; DRC judges the dragged copper |
+| Warp field (rubber/pcbmorph) | `WarpField`, `translate_warping` | CG on the reduced SPD system; rubber's claim rounds; traces split at 0.5 mm and at junctions; shared corners anchored |
+| Stall reroute | soft mode rips overrun copper | The router re-plans it |
+| Ghosts and site search | `place_shoving`, `place_near_partners` | Born full size; the shove engine moves copper recursively |
+| Net-length caps | inside `translate_shoving` / `translate_warping` | `max(1.25 L0, L0 + 4 mm)`; did not bind on the test board |
+| Driver | `MoveOracle::settle`, `copperroute settle` | Gentlest move first: warp, then shove, then push, then group |
+| Escape-driven targets (new) | `--backend nudge` | Bluebuzz 18 → 17 by moving J4 0.5 mm (approved) |
+
+Not ported: length springs (pull-back below the cap), part mobility weights, trajectory snapshots and animation, the KiCad emit/refill/gate pipeline (the DRC on the re-imported session plays the gate's role).
