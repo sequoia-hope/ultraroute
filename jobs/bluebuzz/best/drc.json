@@ -1,7 +1,7 @@
 {
   "$schema": "https://schemas.kicad.org/drc.v1.json",
   "coordinate_units": "mm",
-  "date": "2026-10-22T20:33:12.544326085Z",
+  "date": "2026-10-22T21:09:02.40010734Z",
   "kicad_version": "N/A",
   "copperroute_version": "Copperroute 0.1.0",
   "source": "bluebuzz-rm2.dsn",
@@ -622,7 +622,7 @@
             "x": 95.5,
             "y": -117.71225
           },
-          "uuid": "3825"
+          "uuid": "3832"
         },
         {
           "description": "Conduction Area [3V3_SYS]",
@@ -1822,7 +1822,7 @@
             "x": 98.956,
             "y": -109.5
           },
-          "uuid": "3819"
+          "uuid": "3826"
         },
         {
           "description": "Trace [3V3_SYS]",
@@ -1830,7 +1830,7 @@
             "x": 98.956,
             "y": -113.5
           },
-          "uuid": "3820"
+          "uuid": "3827"
         },
         {
           "description": "Trace [3V3_SYS]",
@@ -1838,7 +1838,7 @@
             "x": 101.2,
             "y": -115.744
           },
-          "uuid": "3821"
+          "uuid": "3828"
         },
         {
           "description": "Trace [3V3_SYS]",
@@ -1846,7 +1846,7 @@
             "x": 105.844,
             "y": -112.3
           },
-          "uuid": "3822"
+          "uuid": "3829"
         },
         {
           "description": "Trace [3V3_SYS]",
@@ -1854,7 +1854,7 @@
             "x": 105.2,
             "y": -115.744
           },
-          "uuid": "3824"
+          "uuid": "3831"
         }
       ],
       "severity": "warning",
@@ -2237,7 +2237,7 @@
             "x": 98.956,
             "y": -111.5
           },
-          "uuid": "3826"
+          "uuid": "3833"
         },
         {
           "description": "Pin [1V1]",
@@ -2620,7 +2620,7 @@
             "x": 105.71225,
             "y": -104.6
           },
-          "uuid": "3827"
+          "uuid": "3834"
         },
         {
           "description": "Trace [3V3_SENS]",
@@ -2628,7 +2628,7 @@
             "x": 104.82419999999999,
             "y": -95.05925
           },
-          "uuid": "3828"
+          "uuid": "3835"
         },
         {
           "description": "Trace [3V3_SENS]",
@@ -2636,7 +2636,7 @@
             "x": 102.7165,
             "y": -90.298
           },
-          "uuid": "3829"
+          "uuid": "3836"
         },
         {
           "description": "Trace [3V3_SENS]",
@@ -2644,31 +2644,31 @@
             "x": 101.879,
             "y": -90.7005
           },
-          "uuid": "3830"
+          "uuid": "3837"
         },
         {
           "description": "Trace [3V3_SENS]",
           "pos": {
-            "x": 105.55545,
-            "y": -103.15665
+            "x": 105.55539999999999,
+            "y": -103.1565
           },
-          "uuid": "3831"
+          "uuid": "3838"
         },
         {
           "description": "Via [3V3_SENS]",
           "pos": {
-            "x": 105.3984,
-            "y": -102.6633
+            "x": 105.3983,
+            "y": -102.663
           },
-          "uuid": "3832"
+          "uuid": "3839"
         },
         {
           "description": "Trace [3V3_SENS]",
           "pos": {
-            "x": 106.2589,
-            "y": -100.85289999999999
+            "x": 106.25885000000001,
+            "y": -100.85275
           },
-          "uuid": "3833"
+          "uuid": "3840"
         },
         {
           "description": "Via [3V3_SENS]",
@@ -2676,7 +2676,7 @@
             "x": 106.6154,
             "y": -99.0425
           },
-          "uuid": "3834"
+          "uuid": "3841"
         },
         {
           "description": "Trace [3V3_SENS]",
@@ -2684,7 +2684,7 @@
             "x": 105.71225,
             "y": -103.65
           },
-          "uuid": "3836"
+          "uuid": "3843"
         },
         {
           "description": "Pin [3V3_SENS]",
@@ -2732,7 +2732,7 @@
             "x": 101.46075,
             "y": -134.475
           },
-          "uuid": "3835"
+          "uuid": "3842"
         }
       ],
       "severity": "warning",
@@ -3355,7 +3355,7 @@
             "x": 89.65,
             "y": -110.61225
           },
-          "uuid": "3854"
+          "uuid": "3861"
         },
         {
           "description": "Pin [LDO_EN]",
@@ -3840,7 +3840,7 @@
             "x": 107.03775,
             "y": -123.3
           },
-          "uuid": "3863"
+          "uuid": "3870"
         },
         {
           "description": "Pin [MOTOR2_SW]",
@@ -4525,16 +4525,8 @@
       "type": "unconnected_items"
     },
     {
-      "description": "Unconnected items: Pin [TAC_SDO] and Pin [TAC_SDO] (62 total items in net)",
+      "description": "Unconnected items: Pin [TAC_SDO] and Pin [TAC_SDO] (56 total items in net)",
       "items": [
-        {
-          "description": "Pin [TAC_SDO]",
-          "pos": {
-            "x": 100.725,
-            "y": -135.775
-          },
-          "uuid": "766"
-        },
         {
           "description": "Pin [TAC_SDO]",
           "pos": {
@@ -4976,52 +4968,12 @@
           "uuid": "3749"
         },
         {
-          "description": "Trace [TAC_SDO]",
-          "pos": {
-            "x": 106.35005,
-            "y": -126.72225
-          },
-          "uuid": "3880"
-        },
-        {
-          "description": "Trace [TAC_SDO]",
-          "pos": {
-            "x": 111.50689999999999,
-            "y": -116.25255
-          },
-          "uuid": "3881"
-        },
-        {
-          "description": "Trace [TAC_SDO]",
-          "pos": {
-            "x": 100.83064999999999,
-            "y": -136.2322
-          },
-          "uuid": "3882"
-        },
-        {
-          "description": "Via [TAC_SDO]",
-          "pos": {
-            "x": 100.9363,
-            "y": -136.6894
-          },
-          "uuid": "3883"
-        },
-        {
-          "description": "Via [TAC_SDO]",
-          "pos": {
-            "x": 111.7638,
-            "y": -116.7551
-          },
-          "uuid": "3884"
-        },
-        {
           "description": "Pin [TAC_SDO]",
           "pos": {
             "x": 100.725,
-            "y": -90.975
+            "y": -135.775
           },
-          "uuid": "746"
+          "uuid": "766"
         }
       ],
       "severity": "warning",
@@ -5068,7 +5020,7 @@
             "x": 101.73775,
             "y": -123.65
           },
-          "uuid": "3886"
+          "uuid": "3887"
         },
         {
           "description": "Trace [USB_DM]",
@@ -5076,7 +5028,7 @@
             "x": 101.73775,
             "y": -125.35
           },
-          "uuid": "3887"
+          "uuid": "3888"
         },
         {
           "description": "Pin [USB_DM]",
@@ -6121,7 +6073,7 @@
             "x": 97.55,
             "y": -128.5525
           },
-          "uuid": "3890"
+          "uuid": "3891"
         },
         {
           "description": "Trace [VBUS]",
@@ -6129,7 +6081,7 @@
             "x": 102.45,
             "y": -128.5525
           },
-          "uuid": "3891"
+          "uuid": "3892"
         },
         {
           "description": "Pin [VBUS]",
@@ -7573,5 +7525,5 @@
     }
   ],
   "schematic_parity": [],
-  "quality_score": 776.031982421875
+  "quality_score": 781.240478515625
 }

@@ -110,7 +110,7 @@ footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
       <tr><td>ripup history ×1</td><td>23/42</td><td>88</td><td>189</td><td>311</td></tr>
       <tr><td>ripup history ×2</td><td>23/42</td><td>86</td><td>178</td><td>335</td></tr>
       <tr><td>obstacle-aware heuristic (vs its own base build: 23/42, 81, 122, 284)</td><td>23/42</td><td>87</td><td>119</td><td>275</td><td><b>Neutral, 2.2× slower.</b> 35 of 42 boards unchanged; slightly fewer vias and violations. Abakus_Main lost 6 connections, taking 100 s vs 30 s (search budgets). Bluebuzz: 18, but shortest copper yet (153.7 mm), the new best. Stays opt-in; next fix is caching the field per net</td></tr>
-      <tr><td>region history (PathFinder over space)</td><td colspan="4" class="todo">bluebuzz and corpus running</td><td>DAC2020 bm01: ×0.25 closes the last connection (one board, not evidence)</td></tr>
+      <tr><td>region history (PathFinder over space)</td><td colspan="4" class="todo">corpus running</td><td>Bluebuzz: 18 at every factor. With fanout off and the heuristic, ×0.25 gives <b>9 vias</b> (best yet). Without those, it costs copper (184–205 mm)</td></tr>
     </table>
     <p style="color:var(--muted);font-size:.85rem;margin-bottom:0">Same 42 PCBench boards, serial, 100 passes, 120 s each. <a href="copperroute/benchmark/reports/hist-20261022.html">History report</a>, <a href="copperroute/benchmark/reports/e1-20261022.html">heuristic report</a>.</p>
   </section>
@@ -119,7 +119,7 @@ footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
     <h2>Route job: bluebuzz</h2>
     <p>Input is the tamed DSN <code>route.py</code> feeds Freerouting (bluebuzz <code>6c5bd5e</code>): 6 layers with only 3 routable, 696 keepouts, and 38 connections open before routing. Every attempt is scored by the same <code>copperroute drc</code> against the bare input. <a href="jobs/bluebuzz/leaderboard.csv">Leaderboard</a> (24 attempts), <a href="jobs/bluebuzz/best/recipe.json">best recipe</a>.</p>
     <ul>
-      <li><b>Best: 18 unconnected</b>, 0 new violations, 10 vias, 153.7 mm, 91 s. Recipe: CopperRoute with <code>--set router.fanout.enabled=false</code> and <code>COPPERROUTE_OBSTACLE_HEURISTIC=1</code>. Without the heuristic: 157.9 mm in 51 s</li>
+      <li><b>Best: 18 unconnected</b>, 0 new violations, <b>9 vias</b>, 163.9 mm. Recipe: <code>--set router.fanout.enabled=false</code>, <code>COPPERROUTE_OBSTACLE_HEURISTIC=1</code> and <code>COPPERROUTE_REGION_HISTORY=0.25</code>. Shortest copper: 153.7 mm with 10 vias (heuristic only)</li>
       <li>Freerouting 2.4.1 governed: also 18, but 173 mm, 249 s, 1.3 GB. Freerouting master stalls past 600 s</li>
       <li>Ripup history (factors 0.25–4): no effect. Bluebuzz's failures aren't nets fighting over space</li>
       <li>Obstacle-aware heuristic: also 18. It's sharper in only about 1% of searches, but there by up to 11.6×</li>
@@ -141,6 +141,7 @@ footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
         <li class="done">Fork pushed: <a href="https://github.com/sequoia-hope/copperroute/tree/governance">sequoia-hope/copperroute@governance</a>; default job timeout now 30 min</li>
         <li class="done"><code>tools/route_job.py</code>: governed portfolio routing per board, keeps the best session and its recipe</li>
         <li class="done">Opt-in per-net ripup history (PathFinder history term), <code>COPPERROUTE_RIPUP_HISTORY</code></li>
+        <li class="done"><code>copper-morph</code> move oracle, ported from settle (lean-jiggle): exact-shape clearance conflicts with grandfathering, guard band, bisection line search. Attached routable copper is ripped for the router; fixed copper pins the part. Independent DRC confirms moves on tomu-fpga add no violations</li>
         <li class="done">Opt-in obstacle-aware admissible heuristic (survey E1), <code>COPPERROUTE_OBSTACLE_HEURISTIC</code>: per-run coarse obstacle grid plus a backward Dijkstra per search, <code>h = max(box, coarse)</code>, byte-identical when off</li>
       </ul>
     </section>

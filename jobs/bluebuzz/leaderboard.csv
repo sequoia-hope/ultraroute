@@ -1,16 +1,23 @@
 name,router,unconnected,new_violations,vias,length_mm,wall_s,peak_rss_mb,exit,args,env,finished_at
+cr-region0.25-nofan-e1,copperroute,18,0,9,163.9,106.3,409,0,--set router.fanout.enabled=false,"{""COPPERROUTE_REGION_HISTORY"": ""0.25"", ""COPPERROUTE_OBSTACLE_HEURISTIC"": ""1""}",2026-10-22T14:09:02
+cr-region0.25-nofan,copperroute,18,0,9,166.3,83.2,398,0,--set router.fanout.enabled=false,"{""COPPERROUTE_REGION_HISTORY"": ""0.25""}",2026-10-22T14:04:03
 cr-e1-nofan,copperroute,18,0,10,153.7,91.0,408,0,--set router.fanout.enabled=false,"{""COPPERROUTE_OBSTACLE_HEURISTIC"": ""1""}",2026-10-22T13:33:12
 cr-e1-nofan-search4m,copperroute,18,0,10,153.7,81.4,410,0,--set router.fanout.enabled=false --set router.connection_search_steps=4000000,"{""COPPERROUTE_OBSTACLE_HEURISTIC"": ""1""}",2026-10-22T13:36:14
 cr-no-fanout,copperroute,18,0,10,157.9,50.8,397,0,--set router.fanout.enabled=false,{},2026-10-22T12:39:18
 fr-2.4.1,freerouting,18,0,10,173.4,249.2,1305,0,-mp 100 -mt 1,{},2026-10-22T12:45:40
+cr-region0.5-nofan,copperroute,18,0,11,184.7,77.4,114,0,--set router.fanout.enabled=false,"{""COPPERROUTE_REGION_HISTORY"": ""0.5""}",2026-10-22T14:07:15
+cr-region0.1-nofan,copperroute,18,0,11,196.3,55.1,133,0,--set router.fanout.enabled=false,"{""COPPERROUTE_REGION_HISTORY"": ""0.1""}",2026-10-22T14:00:54
 cr-e1-hist1-nofan,copperroute,18,0,12,189.1,89.6,125,0,--set router.fanout.enabled=false,"{""COPPERROUTE_OBSTACLE_HEURISTIC"": ""1"", ""COPPERROUTE_RIPUP_HISTORY"": ""1""}",2026-10-22T13:37:44
 cr-nofan-hist0.5,copperroute,18,0,12,193.4,64.6,112,0,--set router.fanout.enabled=false,"{""COPPERROUTE_RIPUP_HISTORY"": ""0.5""}",2026-10-22T13:06:25
 cr-nofan-hist1,copperroute,18,0,12,193.4,60.7,112,0,--set router.fanout.enabled=false,"{""COPPERROUTE_RIPUP_HISTORY"": ""1""}",2026-10-22T13:07:26
 cr-nofan-hist2,copperroute,18,0,12,193.4,61.9,111,0,--set router.fanout.enabled=false,"{""COPPERROUTE_RIPUP_HISTORY"": ""2""}",2026-10-22T13:08:28
+cr-region0.25,copperroute,18,0,13,204.9,105.3,164,0,,"{""COPPERROUTE_REGION_HISTORY"": ""0.25""}",2026-10-22T14:02:39
 cr-nofan-via10,copperroute,18,0,15,151.1,75.5,365,0,--set router.fanout.enabled=false --set router.scoring.via_costs=10,{},2026-10-22T13:09:44
 cr-nofan-via10-hist1,copperroute,18,0,15,151.1,73.0,366,0,--set router.fanout.enabled=false --set router.scoring.via_costs=10,"{""COPPERROUTE_RIPUP_HISTORY"": ""1""}",2026-10-22T13:10:57
+cr-region0.5,copperroute,18,0,15,204.1,114.8,165,0,,"{""COPPERROUTE_REGION_HISTORY"": ""0.5""}",2026-10-22T14:05:58
 cr-e1-nofan-via10,copperroute,18,0,16,176.5,100.5,375,0,--set router.fanout.enabled=false --set router.scoring.via_costs=10,"{""COPPERROUTE_OBSTACLE_HEURISTIC"": ""1""}",2026-10-22T13:34:53
 cr-via10-search4m,copperroute,18,0,17,184.9,64.8,209,0,--set router.scoring.via_costs=10 --set router.connection_search_steps=4000000,{},2026-10-22T12:41:30
+cr-region0.1,copperroute,18,0,17,198.1,91.5,165,0,,"{""COPPERROUTE_REGION_HISTORY"": ""0.1""}",2026-10-22T13:59:58
 cr-via10,copperroute,18,0,18,197.5,77.9,164,0,--set router.scoring.via_costs=10,{},2026-10-22T12:34:58
 cr-via20,copperroute,19,0,10,141.1,54.6,170,0,--set router.scoring.via_costs=20,{},2026-10-22T12:33:39
 cr-ripup300,copperroute,19,0,12,124.2,73.0,315,0,--set router.scoring.start_ripup_costs=300,{},2026-10-22T12:37:20

@@ -1,29 +1,30 @@
 {
   "config": {
-    "name": "cr-e1-nofan",
+    "name": "cr-region0.25-nofan-e1",
     "router": "copperroute",
-    "binary": "/home/sequoia/Software/ultraroute/copperroute/target-e1/release/copperroute",
+    "binary": "/home/sequoia/Software/ultraroute/copperroute/target-rh/release/copperroute",
     "args": [
       "--set",
       "router.fanout.enabled=false"
     ],
     "env": {
+      "COPPERROUTE_REGION_HISTORY": "0.25",
       "COPPERROUTE_OBSTACLE_HEURISTIC": "1"
     }
   },
   "score": {
-    "name": "cr-e1-nofan",
+    "name": "cr-region0.25-nofan-e1",
     "router": "copperroute",
     "exit": 0,
-    "wall_s": "91.0",
-    "peak_rss_mb": 408,
+    "wall_s": "106.3",
+    "peak_rss_mb": 409,
     "args": "--set router.fanout.enabled=false",
-    "env": "{\"COPPERROUTE_OBSTACLE_HEURISTIC\": \"1\"}",
-    "finished_at": "2026-10-22T13:33:12",
+    "env": "{\"COPPERROUTE_REGION_HISTORY\": \"0.25\", \"COPPERROUTE_OBSTACLE_HEURISTIC\": \"1\"}",
+    "finished_at": "2026-10-22T14:09:02",
     "unconnected": 18,
     "new_violations": 0,
-    "vias": 10,
-    "length_mm": "153.7"
+    "vias": 9,
+    "length_mm": "163.9"
   },
   "input_dsn": "bluebuzz-rm2.dsn",
   "copperroute": "/home/sequoia/Software/ultraroute/copperroute/target/release/copperroute",
