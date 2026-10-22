@@ -120,7 +120,7 @@ footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
 
   <section class="card" id="bluebuzz">
     <h2>Route job: bluebuzz</h2>
-    <p>Input is the tamed DSN <code>route.py</code> feeds Freerouting (bluebuzz <code>6c5bd5e</code>): 6 layers with only 3 routable, 696 keepouts, and 38 connections open before routing. Every attempt is scored by the same <code>copperroute drc</code> against the bare input. <a href="jobs/bluebuzz/leaderboard.csv">Leaderboard</a> (24 attempts), <a href="jobs/bluebuzz/best/recipe.json">best recipe</a>.</p>
+    <p>Input is the tamed DSN <code>route.py</code> feeds Freerouting (bluebuzz <code>6c5bd5e</code>): 6 layers with only 3 routable, 696 keepouts, and 38 connections open before routing. Every attempt is scored by the same <code>copperroute drc</code> against the bare input. "Unconnected" counts <i>nets</i> with an open connection: the DRC lists one entry per such net, not one per missing connection. <a href="jobs/bluebuzz/leaderboard.csv">Leaderboard</a> (24 attempts), <a href="jobs/bluebuzz/best/recipe.json">best recipe</a>.</p>
     <ul>
       <li><b>Best: 13 unconnected</b>, 0 new violations, no part moved. Recipe: <code>--backend grid --set router.fanout.enabled=false</code> with <code>COPPERROUTE_GRID_CELL_MM=0.05</code> (225 s, RTX 3060). More copper than maze: 21 vias, 279 mm. At 0.1 mm: 14 unconnected, 12 vias, 103 s</li>
       <li>Nudge (J4 −0.5 mm, approved): 17 unconnected, 9 vias. Grid and nudge haven't been combined yet</li>
