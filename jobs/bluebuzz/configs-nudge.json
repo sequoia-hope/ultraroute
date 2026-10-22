@@ -1,0 +1,28 @@
+[
+ {
+  "name": "cr-nudge-nofan",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target/release/copperroute",
+  "args": [
+   "--backend",
+   "nudge",
+   "--set",
+   "router.fanout.enabled=false"
+  ]
+ },
+ {
+  "name": "cr-nudge-nofan-e1-region0.25",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target/release/copperroute",
+  "args": [
+   "--backend",
+   "nudge",
+   "--set",
+   "router.fanout.enabled=false"
+  ],
+  "env": {
+   "COPPERROUTE_REGION_HISTORY": "0.25",
+   "COPPERROUTE_OBSTACLE_HEURISTIC": "1"
+  }
+ }
+]
