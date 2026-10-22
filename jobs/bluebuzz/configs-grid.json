@@ -1,0 +1,51 @@
+[
+ {
+  "name": "cr-grid-nofan",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-dev/release/copperroute",
+  "args": [
+   "--backend",
+   "grid",
+   "--set",
+   "router.fanout.enabled=false"
+  ]
+ },
+ {
+  "name": "cr-grid",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-dev/release/copperroute",
+  "args": [
+   "--backend",
+   "grid"
+  ]
+ },
+ {
+  "name": "cr-grid005-nofan",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-dev/release/copperroute",
+  "args": [
+   "--backend",
+   "grid",
+   "--set",
+   "router.fanout.enabled=false"
+  ],
+  "env": {
+   "COPPERROUTE_GRID_CELL_MM": "0.05"
+  }
+ },
+ {
+  "name": "cr-grid-nofan-e1-region0.25",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-dev/release/copperroute",
+  "args": [
+   "--backend",
+   "grid",
+   "--set",
+   "router.fanout.enabled=false"
+  ],
+  "env": {
+   "COPPERROUTE_OBSTACLE_HEURISTIC": "1",
+   "COPPERROUTE_REGION_HISTORY": "0.25"
+  }
+ }
+]
