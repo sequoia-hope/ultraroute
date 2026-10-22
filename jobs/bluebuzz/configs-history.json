@@ -1,0 +1,120 @@
+[
+ {
+  "name": "cr-hist0.25",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-dev/release/copperroute",
+  "args": [],
+  "env": {
+   "COPPERROUTE_RIPUP_HISTORY": "0.25"
+  }
+ },
+ {
+  "name": "cr-hist0.5",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-dev/release/copperroute",
+  "args": [],
+  "env": {
+   "COPPERROUTE_RIPUP_HISTORY": "0.5"
+  }
+ },
+ {
+  "name": "cr-hist1",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-dev/release/copperroute",
+  "args": [],
+  "env": {
+   "COPPERROUTE_RIPUP_HISTORY": "1"
+  }
+ },
+ {
+  "name": "cr-hist2",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-dev/release/copperroute",
+  "args": [],
+  "env": {
+   "COPPERROUTE_RIPUP_HISTORY": "2"
+  }
+ },
+ {
+  "name": "cr-hist4",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-dev/release/copperroute",
+  "args": [],
+  "env": {
+   "COPPERROUTE_RIPUP_HISTORY": "4"
+  }
+ },
+ {
+  "name": "cr-hist1-search4m",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-dev/release/copperroute",
+  "args": [
+   "--set",
+   "router.connection_search_steps=4000000"
+  ],
+  "env": {
+   "COPPERROUTE_RIPUP_HISTORY": "1"
+  }
+ },
+ {
+  "name": "cr-nofan-hist0.5",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-dev/release/copperroute",
+  "args": [
+   "--set",
+   "router.fanout.enabled=false"
+  ],
+  "env": {
+   "COPPERROUTE_RIPUP_HISTORY": "0.5"
+  }
+ },
+ {
+  "name": "cr-nofan-hist1",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-dev/release/copperroute",
+  "args": [
+   "--set",
+   "router.fanout.enabled=false"
+  ],
+  "env": {
+   "COPPERROUTE_RIPUP_HISTORY": "1"
+  }
+ },
+ {
+  "name": "cr-nofan-hist2",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-dev/release/copperroute",
+  "args": [
+   "--set",
+   "router.fanout.enabled=false"
+  ],
+  "env": {
+   "COPPERROUTE_RIPUP_HISTORY": "2"
+  }
+ },
+ {
+  "name": "cr-nofan-via10",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-dev/release/copperroute",
+  "args": [
+   "--set",
+   "router.fanout.enabled=false",
+   "--set",
+   "router.scoring.via_costs=10"
+  ]
+ },
+ {
+  "name": "cr-nofan-via10-hist1",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-dev/release/copperroute",
+  "args": [
+   "--set",
+   "router.fanout.enabled=false",
+   "--set",
+   "router.scoring.via_costs=10"
+  ],
+  "env": {
+   "COPPERROUTE_RIPUP_HISTORY": "1"
+  }
+ }
+]

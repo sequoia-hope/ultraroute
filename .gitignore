@@ -1,0 +1,13 @@
+# Separate checkouts with their own history
+/copperroute/
+/copperroute-main/
+/freerouting/
+/PCBench/
+
+# Logs and bulky per-attempt outputs; leaderboards, best results and recipes are kept
+*.log
+/jobs/*/runs/
+/jobs/*/e1/grid/
+/jobs/*/e1/*.ses
+/jobs/*/e1/stats*.txt
+__pycache__/

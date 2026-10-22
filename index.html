@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ultraroute — status</title>
+<style>
+/* Same palette as the hub dashboard, so a project page and the project list
+   read as one system when you tab between them. */
+:root {
+  --bg: #f6f7f9; --card: #ffffff; --line: #e2e5ea; --fg: #14171c;
+  --muted: #5f6875; --accent: #2f6feb; --up: #1a9c5b; --warn: #b7791f;
+  --down: #98a1ae; --chip: #eef1f5;
+  --shadow: 0 1px 2px rgba(16,20,28,.06), 0 4px 12px rgba(16,20,28,.05);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1116; --card: #171b22; --line: #262c36; --fg: #e6e9ee;
+    --muted: #8b94a3; --accent: #5b9bff; --up: #35c07d; --warn: #d9a441;
+    --down: #4d5563; --chip: #222833; --shadow: none;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  padding: 0 0 3rem;
+}
+header, main, footer { max-width: 900px; margin: 0 auto; padding: 0 1.25rem; }
+header { padding-top: 1.75rem; padding-bottom: 1rem; }
+.title { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+h1 { font-size: 1.5rem; margin: 0; letter-spacing: -.015em; }
+h2 {
+  font-size: .78rem; margin: 0 0 .6rem; text-transform: uppercase;
+  letter-spacing: .08em; color: var(--muted); font-weight: 650;
+}
+.state {
+  display: inline-flex; align-items: center; gap: .4rem; border-radius: 999px;
+  padding: .2rem .65rem; font-size: .76rem; font-weight: 600;
+  background: var(--chip); border: 1px solid var(--line); color: var(--muted);
+}
+.state .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--down); }
+.state.active { color: var(--up); border-color: color-mix(in srgb, var(--up) 35%, var(--line)); }
+.state.active .dot { background: var(--up); box-shadow: 0 0 0 3px color-mix(in srgb, var(--up) 22%, transparent); }
+.state.blocked { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, var(--line)); }
+.state.blocked .dot { background: var(--warn); }
+.lede { color: var(--muted); font-size: .95rem; margin: .55rem 0 0; }
+main { display: grid; gap: .9rem; }
+.card {
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  padding: 1rem 1.1rem 1.1rem; box-shadow: var(--shadow);
+}
+.cols { display: grid; gap: .9rem; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+ul { margin: 0; padding-left: 1.15rem; }
+li { margin: .25rem 0; }
+ul.checks { list-style: none; padding-left: 0; }
+ul.checks li { display: flex; gap: .55rem; align-items: baseline; }
+ul.checks li::before { content: "○"; color: var(--muted); font-size: .9em; }
+ul.checks li.done { color: var(--muted); }
+ul.checks li.done::before { content: "●"; color: var(--up); }
+.log { display: grid; gap: .7rem; }
+.entry { display: grid; grid-template-columns: 5.5rem 1fr; gap: .75rem; align-items: baseline; }
+.entry time { color: var(--muted); font-size: .8rem; font-variant-numeric: tabular-nums; }
+.todo { color: var(--muted); font-style: italic; }
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em;
+  background: var(--chip); border: 1px solid var(--line);
+  border-radius: 5px; padding: .06em .35em;
+}
+a { color: var(--accent); }
+footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
+@media (max-width: 480px) { .entry { grid-template-columns: 1fr; gap: .1rem; } }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="title">
+    <h1>ultraroute</h1>
+    <span class="state active"><span class="dot"></span>Building</span>
+  </div>
+  <p class="lede">A fast, GPU-capable, host-friendly KiCad autorouter, built on a fork of CopperRoute, and a bench for comparing routing approaches.</p>
+</header>
+
+<main>
+
+  <section class="card">
+    <h2>Where it stands</h2>
+    <p>CopperRoute is cloned into <code>copperroute/</code> on a local <code>governance</code> branch. It builds, and its benchmark harness runs against KiCad-refereed PCBench boards. The router now governs itself by default: it runs niced, uses at most half the cores, and stops gracefully at a memory ceiling while still writing the session. Routing goes through a pluggable <code>RouterBackend</code> trait. <code>maze</code> is the existing router; <code>none</code> is the scoring floor. A wgpu probe confirms the RTX 3060 is usable over Vulkan with 64-bit atomics. No GPU routing exists yet. Nothing has been pushed anywhere.</p>
+  </section>
+
+  <section class="card" id="baseline">
+    <h2>Baseline</h2>
+    <p>42 KiCad-refereed PCBench boards, serial (<code>--jobs 1 --threads 1</code>), 100 passes, 120 s timeout. <a href="copperroute/benchmark/reports/baseline-20261022.html">Full report</a>.</p>
+    <table style="width:100%;border-collapse:collapse;font-size:.88rem;font-variant-numeric:tabular-nums">
+      <tr style="text-align:left;color:var(--muted)"><th>router</th><th>clean boards</th><th>unrouted</th><th>DRC viol.</th><th>vias</th><th>total wall</th><th>median wall</th></tr>
+      <tr><td>Freerouting (Java)</td><td>15 / 42</td><td>98</td><td>185</td><td>392</td><td>328 s</td><td>4.55 s</td></tr>
+      <tr><td>CopperRoute main</td><td>23 / 42</td><td>81</td><td>122</td><td>284</td><td>179 s</td><td>1.15 s</td></tr>
+      <tr><td>CopperRoute governed</td><td>23 / 42</td><td>81</td><td>122</td><td>284</td><td>176 s</td><td>1.05 s</td></tr>
+    </table>
+    <p style="color:var(--muted);font-size:.85rem;margin-bottom:0">Median per-board speedup of governed over Java is 4.5×, but this includes roughly 3 s of JVM startup on every board. On the slowest boards the gap shrinks to about 0.8–1.7×. Governed and main produce identical results on every board. CopperRoute still loses 10 boards to Java on quality: 6 on unrouted count, the rest on score ties.</p>
+  </section>
+
+  <section class="card" id="experiments">
+    <h2>Experiments</h2>
+    <table style="width:100%;border-collapse:collapse;font-size:.88rem;font-variant-numeric:tabular-nums">
+      <tr style="text-align:left;color:var(--muted)"><th>experiment</th><th>clean</th><th>unrouted</th><th>DRC viol.</th><th>vias</th><th>verdict</th></tr>
+      <tr><td>maze, no history (dev build)</td><td>23/42</td><td>81</td><td>122</td><td>284</td><td>reference</td></tr>
+      <tr><td>ripup history ×0.5</td><td>23/42</td><td>80</td><td>144</td><td>314</td><td rowspan="3"><b>Negative.</b> Per-net history makes the router detour around "expensive" nets with more vias and more violations. Stays off. Next variant: per-region history</td></tr>
+      <tr><td>ripup history ×1</td><td>23/42</td><td>88</td><td>189</td><td>311</td></tr>
+      <tr><td>ripup history ×2</td><td>23/42</td><td>86</td><td>178</td><td>335</td></tr>
+      <tr><td>obstacle-aware heuristic</td><td colspan="4" class="todo">corpus A/B queued</td><td>bluebuzz: no change (18)</td></tr>
+    </table>
+    <p style="color:var(--muted);font-size:.85rem;margin-bottom:0">Same 42 PCBench boards, serial, 100 passes, 120 s each. <a href="copperroute/benchmark/reports/hist-20261022.html">History report</a>.</p>
+  </section>
+
+  <section class="card" id="bluebuzz">
+    <h2>Route job: bluebuzz</h2>
+    <p>Input is the tamed DSN <code>route.py</code> feeds Freerouting (bluebuzz <code>6c5bd5e</code>): 6 layers with only 3 routable, 696 keepouts, and 38 connections open before routing. Every attempt is scored by the same <code>copperroute drc</code> against the bare input. <a href="jobs/bluebuzz/leaderboard.csv">Leaderboard</a> (24 attempts), <a href="jobs/bluebuzz/best/recipe.json">best recipe</a>.</p>
+    <ul>
+      <li><b>Best: 18 unconnected</b>, 0 new violations, 10 vias, 158 mm, 51 s. Recipe: CopperRoute with <code>--set router.fanout.enabled=false</code></li>
+      <li>Freerouting 2.4.1 governed: also 18, but 173 mm, 249 s, 1.3 GB. Freerouting master stalls past 600 s</li>
+      <li>Ripup history (factors 0.25–4): no effect. Bluebuzz's failures aren't nets fighting over space</li>
+      <li>Obstacle-aware heuristic: also 18. It's sharper in only about 1% of searches, but there by up to 11.6×</li>
+      <li>Fixed copper and keepouts never fully wall off a start on the routable layers, so the remaining 18 aren't impossible by geometry alone. <a href="jobs/bluebuzz/walls.png">Obstacle grid render</a>. <i>Retracted:</i> an earlier "11 of 18 nets walled in" reading came from starts on the unroutable plane layers</li>
+    </ul>
+  </section>
+
+  <div class="cols">
+    <section class="card">
+      <h2>Working</h2>
+      <ul class="checks">
+        <li class="done">CopperRoute and Freerouting build locally</li>
+        <li class="done">Benchmark harness with KiCad DRC referee on 42 PCBench boards</li>
+        <li class="done"><code>copper-governor</code>: nice 10, RSS watchdog with soft stop and hard cancel, <code>--nice</code> and <code>--max-memory</code></li>
+        <li class="done">Default thread cap cut from cores−1 to cores/2</li>
+        <li class="done"><code>RouterBackend</code> trait and <code>--backend</code> flag</li>
+        <li class="done">PCB skill: governed-autorouter section in <code>references/routing.md</code></li>
+        <li class="done">wgpu 30 sees the RTX 3060 (Vulkan; int64 atomics, subgroups, timestamps)</li>
+        <li class="done">Fork pushed: <a href="https://github.com/sequoia-hope/copperroute/tree/governance">sequoia-hope/copperroute@governance</a>; default job timeout now 30 min</li>
+        <li class="done"><code>tools/route_job.py</code>: governed portfolio routing per board, keeps the best session and its recipe</li>
+        <li class="done">Opt-in per-net ripup history (PathFinder history term), <code>COPPERROUTE_RIPUP_HISTORY</code></li>
+        <li class="done">Opt-in obstacle-aware admissible heuristic (survey E1), <code>COPPERROUTE_OBSTACLE_HEURISTIC</code>: per-run coarse obstacle grid plus a backward Dijkstra per search, <code>h = max(box, coarse)</code>, byte-identical when off</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>Next up</h2>
+      <ul class="checks">
+        <li>Finish the baseline, then publish the comparison table</li>
+        <li>Record the backend name in the result manifest; add a <code>backend</code> argument to MCP <code>route_board</code></li>
+        <li>M4: rasterize the board to a conservative int32 grid, then GPU wavefront search for single nets, validated against a CPU BFS and copper-drc</li>
+        <li>Benchmark harness: GPU time and peak GPU memory columns</li>
+      </ul>
+    </section>
+  </div>
+
+  <div class="cols">
+    <section class="card">
+      <h2>Open questions</h2>
+      <ul>
+        <li>Fork <code>emshotton/copperroute</code> on GitHub, and contact the author about upstreaming governance and the GPU backend?</li>
+        <li>Default job timeout is still upstream's 12 h. Lower it for agent use?</li>
+        <li>New dependencies (<code>rustix</code>, <code>wgpu</code>) go against upstream's "no new workspace dependencies" constraint. Keep them behind crate boundaries or features?</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>Blocked on</h2>
+      <ul>
+        <li>The PCB skill's <code>SKILL.md</code> is read-only, so its hard-rule line is waiting on you.</li>
+      </ul>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>Log</h2>
+    <div class="log">
+      <div class="entry">
+        <time datetime="2026-10-22">2026-10-22</time>
+        <div>Bluebuzz became a route job (24 attempts, best 18 unconnected, matching Freerouting 2.4.1 in a fifth of the time). Ripup history and the obstacle-aware heuristic both run, are admissible and opt-in, and neither moves bluebuzz. The heuristic's provable bound is loose (median 0.45× the box distance), so it only matters on long pinched detours. Retracted a false "walled in" correlation caused by plane-layer starts. Design doc gained a research appendix; HubRouter and DSBRouter citations checked.</div>
+      </div>
+      <div class="entry">
+        <time datetime="2026-10-22">2026-10-22</time>
+        <div>Cloned CopperRoute, Freerouting and PCBench. Added governance, the backend trait and the GPU probe. Found that wgpu hides the NVIDIA Vulkan adapter when all backends are requested. Pre-existing test failures on upstream main: three in <code>batch_loop</code> (release builds) and <code>float_narrowing</code> (debug builds).</div>
+      </div>
+      <div class="entry">
+        <time datetime="2026-10-22">2026-10-22</time>
+        <div>Project created and registered with the hub. Status page scaffolded.</div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  Served from <code>~/Software/ultraroute</code> on its registered port.
+  <code>proj up ultraroute</code> to start, <code>proj down ultraroute</code> to stop.
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,1199 @@
+{
+  "layers": [
+    {
+      "index": 0,
+      "name": "F.Cu",
+      "signal": true
+    },
+    {
+      "index": 1,
+      "name": "In1.Cu",
+      "signal": false
+    },
+    {
+      "index": 2,
+      "name": "In2.Cu",
+      "signal": true
+    },
+    {
+      "index": 3,
+      "name": "In3.Cu",
+      "signal": false
+    },
+    {
+      "index": 4,
+      "name": "In4.Cu",
+      "signal": false
+    },
+    {
+      "index": 5,
+      "name": "B.Cu",
+      "signal": true
+    }
+  ],
+  "nets": [
+    {
+      "number": 1,
+      "name": "VBAT",
+      "class": "Battery",
+      "contains_plane": true
+    },
+    {
+      "number": 2,
+      "name": "3V3_SYS",
+      "class": "Supply",
+      "contains_plane": true
+    },
+    {
+      "number": 3,
+      "name": "1V1",
+      "class": "Supply",
+      "contains_plane": true
+    },
+    {
+      "number": 4,
+      "name": "VREG_LX",
+      "class": "default",
+      "contains_plane": true
+    },
+    {
+      "number": 5,
+      "name": "3V3A",
+      "class": "Supply",
+      "contains_plane": false
+    },
+    {
+      "number": 6,
+      "name": "3V3_SENS",
+      "class": "Supply",
+      "contains_plane": false
+    },
+    {
+      "number": 7,
+      "name": "BOOTSEL",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 8,
+      "name": "BTN",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 9,
+      "name": "BTN_RAW",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 10,
+      "name": "CC1",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 11,
+      "name": "CC2",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 12,
+      "name": "CHG_LED",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 13,
+      "name": "CHG_N",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 14,
+      "name": "CT_SENS",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 15,
+      "name": "ILIM",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 16,
+      "name": "IMU_INT1",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 17,
+      "name": "IMU_INT2",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 18,
+      "name": "ISET",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 19,
+      "name": "LDO_EN",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 20,
+      "name": "LED_DIN",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 21,
+      "name": "LED_STAT",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 22,
+      "name": "LED_VDD",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 23,
+      "name": "MOTOR1_G",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 24,
+      "name": "MOTOR1_PWM",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 25,
+      "name": "MOTOR1_SW",
+      "class": "Motor",
+      "contains_plane": false
+    },
+    {
+      "number": 26,
+      "name": "MOTOR2_G",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 27,
+      "name": "MOTOR2_PWM",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 28,
+      "name": "MOTOR2_SW",
+      "class": "Motor",
+      "contains_plane": false
+    },
+    {
+      "number": 29,
+      "name": "PDM_CLK",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 30,
+      "name": "PDM_DATA",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 31,
+      "name": "PG_N",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 32,
+      "name": "PWR_HOLD",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 33,
+      "name": "QSPI_SCLK",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 34,
+      "name": "QSPI_SD0",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 35,
+      "name": "QSPI_SD1",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 36,
+      "name": "QSPI_SD2",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 37,
+      "name": "QSPI_SD3",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 38,
+      "name": "QSPI_SS",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 39,
+      "name": "RUN",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 40,
+      "name": "SCL",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 41,
+      "name": "SDA",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 42,
+      "name": "SENS_EN",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 43,
+      "name": "SWCLK",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 44,
+      "name": "SWDIO",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 45,
+      "name": "TAC_CS1",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 46,
+      "name": "TAC_CS2",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 47,
+      "name": "TAC_CS3",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 48,
+      "name": "TAC_CS4",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 49,
+      "name": "TAC_SCK",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 50,
+      "name": "TAC_SDI",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 51,
+      "name": "TAC_SDO",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 52,
+      "name": "TMR",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 53,
+      "name": "TS",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 54,
+      "name": "USB_DM",
+      "class": "USB",
+      "contains_plane": false
+    },
+    {
+      "number": 55,
+      "name": "USB_DM_C",
+      "class": "USB",
+      "contains_plane": false
+    },
+    {
+      "number": 56,
+      "name": "USB_DP",
+      "class": "USB",
+      "contains_plane": false
+    },
+    {
+      "number": 57,
+      "name": "USB_DP_C",
+      "class": "USB",
+      "contains_plane": false
+    },
+    {
+      "number": 58,
+      "name": "VBAT_SENSE",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 59,
+      "name": "VBUS",
+      "class": "Vbus",
+      "contains_plane": false
+    },
+    {
+      "number": 60,
+      "name": "VBUS_EN",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 61,
+      "name": "VREG_AVDD",
+      "class": "Supply",
+      "contains_plane": false
+    },
+    {
+      "number": 62,
+      "name": "WL_CLK",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 63,
+      "name": "WL_CS",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 64,
+      "name": "WL_DATA",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 65,
+      "name": "WL_DOUT",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 66,
+      "name": "WL_IRQ",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 67,
+      "name": "WL_ON",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 68,
+      "name": "XIN",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 69,
+      "name": "XOUT",
+      "class": "default",
+      "contains_plane": false
+    },
+    {
+      "number": 70,
+      "name": "XTAL2",
+      "class": "default",
+      "contains_plane": false
+    }
+  ],
+  "components": [
+    {
+      "id": 1,
+      "name": "J6",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 2,
+      "name": "U20",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 3,
+      "name": "U23",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 4,
+      "name": "U22",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 5,
+      "name": "U21",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 6,
+      "name": "C52",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 7,
+      "name": "C11",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 8,
+      "name": "C12",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 9,
+      "name": "C21",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 10,
+      "name": "C22",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 11,
+      "name": "J3",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 12,
+      "name": "U10",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 13,
+      "name": "SW1",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 14,
+      "name": "R85",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 15,
+      "name": "R61",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 16,
+      "name": "R3",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 17,
+      "name": "R41",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 18,
+      "name": "R60",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 19,
+      "name": "R88",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 20,
+      "name": "R4",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 21,
+      "name": "R84",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 22,
+      "name": "R43",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 23,
+      "name": "R86",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 24,
+      "name": "C131",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 25,
+      "name": "C42",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 26,
+      "name": "C40",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 27,
+      "name": "J4",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 28,
+      "name": "D4",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 29,
+      "name": "D6",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 30,
+      "name": "U3",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 31,
+      "name": "U6",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 32,
+      "name": "Q3",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 33,
+      "name": "D5",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 34,
+      "name": "U1",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 35,
+      "name": "Y1",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 36,
+      "name": "C81",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 37,
+      "name": "C132",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 38,
+      "name": "C97",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 39,
+      "name": "C122",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 40,
+      "name": "C98",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 41,
+      "name": "C93",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 42,
+      "name": "C120",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 43,
+      "name": "C121",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 44,
+      "name": "C86",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 45,
+      "name": "C91",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 46,
+      "name": "C102",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 47,
+      "name": "C101",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 48,
+      "name": "R40",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 49,
+      "name": "R14",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 50,
+      "name": "R2",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 51,
+      "name": "R1",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 52,
+      "name": "R42",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 53,
+      "name": "R80",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 54,
+      "name": "U7",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 55,
+      "name": "J2",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 56,
+      "name": "J1",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 57,
+      "name": "C15",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 58,
+      "name": "C14",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 59,
+      "name": "C140",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 60,
+      "name": "C82",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 61,
+      "name": "C123",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 62,
+      "name": "C95",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 63,
+      "name": "L1",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 64,
+      "name": "U2",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 65,
+      "name": "D1",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 66,
+      "name": "R131",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 67,
+      "name": "R62",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 68,
+      "name": "R12",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 69,
+      "name": "R50",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 70,
+      "name": "R11",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 71,
+      "name": "R66",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 72,
+      "name": "R87",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 73,
+      "name": "R10",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 74,
+      "name": "D2",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 75,
+      "name": "U30",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 76,
+      "name": "U11",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 77,
+      "name": "C96",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 78,
+      "name": "C84",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 79,
+      "name": "C13",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 80,
+      "name": "C64",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 81,
+      "name": "C41",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 82,
+      "name": "C133",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 83,
+      "name": "C87",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 84,
+      "name": "C94",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 85,
+      "name": "C88",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 86,
+      "name": "C50",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 87,
+      "name": "C89",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 88,
+      "name": "C130",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 89,
+      "name": "C43",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 90,
+      "name": "C92",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 91,
+      "name": "C2",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 92,
+      "name": "C100",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 93,
+      "name": "C10",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 94,
+      "name": "C51",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 95,
+      "name": "C20",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 96,
+      "name": "C85",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 97,
+      "name": "Q1",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 98,
+      "name": "R64",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 99,
+      "name": "R63",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 100,
+      "name": "R13",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 101,
+      "name": "R81",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 102,
+      "name": "R130",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 103,
+      "name": "D3",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 104,
+      "name": "C80",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 105,
+      "name": "C83",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 106,
+      "name": "U5",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 107,
+      "name": "U40",
+      "placed": true,
+      "on_front": true
+    },
+    {
+      "id": 108,
+      "name": "J5",
+      "placed": true,
+      "on_front": false
+    },
+    {
+      "id": 109,
+      "name": "Q2",
+      "placed": true,
+      "on_front": false
+    }
+  ],
+  "statistics": {
+    "bends": {
+      "45_degree_count": 1,
+      "90_degree_count": 0,
+      "other_angle_count": 0,
+      "total_count": 1
+    },
+    "board": {
+      "bounding_box": {
+        "height": -1389.3699951171875,
+        "width": 869.0,
+        "x": 1131.0,
+        "y": -819.0250244140625
+      },
+      "size": {
+        "height": 570.344970703125,
+        "width": 262.0,
+        "x": 0.0,
+        "y": 0.0
+      }
+    },
+    "clearance_violations": {
+      "avg_violation_um": 2.901214599609375,
+      "max_violation_um": 6.900665283203125,
+      "min_violation_um": 1.9013519287109375,
+      "total_count": 20
+    },
+    "components": {
+      "total_count": 109
+    },
+    "connections": {
+      "incomplete_count": 92,
+      "maximum_count": 192
+    },
+    "fanout": {
+      "escaped_count": 163,
+      "pins_to_escape": 183,
+      "total_smd_pins": 256
+    },
+    "host": "KiCad's Pcbnew,9.0.8+dfsg-1",
+    "items": {
+      "component_count": 811,
+      "conduction_area_count": 6,
+      "drill_item_count": 0,
+      "other_count": 723,
+      "pin_count": 423,
+      "total_count": 3812,
+      "trace_count": 1718,
+      "via_count": 131
+    },
+    "layers": {
+      "signal_count": 3,
+      "total_count": 6
+    },
+    "nets": {
+      "class_count": 6,
+      "total_count": 70
+    },
+    "pads": {
+      "total_count": 423
+    },
+    "traces": {
+      "average_length": 7.856673240661621,
+      "total_angled_length": 5594.59619140625,
+      "total_count": 1718,
+      "total_horizontal_length": 3815.64697265625,
+      "total_length": 13497.7646484375,
+      "total_length_mm": 1349.7764892578125,
+      "total_segment_count": 1719,
+      "total_vertical_length": 4128.005859375,
+      "total_weighted_length": 0.0
+    },
+    "unit": "mm",
+    "vias": {
+      "blind_count": 0,
+      "buried_count": 0,
+      "through_hole_count": 131,
+      "total_count": 131
+    }
+  },
+  "metadata": {
+    "host_cad": "KiCad's Pcbnew",
+    "host_version": "9.0.8+dfsg-1",
+    "unit": "um",
+    "resolution": 10,
+    "snap_angle": "fortyfive_degree"
+  }
+}

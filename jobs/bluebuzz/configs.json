@@ -1,0 +1,15 @@
+[
+  {"name": "cr-default", "router": "copperroute", "args": []},
+  {"name": "cr-search-1m", "router": "copperroute", "args": ["--set", "router.connection_search_steps=1000000"]},
+  {"name": "cr-search-4m", "router": "copperroute", "args": ["--set", "router.connection_search_steps=4000000"]},
+  {"name": "cr-via20", "router": "copperroute", "args": ["--set", "router.scoring.via_costs=20"]},
+  {"name": "cr-via10", "router": "copperroute", "args": ["--set", "router.scoring.via_costs=10"]},
+  {"name": "cr-ripup30", "router": "copperroute", "args": ["--set", "router.scoring.start_ripup_costs=30"]},
+  {"name": "cr-ripup300", "router": "copperroute", "args": ["--set", "router.scoring.start_ripup_costs=300"]},
+  {"name": "cr-giveup-high", "router": "copperroute", "args": ["--set", "router.failure_give_up_threshold=1000"]},
+  {"name": "cr-no-fanout", "router": "copperroute", "args": ["--set", "router.fanout.enabled=false"]},
+  {"name": "cr-no-corridor", "router": "copperroute", "args": [], "env": {"COPPERROUTE_CORRIDOR_GUIDANCE": "0"}},
+  {"name": "cr-via10-search4m", "router": "copperroute", "args": ["--set", "router.scoring.via_costs=10", "--set", "router.connection_search_steps=4000000"]},
+  {"name": "fr-2.4.1", "router": "freerouting", "jar": "/home/sequoia/pcb/bluebuzz/tools/freerouting-2.4.1.jar", "args": ["-mp", "100", "-mt", "1"]},
+  {"name": "fr-current", "router": "freerouting", "args": ["-mp", "100", "-mt", "1"]}
+]

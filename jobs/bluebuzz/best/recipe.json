@@ -1,0 +1,31 @@
+{
+  "config": {
+    "name": "cr-e1-nofan",
+    "router": "copperroute",
+    "binary": "/home/sequoia/Software/ultraroute/copperroute/target-e1/release/copperroute",
+    "args": [
+      "--set",
+      "router.fanout.enabled=false"
+    ],
+    "env": {
+      "COPPERROUTE_OBSTACLE_HEURISTIC": "1"
+    }
+  },
+  "score": {
+    "name": "cr-e1-nofan",
+    "router": "copperroute",
+    "exit": 0,
+    "wall_s": "91.0",
+    "peak_rss_mb": 408,
+    "args": "--set router.fanout.enabled=false",
+    "env": "{\"COPPERROUTE_OBSTACLE_HEURISTIC\": \"1\"}",
+    "finished_at": "2026-10-22T13:33:12",
+    "unconnected": 18,
+    "new_violations": 0,
+    "vias": 10,
+    "length_mm": "153.7"
+  },
+  "input_dsn": "bluebuzz-rm2.dsn",
+  "copperroute": "/home/sequoia/Software/ultraroute/copperroute/target/release/copperroute",
+  "freerouting": "/home/sequoia/Software/ultraroute/freerouting/build/libs/freerouting-current-executable.jar"
+}

@@ -1,0 +1,64 @@
+[
+ {
+  "name": "cr-e1",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-e1/release/copperroute",
+  "args": [],
+  "env": {
+   "COPPERROUTE_OBSTACLE_HEURISTIC": "1"
+  }
+ },
+ {
+  "name": "cr-e1-nofan",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-e1/release/copperroute",
+  "args": [
+   "--set",
+   "router.fanout.enabled=false"
+  ],
+  "env": {
+   "COPPERROUTE_OBSTACLE_HEURISTIC": "1"
+  }
+ },
+ {
+  "name": "cr-e1-nofan-via10",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-e1/release/copperroute",
+  "args": [
+   "--set",
+   "router.fanout.enabled=false",
+   "--set",
+   "router.scoring.via_costs=10"
+  ],
+  "env": {
+   "COPPERROUTE_OBSTACLE_HEURISTIC": "1"
+  }
+ },
+ {
+  "name": "cr-e1-nofan-search4m",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-e1/release/copperroute",
+  "args": [
+   "--set",
+   "router.fanout.enabled=false",
+   "--set",
+   "router.connection_search_steps=4000000"
+  ],
+  "env": {
+   "COPPERROUTE_OBSTACLE_HEURISTIC": "1"
+  }
+ },
+ {
+  "name": "cr-e1-hist1-nofan",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-e1/release/copperroute",
+  "args": [
+   "--set",
+   "router.fanout.enabled=false"
+  ],
+  "env": {
+   "COPPERROUTE_OBSTACLE_HEURISTIC": "1",
+   "COPPERROUTE_RIPUP_HISTORY": "1"
+  }
+ }
+]
