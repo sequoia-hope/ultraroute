@@ -110,16 +110,19 @@ footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
       <tr><td>ripup history ×1</td><td>23/42</td><td>88</td><td>189</td><td>311</td></tr>
       <tr><td>ripup history ×2</td><td>23/42</td><td>86</td><td>178</td><td>335</td></tr>
       <tr><td>obstacle-aware heuristic (vs its own base build: 23/42, 81, 122, 284)</td><td>23/42</td><td>87</td><td>119</td><td>275</td><td><b>Neutral, 2.2× slower.</b> 35 of 42 boards unchanged; slightly fewer vias and violations. Abakus_Main lost 6 connections, taking 100 s vs 30 s (search budgets). Bluebuzz: 18, but shortest copper yet (153.7 mm), the new best. Stays opt-in; next fix is caching the field per net</td></tr>
-      <tr><td>region history (PathFinder over space)</td><td colspan="4" class="todo">corpus running</td><td>Bluebuzz: 18 at every factor. With fanout off and the heuristic, ×0.25 gives <b>9 vias</b> (best yet). Without those, it costs copper (184–205 mm)</td></tr>
+      <tr><td>region history ×0.1</td><td>23/42</td><td>81</td><td><b>107</b></td><td>277</td><td rowspan="3"><b>Mixed, promising.</b> ×0.1 cuts violations 12% at no cost in connections. ×0.25 closes 8 more connections (−10%), better on 4 boards and worse on 1, but loses a clean board. Base: 23/42, 81, 122, 284. Kept opt-in; next, find why ×0.25 lost a clean board</td></tr>
+      <tr><td>region history ×0.25</td><td>22/42</td><td><b>73</b></td><td>137</td><td>288</td></tr>
+      <tr><td>region history ×0.5</td><td>22/42</td><td>76</td><td>119</td><td>298</td></tr>
+      <tr><td>region history on bluebuzz</td><td colspan="4"></td><td>Bluebuzz: 18 at every factor. With fanout off and the heuristic, ×0.25 gives <b>9 vias</b> (best yet). Without those, it costs copper (184–205 mm)</td></tr>
     </table>
-    <p style="color:var(--muted);font-size:.85rem;margin-bottom:0">Same 42 PCBench boards, serial, 100 passes, 120 s each. <a href="copperroute/benchmark/reports/hist-20261022.html">History report</a>, <a href="copperroute/benchmark/reports/e1-20261022.html">heuristic report</a>.</p>
+    <p style="color:var(--muted);font-size:.85rem;margin-bottom:0">Same 42 PCBench boards, serial, 100 passes, 120 s each. <a href="copperroute/benchmark/reports/hist-20261022.html">History report</a>, <a href="copperroute/benchmark/reports/e1-20261022.html">heuristic report</a>, <a href="copperroute/benchmark/reports/region-20261022.html">region report</a>.</p>
   </section>
 
   <section class="card" id="bluebuzz">
     <h2>Route job: bluebuzz</h2>
     <p>Input is the tamed DSN <code>route.py</code> feeds Freerouting (bluebuzz <code>6c5bd5e</code>): 6 layers with only 3 routable, 696 keepouts, and 38 connections open before routing. Every attempt is scored by the same <code>copperroute drc</code> against the bare input. <a href="jobs/bluebuzz/leaderboard.csv">Leaderboard</a> (24 attempts), <a href="jobs/bluebuzz/best/recipe.json">best recipe</a>.</p>
     <ul>
-      <li><b>Nudge: 17 unconnected</b>, 0 new violations (confirmed by DRC on the re-imported session). The <code>nudge</code> backend moved <b>J4 by 0.5 mm in −x</b>, closing one more connection. J4 is a back-side pad row, so it may be mechanically fixed. <i>Needs your call before use.</i> <a href="jobs/bluebuzz/nudge-j4.ses">Session</a> (placement included; KiCad applies it on Specctra import)</li>
+      <li><i>Withdrawn, being re-run:</i> "nudge J4 by 0.5 mm → 17 unconnected". Moves left pins behind in the search tree, and the oracle and referee read the same stale geometry, so they agreed. Fixed, with a test that shapes move by exactly the vector. The corrected nudge runs are in progress</li>
       <li>Best without moving parts: 18 unconnected, 0 new violations, <b>9 vias</b>, 163.9 mm. Recipe: <code>--set router.fanout.enabled=false</code>, <code>COPPERROUTE_OBSTACLE_HEURISTIC=1</code> and <code>COPPERROUTE_REGION_HISTORY=0.25</code>. Shortest copper: 153.7 mm with 10 vias (heuristic only)</li>
       <li>Freerouting 2.4.1 governed: also 18, but 173 mm, 249 s, 1.3 GB. Freerouting master stalls past 600 s</li>
       <li>Ripup history (factors 0.25–4): no effect. Bluebuzz's failures aren't nets fighting over space</li>
@@ -142,6 +145,7 @@ footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
         <li class="done">Fork pushed: <a href="https://github.com/sequoia-hope/copperroute/tree/governance">sequoia-hope/copperroute@governance</a>; default job timeout now 30 min</li>
         <li class="done"><code>tools/route_job.py</code>: governed portfolio routing per board, keeps the best session and its recipe</li>
         <li class="done">Opt-in per-net ripup history (PathFinder history term), <code>COPPERROUTE_RIPUP_HISTORY</code></li>
+        <li class="done">Oracle fixed and made referee-consistent. (1) Pins now really move: the component moves before its items re-enter the search tree. (2) Clearance is judged like the DRC and KiCad, using each pad's net-class clearance, which on these boards is far larger than the pin's item class (0.152 vs 0.038 mm on DAC2020). Measured as real gaps. (3) Grandfathered pairs may not lose distance. (4) <code>push()</code>, settle's pressure: blocked parts shove free neighbours aside</li>
         <li class="done"><code>--backend nudge</code>: route, then try line-searched moves of parts with open connections on board clones, rerouting only what's open. A move is kept only if it closes more. 506 s on bluebuzz, so it needs tuning</li>
         <li class="done">Session reader applies placement (translation only), so nudged sessions are scored where the parts really are. Round-trip tested; unmoved sessions score identically</li>
         <li class="done"><code>copper-morph</code> move oracle, ported from settle (lean-jiggle): exact-shape clearance conflicts with grandfathering, guard band, bisection line search. Attached routable copper is ripped for the router; fixed copper pins the part. Independent DRC confirms moves on tomu-fpga add no violations</li>
