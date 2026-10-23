@@ -135,6 +135,24 @@ footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
     </ul>
   </section>
 
+  <section class="card" id="earring">
+    <h2>Route job: simple_earring</h2>
+    <p>Input is exported from the latest rev (<code>afabd86</code>, LiPo and B3U button). The repo's own <code>out/earring.dsn</code> is the stale coin-cell rev. The board holds only the 72 locked scripted tracks and 14 zones from <code>route.py</code>: 89 nets open, 50 violations already present. LED1–LED45, J1 and SW1–SW2 are locked for nudging. <a href="jobs/simple_earring/leaderboard.csv">Leaderboard</a>, <a href="jobs/simple_earring/best/recipe.json">best recipe</a>.</p>
+    <table style="width:100%;border-collapse:collapse;font-size:.88rem;font-variant-numeric:tabular-nums">
+      <tr style="text-align:left;color:var(--muted)"><th>attempt</th><th>open nets</th><th>new viol.</th><th>vias</th><th>KiCad unconnected</th><th>wall</th></tr>
+      <tr><td>Freerouting 2.4.1</td><td>35</td><td>40</td><td>81</td><td></td><td>1815 s</td></tr>
+      <tr><td>maze</td><td>14</td><td>0</td><td>96</td><td>52</td><td>274 s</td></tr>
+      <tr><td>maze + nudge</td><td>13</td><td>3</td><td>99</td><td>53</td><td>330 s</td></tr>
+      <tr><td>negotiated grid (0.05 mm)</td><td>5</td><td>4</td><td>204</td><td>28</td><td>329 s</td></tr>
+      <tr><td><b>grid + nudge: C5 moved 0.055 mm</b></td><td><b>2</b></td><td>4</td><td>209</td><td><b>25</b></td><td>791 s</td></tr>
+    </table>
+    <ul>
+      <li>KiCad unconnected counts ratsnest edges, from <code>kicad-cli pcb drc</code> after importing the session into the board (bare: 249). It confirms the nudge adds no violations of any kind</li>
+      <li>The maze router gives up on routable connections: <code>blame</code> finds a free grid path for all 14 it leaves, so there is nothing for nudging to fix there</li>
+      <li>KiCad sees what our DRC misses on grid routes: 4 shorts and 42 stacked via holes (<code>holes_co_located</code>), plus 12 hole-to-hole</li>
+    </ul>
+  </section>
+
   <div class="cols">
     <section class="card">
       <h2>Working</h2>
@@ -149,6 +167,7 @@ footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
         <li class="done">Fork pushed: <a href="https://github.com/sequoia-hope/copperroute/tree/governance">sequoia-hope/copperroute@governance</a>; default job timeout now 30 min</li>
         <li class="done"><code>tools/route_job.py</code>: governed portfolio routing per board, keeps the best session and its recipe</li>
         <li class="done">Opt-in per-net ripup history (PathFinder history term), <code>COPPERROUTE_RIPUP_HISTORY</code></li>
+        <li class="done"><b>Three bugs found by checking against KiCad:</b> (1) moving a part could move its pins twice, depending on whether each pin's centre was cached, so a reloaded nudged session read every net on the moved part as open (earring scored 31 open instead of 2). (2) <code>--lock</code> wrote <code>lock_type position</code> into the session, which KiCad refuses to import. (3) Nudge counted lone dangling items as open connections. All fixed and tested. The runner now matches violations by what they are between, not by position, so a moved part keeps its old violations</li>
         <li class="done"><b>Targeted nudge and <code>copperroute blame</code>:</b> for each open connection, route it on its net's grid with movable parts passable at a price that grows with how deep the path intrudes into their clearance. Routed copper is a wall (or priced). The intrusions on the cheapest path become per-part displacements, solved by cyclic projection; a part pushed from both sides is reported as unmovable. Nudge tries these moves smallest first, instead of 16 blind guesses per part. <code>--lock REF,...</code> keeps parts in place. <code>blame</code> also tells apart connections that are walled off, pinned by their own part's pins, or blocked by congestion</li>
         <li class="done"><b>Milestone 5, negotiated congestion (PathFinder):</b> per-net zones, rising present cost and history, greedy legal commit; connections from a spanning tree per net (the DRC lists one entry per open net). Pad escape stubs checked by exact geometry. <b>Runs on governed CPU threads, not the GPU</b>: on bluebuzz grids (1.79M nodes), 32 cost fields take 0.05 s on 12 CPU threads against about 3 s batched on the RTX 3060, and GAMER-style sweeps were slower still. All GPU kernels match the CPU exactly and stay as tested experiments. Parallel negotiation on bm05: 48.8 s → 5.1 s, no new violations</li>
         <li class="done"><b>GPU router, Milestone 4:</b> <code>copper-gpu</code> builds a conservative per-net grid (any accepted path is legal), computes integer cost fields with <code>relax.wgsl</code> on wgpu, identical node for node to the CPU Dijkstra reference, and commits paths ending exactly on pin and via centres. <code>--backend grid</code> routes on the grid first, then maze finishes. No new DRC violations on bm05 or bluebuzz. Not faster than CPU yet on small grids (0.13 vs 0.08 s for six fields)</li>
@@ -166,7 +185,10 @@ footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
       <ul class="checks">
         <li>Finish the baseline, then publish the comparison table</li>
         <li>Record the backend name in the result manifest; add a <code>backend</code> argument to MCP <code>route_board</code></li>
-<li>Work-efficient GPU shortest paths (delta-stepping or near-far frontier, persistent buffers, GPU traceback) before the GPU can compete with threaded CPU Dijkstra</li>
+<li>Grid router: stop stacking vias and shorting (KiCad flags these; our DRC does not check hole-to-hole)</li>
+        <li>Find why the maze router abandons connections that <code>blame</code> shows are routable; fill them with the grid router</li>
+        <li>Why our DRC and KiCad disagree on scale (2 open nets vs 25 ratsnest edges)</li>
+        <li>Work-efficient GPU shortest paths (delta-stepping or near-far frontier, persistent buffers, GPU traceback) before the GPU can compete with threaded CPU Dijkstra</li>
         <li>Benchmark harness: GPU time and peak GPU memory columns</li>
       </ul>
     </section>
@@ -176,9 +198,7 @@ footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
     <section class="card">
       <h2>Open questions</h2>
       <ul>
-        <li>Fork <code>emshotton/copperroute</code> on GitHub, and contact the author about upstreaming governance and the GPU backend?</li>
-        <li>Default job timeout is still upstream's 12 h. Lower it for agent use?</li>
-        <li>New dependencies (<code>rustix</code>, <code>wgpu</code>) go against upstream's "no new workspace dependencies" constraint. Keep them behind crate boundaries or features?</li>
+        <li>Upstreaming governance and the GPU backend: you'll contact the author</li>
       </ul>
     </section>
 
@@ -193,6 +213,10 @@ footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
   <section class="card">
     <h2>Log</h2>
     <div class="log">
+      <div class="entry">
+        <time datetime="2026-10-22">2026-10-22</time>
+        <div>simple_earring routed: negotiated grid 5 open nets, then targeted nudge moved C5 0.055 mm and closed 3 more (2 open, KiCad 28 → 25 ratsnest edges, no new violations). Getting there meant fixing pins that moved twice on part moves, <code>--lock</code> leaking into sessions that KiCad then refused, and nudge counting dangling stubs. The bluebuzz best (6) rescored unchanged; its session had the <code>lock_type</code> lines stripped so KiCad can import it. Correction: upstream main fails 18 <code>copper-router</code> tests in release, not 3.</div>
+      </div>
       <div class="entry">
         <time datetime="2026-10-22">2026-10-22</time>
         <div>Targeted nudge: bluebuzz 10 → 6 unconnected by moving C95 0.08 mm, with USB, pressure sensors and RM2 locked. The first targeted run found nothing, because crossing routed copper was priced at one step per cell, so the blame path always crossed copper and never named a part. Pricing it as a wall fixed that. Trial reroutes were also being cut off at 20 s while the grid base needs 146 s; the deadline now scales with the first pass. simple_earring became a route job from the latest rev (afabd86), with LEDs, USB and buttons locked.</div>

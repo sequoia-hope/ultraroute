@@ -1,0 +1,1577 @@
+{
+  "$schema": "https://schemas.kicad.org/drc.v1.json",
+  "coordinate_units": "mm",
+  "date": "2026-10-23T06:05:28.914669094Z",
+  "kicad_version": "N/A",
+  "copperroute_version": "Copperroute 0.1.0",
+  "source": "earring.dsn",
+  "unconnected_items": [
+    {
+      "description": "Unconnected items: Pin [3V3] and Pin [3V3] (117 total items in net)",
+      "items": [
+        {
+          "description": "Conduction Area [3V3]",
+          "pos": {
+            "x": 100,
+            "y": -99.5
+          },
+          "uuid": "7"
+        },
+        {
+          "description": "Conduction Area [3V3]",
+          "pos": {
+            "x": 98.525,
+            "y": -103.275
+          },
+          "uuid": "10"
+        },
+        {
+          "description": "Conduction Area [3V3]",
+          "pos": {
+            "x": 100,
+            "y": -100
+          },
+          "uuid": "14"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 102.72,
+            "y": -91.2
+          },
+          "uuid": "21"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 96.32,
+            "y": -91.2
+          },
+          "uuid": "51"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 104.8,
+            "y": -99.28
+          },
+          "uuid": "81"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 93.25,
+            "y": -97.78
+          },
+          "uuid": "87"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 95.2,
+            "y": -98.38
+          },
+          "uuid": "93"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 95.2,
+            "y": -95.93
+          },
+          "uuid": "99"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 104.8,
+            "y": -96.88
+          },
+          "uuid": "111"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 91.4341,
+            "y": -104.1015
+          },
+          "uuid": "117"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 93.7,
+            "y": -106.18
+          },
+          "uuid": "123"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 95.92,
+            "y": -106.81
+          },
+          "uuid": "345"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 92.425,
+            "y": -102.75
+          },
+          "uuid": "397"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 103.4375,
+            "y": -102.3
+          },
+          "uuid": "414"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 103.4375,
+            "y": -98.3
+          },
+          "uuid": "424"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 101.2,
+            "y": -96.0625
+          },
+          "uuid": "433"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 96.5625,
+            "y": -99.5
+          },
+          "uuid": "451"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 96.5625,
+            "y": -101.9
+          },
+          "uuid": "457"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 96.5625,
+            "y": -102.3
+          },
+          "uuid": "458"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 98.4,
+            "y": -102.9375
+          },
+          "uuid": "462"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 100,
+            "y": -102.9375
+          },
+          "uuid": "466"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 100.4,
+            "y": -102.9375
+          },
+          "uuid": "467"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 104.6,
+            "y": -88.19
+          },
+          "uuid": "549"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 105.9,
+            "y": -88.19
+          },
+          "uuid": "561"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 106.3,
+            "y": -86.14
+          },
+          "uuid": "567"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 98.515,
+            "y": -104.15
+          },
+          "uuid": "679"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 103.25,
+            "y": -107.5
+          },
+          "uuid": "843"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 92.19,
+            "y": -98.89
+          },
+          "uuid": "1128"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 107.0354,
+            "y": -91.45195
+          },
+          "uuid": "1337"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 107.745,
+            "y": -88.719
+          },
+          "uuid": "1389"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 108.1595,
+            "y": -88.43939999999999
+          },
+          "uuid": "1390"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 109.2145,
+            "y": -88.6445
+          },
+          "uuid": "1392"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 109.9832,
+            "y": -90.249
+          },
+          "uuid": "1395"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 108.0991,
+            "y": -90.60310000000001
+          },
+          "uuid": "1399"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 109.7856,
+            "y": -91.32805
+          },
+          "uuid": "1479"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 97.20125,
+            "y": -99.5
+          },
+          "uuid": "1483"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 100,
+            "y": -102.349
+          },
+          "uuid": "1484"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 102.799,
+            "y": -98.3
+          },
+          "uuid": "1485"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 101.2,
+            "y": -96.65125
+          },
+          "uuid": "1486"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 100.4,
+            "y": -102.349
+          },
+          "uuid": "1487"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 106.2,
+            "y": -102.6
+          },
+          "uuid": "1510"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 105.55,
+            "y": -99
+          },
+          "uuid": "1511"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 105.55,
+            "y": -101.35
+          },
+          "uuid": "1512"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 106.3,
+            "y": -86.14
+          },
+          "uuid": "1513"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 92.425,
+            "y": -104.9
+          },
+          "uuid": "1514"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 105.45,
+            "y": -96.55
+          },
+          "uuid": "1515"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 94.15,
+            "y": -98.4
+          },
+          "uuid": "1516"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 95.75,
+            "y": -92.45
+          },
+          "uuid": "1517"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 107.9895,
+            "y": -88.1874
+          },
+          "uuid": "1578"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 107.575,
+            "y": -88.467
+          },
+          "uuid": "1579"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 103.68005000000001,
+            "y": -102.6865
+          },
+          "uuid": "1580"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 105.33630000000001,
+            "y": -87.2815
+          },
+          "uuid": "1581"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 105.25,
+            "y": -88.19
+          },
+          "uuid": "1582"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 108.9625,
+            "y": -88.8145
+          },
+          "uuid": "1583"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 108.3295,
+            "y": -88.69145
+          },
+          "uuid": "1584"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 96.8905,
+            "y": -102.2615
+          },
+          "uuid": "1585"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 95.77835,
+            "y": -107.47439999999999
+          },
+          "uuid": "1586"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 95.63669999999999,
+            "y": -108.1388
+          },
+          "uuid": "1587"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 95.67285000000001,
+            "y": -108.10265
+          },
+          "uuid": "1588"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 94.6521,
+            "y": -95.58235
+          },
+          "uuid": "1589"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 94.10419999999999,
+            "y": -95.2347
+          },
+          "uuid": "1590"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 93.29805,
+            "y": -105.90005000000001
+          },
+          "uuid": "1591"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 92.8961,
+            "y": -105.62010000000001
+          },
+          "uuid": "1592"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 103.5463,
+            "y": -89.8115
+          },
+          "uuid": "1593"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 96.7325,
+            "y": -99.5
+          },
+          "uuid": "1594"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 96.5625,
+            "y": -102.1
+          },
+          "uuid": "1595"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 104.754,
+            "y": -91.448
+          },
+          "uuid": "1596"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 98.57260000000001,
+            "y": -104.023
+          },
+          "uuid": "1597"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 100.6726,
+            "y": -105.073
+          },
+          "uuid": "1598"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 103.9226,
+            "y": -103.073
+          },
+          "uuid": "1599"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 102.27260000000001,
+            "y": -92.873
+          },
+          "uuid": "1600"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 98.57260000000001,
+            "y": -104.023
+          },
+          "uuid": "1601"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 100.6726,
+            "y": -105.073
+          },
+          "uuid": "1602"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 103.9226,
+            "y": -103.073
+          },
+          "uuid": "1603"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 102.27260000000001,
+            "y": -92.873
+          },
+          "uuid": "1604"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 102.4726,
+            "y": -91.373
+          },
+          "uuid": "1605"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 96.57260000000001,
+            "y": -91.423
+          },
+          "uuid": "1606"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 102.5963,
+            "y": -91.2865
+          },
+          "uuid": "1607"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 96.57260000000001,
+            "y": -91.423
+          },
+          "uuid": "1608"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 96.44630000000001,
+            "y": -91.3115
+          },
+          "uuid": "1609"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 102.9726,
+            "y": -107.823
+          },
+          "uuid": "1610"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 103.1113,
+            "y": -107.6615
+          },
+          "uuid": "1611"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 107.27260000000001,
+            "y": -91.573
+          },
+          "uuid": "1612"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 108.32260000000001,
+            "y": -90.473
+          },
+          "uuid": "1613"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 107.154,
+            "y": -91.51245
+          },
+          "uuid": "1614"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 107.7976,
+            "y": -91.023
+          },
+          "uuid": "1615"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 108.32260000000001,
+            "y": -90.473
+          },
+          "uuid": "1616"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 109.57260000000001,
+            "y": -91.823
+          },
+          "uuid": "1617"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 108.21085000000001,
+            "y": -90.53805
+          },
+          "uuid": "1618"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 108.94760000000001,
+            "y": -91.148
+          },
+          "uuid": "1619"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 109.6791,
+            "y": -91.57555
+          },
+          "uuid": "1620"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 110.0541,
+            "y": -90.78855
+          },
+          "uuid": "1621"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 110.1226,
+            "y": -90.023
+          },
+          "uuid": "1622"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 109.52260000000001,
+            "y": -88.423
+          },
+          "uuid": "1623"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 110.0529,
+            "y": -90.136
+          },
+          "uuid": "1624"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 109.82260000000001,
+            "y": -89.223
+          },
+          "uuid": "1625"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 109.36855,
+            "y": -88.53375
+          },
+          "uuid": "1626"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 108.605,
+            "y": -88.96395
+          },
+          "uuid": "1627"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 107.61225,
+            "y": -88.0752
+          },
+          "uuid": "1628"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 104.3726,
+            "y": -88.423
+          },
+          "uuid": "1629"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 104.4863,
+            "y": -88.3065
+          },
+          "uuid": "1630"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 101.1863,
+            "y": -96.26775
+          },
+          "uuid": "1631"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 99.9863,
+            "y": -102.76775
+          },
+          "uuid": "1632"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 100.4113,
+            "y": -102.76775
+          },
+          "uuid": "1633"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 103.23005,
+            "y": -98.3115
+          },
+          "uuid": "1634"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 104.11875,
+            "y": -98.77795
+          },
+          "uuid": "1635"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 92.07260000000001,
+            "y": -102.923
+          },
+          "uuid": "1636"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 92.2488,
+            "y": -102.8365
+          },
+          "uuid": "1637"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 92.72,
+            "y": -98.335
+          },
+          "uuid": "1638"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 96.035,
+            "y": -91.825
+          },
+          "uuid": "1639"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 91.92955,
+            "y": -104.50075
+          },
+          "uuid": "1640"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 93.7,
+            "y": -98.0658
+          },
+          "uuid": "1641"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 94.675,
+            "y": -98.4515
+          },
+          "uuid": "1642"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 105.175,
+            "y": -99.14
+          },
+          "uuid": "1643"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 105.125,
+            "y": -96.715
+          },
+          "uuid": "1644"
+        },
+        {
+          "description": "Pin [3V3]",
+          "pos": {
+            "x": 97.2,
+            "y": -96.0625
+          },
+          "uuid": "443"
+        }
+      ],
+      "severity": "warning",
+      "type": "unconnected_items"
+    },
+    {
+      "description": "Unconnected items: Pin [VSYS] and Pin [VSYS] (23 total items in net)",
+      "items": [
+        {
+          "description": "Pin [VSYS]",
+          "pos": {
+            "x": 91.3689,
+            "y": -101.75280000000001
+          },
+          "uuid": "105"
+        },
+        {
+          "description": "Pin [VSYS]",
+          "pos": {
+            "x": 94.375,
+            "y": -102.75
+          },
+          "uuid": "402"
+        },
+        {
+          "description": "Pin [VSYS]",
+          "pos": {
+            "x": 109.25,
+            "y": -98.05
+          },
+          "uuid": "584"
+        },
+        {
+          "description": "Pin [VSYS]",
+          "pos": {
+            "x": 110,
+            "y": -102.525
+          },
+          "uuid": "615"
+        },
+        {
+          "description": "Pin [VSYS]",
+          "pos": {
+            "x": 109.9,
+            "y": -107.2
+          },
+          "uuid": "1432"
+        },
+        {
+          "description": "Trace [VSYS]",
+          "pos": {
+            "x": 109.4316,
+            "y": -104.5592
+          },
+          "uuid": "2281"
+        },
+        {
+          "description": "Trace [VSYS]",
+          "pos": {
+            "x": 109.3042,
+            "y": -107.98935
+          },
+          "uuid": "2282"
+        },
+        {
+          "description": "Trace [VSYS]",
+          "pos": {
+            "x": 109.73989999999999,
+            "y": -107.9787
+          },
+          "uuid": "2283"
+        },
+        {
+          "description": "Trace [VSYS]",
+          "pos": {
+            "x": 109.9,
+            "y": -107.58935000000001
+          },
+          "uuid": "2284"
+        },
+        {
+          "description": "Trace [VSYS]",
+          "pos": {
+            "x": 101.562,
+            "y": -106.28415
+          },
+          "uuid": "2285"
+        },
+        {
+          "description": "Trace [VSYS]",
+          "pos": {
+            "x": 94.23164999999999,
+            "y": -102.19330000000001
+          },
+          "uuid": "2286"
+        },
+        {
+          "description": "Trace [VSYS]",
+          "pos": {
+            "x": 92.8846,
+            "y": -102.3657
+          },
+          "uuid": "2287"
+        },
+        {
+          "description": "Via [VSYS]",
+          "pos": {
+            "x": 109.02860000000001,
+            "y": -108
+          },
+          "uuid": "2288"
+        },
+        {
+          "description": "Trace [VSYS]",
+          "pos": {
+            "x": 91.52135000000001,
+            "y": -102.05925
+          },
+          "uuid": "2289"
+        },
+        {
+          "description": "Via [VSYS]",
+          "pos": {
+            "x": 91.6738,
+            "y": -102.3657
+          },
+          "uuid": "2290"
+        },
+        {
+          "description": "Via [VSYS]",
+          "pos": {
+            "x": 94.36789999999999,
+            "y": -102.0209
+          },
+          "uuid": "2291"
+        },
+        {
+          "description": "Trace [VSYS]",
+          "pos": {
+            "x": 94.37145,
+            "y": -102.38544999999999
+          },
+          "uuid": "2292"
+        },
+        {
+          "description": "Trace [VSYS]",
+          "pos": {
+            "x": 109.57735000000001,
+            "y": -99.52085000000001
+          },
+          "uuid": "2293"
+        },
+        {
+          "description": "Trace [VSYS]",
+          "pos": {
+            "x": 109.59295,
+            "y": -101.83235
+          },
+          "uuid": "2294"
+        },
+        {
+          "description": "Via [VSYS]",
+          "pos": {
+            "x": 109.18589999999999,
+            "y": -101.13969999999999
+          },
+          "uuid": "2295"
+        },
+        {
+          "description": "Via [VSYS]",
+          "pos": {
+            "x": 109.9688,
+            "y": -97.902
+          },
+          "uuid": "2296"
+        },
+        {
+          "description": "Trace [VSYS]",
+          "pos": {
+            "x": 109.6094,
+            "y": -97.976
+          },
+          "uuid": "2297"
+        },
+        {
+          "description": "Pin [VSYS]",
+          "pos": {
+            "x": 106.85,
+            "y": -98.15
+          },
+          "uuid": "1154"
+        }
+      ],
+      "severity": "warning",
+      "type": "unconnected_items"
+    }
+  ],
+  "violations": [
+    {
+      "description": "Clearance violation between Via [CHRG] and Trace [VBUS] (expected: 0.1270 mm, actual: 0.1000 mm)",
+      "items": [
+        {
+          "description": "Via [CHRG]",
+          "pos": {
+            "x": 106.5,
+            "y": -104.75
+          },
+          "uuid": "1519"
+        },
+        {
+          "description": "Trace [VBUS]",
+          "pos": {
+            "x": 106.13,
+            "y": -103.75
+          },
+          "uuid": "2264"
+        }
+      ],
+      "severity": "error",
+      "type": "clearance"
+    },
+    {
+      "description": "Items shorting two nets: Trace [3V3] and Via [LATCH_G]",
+      "items": [
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 92.72,
+            "y": -98.335
+          },
+          "uuid": "1638"
+        },
+        {
+          "description": "Via [LATCH_G]",
+          "pos": {
+            "x": 92.52260000000001,
+            "y": -98.023
+          },
+          "uuid": "1885"
+        }
+      ],
+      "severity": "error",
+      "type": "shorting_items"
+    },
+    {
+      "description": "Items shorting two nets: Trace [USB_C_DP] and Via [VBUS]",
+      "items": [
+        {
+          "description": "Trace [USB_C_DP]",
+          "pos": {
+            "x": 98.5204,
+            "y": -89.38975
+          },
+          "uuid": "2157"
+        },
+        {
+          "description": "Via [VBUS]",
+          "pos": {
+            "x": 98.82260000000001,
+            "y": -89.623
+          },
+          "uuid": "2266"
+        }
+      ],
+      "severity": "error",
+      "type": "shorting_items"
+    },
+    {
+      "description": "Track has unconnected end",
+      "items": [
+        {
+          "description": "Track [USB_C_DP] on B.Cu, length 0.4000 mm",
+          "pos": {
+            "x": 99.75,
+            "y": -85.2
+          },
+          "uuid": "1499"
+        }
+      ],
+      "severity": "warning",
+      "type": "track_dangling"
+    },
+    {
+      "description": "Track has unconnected end",
+      "items": [
+        {
+          "description": "Track [USB_C_DP] on B.Cu, length 2.0000 mm",
+          "pos": {
+            "x": 100.75,
+            "y": -86
+          },
+          "uuid": "1498"
+        }
+      ],
+      "severity": "warning",
+      "type": "track_dangling"
+    },
+    {
+      "description": "Track has unconnected end",
+      "items": [
+        {
+          "description": "Track [LED_D3] on F.Cu, length 0.6230 mm",
+          "pos": {
+            "x": 92.572,
+            "y": -88.1235
+          },
+          "uuid": "1495"
+        }
+      ],
+      "severity": "warning",
+      "type": "track_dangling"
+    },
+    {
+      "description": "Via is not connected or connected on only one layer",
+      "items": [
+        {
+          "description": "Via [VLED]",
+          "pos": {
+            "x": 94.1618,
+            "y": -85.9142
+          },
+          "uuid": "1549"
+        }
+      ],
+      "severity": "warning",
+      "type": "via_dangling"
+    },
+    {
+      "description": "Via is not connected or connected on only one layer",
+      "items": [
+        {
+          "description": "Via [VBUS]",
+          "pos": {
+            "x": 102.2,
+            "y": -87.01
+          },
+          "uuid": "1545"
+        }
+      ],
+      "severity": "warning",
+      "type": "via_dangling"
+    },
+    {
+      "description": "Via is not connected or connected on only one layer",
+      "items": [
+        {
+          "description": "Via [VBUS]",
+          "pos": {
+            "x": 100.92,
+            "y": -88.5
+          },
+          "uuid": "1544"
+        }
+      ],
+      "severity": "warning",
+      "type": "via_dangling"
+    },
+    {
+      "description": "Via is not connected or connected on only one layer",
+      "items": [
+        {
+          "description": "Via [VBUS]",
+          "pos": {
+            "x": 97.65,
+            "y": -86.55
+          },
+          "uuid": "1543"
+        }
+      ],
+      "severity": "warning",
+      "type": "via_dangling"
+    },
+    {
+      "description": "Via is not connected or connected on only one layer",
+      "items": [
+        {
+          "description": "Via [USB_C_DN]",
+          "pos": {
+            "x": 99.25,
+            "y": -86.45
+          },
+          "uuid": "1538"
+        }
+      ],
+      "severity": "warning",
+      "type": "via_dangling"
+    },
+    {
+      "description": "Via is not connected or connected on only one layer",
+      "items": [
+        {
+          "description": "Via [USB_C_DN]",
+          "pos": {
+            "x": 100.25,
+            "y": -86.45
+          },
+          "uuid": "1537"
+        }
+      ],
+      "severity": "warning",
+      "type": "via_dangling"
+    },
+    {
+      "description": "Via is not connected or connected on only one layer",
+      "items": [
+        {
+          "description": "Via [SWCLK]",
+          "pos": {
+            "x": 105.3,
+            "y": -95.4
+          },
+          "uuid": "1535"
+        }
+      ],
+      "severity": "warning",
+      "type": "via_dangling"
+    },
+    {
+      "description": "Via is not connected or connected on only one layer",
+      "items": [
+        {
+          "description": "Via [QSPI_SD3]",
+          "pos": {
+            "x": 101.11,
+            "y": -104.21
+          },
+          "uuid": "1534"
+        }
+      ],
+      "severity": "warning",
+      "type": "via_dangling"
+    },
+    {
+      "description": "Via is not connected or connected on only one layer",
+      "items": [
+        {
+          "description": "Via [QSPI_SD2]",
+          "pos": {
+            "x": 99.6,
+            "y": -107.53
+          },
+          "uuid": "1533"
+        }
+      ],
+      "severity": "warning",
+      "type": "via_dangling"
+    },
+    {
+      "description": "Via is not connected or connected on only one layer",
+      "items": [
+        {
+          "description": "Via [QSPI_SD1]",
+          "pos": {
+            "x": 102.68,
+            "y": -104.28
+          },
+          "uuid": "1532"
+        }
+      ],
+      "severity": "warning",
+      "type": "via_dangling"
+    },
+    {
+      "description": "Via is not connected or connected on only one layer",
+      "items": [
+        {
+          "description": "Via [QSPI_SD0]",
+          "pos": {
+            "x": 101.81,
+            "y": -104.8
+          },
+          "uuid": "1531"
+        }
+      ],
+      "severity": "warning",
+      "type": "via_dangling"
+    },
+    {
+      "description": "Via is not connected or connected on only one layer",
+      "items": [
+        {
+          "description": "Via [QSPI_SCLK]",
+          "pos": {
+            "x": 101.29,
+            "y": -105.06
+          },
+          "uuid": "1530"
+        }
+      ],
+      "severity": "warning",
+      "type": "via_dangling"
+    },
+    {
+      "description": "Via is not connected or connected on only one layer",
+      "items": [
+        {
+          "description": "Via [LED_EN]",
+          "pos": {
+            "x": 107.35,
+            "y": -97.65
+          },
+          "uuid": "1529"
+        }
+      ],
+      "severity": "warning",
+      "type": "via_dangling"
+    },
+    {
+      "description": "Via is not connected or connected on only one layer",
+      "items": [
+        {
+          "description": "Via [IMU_SDA]",
+          "pos": {
+            "x": 106.3,
+            "y": -99.25
+          },
+          "uuid": "1527"
+        }
+      ],
+      "severity": "warning",
+      "type": "via_dangling"
+    },
+    {
+      "description": "Via is not connected or connected on only one layer",
+      "items": [
+        {
+          "description": "Via [IMU_SCL]",
+          "pos": {
+            "x": 105.15,
+            "y": -94.3
+          },
+          "uuid": "1526"
+        }
+      ],
+      "severity": "warning",
+      "type": "via_dangling"
+    },
+    {
+      "description": "Via is not connected or connected on only one layer",
+      "items": [
+        {
+          "description": "Via [IMU_INT1]",
+          "pos": {
+            "x": 105.55,
+            "y": -97.65
+          },
+          "uuid": "1525"
+        }
+      ],
+      "severity": "warning",
+      "type": "via_dangling"
+    },
+    {
+      "description": "Via is not connected or connected on only one layer",
+      "items": [
+        {
+          "description": "Via [CHRG_DONE]",
+          "pos": {
+            "x": 107.8,
+            "y": -106.6
+          },
+          "uuid": "1521"
+        }
+      ],
+      "severity": "warning",
+      "type": "via_dangling"
+    },
+    {
+      "description": "Via is not connected or connected on only one layer",
+      "items": [
+        {
+          "description": "Via [CHRG_DONE]",
+          "pos": {
+            "x": 95.4,
+            "y": -101.35
+          },
+          "uuid": "1520"
+        }
+      ],
+      "severity": "warning",
+      "type": "via_dangling"
+    },
+    {
+      "description": "Via is not connected or connected on only one layer",
+      "items": [
+        {
+          "description": "Via [CHRG]",
+          "pos": {
+            "x": 106.5,
+            "y": -104.75
+          },
+          "uuid": "1519"
+        }
+      ],
+      "severity": "warning",
+      "type": "via_dangling"
+    },
+    {
+      "description": "Via is not connected or connected on only one layer",
+      "items": [
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 105.55,
+            "y": -101.35
+          },
+          "uuid": "1512"
+        }
+      ],
+      "severity": "warning",
+      "type": "via_dangling"
+    },
+    {
+      "description": "Via is not connected or connected on only one layer",
+      "items": [
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 106.2,
+            "y": -102.6
+          },
+          "uuid": "1510"
+        }
+      ],
+      "severity": "warning",
+      "type": "via_dangling"
+    }
+  ],
+  "schematic_parity": [],
+  "quality_score": 993.42236328125
+}

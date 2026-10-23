@@ -10,6 +10,7 @@ Every attempt is scored by the same referee, `copperroute drc`, against the bare
 unconnected items first, then violations the attempt added, then vias, then copper length.
 """
 import argparse
+import collections
 import csv
 import json
 import os
@@ -45,8 +46,13 @@ def drc(dsn, ses, out):
 
 
 def violation_key(v):
-    return (v["type"], tuple(sorted((round(i["pos"]["x"], 3), round(i["pos"]["y"], 3))
-                                    for i in v["items"])))
+    """What a violation is between, not where: a moved part carries its old violations along."""
+    return (v["type"], tuple(sorted(i["description"] for i in v["items"])))
+
+
+def new_violations(report, bare_keys):
+    after = collections.Counter(violation_key(v) for v in report["violations"])
+    return sum(max(0, n - bare_keys[k]) for k, n in after.items())
 
 
 def session_stats(ses):
@@ -116,7 +122,7 @@ def run_one(job, dsn, cfg, timeout_s, bare_keys):
     report = drc(dsn, ses, runs / f"{name}.drc.json")
     vias, length = session_stats(ses)
     row.update(unconnected=len(report["unconnected_items"]),
-               new_violations=sum(violation_key(v) not in bare_keys for v in report["violations"]),
+               new_violations=new_violations(report, bare_keys),
                vias=vias, length_mm=f"{length:.1f}")
     return row, ses
 
@@ -140,7 +146,7 @@ def main():
         configs = [c for c in configs if c["name"] in wanted]
 
     bare = drc(dsn, None, job / "runs" / "bare.drc.json")
-    bare_keys = {violation_key(v) for v in bare["violations"]}
+    bare_keys = collections.Counter(violation_key(v) for v in bare["violations"])
     print(f"bare input: {len(bare['unconnected_items'])} unconnected, "
           f"{len(bare['violations'])} violations already present")
 
