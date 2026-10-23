@@ -10,7 +10,7 @@ Results go to runs/<name>.*, leaderboard.csv, and best/ (session + recipe.json +
 Every attempt is scored by the same referee, `copperroute drc`, against the bare input:
 clean attempts (no errors added) before the rest, then unconnected items, then errors added,
 then vias, then copper length. Violations the board's rules rate as warnings (a dangling stub)
-are counted in new_warnings and do not rank.
+are counted in new_warnings and do not rank; hole-to-hole and co-located holes are always errors.
 """
 import argparse
 import collections
@@ -55,9 +55,17 @@ def violation_key(v):
     return (v["type"], tuple(sorted(i["description"] for i in v["items"])))
 
 
-def new_violations(report, bare_keys, severity):
+# Fabrication problems whatever severity a board's rules give them.
+ALWAYS_ERRORS = {"hole_to_hole", "holes_co_located"}
+
+
+def severity(v):
+    return "error" if v["type"] in ALWAYS_ERRORS else v.get("severity", "error")
+
+
+def new_violations(report, bare_keys, wanted):
     after = collections.Counter(violation_key(v) for v in report["violations"]
-                                if v.get("severity", "error") == severity)
+                                if severity(v) == wanted)
     return sum(max(0, n - bare_keys[k]) for k, n in after.items())
 
 
