@@ -7,7 +7,7 @@
     )
     (component "Connector_USB:USB_C_Receptacle_HRO_TYPE-C-31-M-12"
       (place J1 1000000 -1334000 front 0
-)
+       (lock_type position))
     )
     (component "Crystal:Crystal_SMD_3225-4Pin_3.2x2.5mm"
       (place Y1 1012000 -1199000 front 270)
@@ -61,15 +61,15 @@
     )
     (component "bluebuzz-rm2:DPS368_LGA-8"
       (place U21 1100000 -1120000 back 180
-)
+       (lock_type position))
     )
     (component "bluebuzz-rm2:DPS368_LGA-8::1"
       (place U20 1000000 -900000 back 0
-)
+       (lock_type position))
       (place U23 1000000 -1348000 back 0
-)
+       (lock_type position))
       (place U22 900000 -1120000 back 0
-)
+       (lock_type position))
     )
     (component "bluebuzz-rm2:LED_1010_WS2812"
       (place D2 1088000 -1226000 front 180)
@@ -94,7 +94,7 @@
     )
     (component "bluebuzz-rm2:RM2"
       (place U7 1000000 -916500 front 0
-)
+       (lock_type position))
     )
     (component "Button_Switch_SMD:Panasonic_EVQPUL_EVQPUC"
       (place SW1 903500 -1228500 front 111)

@@ -3,6 +3,7 @@
 
 A job directory holds:
   input/<board>.dsn       the routing problem (copied from the source project, never edited)
+  input/<board>.kicad_pro optional; its design rules go to both the router and the referee
   configs.json            [{"name": ..., "router": "copperroute"|"freerouting", "args": [...], "env": {...}}]
 Results go to runs/<name>.*, leaderboard.csv, and best/ (session + recipe.json + drc.json).
 
@@ -34,10 +35,12 @@ def governed(cmd, timeout_s, memory="6G"):
             "-p", f"CPUQuota={quota}%", "nice", "-n", "15", "timeout", str(timeout_s)] + cmd
 
 
-def drc(dsn, ses, out):
+def drc(dsn, ses, out, project):
     cmd = [str(COPPERROUTE), "--log-level", "off", "drc", str(dsn), "-o", str(out)]
     if ses:
         cmd[5:5] = ["--ses", str(ses)]
+    if project:
+        cmd += ["--kicad-project", str(project)]
     out.unlink(missing_ok=True)
     proc = subprocess.run(cmd)
     if not out.exists():
@@ -86,7 +89,7 @@ def rank(row):
             float(row["length_mm"]))
 
 
-def run_one(job, dsn, cfg, timeout_s, bare_keys):
+def run_one(job, dsn, project, cfg, timeout_s, bare_keys):
     name = cfg["name"]
     runs = job / "runs"
     ses = runs / f"{name}.ses"
@@ -94,6 +97,8 @@ def run_one(job, dsn, cfg, timeout_s, bare_keys):
     if cfg["router"] == "copperroute":
         cmd = [cfg.get("binary", str(COPPERROUTE)), "--log-level", cfg.get("log_level", "warn"), "route", str(dsn), "-o", str(ses),
                "--timeout", str(timeout_s - 30), "--result-json", str(runs / f"{name}.result.json")]
+        if project:
+            cmd += ["--kicad-project", str(project)]
     elif cfg["router"] == "freerouting":
         cmd = ["java", "-Xmx4g", "-jar", cfg.get("jar", str(FREEROUTING)), "-de", str(dsn), "-do", str(ses),
                "--gui.enabled=false"]
@@ -119,12 +124,51 @@ def run_one(job, dsn, cfg, timeout_s, bare_keys):
     if not ses.exists():
         row.update(unconnected=10**6, new_violations=10**6, vias=0, length_mm=0)
         return row, None
-    report = drc(dsn, ses, runs / f"{name}.drc.json")
+    score(row, dsn, project, ses, runs / f"{name}.drc.json", bare_keys)
+    return row, ses
+
+
+def score(row, dsn, project, ses, out, bare_keys):
+    report = drc(dsn, ses, out, project)
     vias, length = session_stats(ses)
     row.update(unconnected=len(report["unconnected_items"]),
                new_violations=new_violations(report, bare_keys),
                vias=vias, length_mm=f"{length:.1f}")
-    return row, ses
+
+
+def write_board(board, rows):
+    with board.open("w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=FIELDS)
+        w.writeheader()
+        w.writerows(sorted(rows, key=rank))
+
+
+def keep_best(job, dsn, cfg, row, ses):
+    best = {"config": cfg, "score": row, "input_dsn": dsn.name,
+            "copperroute": str(COPPERROUTE), "freerouting": str(FREEROUTING)}
+    shutil.copy(ses, job / "best" / "best.ses")
+    shutil.copy(job / "runs" / f"{cfg['name']}.drc.json", job / "best" / "drc.json")
+    (job / "best" / "recipe.json").write_text(json.dumps(best, indent=2) + "\n")
+    return best
+
+
+def rescore(job, dsn, project, rows, bare_keys, best):
+    """Scores every kept session again, as the referee now judges, and re-picks the best."""
+    configs = {c["name"]: c for f in sorted(job.glob("configs*.json")) for c in json.loads(f.read_text())}
+    if best:
+        configs.setdefault(best["config"]["name"], best["config"])
+    for row in rows:
+        ses = job / "runs" / f"{row['name']}.ses"
+        if ses.exists():
+            score(row, dsn, project, ses, job / "runs" / f"{row['name']}.drc.json", bare_keys)
+            print(f"  {row['name']}: unconnected={row['unconnected']} "
+                  f"new_violations={row['new_violations']}", flush=True)
+    write_board(job / "leaderboard.csv", rows)
+    kept = [r for r in rows if (job / "runs" / f"{r['name']}.ses").exists() and r["name"] in configs]
+    if kept:
+        top = min(kept, key=rank)
+        keep_best(job, dsn, configs[top["name"]], top, job / "runs" / f"{top['name']}.ses")
+        print(f"  ★ best: {top['name']}", flush=True)
 
 
 def main():
@@ -134,18 +178,21 @@ def main():
     ap.add_argument("--only", help="comma-separated config names")
     ap.add_argument("--timeout", type=int, default=600, help="seconds per attempt")
     ap.add_argument("--rerun", action="store_true", help="rerun configs already on the leaderboard")
+    ap.add_argument("--rescore", action="store_true",
+                    help="score the kept sessions again instead of routing, and re-pick the best")
     args = ap.parse_args()
 
     job = args.job.resolve()
     (job / "runs").mkdir(exist_ok=True)
     (job / "best").mkdir(exist_ok=True)
     dsn = next((job / "input").glob("*.dsn"))
+    project = next((job / "input").glob("*.kicad_pro"), None)
     configs = json.loads((args.configs or job / "configs.json").read_text())
     if args.only:
         wanted = set(args.only.split(","))
         configs = [c for c in configs if c["name"] in wanted]
 
-    bare = drc(dsn, None, job / "runs" / "bare.drc.json")
+    bare = drc(dsn, None, job / "runs" / "bare.drc.json", project)
     bare_keys = collections.Counter(violation_key(v) for v in bare["violations"])
     print(f"bare input: {len(bare['unconnected_items'])} unconnected, "
           f"{len(bare['violations'])} violations already present")
@@ -155,25 +202,21 @@ def main():
     done = {r["name"] for r in rows}
     best_file = job / "best" / "recipe.json"
     best = json.loads(best_file.read_text()) if best_file.exists() else None
+    if args.rescore:
+        rescore(job, dsn, project, rows, bare_keys, best)
+        return
 
     for cfg in configs:
         if cfg["name"] in done and not args.rerun:
             continue
         print(f"→ {cfg['name']} ({cfg['router']} {' '.join(cfg.get('args', []))})", flush=True)
-        row, ses = run_one(job, dsn, cfg, args.timeout, bare_keys)
+        row, ses = run_one(job, dsn, project, cfg, args.timeout, bare_keys)
         print(f"  unconnected={row['unconnected']} new_violations={row['new_violations']} "
               f"vias={row['vias']} length={row['length_mm']}mm wall={row['wall_s']}s", flush=True)
         rows = [r for r in rows if r["name"] != cfg["name"]] + [row]
-        with board.open("w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=FIELDS)
-            w.writeheader()
-            w.writerows(sorted(rows, key=rank))
+        write_board(board, rows)
         if ses and (best is None or rank(row) < rank(best["score"])):
-            best = {"config": cfg, "score": row, "input_dsn": dsn.name,
-                    "copperroute": str(COPPERROUTE), "freerouting": str(FREEROUTING)}
-            shutil.copy(ses, job / "best" / "best.ses")
-            shutil.copy(job / "runs" / f"{cfg['name']}.drc.json", job / "best" / "drc.json")
-            best_file.write_text(json.dumps(best, indent=2) + "\n")
+            best = keep_best(job, dsn, cfg, row, ses)
             print(f"  ★ new best", flush=True)
 
 
