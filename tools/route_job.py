@@ -86,7 +86,7 @@ def run_one(job, dsn, cfg, timeout_s, bare_keys):
     ses = runs / f"{name}.ses"
     env = {**os.environ, **cfg.get("env", {})}
     if cfg["router"] == "copperroute":
-        cmd = [cfg.get("binary", str(COPPERROUTE)), "--log-level", "warn", "route", str(dsn), "-o", str(ses),
+        cmd = [cfg.get("binary", str(COPPERROUTE)), "--log-level", cfg.get("log_level", "warn"), "route", str(dsn), "-o", str(ses),
                "--timeout", str(timeout_s - 30), "--result-json", str(runs / f"{name}.result.json")]
     elif cfg["router"] == "freerouting":
         cmd = ["java", "-Xmx4g", "-jar", cfg.get("jar", str(FREEROUTING)), "-de", str(dsn), "-do", str(ses),
@@ -94,12 +94,13 @@ def run_one(job, dsn, cfg, timeout_s, bare_keys):
     else:
         raise SystemExit(f"{name}: unknown router {cfg['router']}")
     cmd += cfg.get("args", [])
-    timed = ["/usr/bin/time", "-f", "%e %M"] + governed(cmd, timeout_s)
+    timing = runs / f"{name}.time"
+    timed = ["/usr/bin/time", "-f", "%e %M", "-o", str(timing)] + governed(cmd, timeout_s)
     started = time.time()
     with open(runs / f"{name}.log", "w") as log:
-        proc = subprocess.run(timed, env=env, stdout=log, stderr=subprocess.PIPE, text=True)
+        proc = subprocess.run(timed, env=env, stdout=log, stderr=subprocess.STDOUT, text=True)
     wall, rss_kb = time.time() - started, 0
-    tail = proc.stderr.strip().splitlines()
+    tail = timing.read_text().strip().splitlines() if timing.exists() else []
     if tail:
         try:
             wall, rss_kb = float(tail[-1].split()[0]), int(tail[-1].split()[1])

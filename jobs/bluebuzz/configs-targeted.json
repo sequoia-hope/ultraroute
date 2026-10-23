@@ -1,0 +1,34 @@
+[
+ {
+  "name": "cr-tnudge-maze-lock",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-dev/release/copperroute",
+  "args": [
+   "--backend",
+   "nudge",
+   "--lock",
+   "J1,U7,U20,U21,U22,U23"
+  ],
+  "env": {},
+  "log_level": "info"
+ },
+ {
+  "name": "cr-tnudge-gridneg005-lock",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-dev/release/copperroute",
+  "args": [
+   "--backend",
+   "nudge",
+   "--set",
+   "router.fanout.enabled=false",
+   "--lock",
+   "J1,U7,U20,U21,U22,U23"
+  ],
+  "env": {
+   "COPPERROUTE_NUDGE_BASE": "grid",
+   "COPPERROUTE_GRID_NEGOTIATE": "1",
+   "COPPERROUTE_GRID_CELL_MM": "0.05"
+  },
+  "log_level": "info"
+ }
+]

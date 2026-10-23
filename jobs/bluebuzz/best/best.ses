@@ -6,7 +6,8 @@
       (place J6 988000 -963000 back 180)
     )
     (component "Connector_USB:USB_C_Receptacle_HRO_TYPE-C-31-M-12"
-      (place J1 1000000 -1334000 front 0)
+      (place J1 1000000 -1334000 front 0
+       (lock_type position))
     )
     (component "Crystal:Crystal_SMD_3225-4Pin_3.2x2.5mm"
       (place Y1 1012000 -1199000 front 270)
@@ -59,12 +60,16 @@
       (place C83 1044000 -1077000 front 0)
     )
     (component "bluebuzz-rm2:DPS368_LGA-8"
-      (place U21 1100000 -1120000 back 180)
+      (place U21 1100000 -1120000 back 180
+       (lock_type position))
     )
     (component "bluebuzz-rm2:DPS368_LGA-8::1"
-      (place U20 1000000 -900000 back 0)
-      (place U23 1000000 -1348000 back 0)
-      (place U22 900000 -1120000 back 0)
+      (place U20 1000000 -900000 back 0
+       (lock_type position))
+      (place U23 1000000 -1348000 back 0
+       (lock_type position))
+      (place U22 900000 -1120000 back 0
+       (lock_type position))
     )
     (component "bluebuzz-rm2:LED_1010_WS2812"
       (place D2 1088000 -1226000 front 180)
@@ -88,7 +93,8 @@
       (place J3 939000 -952000 back 270)
     )
     (component "bluebuzz-rm2:RM2"
-      (place U7 1000000 -916500 front 0)
+      (place U7 1000000 -916500 front 0
+       (lock_type position))
     )
     (component "Button_Switch_SMD:Panasonic_EVQPUL_EVQPUC"
       (place SW1 903500 -1228500 front 111)
@@ -132,7 +138,7 @@
       (place C140 1103000 -1080000 front 0)
       (place C82 1080000 -1127500 front 0)
       (place C123 1000000 -1324000 back 0)
-      (place C95 1080000 -1138000 front 0)
+      (place C95 1080717 -1137746 front 0)
     )
     (component "Capacitor_SMD:C_0603_1608Metric"
       (place C131 905000 -1172000 back 270)
@@ -745,6 +751,27 @@
       (net "1V1"
         (wire
           (path F.Cu 2000
+            1024000 -1157380
+            1023750 -1160120
+            1024000 -1157500
+          )
+        )
+        (wire
+          (path F.Cu 2000
+            1069000 -1119000
+            1063750 -1119620
+            1058500 -1119000
+          )
+        )
+        (wire
+          (path F.Cu 2000
+            1036000 -1088620
+            1035750 -1091620
+            1036000 -1088500
+          )
+        )
+        (wire
+          (path F.Cu 2000
             989620 -1115000
             990250 -1115120
             989500 -1115000
@@ -1313,6 +1340,20 @@
         )
       )
       (net "USB_DM"
+        (via "Via[0-5]_400:200_um" 1017250 -1254620
+        )
+        (wire
+          (path B.Cu 1500
+            1017250 -1254620
+            1017500 -1253500
+          )
+        )
+        (wire
+          (path F.Cu 1500
+            1017380 -1253500
+            1017250 -1254620
+          )
+        )
         (wire
           (path F.Cu 1500
             1017375 -1236500
@@ -1354,6 +1395,13 @@
       (net "USB_DP_C"
         (wire
           (path F.Cu 1500
+            1013000 -1053800
+            1012750 -1055120
+            1013000 -1054100
+          )
+        )
+        (wire
+          (path F.Cu 1500
             1028000 -1083000
             1028250 -1087120
             1028000 -1088500
@@ -1361,6 +1409,22 @@
         )
       )
       (net VBUS
+        (via "Via[0-5]_700:400_um" 994750 -1222120
+        )
+        (wire
+          (path F.Cu 6500
+            994750 -1222120
+            994750 -1237620
+            993000 -1240200
+          )
+        )
+        (wire
+          (path In2.Cu 6500
+            995500 -1237500
+            994750 -1236620
+            994750 -1222120
+          )
+        )
         (via "Via[0-5]_700:400_um" 901750 -1030120
         )
         (wire
