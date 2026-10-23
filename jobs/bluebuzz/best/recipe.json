@@ -1,36 +1,33 @@
 {
   "config": {
-    "name": "cr-tnudge-gridneg005-lock",
+    "name": "cr-gridneg005-nofan",
     "router": "copperroute",
-    "binary": "/home/sequoia/Software/ultraroute/copperroute/target-dev/release/copperroute",
+    "binary": "/home/sequoia/Software/ultraroute/copperroute/target-e1/release/copperroute",
     "args": [
       "--backend",
-      "nudge",
+      "grid",
       "--set",
-      "router.fanout.enabled=false",
-      "--lock",
-      "J1,U7,U20,U21,U22,U23"
+      "router.fanout.enabled=false"
     ],
     "env": {
-      "COPPERROUTE_NUDGE_BASE": "grid",
       "COPPERROUTE_GRID_NEGOTIATE": "1",
       "COPPERROUTE_GRID_CELL_MM": "0.05"
-    },
-    "log_level": "info"
+    }
   },
   "score": {
-    "name": "cr-tnudge-gridneg005-lock",
+    "name": "cr-gridneg005-nofan",
     "router": "copperroute",
-    "unconnected": 12,
+    "unconnected": 10,
     "new_violations": 0,
-    "vias": 24,
-    "length_mm": "206.2",
-    "wall_s": "482.1",
-    "peak_rss_mb": "653",
+    "vias": 37,
+    "length_mm": "265.0",
+    "wall_s": "145.8",
+    "peak_rss_mb": "434",
     "exit": "0",
-    "args": "--backend nudge --set router.fanout.enabled=false --lock J1,U7,U20,U21,U22,U23",
-    "env": "{\"COPPERROUTE_NUDGE_BASE\": \"grid\", \"COPPERROUTE_GRID_NEGOTIATE\": \"1\", \"COPPERROUTE_GRID_CELL_MM\": \"0.05\"}",
-    "finished_at": "2026-10-23T00:07:35"
+    "args": "--backend grid --set router.fanout.enabled=false",
+    "env": "{\"COPPERROUTE_GRID_NEGOTIATE\": \"1\", \"COPPERROUTE_GRID_CELL_MM\": \"0.05\"}",
+    "finished_at": "2026-10-22T17:50:02",
+    "new_warnings": 10
   },
   "input_dsn": "bluebuzz-rm2.dsn",
   "copperroute": "/home/sequoia/Software/ultraroute/copperroute/target/release/copperroute",

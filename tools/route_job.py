@@ -8,8 +8,9 @@ A job directory holds:
 Results go to runs/<name>.*, leaderboard.csv, and best/ (session + recipe.json + drc.json).
 
 Every attempt is scored by the same referee, `copperroute drc`, against the bare input:
-clean attempts (no violations added) before the rest, then unconnected items, then violations
-added, then vias, then copper length.
+clean attempts (no errors added) before the rest, then unconnected items, then errors added,
+then vias, then copper length. Violations the board's rules rate as warnings (a dangling stub)
+are counted in new_warnings and do not rank.
 """
 import argparse
 import collections
@@ -25,7 +26,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 COPPERROUTE = ROOT / "copperroute" / "target" / "release" / "copperroute"
 FREEROUTING = ROOT / "freerouting" / "build" / "libs" / "freerouting-current-executable.jar"
-FIELDS = ["name", "router", "unconnected", "new_violations", "vias", "length_mm", "wall_s",
+FIELDS = ["name", "router", "unconnected", "new_violations", "new_warnings", "vias", "length_mm", "wall_s",
           "peak_rss_mb", "exit", "args", "env", "finished_at"]
 
 
@@ -54,8 +55,9 @@ def violation_key(v):
     return (v["type"], tuple(sorted(i["description"] for i in v["items"])))
 
 
-def new_violations(report, bare_keys):
-    after = collections.Counter(violation_key(v) for v in report["violations"])
+def new_violations(report, bare_keys, severity):
+    after = collections.Counter(violation_key(v) for v in report["violations"]
+                                if v.get("severity", "error") == severity)
     return sum(max(0, n - bare_keys[k]) for k, n in after.items())
 
 
@@ -123,7 +125,7 @@ def run_one(job, dsn, project, cfg, timeout_s, bare_keys):
            "args": " ".join(cfg.get("args", [])), "env": json.dumps(cfg.get("env", {})),
            "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
     if not ses.exists():
-        row.update(unconnected=10**6, new_violations=10**6, vias=0, length_mm=0)
+        row.update(unconnected=10**6, new_violations=10**6, new_warnings=0, vias=0, length_mm=0)
         return row, None
     score(row, dsn, project, ses, runs / f"{name}.drc.json", bare_keys)
     return row, ses
@@ -133,7 +135,8 @@ def score(row, dsn, project, ses, out, bare_keys):
     report = drc(dsn, ses, out, project)
     vias, length = session_stats(ses)
     row.update(unconnected=len(report["unconnected_items"]),
-               new_violations=new_violations(report, bare_keys),
+               new_violations=new_violations(report, bare_keys, "error"),
+               new_warnings=new_violations(report, bare_keys, "warning"),
                vias=vias, length_mm=f"{length:.1f}")
 
 
@@ -163,7 +166,7 @@ def rescore(job, dsn, project, rows, bare_keys, best):
         if ses.exists():
             score(row, dsn, project, ses, job / "runs" / f"{row['name']}.drc.json", bare_keys)
             print(f"  {row['name']}: unconnected={row['unconnected']} "
-                  f"new_violations={row['new_violations']}", flush=True)
+                  f"new_errors={row['new_violations']} new_warnings={row['new_warnings']}", flush=True)
     write_board(job / "leaderboard.csv", rows)
     kept = [r for r in rows if (job / "runs" / f"{r['name']}.ses").exists() and r["name"] in configs]
     if kept:
@@ -212,7 +215,8 @@ def main():
             continue
         print(f"→ {cfg['name']} ({cfg['router']} {' '.join(cfg.get('args', []))})", flush=True)
         row, ses = run_one(job, dsn, project, cfg, args.timeout, bare_keys)
-        print(f"  unconnected={row['unconnected']} new_violations={row['new_violations']} "
+        print(f"  unconnected={row['unconnected']} new_errors={row['new_violations']} "
+              f"new_warnings={row['new_warnings']} "
               f"vias={row['vias']} length={row['length_mm']}mm wall={row['wall_s']}s", flush=True)
         rows = [r for r in rows if r["name"] != cfg["name"]] + [row]
         write_board(board, rows)

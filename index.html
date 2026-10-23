@@ -145,11 +145,14 @@ footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
       <tr><td>Freerouting 2.4.1</td><td>34</td><td>61</td><td>81</td><td></td><td></td></tr>
       <tr><td>maze</td><td>14</td><td>0</td><td>96</td><td>52</td><td>2 clearance</td></tr>
       <tr><td>grid, before the via fix</td><td>5</td><td>60</td><td>204</td><td>28</td><td>42 stacked holes, 12 hole-to-hole, 4 shorts, 4 clearance</td></tr>
-      <tr><td>grid</td><td>6</td><td>5</td><td>161</td><td>33</td><td>4 clearance</td></tr>
-      <tr><td><b>grid + nudge</b> (U7 0.026 mm)</td><td><b>2</b></td><td>3</td><td>176</td><td>33</td><td>2 clearance</td></tr>
+      <tr><td>grid, before the leg check</td><td>6</td><td>5</td><td>161</td><td>33</td><td>4 clearance</td></tr>
+      <tr><td>grid + nudge, before the leg check</td><td>2</td><td>3</td><td>176</td><td>33</td><td>2 clearance</td></tr>
+      <tr><td>grid</td><td>8</td><td>0</td><td>147</td><td></td><td></td></tr>
+      <tr><td><b>grid + nudge</b></td><td><b>7</b></td><td><b>0</b></td><td>148</td><td><b>30</b></td><td><b>none</b> (warnings only)</td></tr>
     </table>
     <ul>
-      <li><code>best/</code> is the maze route (14 open, clean): clean results rank first. Grid + nudge reaches 2 open but adds 2 clearance violations and a dangling track</li>
+      <li><code>best/</code> is grid + nudge: 7 open nets and no DRC errors, confirmed by KiCad. Its one new warning is a 0.62 mm LED_D3 stub from <code>route.py</code> whose free end the route doesn't use</li>
+      <li>The clearance errors were the leg from a path's last free cell to the pin centre, never checked: a 0.4 mm VBUS trace into a 0.25 mm pad came 0.10 mm from a CHRG via. Legs are now checked and necked down when needed, and commit checks everything it inserts. Cost: 2 → 7 open, because the earlier routes were only that complete by breaking clearance</li>
       <li>KiCad unconnected counts ratsnest edges, from <code>kicad-cli pcb drc</code> after importing the session into the board (bare: 249). Our "open nets" and KiCad's edges still disagree in scale; not yet explained</li>
       <li>The maze router gives up on routable connections: <code>blame</code> finds a free grid path for all 14 it leaves, so there is nothing for nudging to fix there</li>
     </ul>
@@ -216,6 +219,10 @@ footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
   <section class="card">
     <h2>Log</h2>
     <div class="log">
+      <div class="entry">
+        <time datetime="2026-10-23">2026-10-23</time>
+        <div>Earring clearance errors fixed: grid commit now checks the leg into each pin (necking down to the pad if needed) and every item it inserts. Earring best: 7 open nets, no DRC errors in our referee or KiCad. Route jobs now rank by new <i>errors</i> as the board's own rules rate them; warnings are counted separately. Bluebuzz rates hole-to-hole as a warning, so its 10-open route (10 hole-to-hole warnings) is back on top.</div>
+      </div>
       <div class="entry">
         <time datetime="2026-10-23">2026-10-23</time>
         <div>Route jobs now rank clean results (no new violations) first, then by open connections. Bests: bluebuzz 12 (grid under the project rules, nothing moved), simple_earring 14 (maze).</div>
