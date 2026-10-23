@@ -8,7 +8,8 @@ A job directory holds:
 Results go to runs/<name>.*, leaderboard.csv, and best/ (session + recipe.json + drc.json).
 
 Every attempt is scored by the same referee, `copperroute drc`, against the bare input:
-unconnected items first, then violations the attempt added, then vias, then copper length.
+clean attempts (no violations added) before the rest, then unconnected items, then violations
+added, then vias, then copper length.
 """
 import argparse
 import collections
@@ -85,8 +86,8 @@ def session_stats(ses):
 
 
 def rank(row):
-    return (int(row["unconnected"]), int(row["new_violations"]), int(row["vias"]),
-            float(row["length_mm"]))
+    return (int(row["new_violations"]) > 0, int(row["unconnected"]), int(row["new_violations"]),
+            int(row["vias"]), float(row["length_mm"]))
 
 
 def run_one(job, dsn, project, cfg, timeout_s, bare_keys):

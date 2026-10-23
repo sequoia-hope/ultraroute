@@ -123,7 +123,7 @@ footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
     <h2>Route job: bluebuzz</h2>
     <p>Input is the tamed DSN <code>route.py</code> feeds Freerouting (bluebuzz <code>6c5bd5e</code>): 6 layers with only 3 routable, 696 keepouts, and 38 connections open before routing. Every attempt is scored by the same <code>copperroute drc</code> against the bare input. "Unconnected" counts <i>nets</i> with an open connection: the DRC lists one entry per such net, not one per missing connection. <a href="jobs/bluebuzz/leaderboard.csv">Leaderboard</a> (24 attempts), <a href="jobs/bluebuzz/best/recipe.json">best recipe</a>.</p>
     <ul>
-      <li><b>Rescored with the KiCad project rules (2026-10-23):</b> the 6-unconnected best below has <b>11 hole-to-hole violations</b>, and the 10-unconnected grid route has 10. The best result with no new violations is now <b>12 unconnected</b> (grid + nudge with the via fix and project rules; 24 vias, 206 mm, 482 s), ahead of the earlier clean best of 14. <code>best/</code> still holds the 6-unconnected session because the leaderboard ranks open connections first</li>
+      <li><b>Rescored with the KiCad project rules (2026-10-23):</b> the 6-unconnected best below has <b>11 hole-to-hole violations</b>, and the 10-unconnected grid route has 10. The best result with no new violations is now <b>12 unconnected</b> (grid + nudge with the via fix and project rules; 24 vias, 206 mm, 482 s), ahead of the earlier clean best of 14. No part moved: the nudge found nothing to improve, so this is the grid route under the project rules. It is now <code>best/</code>: the leaderboard ranks clean results (no new violations) first</li>
       <li><i>Before rescoring:</i> 6 unconnected, 0 new violations, by moving <b>C95 0.08 mm</b> (+0.072, +0.025). J1, U7 and U20–U23 locked. Recipe: <code>--backend nudge --set router.fanout.enabled=false --lock J1,U7,U20,U21,U22,U23</code> with <code>COPPERROUTE_NUDGE_BASE=grid COPPERROUTE_GRID_NEGOTIATE=1 COPPERROUTE_GRID_CELL_MM=0.05</code> (282 s; 39 vias, 271 mm). Blame named C95 as the part in TAC_SDO's way. Four connections closed after the move, partly because the router took a different path once the board changed</li>
       <li>What <code>copperroute blame</code> says about the 6 still open: VBAT and 3V3_SYS have one end buried in the tamed DSN's keepouts and planes (no free grid cell at all); 3V3_SENS, MOTOR2_PWM, TAC_SDO and USB_DM_C cross only other nets' routed copper, so they are congestion, not placement</li>
       <li>Best without moving parts: 10 unconnected, 0 new violations. Recipe: <code>--backend grid --set router.fanout.enabled=false</code> with <code>COPPERROUTE_GRID_NEGOTIATE=1 COPPERROUTE_GRID_CELL_MM=0.05</code> (146 s; PathFinder on 12 CPU threads, then maze). Costs copper: 37 vias, 265 mm. Without negotiation: 13</li>
@@ -149,6 +149,7 @@ footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
       <tr><td><b>grid + nudge</b> (U7 0.026 mm)</td><td><b>2</b></td><td>3</td><td>176</td><td>33</td><td>2 clearance</td></tr>
     </table>
     <ul>
+      <li><code>best/</code> is the maze route (14 open, clean): clean results rank first. Grid + nudge reaches 2 open but adds 2 clearance violations and a dangling track</li>
       <li>KiCad unconnected counts ratsnest edges, from <code>kicad-cli pcb drc</code> after importing the session into the board (bare: 249). Our "open nets" and KiCad's edges still disagree in scale; not yet explained</li>
       <li>The maze router gives up on routable connections: <code>blame</code> finds a free grid path for all 14 it leaves, so there is nothing for nudging to fix there</li>
     </ul>
@@ -215,6 +216,10 @@ footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
   <section class="card">
     <h2>Log</h2>
     <div class="log">
+      <div class="entry">
+        <time datetime="2026-10-23">2026-10-23</time>
+        <div>Route jobs now rank clean results (no new violations) first, then by open connections. Bests: bluebuzz 12 (grid under the project rules, nothing moved), simple_earring 14 (maze).</div>
+      </div>
       <div class="entry">
         <time datetime="2026-10-23">2026-10-23</time>
         <div>Grid router no longer stacks vias or breaks hole-to-hole. Our DRC already had the hole check, but only with the KiCad project rules, which the runner never passed; it now does, for routing and scoring. Rescoring showed the earlier bluebuzz bests (6 and 10 unconnected) carry 11 and 10 hole-to-hole violations. With the fix: earring 2 open nets with 3 new violations, none of them holes; bluebuzz 12 with none.</div>
