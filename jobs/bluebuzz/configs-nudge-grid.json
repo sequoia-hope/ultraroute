@@ -1,0 +1,31 @@
+[
+ {
+  "name": "cr-nudge-grid005-nofan",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-dev/release/copperroute",
+  "args": [
+   "--backend",
+   "nudge",
+   "--set",
+   "router.fanout.enabled=false"
+  ],
+  "env": {
+   "COPPERROUTE_NUDGE_BASE": "grid",
+   "COPPERROUTE_GRID_CELL_MM": "0.05"
+  }
+ },
+ {
+  "name": "cr-nudge-grid-nofan",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-dev/release/copperroute",
+  "args": [
+   "--backend",
+   "nudge",
+   "--set",
+   "router.fanout.enabled=false"
+  ],
+  "env": {
+   "COPPERROUTE_NUDGE_BASE": "grid"
+  }
+ }
+]
