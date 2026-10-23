@@ -1,0 +1,5 @@
+name,router,unconnected,new_violations,new_warnings,vias,length_mm,wall_s,peak_rss_mb,exit,args,env,finished_at
+cr-gridneg005-nofan,copperroute,10,0,0,155,928.4,388.8,475,0,--backend grid --set router.fanout.enabled=false,"{""COPPERROUTE_GRID_NEGOTIATE"": ""1"", ""COPPERROUTE_GRID_CELL_MM"": ""0.05""}",2026-10-23T02:11:55
+cr-tnudge-gridneg005-lock,copperroute,10,0,0,155,928.4,441.7,474,0,"--backend nudge --set router.fanout.enabled=false --lock LED1,LED2,LED3,LED4,LED5,LED6,LED7,LED8,LED9,LED10,LED11,LED12,LED13,LED14,LED15,LED16,LED17,LED18,LED19,LED20,LED21,LED22,LED23,LED24,LED25,LED26,LED27,LED28,LED29,LED30,LED31,LED32,LED33,LED34,LED35,LED36,LED37,LED38,LED39,LED40,LED41,LED42,LED43,LED44,LED45,J1,SW1,SW2","{""COPPERROUTE_GRID_NEGOTIATE"": ""1"", ""COPPERROUTE_GRID_CELL_MM"": ""0.05"", ""COPPERROUTE_NUDGE_BASE"": ""grid""}",2026-10-23T02:19:17
+cr-maze,copperroute,12,0,0,117,1200.1,271.0,175,0,,{},2026-10-23T02:05:25
+freerouting,freerouting,32,3,40,117,1021.3,1789.3,1107,0,-mp 40,{},2026-10-23T02:00:54

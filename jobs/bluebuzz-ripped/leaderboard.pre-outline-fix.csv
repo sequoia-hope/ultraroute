@@ -1,0 +1,5 @@
+name,router,unconnected,new_violations,new_warnings,vias,length_mm,wall_s,peak_rss_mb,exit,args,env,finished_at
+cr-tnudge-gridneg005-lock,copperroute,18,0,0,129,1257.0,2800.3,698,0,"--backend nudge --set router.fanout.enabled=false --lock J1,U7,U20,U21,U22,U23","{""COPPERROUTE_GRID_NEGOTIATE"": ""1"", ""COPPERROUTE_GRID_CELL_MM"": ""0.05"", ""COPPERROUTE_NUDGE_BASE"": ""grid""}",2026-10-23T04:26:48
+cr-maze,copperroute,23,0,5,93,1065.8,497.1,324,0,,{},2026-10-23T03:27:36
+cr-gridneg005-nofan,copperroute,24,0,0,111,1082.1,748.0,692,0,--backend grid --set router.fanout.enabled=false,"{""COPPERROUTE_GRID_NEGOTIATE"": ""1"", ""COPPERROUTE_GRID_CELL_MM"": ""0.05""}",2026-10-23T03:40:06
+freerouting,freerouting,1000000,1000000,0,0,0,3600.7,1865,124,-mp 40,{},2026-10-23T03:19:19

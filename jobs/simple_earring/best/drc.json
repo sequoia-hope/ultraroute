@@ -1,13 +1,13 @@
 {
   "$schema": "https://schemas.kicad.org/drc.v1.json",
   "coordinate_units": "mm",
-  "date": "2026-10-23T08:29:07.410012735Z",
+  "date": "2026-10-23T12:00:18.517894773Z",
   "kicad_version": "N/A",
   "copperroute_version": "Copperroute 0.1.0",
   "source": "earring.dsn",
   "unconnected_items": [
     {
-      "description": "Unconnected items: Pin [VDD_CORE] and Pin [VDD_CORE] (33 total items in net)",
+      "description": "Unconnected items: Pin [VDD_CORE] and Pin [VDD_CORE] (29 total items in net)",
       "items": [
         {
           "description": "Conduction Area [VDD_CORE]",
@@ -92,50 +92,10 @@
         {
           "description": "Trace [VDD_CORE]",
           "pos": {
-            "x": 104.8568,
-            "y": -101.98825
-          },
-          "uuid": "1553"
-        },
-        {
-          "description": "Via [VDD_CORE]",
-          "pos": {
-            "x": 104.9136,
-            "y": -102.2965
-          },
-          "uuid": "1554"
-        },
-        {
-          "description": "Trace [VDD_CORE]",
-          "pos": {
-            "x": 103.76214999999999,
-            "y": -101.1692
-          },
-          "uuid": "1555"
-        },
-        {
-          "description": "Via [VDD_CORE]",
-          "pos": {
-            "x": 102.6107,
-            "y": -100.0419
-          },
-          "uuid": "1556"
-        },
-        {
-          "description": "Trace [VDD_CORE]",
-          "pos": {
-            "x": 102.31225,
-            "y": -99.6575
-          },
-          "uuid": "1557"
-        },
-        {
-          "description": "Trace [VDD_CORE]",
-          "pos": {
             "x": 99.8613,
             "y": -96.63775
           },
-          "uuid": "1558"
+          "uuid": "1553"
         },
         {
           "description": "Trace [VDD_CORE]",
@@ -143,7 +103,7 @@
             "x": 95.88125,
             "y": -100.265
           },
-          "uuid": "1559"
+          "uuid": "1554"
         },
         {
           "description": "Trace [VDD_CORE]",
@@ -151,7 +111,15 @@
             "x": 100,
             "y": -96.2325
           },
-          "uuid": "1560"
+          "uuid": "1555"
+        },
+        {
+          "description": "Trace [VDD_CORE]",
+          "pos": {
+            "x": 104.11875,
+            "y": -100.99
+          },
+          "uuid": "1557"
         },
         {
           "description": "Trace [VDD_CORE]",
@@ -159,7 +127,7 @@
             "x": 103.23005,
             "y": -100.3115
           },
-          "uuid": "1562"
+          "uuid": "1558"
         },
         {
           "description": "Via [VDD_CORE]",
@@ -167,7 +135,7 @@
             "x": 103.27260000000001,
             "y": -95.773
           },
-          "uuid": "1563"
+          "uuid": "1559"
         },
         {
           "description": "Via [VDD_CORE]",
@@ -175,7 +143,7 @@
             "x": 99.7226,
             "y": -96.873
           },
-          "uuid": "1564"
+          "uuid": "1560"
         },
         {
           "description": "Trace [VDD_CORE]",
@@ -183,7 +151,7 @@
             "x": 103.30380000000001,
             "y": -95.1615
           },
-          "uuid": "1565"
+          "uuid": "1561"
         },
         {
           "description": "Trace [VDD_CORE]",
@@ -191,7 +159,7 @@
             "x": 101.4976,
             "y": -97.20845
           },
-          "uuid": "1566"
+          "uuid": "1562"
         },
         {
           "description": "Trace [VDD_CORE]",
@@ -199,7 +167,7 @@
             "x": 96.7325,
             "y": -99.9115
           },
-          "uuid": "1568"
+          "uuid": "1564"
         },
         {
           "description": "Conduction Area [VDD_CORE]",
@@ -263,7 +231,7 @@
             "x": 98.4113,
             "y": -104.19565
           },
-          "uuid": "1561"
+          "uuid": "1556"
         },
         {
           "description": "Trace [VDD_CORE]",
@@ -271,7 +239,7 @@
             "x": 98.7863,
             "y": -103.15525
           },
-          "uuid": "1567"
+          "uuid": "1563"
         }
       ],
       "severity": "warning",
@@ -539,26 +507,34 @@
         {
           "description": "Trace [3V3]",
           "pos": {
-            "x": 102.94815,
-            "y": -107.5
+            "x": 92.38605,
+            "y": -99.36025
+          },
+          "uuid": "1565"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 103.40785000000001,
+            "y": -108.0365
+          },
+          "uuid": "1568"
+        },
+        {
+          "description": "Via [3V3]",
+          "pos": {
+            "x": 103.56569999999999,
+            "y": -108.573
           },
           "uuid": "1569"
         },
         {
           "description": "Trace [3V3]",
           "pos": {
-            "x": 102.58345,
-            "y": -107.3682
+            "x": 102.8373,
+            "y": -108.54105
           },
           "uuid": "1570"
-        },
-        {
-          "description": "Via [3V3]",
-          "pos": {
-            "x": 102.5206,
-            "y": -107.23639999999999
-          },
-          "uuid": "1571"
         },
         {
           "description": "Trace [3V3]",
@@ -566,55 +542,47 @@
             "x": 109.19760000000001,
             "y": -90.223
           },
-          "uuid": "1573"
+          "uuid": "1572"
         },
         {
           "description": "Trace [3V3]",
           "pos": {
             "x": 103.0662,
-            "y": -90.62039999999999
+            "y": -90.76464999999999
           },
-          "uuid": "1574"
+          "uuid": "1573"
         },
         {
           "description": "Trace [3V3]",
           "pos": {
             "x": 103.4175,
-            "y": -89.4069
+            "y": -89.55114999999999
           },
-          "uuid": "1575"
+          "uuid": "1574"
         },
         {
           "description": "Via [3V3]",
           "pos": {
             "x": 103.41239999999999,
-            "y": -90.0408
+            "y": -90.3293
           },
-          "uuid": "1576"
+          "uuid": "1575"
         },
         {
           "description": "Trace [3V3]",
           "pos": {
             "x": 103.35675,
-            "y": -90.82625
+            "y": -90.9705
           },
-          "uuid": "1577"
-        },
-        {
-          "description": "Trace [3V3]",
-          "pos": {
-            "x": 92.3908,
-            "y": -99.3555
-          },
-          "uuid": "1579"
+          "uuid": "1576"
         },
         {
           "description": "Via [3V3]",
           "pos": {
-            "x": 92.5916,
-            "y": -99.821
+            "x": 92.58210000000001,
+            "y": -99.8305
           },
-          "uuid": "1580"
+          "uuid": "1578"
         },
         {
           "description": "Trace [3V3]",
@@ -622,7 +590,7 @@
             "x": 108.435,
             "y": -88.85175
           },
-          "uuid": "1581"
+          "uuid": "1579"
         },
         {
           "description": "Trace [3V3]",
@@ -630,7 +598,7 @@
             "x": 108.1595,
             "y": -88.5792
           },
-          "uuid": "1582"
+          "uuid": "1580"
         },
         {
           "description": "Trace [3V3]",
@@ -638,7 +606,7 @@
             "x": 107.95225,
             "y": -88.719
           },
-          "uuid": "1583"
+          "uuid": "1581"
         },
         {
           "description": "Trace [3V3]",
@@ -646,7 +614,7 @@
             "x": 108.9625,
             "y": -88.8145
           },
-          "uuid": "1584"
+          "uuid": "1582"
         },
         {
           "description": "Trace [3V3]",
@@ -654,7 +622,7 @@
             "x": 107.575,
             "y": -88.467
           },
-          "uuid": "1585"
+          "uuid": "1583"
         },
         {
           "description": "Trace [3V3]",
@@ -662,7 +630,7 @@
             "x": 106.6525,
             "y": -88.294
           },
-          "uuid": "1586"
+          "uuid": "1584"
         },
         {
           "description": "Trace [3V3]",
@@ -670,7 +638,7 @@
             "x": 105.5363,
             "y": -88.573
           },
-          "uuid": "1587"
+          "uuid": "1585"
         },
         {
           "description": "Trace [3V3]",
@@ -678,7 +646,7 @@
             "x": 105.9,
             "y": -88.2815
           },
-          "uuid": "1588"
+          "uuid": "1586"
         },
         {
           "description": "Trace [3V3]",
@@ -686,7 +654,7 @@
             "x": 108.4105,
             "y": -91.49430000000001
           },
-          "uuid": "1592"
+          "uuid": "1588"
         },
         {
           "description": "Via [3V3]",
@@ -694,7 +662,7 @@
             "x": 104.82260000000001,
             "y": -88.573
           },
-          "uuid": "1593"
+          "uuid": "1589"
         },
         {
           "description": "Trace [3V3]",
@@ -702,7 +670,7 @@
             "x": 105.5613,
             "y": -87.3565
           },
-          "uuid": "1594"
+          "uuid": "1590"
         },
         {
           "description": "Trace [3V3]",
@@ -710,7 +678,7 @@
             "x": 103.7713,
             "y": -89.8865
           },
-          "uuid": "1595"
+          "uuid": "1591"
         },
         {
           "description": "Via [3V3]",
@@ -718,7 +686,7 @@
             "x": 105.1726,
             "y": -88.773
           },
-          "uuid": "1596"
+          "uuid": "1592"
         },
         {
           "description": "Trace [3V3]",
@@ -726,7 +694,7 @@
             "x": 103.94630000000001,
             "y": -89.9865
           },
-          "uuid": "1597"
+          "uuid": "1593"
         },
         {
           "description": "Via [3V3]",
@@ -734,7 +702,7 @@
             "x": 107.9726,
             "y": -91.373
           },
-          "uuid": "1598"
+          "uuid": "1594"
         },
         {
           "description": "Via [3V3]",
@@ -742,7 +710,7 @@
             "x": 108.3726,
             "y": -90.473
           },
-          "uuid": "1599"
+          "uuid": "1595"
         },
         {
           "description": "Trace [3V3]",
@@ -750,7 +718,7 @@
             "x": 107.504,
             "y": -91.473
           },
-          "uuid": "1600"
+          "uuid": "1596"
         },
         {
           "description": "Trace [3V3]",
@@ -758,7 +726,7 @@
             "x": 108.23585,
             "y": -90.53805
           },
-          "uuid": "1601"
+          "uuid": "1597"
         },
         {
           "description": "Trace [3V3]",
@@ -766,7 +734,7 @@
             "x": 108.1726,
             "y": -90.923
           },
-          "uuid": "1602"
+          "uuid": "1598"
         },
         {
           "description": "Via [3V3]",
@@ -774,7 +742,7 @@
             "x": 110.02260000000001,
             "y": -89.973
           },
-          "uuid": "1603"
+          "uuid": "1599"
         },
         {
           "description": "Via [3V3]",
@@ -782,7 +750,7 @@
             "x": 109.57260000000001,
             "y": -88.373
           },
-          "uuid": "1604"
+          "uuid": "1600"
         },
         {
           "description": "Trace [3V3]",
@@ -790,7 +758,7 @@
             "x": 109.9726,
             "y": -90.086
           },
-          "uuid": "1605"
+          "uuid": "1601"
         },
         {
           "description": "Trace [3V3]",
@@ -798,7 +766,7 @@
             "x": 109.39355,
             "y": -88.50875
           },
-          "uuid": "1606"
+          "uuid": "1602"
         },
         {
           "description": "Trace [3V3]",
@@ -806,7 +774,7 @@
             "x": 109.7976,
             "y": -89.173
           },
-          "uuid": "1607"
+          "uuid": "1603"
         },
         {
           "description": "Via [3V3]",
@@ -814,7 +782,7 @@
             "x": 103.4226,
             "y": -88.773
           },
-          "uuid": "1608"
+          "uuid": "1604"
         },
         {
           "description": "Trace [3V3]",
@@ -822,7 +790,7 @@
             "x": 104.0113,
             "y": -88.4815
           },
-          "uuid": "1609"
+          "uuid": "1605"
         },
         {
           "description": "Via [3V3]",
@@ -830,7 +798,7 @@
             "x": 92.6226,
             "y": -94.673
           },
-          "uuid": "1610"
+          "uuid": "1606"
         },
         {
           "description": "Via [3V3]",
@@ -838,7 +806,7 @@
             "x": 95.4226,
             "y": -98.723
           },
-          "uuid": "1611"
+          "uuid": "1607"
         },
         {
           "description": "Trace [3V3]",
@@ -846,7 +814,7 @@
             "x": 93.9113,
             "y": -95.3015
           },
-          "uuid": "1612"
+          "uuid": "1608"
         },
         {
           "description": "Trace [3V3]",
@@ -854,7 +822,7 @@
             "x": 95.3113,
             "y": -98.5515
           },
-          "uuid": "1613"
+          "uuid": "1609"
         },
         {
           "description": "Trace [3V3]",
@@ -862,7 +830,7 @@
             "x": 94.81,
             "y": -106.5265
           },
-          "uuid": "1614"
+          "uuid": "1610"
         },
         {
           "description": "Trace [3V3]",
@@ -870,7 +838,7 @@
             "x": 93.0625,
             "y": -105.54
           },
-          "uuid": "1615"
+          "uuid": "1611"
         },
         {
           "description": "Via [3V3]",
@@ -878,7 +846,7 @@
             "x": 92.27260000000001,
             "y": -102.873
           },
-          "uuid": "1620"
+          "uuid": "1616"
         },
         {
           "description": "Trace [3V3]",
@@ -886,7 +854,7 @@
             "x": 92.3488,
             "y": -102.8115
           },
-          "uuid": "1621"
+          "uuid": "1617"
         },
         {
           "description": "Trace [3V3]",
@@ -894,7 +862,7 @@
             "x": 96.035,
             "y": -91.825
           },
-          "uuid": "1622"
+          "uuid": "1618"
         },
         {
           "description": "Trace [3V3]",
@@ -902,7 +870,7 @@
             "x": 91.92955,
             "y": -104.50075
           },
-          "uuid": "1623"
+          "uuid": "1619"
         },
         {
           "description": "Trace [3V3]",
@@ -910,7 +878,7 @@
             "x": 93.7,
             "y": -98.03885000000001
           },
-          "uuid": "1624"
+          "uuid": "1620"
         },
         {
           "description": "Trace [3V3]",
@@ -918,7 +886,7 @@
             "x": 105.175,
             "y": -99.14
           },
-          "uuid": "1625"
+          "uuid": "1621"
         },
         {
           "description": "Trace [3V3]",
@@ -926,7 +894,7 @@
             "x": 105.125,
             "y": -96.715
           },
-          "uuid": "1626"
+          "uuid": "1622"
         },
         {
           "description": "Conduction Area [3V3]",
@@ -1051,34 +1019,10 @@
         {
           "description": "Trace [3V3]",
           "pos": {
-            "x": 103.0998,
-            "y": -102.18180000000001
+            "x": 96.95665,
+            "y": -101.86364999999999
           },
-          "uuid": "1572"
-        },
-        {
-          "description": "Trace [3V3]",
-          "pos": {
-            "x": 97.33019999999999,
-            "y": -96.41664999999999
-          },
-          "uuid": "1578"
-        },
-        {
-          "description": "Trace [3V3]",
-          "pos": {
-            "x": 96.7325,
-            "y": -99.5
-          },
-          "uuid": "1589"
-        },
-        {
-          "description": "Trace [3V3]",
-          "pos": {
-            "x": 97.12875,
-            "y": -101.65769999999999
-          },
-          "uuid": "1590"
+          "uuid": "1566"
         },
         {
           "description": "Trace [3V3]",
@@ -1086,7 +1030,31 @@
             "x": 96.5625,
             "y": -102.1
           },
-          "uuid": "1591"
+          "uuid": "1567"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 102.97494999999999,
+            "y": -102.07469999999999
+          },
+          "uuid": "1571"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 97.33019999999999,
+            "y": -96.41664999999999
+          },
+          "uuid": "1577"
+        },
+        {
+          "description": "Trace [3V3]",
+          "pos": {
+            "x": 96.7325,
+            "y": -99.5
+          },
+          "uuid": "1587"
         },
         {
           "description": "Trace [3V3]",
@@ -1094,7 +1062,7 @@
             "x": 101.1863,
             "y": -96.26775
           },
-          "uuid": "1616"
+          "uuid": "1612"
         },
         {
           "description": "Trace [3V3]",
@@ -1102,7 +1070,7 @@
             "x": 99.9863,
             "y": -102.76775
           },
-          "uuid": "1617"
+          "uuid": "1613"
         },
         {
           "description": "Trace [3V3]",
@@ -1110,7 +1078,7 @@
             "x": 100.4113,
             "y": -102.76775
           },
-          "uuid": "1618"
+          "uuid": "1614"
         },
         {
           "description": "Trace [3V3]",
@@ -1118,2051 +1086,7 @@
             "x": 103.23005,
             "y": -98.3115
           },
-          "uuid": "1619"
-        }
-      ],
-      "severity": "warning",
-      "type": "unconnected_items"
-    },
-    {
-      "description": "Unconnected items: Pin [VLED] and Pin [VLED] (235 total items in net)",
-      "items": [
-        {
-          "description": "Conduction Area [VLED]",
-          "pos": {
-            "x": 100.00025,
-            "y": -97.375
-          },
-          "uuid": "13"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 99.52,
-            "y": -108.55
-          },
-          "uuid": "15"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 98.22,
-            "y": -83.7
-          },
-          "uuid": "27"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 103.58,
-            "y": -93.1
-          },
-          "uuid": "39"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 100.82,
-            "y": -83.7
-          },
-          "uuid": "45"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 107.6,
-            "y": -99.88
-          },
-          "uuid": "75"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 91.65,
-            "y": -97.83
-          },
-          "uuid": "129"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 94.9773,
-            "y": -82.7342
-          },
-          "uuid": "143"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 92.35119999999999,
-            "y": -86.6923
-          },
-          "uuid": "157"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 90.6926,
-            "y": -89.19210000000001
-          },
-          "uuid": "171"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 93.6643,
-            "y": -84.7132
-          },
-          "uuid": "185"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 89.03410000000001,
-            "y": -91.69189999999999
-          },
-          "uuid": "199"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 88.72475,
-            "y": -101.3864
-          },
-          "uuid": "211"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 89.94839999999999,
-            "y": -105.29335
-          },
-          "uuid": "215"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 111.02895,
-            "y": -97.27675
-          },
-          "uuid": "219"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 111.27810000000001,
-            "y": -101.36319999999999
-          },
-          "uuid": "223"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 109.27675,
-            "y": -93.45235000000001
-          },
-          "uuid": "227"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 110.0624,
-            "y": -105.2727
-          },
-          "uuid": "231"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 100.01164999999999,
-            "y": -111.36014999999999
-          },
-          "uuid": "235"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 105.46045,
-            "y": -87.70045
-          },
-          "uuid": "239"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 104.03795,
-            "y": -110.61835
-          },
-          "uuid": "243"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 106.62225,
-            "y": -89.45145
-          },
-          "uuid": "247"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 105.0227,
-            "y": -82.7342
-          },
-          "uuid": "267"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 110.3317,
-            "y": -90.736
-          },
-          "uuid": "281"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 107.6772,
-            "y": -86.7351
-          },
-          "uuid": "295"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 106.35,
-            "y": -84.7346
-          },
-          "uuid": "309"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 95.9838,
-            "y": -110.62655000000001
-          },
-          "uuid": "321"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 94.53089999999999,
-            "y": -112.59464999999999
-          },
-          "uuid": "327"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 93.77125,
-            "y": -88.85844999999999
-          },
-          "uuid": "381"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 95.07735000000001,
-            "y": -86.88985000000001
-          },
-          "uuid": "385"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 90.63945,
-            "y": -93.56315
-          },
-          "uuid": "389"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 88.9655,
-            "y": -97.29935
-          },
-          "uuid": "393"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 109.7808,
-            "y": -99.5067
-          },
-          "uuid": "502"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 110.39345,
-            "y": -108.97285000000001
-          },
-          "uuid": "516"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 86.30680000000001,
-            "y": -101.01535000000001
-          },
-          "uuid": "530"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 106.3,
-            "y": -96.975
-          },
-          "uuid": "609"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 108.60645,
-            "y": -110.69885000000001
-          },
-          "uuid": "629"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 111.8402,
-            "y": -106.9531
-          },
-          "uuid": "643"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 113.7298,
-            "y": -99.82745
-          },
-          "uuid": "657"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 94.24,
-            "y": -91.25
-          },
-          "uuid": "689"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 87.5559,
-            "y": -105.8035
-          },
-          "uuid": "721"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 92.35095,
-            "y": -111.40289999999999
-          },
-          "uuid": "747"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 96.8899,
-            "y": -113.37395
-          },
-          "uuid": "761"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 97.12435,
-            "y": -81.92635
-          },
-          "uuid": "781"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 101.8329,
-            "y": -113.6079
-          },
-          "uuid": "795"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 97.7024,
-            "y": -109.77080000000001
-          },
-          "uuid": "809"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 86.34795,
-            "y": -98.53125
-          },
-          "uuid": "831"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 90.2192,
-            "y": -99.5067
-          },
-          "uuid": "855"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 104.25495,
-            "y": -113.05494999999999
-          },
-          "uuid": "869"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 92.47760000000001,
-            "y": -108.51275
-          },
-          "uuid": "881"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 107.53985,
-            "y": -108.49730000000001
-          },
-          "uuid": "885"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 100,
-            "y": -80.91914999999999
-          },
-          "uuid": "891"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 90.42135,
-            "y": -109.83805000000001
-          },
-          "uuid": "905"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 86.71385000000001,
-            "y": -103.46615
-          },
-          "uuid": "994"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 86.8361,
-            "y": -96.09525
-          },
-          "uuid": "1008"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 106.63145,
-            "y": -92.98775
-          },
-          "uuid": "1022"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 112.77695,
-            "y": -94.97165
-          },
-          "uuid": "1036"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 111.6618,
-            "y": -92.75160000000001
-          },
-          "uuid": "1050"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 113.47395,
-            "y": -97.35625
-          },
-          "uuid": "1064"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 112.8993,
-            "y": -104.7058
-          },
-          "uuid": "1095"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 113.5361,
-            "y": -102.3043
-          },
-          "uuid": "1109"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 106.53775,
-            "y": -112.07455
-          },
-          "uuid": "1141"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 106.35,
-            "y": -98.15
-          },
-          "uuid": "1153"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 88.80539999999999,
-            "y": -107.95089999999999
-          },
-          "uuid": "1169"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 93.35275,
-            "y": -93.02345
-          },
-          "uuid": "1183"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 93.6106,
-            "y": -107.88210000000001
-          },
-          "uuid": "1197"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 102.60730000000001,
-            "y": -81.69565
-          },
-          "uuid": "1211"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 106.3894,
-            "y": -107.88210000000001
-          },
-          "uuid": "1235"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 87.7552,
-            "y": -93.78715
-          },
-          "uuid": "1249"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 99.35075,
-            "y": -113.7155
-          },
-          "uuid": "1263"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 102.2976,
-            "y": -109.77080000000001
-          },
-          "uuid": "1277"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 94.88560000000001,
-            "y": -87.8292
-          },
-          "uuid": "1509"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 91.8563,
-            "y": -86.1972
-          },
-          "uuid": "1546"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 95.0774,
-            "y": -86.88980000000001
-          },
-          "uuid": "1547"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 108.577,
-            "y": -86.7351
-          },
-          "uuid": "1548"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 94.1618,
-            "y": -85.9142
-          },
-          "uuid": "1549"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 96.2773,
-            "y": -82.7342
-          },
-          "uuid": "1550"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 106.85,
-            "y": -85.4829
-          },
-          "uuid": "1551"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 105.14,
-            "y": -82.14569999999999
-          },
-          "uuid": "1552"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 87.4652,
-            "y": -106.05265
-          },
-          "uuid": "1627"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 88.5813,
-            "y": -107.91295
-          },
-          "uuid": "1628"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 86.5899,
-            "y": -103.67760000000001
-          },
-          "uuid": "1629"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 87.30675,
-            "y": -105.7128
-          },
-          "uuid": "1630"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 86.1486,
-            "y": -100.87905
-          },
-          "uuid": "1631"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 86.18025,
-            "y": -98.66635000000001
-          },
-          "uuid": "1632"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 86.00155000000001,
-            "y": -99.77205000000001
-          },
-          "uuid": "1633"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 108.02364999999999,
-            "y": -97.18894999999999
-          },
-          "uuid": "1634"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 90.42405000000001,
-            "y": -110.035
-          },
-          "uuid": "1635"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 90.36775,
-            "y": -110.40315
-          },
-          "uuid": "1636"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 90.3088,
-            "y": -110.57430000000001
-          },
-          "uuid": "1637"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 93.43855,
-            "y": -112.4003
-          },
-          "uuid": "1638"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 92.64569999999999,
-            "y": -111.9333
-          },
-          "uuid": "1639"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 94.27875,
-            "y": -112.69405
-          },
-          "uuid": "1640"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 92.3959,
-            "y": -111.63119999999999
-          },
-          "uuid": "1641"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 92.8505,
-            "y": -112.00710000000001
-          },
-          "uuid": "1642"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 99.84530000000001,
-            "y": -111.7226
-          },
-          "uuid": "1643"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 99.679,
-            "y": -112.085
-          },
-          "uuid": "1644"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 98.80160000000001,
-            "y": -113.9005
-          },
-          "uuid": "1645"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 97.8484,
-            "y": -113.79610000000001
-          },
-          "uuid": "1646"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 99.2002,
-            "y": -113.85244999999999
-          },
-          "uuid": "1647"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 97.01655000000001,
-            "y": -113.57725
-          },
-          "uuid": "1648"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 98.5536,
-            "y": -113.81160000000001
-          },
-          "uuid": "1649"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 110.56075,
-            "y": -90.78235000000001
-          },
-          "uuid": "1650"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 110.92694999999999,
-            "y": -90.89
-          },
-          "uuid": "1651"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 111.06410000000001,
-            "y": -90.9513
-          },
-          "uuid": "1652"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 110.1583,
-            "y": -99.89189999999999
-          },
-          "uuid": "1653"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 110.76955000000001,
-            "y": -100.6789
-          },
-          "uuid": "1654"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 110.3576,
-            "y": -99.89795
-          },
-          "uuid": "1655"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 110.4542,
-            "y": -99.8013
-          },
-          "uuid": "1656"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 89.21335,
-            "y": -90.81814999999999
-          },
-          "uuid": "1657"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 89.8599,
-            "y": -89.84360000000001
-          },
-          "uuid": "1658"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 89.48530000000001,
-            "y": -90.4024
-          },
-          "uuid": "1659"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 95.93095,
-            "y": -110.20675
-          },
-          "uuid": "1660"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 95.8781,
-            "y": -109.787
-          },
-          "uuid": "1661"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 88.9789,
-            "y": -100.8322
-          },
-          "uuid": "1662"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 97.04860000000001,
-            "y": -81.68305000000001
-          },
-          "uuid": "1663"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 97.09015,
-            "y": -81.05539999999999
-          },
-          "uuid": "1664"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 97.20739999999999,
-            "y": -80.67110000000001
-          },
-          "uuid": "1665"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 107.23735,
-            "y": -99.49244999999999
-          },
-          "uuid": "1666"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 112.55114999999999,
-            "y": -94.36395
-          },
-          "uuid": "1667"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 112.1292,
-            "y": -93.35775
-          },
-          "uuid": "1668"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 112.1297,
-            "y": -93.8549
-          },
-          "uuid": "1669"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 111.89525,
-            "y": -92.8061
-          },
-          "uuid": "1670"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 112.87475,
-            "y": -94.9223
-          },
-          "uuid": "1671"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 113.35294999999999,
-            "y": -95.92160000000001
-          },
-          "uuid": "1672"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 113.6036,
-            "y": -97.1632
-          },
-          "uuid": "1673"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 113.88355,
-            "y": -100.93435000000001
-          },
-          "uuid": "1674"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 113.79485000000001,
-            "y": -99.8275
-          },
-          "uuid": "1675"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 113.8599,
-            "y": -98.72155000000001
-          },
-          "uuid": "1676"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 113.72165,
-            "y": -102.17275
-          },
-          "uuid": "1677"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 113.6669,
-            "y": -97.4859
-          },
-          "uuid": "1678"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 113.66765,
-            "y": -102.48985
-          },
-          "uuid": "1679"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 113.5898,
-            "y": -103.57865
-          },
-          "uuid": "1680"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 113.13985000000001,
-            "y": -104.59385
-          },
-          "uuid": "1681"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 86.61460000000001,
-            "y": -96.21545
-          },
-          "uuid": "1682"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 86.21285,
-            "y": -98.3637
-          },
-          "uuid": "1683"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 87.51010000000001,
-            "y": -93.8672
-          },
-          "uuid": "1684"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 86.71594999999999,
-            "y": -95.8738
-          },
-          "uuid": "1685"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 88.80505000000001,
-            "y": -91.73825
-          },
-          "uuid": "1686"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 87.6751,
-            "y": -93.54195
-          },
-          "uuid": "1687"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 90.46355,
-            "y": -89.23845
-          },
-          "uuid": "1688"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 88.98775,
-            "y": -91.46289999999999
-          },
-          "uuid": "1689"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 92.30485,
-            "y": -86.4633
-          },
-          "uuid": "1690"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 93.43525,
-            "y": -84.75955
-          },
-          "uuid": "1691"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 94.93095,
-            "y": -82.5052
-          },
-          "uuid": "1692"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 109.9182,
-            "y": -99.64795
-          },
-          "uuid": "1693"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 111.90185000000001,
-            "y": -107.19014999999999
-          },
-          "uuid": "1694"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 103.83095,
-            "y": -92.4551
-          },
-          "uuid": "1695"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 104.08189999999999,
-            "y": -91.8102
-          },
-          "uuid": "1696"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 104.49325,
-            "y": -91.39885000000001
-          },
-          "uuid": "1697"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 92.8695,
-            "y": -108.4459
-          },
-          "uuid": "1698"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 93.40039999999999,
-            "y": -108.35325
-          },
-          "uuid": "1699"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 93.2614,
-            "y": -108.37910000000001
-          },
-          "uuid": "1700"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 89.15085,
-            "y": -96.83489999999999
-          },
-          "uuid": "1701"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 89.33619999999999,
-            "y": -96.37039999999999
-          },
-          "uuid": "1702"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 91.3855,
-            "y": -97.6032
-          },
-          "uuid": "1703"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 91.121,
-            "y": -97.37639999999999
-          },
-          "uuid": "1704"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 91.06855,
-            "y": -97.37639999999999
-          },
-          "uuid": "1705"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 90.0818,
-            "y": -99.64795
-          },
-          "uuid": "1706"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 89.58875,
-            "y": -100.0336
-          },
-          "uuid": "1707"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 89.23310000000001,
-            "y": -100.278
-          },
-          "uuid": "1708"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 99.2578,
-            "y": -83.43780000000001
-          },
-          "uuid": "1709"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 100.57589999999999,
-            "y": -82.8953
-          },
-          "uuid": "1710"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 100.5578,
-            "y": -83.43780000000001
-          },
-          "uuid": "1711"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 100.8562,
-            "y": -82.615
-          },
-          "uuid": "1712"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 106.57365,
-            "y": -98.58895
-          },
-          "uuid": "1713"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 106.87469999999999,
-            "y": -99.1049
-          },
-          "uuid": "1714"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 93.2449,
-            "y": -92.77465
-          },
-          "uuid": "1715"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 106.61205,
-            "y": -107.8465
-          },
-          "uuid": "1716"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 102.49375,
-            "y": -109.8996
-          },
-          "uuid": "1717"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 93.575,
-            "y": -108.10475
-          },
-          "uuid": "1718"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 109.1726,
-            "y": -95.273
-          },
-          "uuid": "1719"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 109.2247,
-            "y": -94.3627
-          },
-          "uuid": "1720"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 101.32260000000001,
-            "y": -80.998
-          },
-          "uuid": "1721"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 107.95410000000001,
-            "y": -93.1627
-          },
-          "uuid": "1722"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 102.6726,
-            "y": -81.473
-          },
-          "uuid": "1723"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 102.63995,
-            "y": -81.5843
-          },
-          "uuid": "1724"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 90.4726,
-            "y": -93.273
-          },
-          "uuid": "1725"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 90.556,
-            "y": -93.41810000000001
-          },
-          "uuid": "1726"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 88.0855,
-            "y": -92.5407
-          },
-          "uuid": "1727"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 86.93039999999999,
-            "y": -94.7998
-          },
-          "uuid": "1728"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 86.23545,
-            "y": -97.26585
-          },
-          "uuid": "1729"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 86.76180000000001,
-            "y": -104.75555
-          },
-          "uuid": "1730"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 89.6726,
-            "y": -105.423
-          },
-          "uuid": "1731"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 87.6226,
-            "y": -105.773
-          },
-          "uuid": "1732"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 89.8105,
-            "y": -105.35815
-          },
-          "uuid": "1733"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 87.58925,
-            "y": -105.78825
-          },
-          "uuid": "1734"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 87.86585000000001,
-            "y": -107.0884
-          },
-          "uuid": "1735"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 99.32260000000001,
-            "y": -108.773
-          },
-          "uuid": "1736"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 97.9226,
-            "y": -109.823
-          },
-          "uuid": "1737"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 99.4213,
-            "y": -108.6615
-          },
-          "uuid": "1738"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 97.8125,
-            "y": -109.7969
-          },
-          "uuid": "1739"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 98.6226,
-            "y": -109.298
-          },
-          "uuid": "1740"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 103.0439,
-            "y": -113.33145
-          },
-          "uuid": "1741"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 103.36395,
-            "y": -110.32335
-          },
-          "uuid": "1742"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 104.27260000000001,
-            "y": -111.423
-          },
-          "uuid": "1743"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 104.27260000000001,
-            "y": -112.973
-          },
-          "uuid": "1744"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 104.1553,
-            "y": -111.02064999999999
-          },
-          "uuid": "1745"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 104.26375,
-            "y": -113.014
-          },
-          "uuid": "1746"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 107.5721,
-            "y": -111.38669999999999
-          },
-          "uuid": "1747"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 107.18725,
-            "y": -108.1541
-          },
-          "uuid": "1748"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 107.6226,
-            "y": -108.773
-          },
-          "uuid": "1749"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 108.4726,
-            "y": -110.573
-          },
-          "uuid": "1750"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 107.5812,
-            "y": -108.63515
-          },
-          "uuid": "1751"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 108.53955,
-            "y": -110.63595
-          },
-          "uuid": "1752"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 110.57260000000001,
-            "y": -108.923
-          },
-          "uuid": "1753"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 110.48305,
-            "y": -108.94789999999999
-          },
-          "uuid": "1754"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 112.14305,
-            "y": -107.35010000000001
-          },
-          "uuid": "1755"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 110.77260000000001,
-            "y": -105.823
-          },
-          "uuid": "1756"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 112.32260000000001,
-            "y": -107.273
-          },
-          "uuid": "1757"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 110.4175,
-            "y": -105.54785000000001
-          },
-          "uuid": "1758"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 106.1726,
-            "y": -97.423
-          },
-          "uuid": "1759"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 106.27260000000001,
-            "y": -98.073
-          },
-          "uuid": "1760"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 106.2363,
-            "y": -97.199
-          },
-          "uuid": "1761"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 106.3113,
-            "y": -98.1115
-          },
-          "uuid": "1762"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 106.2226,
-            "y": -97.748
-          },
-          "uuid": "1763"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 111.6226,
-            "y": -97.323
-          },
-          "uuid": "1764"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 111.3258,
-            "y": -97.29985
-          },
-          "uuid": "1765"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 93.6885,
-            "y": -91.88795
-          },
-          "uuid": "1766"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 93.57260000000001,
-            "y": -90.323
-          },
-          "uuid": "1767"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 93.9063,
-            "y": -90.7865
-          },
-          "uuid": "1768"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 106.6726,
-            "y": -89.023
-          },
-          "uuid": "1769"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 106.64744999999999,
-            "y": -89.23725
-          },
-          "uuid": "1770"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 105.3726,
-            "y": -87.373
-          },
-          "uuid": "1771"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 105.41655,
-            "y": -87.53675
-          },
-          "uuid": "1772"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 106.6,
-            "y": -85.10875
-          },
-          "uuid": "1773"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 94.57260000000001,
-            "y": -82.073
-          },
-          "uuid": "1774"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 94.7286,
-            "y": -82.17460000000001
-          },
-          "uuid": "1775"
-        },
-        {
-          "description": "Via [VLED]",
-          "pos": {
-            "x": 92.3726,
-            "y": -85.323
-          },
-          "uuid": "1776"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 92.7894,
-            "y": -85.06439999999999
-          },
-          "uuid": "1777"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 108.12710000000001,
-            "y": -86.7351
-          },
-          "uuid": "1778"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 92.0574,
-            "y": -86.21575
-          },
-          "uuid": "1779"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 105.12265,
-            "y": -82.43995
-          },
-          "uuid": "1780"
-        },
-        {
-          "description": "Trace [VLED]",
-          "pos": {
-            "x": 93.74695,
-            "y": -88.9157
-          },
-          "uuid": "1781"
-        },
-        {
-          "description": "Pin [VLED]",
-          "pos": {
-            "x": 109.00439999999999,
-            "y": -88.7355
-          },
-          "uuid": "253"
-        }
-      ],
-      "severity": "warning",
-      "type": "unconnected_items"
-    },
-    {
-      "description": "Unconnected items: Pin [LED_D0] and Pin [LED_D0] (5 total items in net)",
-      "items": [
-        {
-          "description": "Pin [LED_D0]",
-          "pos": {
-            "x": 95.26,
-            "y": -91.25
-          },
-          "uuid": "690"
-        },
-        {
-          "description": "Pin [LED_D0]",
-          "pos": {
-            "x": 94.95,
-            "y": -89.5
-          },
-          "uuid": "735"
-        },
-        {
-          "description": "Trace [LED_D0]",
-          "pos": {
-            "x": 95.105,
-            "y": -90.67685
-          },
-          "uuid": "1850"
-        },
-        {
-          "description": "Trace [LED_D0]",
-          "pos": {
-            "x": 94.95,
-            "y": -89.80185
-          },
-          "uuid": "1851"
-        },
-        {
-          "description": "Pin [LED_D0]",
-          "pos": {
-            "x": 95.6438,
-            "y": -82.5993
-          },
-          "uuid": "142"
-        }
-      ],
-      "severity": "warning",
-      "type": "unconnected_items"
-    },
-    {
-      "description": "Unconnected items: Pin [LED_EN] and Pin [LED_EN] (8 total items in net)",
-      "items": [
-        {
-          "description": "Pin [LED_EN]",
-          "pos": {
-            "x": 103.4375,
-            "y": -101.5
-          },
-          "uuid": "416"
-        },
-        {
-          "description": "Pin [LED_EN]",
-          "pos": {
-            "x": 106.85,
-            "y": -98.65
-          },
-          "uuid": "1156"
-        },
-        {
-          "description": "Via [LED_EN]",
-          "pos": {
-            "x": 107.35,
-            "y": -97.65
-          },
-          "uuid": "1529"
-        },
-        {
-          "description": "Trace [LED_EN]",
-          "pos": {
-            "x": 102.9152,
-            "y": -101.38055
-          },
-          "uuid": "1987"
-        },
-        {
-          "description": "Via [LED_EN]",
-          "pos": {
-            "x": 102.3929,
-            "y": -101.2611
-          },
-          "uuid": "1988"
-        },
-        {
-          "description": "Trace [LED_EN]",
-          "pos": {
-            "x": 104.87145,
-            "y": -99.45555
-          },
-          "uuid": "1989"
-        },
-        {
-          "description": "Trace [LED_EN]",
-          "pos": {
-            "x": 107.1,
-            "y": -98.15
-          },
-          "uuid": "1990"
-        },
-        {
-          "description": "Pin [LED_EN]",
-          "pos": {
-            "x": 107.6,
-            "y": -86.76
-          },
-          "uuid": "572"
-        }
-      ],
-      "severity": "warning",
-      "type": "unconnected_items"
-    },
-    {
-      "description": "Unconnected items: Pin [VBUS_SENSE] and Pin [VBUS_SENSE] (4 total items in net)",
-      "items": [
-        {
-          "description": "Pin [VBUS_SENSE]",
-          "pos": {
-            "x": 110.99,
-            "y": -98.75
-          },
-          "uuid": "701"
-        },
-        {
-          "description": "Pin [VBUS_SENSE]",
-          "pos": {
-            "x": 104.74,
-            "y": -103.25
-          },
-          "uuid": "918"
-        },
-        {
-          "description": "Trace [VBUS_SENSE]",
-          "pos": {
-            "x": 108.07889999999999,
-            "y": -101
-          },
-          "uuid": "2193"
-        },
-        {
-          "description": "Pin [VBUS_SENSE]",
-          "pos": {
-            "x": 96.5625,
-            "y": -100.7
-          },
-          "uuid": "454"
+          "uuid": "1615"
         }
       ],
       "severity": "warning",
@@ -3214,10 +1138,10 @@
         {
           "description": "Trace [VSYS]",
           "pos": {
-            "x": 110.53405000000001,
-            "y": -100.2561
+            "x": 110.5287,
+            "y": -100.27035000000001
           },
-          "uuid": "2197"
+          "uuid": "2209"
         },
         {
           "description": "Trace [VSYS]",
@@ -3225,7 +1149,7 @@
             "x": 101.9226,
             "y": -104.698
           },
-          "uuid": "2198"
+          "uuid": "2210"
         },
         {
           "description": "Trace [VSYS]",
@@ -3233,31 +1157,31 @@
             "x": 93.0976,
             "y": -101.573
           },
-          "uuid": "2199"
+          "uuid": "2211"
         },
         {
           "description": "Trace [VSYS]",
           "pos": {
             "x": 92.8476,
-            "y": -101.00264999999999
+            "y": -101.523
           },
-          "uuid": "2200"
+          "uuid": "2212"
         },
         {
           "description": "Trace [VSYS]",
           "pos": {
             "x": 110.334,
-            "y": -105.3594
+            "y": -105.37365
           },
-          "uuid": "2201"
+          "uuid": "2213"
         },
         {
           "description": "Trace [VSYS]",
           "pos": {
-            "x": 110.17805,
-            "y": -103.35185
+            "x": 110.16735,
+            "y": -103.3661
           },
-          "uuid": "2202"
+          "uuid": "2214"
         },
         {
           "description": "Via [VSYS]",
@@ -3265,7 +1189,7 @@
             "x": 109.62039999999999,
             "y": -103.80789999999999
           },
-          "uuid": "2203"
+          "uuid": "2215"
         },
         {
           "description": "Trace [VSYS]",
@@ -3273,7 +1197,7 @@
             "x": 109.8102,
             "y": -103.16645
           },
-          "uuid": "2204"
+          "uuid": "2216"
         },
         {
           "description": "Via [VSYS]",
@@ -3281,7 +1205,7 @@
             "x": 110.0852,
             "y": -97.6164
           },
-          "uuid": "2205"
+          "uuid": "2217"
         },
         {
           "description": "Trace [VSYS]",
@@ -3289,7 +1213,7 @@
             "x": 109.66760000000001,
             "y": -97.83319999999999
           },
-          "uuid": "2206"
+          "uuid": "2218"
         },
         {
           "description": "Via [VSYS]",
@@ -3297,7 +1221,7 @@
             "x": 109.32260000000001,
             "y": -107.823
           },
-          "uuid": "2207"
+          "uuid": "2219"
         },
         {
           "description": "Via [VSYS]",
@@ -3305,7 +1229,7 @@
             "x": 91.6726,
             "y": -101.573
           },
-          "uuid": "2208"
+          "uuid": "2220"
         },
         {
           "description": "Trace [VSYS]",
@@ -3313,7 +1237,7 @@
             "x": 109.6113,
             "y": -107.5115
           },
-          "uuid": "2209"
+          "uuid": "2221"
         },
         {
           "description": "Trace [VSYS]",
@@ -3321,7 +1245,7 @@
             "x": 91.52075,
             "y": -101.6629
           },
-          "uuid": "2210"
+          "uuid": "2222"
         },
         {
           "description": "Via [VSYS]",
@@ -3329,7 +1253,7 @@
             "x": 91.1726,
             "y": -101.473
           },
-          "uuid": "2211"
+          "uuid": "2223"
         },
         {
           "description": "Via [VSYS]",
@@ -3337,7 +1261,7 @@
             "x": 94.52260000000001,
             "y": -101.573
           },
-          "uuid": "2212"
+          "uuid": "2224"
         },
         {
           "description": "Trace [VSYS]",
@@ -3345,7 +1269,7 @@
             "x": 91.27075,
             "y": -101.6129
           },
-          "uuid": "2213"
+          "uuid": "2225"
         },
         {
           "description": "Trace [VSYS]",
@@ -3353,7 +1277,7 @@
             "x": 94.4488,
             "y": -102.1615
           },
-          "uuid": "2214"
+          "uuid": "2226"
         },
         {
           "description": "Pin [VSYS]",
@@ -3508,12 +1432,12 @@
       "description": "Via is not connected or connected on only one layer",
       "items": [
         {
-          "description": "Via [QSPI_SD3]",
+          "description": "Via [QSPI_SCLK]",
           "pos": {
-            "x": 101.11,
-            "y": -104.21
+            "x": 101.29,
+            "y": -105.06
           },
-          "uuid": "1534"
+          "uuid": "1530"
         }
       ],
       "severity": "warning",
@@ -3544,6 +1468,21 @@
             "y": -94.3
           },
           "uuid": "1526"
+        }
+      ],
+      "severity": "warning",
+      "type": "via_dangling"
+    },
+    {
+      "description": "Via is not connected or connected on only one layer",
+      "items": [
+        {
+          "description": "Via [IMU_INT1]",
+          "pos": {
+            "x": 105.55,
+            "y": -97.65
+          },
+          "uuid": "1525"
         }
       ],
       "severity": "warning",
@@ -3596,5 +1535,5 @@
     }
   ],
   "schematic_parity": [],
-  "quality_score": 979.7891235351563
+  "quality_score": 989.8899536132813
 }

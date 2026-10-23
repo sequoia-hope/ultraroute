@@ -121,8 +121,10 @@ footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
 
   <section class="card" id="bluebuzz">
     <h2>Route job: bluebuzz</h2>
-    <p>Input is the tamed DSN <code>route.py</code> feeds Freerouting (bluebuzz <code>6c5bd5e</code>): 6 layers with only 3 routable, 696 keepouts, and 38 connections open before routing. Every attempt is scored by the same <code>copperroute drc</code> against the bare input. "Unconnected" counts <i>nets</i> with an open connection: the DRC lists one entry per such net, not one per missing connection. <a href="jobs/bluebuzz/leaderboard.csv">Leaderboard</a> (24 attempts), <a href="jobs/bluebuzz/best/recipe.json">best recipe</a>.</p>
+    <p>Input is the tamed DSN <code>route.py</code> feeds Freerouting (bluebuzz <code>6c5bd5e</code>): 6 layers with only 3 routable, 696 keepouts, and 38 connections open before routing. Every attempt is scored by the same <code>copperroute drc</code> against the bare input. "Unconnected" counts <i>nets</i> with an open connection: the DRC lists one entry per such net, not one per missing connection. <a href="jobs/bluebuzz/leaderboard.csv">Leaderboard</a> (49 attempts), <a href="jobs/bluebuzz/best/recipe.json">best recipe</a>.</p>
     <ul>
+      <li><b>Maze outline fix (2026-10-23): 6 unconnected, 0 new errors</b> (grid + nudge, nothing moved; 24 vias, 224 mm, 393 s). It is now <code>best/</code>, down from 12. Still open: 1V1, 3V3_SENS, 3V3_SYS, MOTOR2_PWM, TAC_SDO, VBAT. The other reruns gained too: maze 19 → 15, no fanout 18 → 16. Bluebuzz has 104 outline edges off the 45° grid. Negotiated grid without nudge reaches 11, but with 10 hole-to-hole errors</li>
+      <li><b>Ripped up</b> (<code>jobs/bluebuzz-ripped</code>, the scripted copper removed: 69 open, 20 violations bare): maze <b>9</b>, grid + nudge 14, negotiated grid 16, all with no new errors. Before the outline fix: 18, 23 and 24. Freerouting hit the one-hour cap without writing a session. Keeping the scripted copper still wins (6)</li>
       <li><b>Rescored with the KiCad project rules (2026-10-23):</b> the 6-unconnected best below has <b>11 hole-to-hole violations</b>, and the 10-unconnected grid route has 10. The best result with no new violations is now <b>12 unconnected</b> (grid + nudge with the via fix and project rules; 24 vias, 206 mm, 482 s), ahead of the earlier clean best of 14. No part moved: the nudge found nothing to improve, so this is the grid route under the project rules. It is now <code>best/</code>: the leaderboard ranks clean results (no new violations) first</li>
       <li><i>Before rescoring:</i> 6 unconnected, 0 new violations, by moving <b>C95 0.08 mm</b> (+0.072, +0.025). J1, U7 and U20–U23 locked. Recipe: <code>--backend nudge --set router.fanout.enabled=false --lock J1,U7,U20,U21,U22,U23</code> with <code>COPPERROUTE_NUDGE_BASE=grid COPPERROUTE_GRID_NEGOTIATE=1 COPPERROUTE_GRID_CELL_MM=0.05</code> (282 s; 39 vias, 271 mm). Blame named C95 as the part in TAC_SDO's way. Four connections closed after the move, partly because the router took a different path once the board changed</li>
       <li>What <code>copperroute blame</code> says about the 6 still open: VBAT and 3V3_SYS have one end buried in the tamed DSN's keepouts and planes (no free grid cell at all); 3V3_SENS, MOTOR2_PWM, TAC_SDO and USB_DM_C cross only other nets' routed copper, so they are congestion, not placement</li>
@@ -148,13 +150,18 @@ footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
       <tr><td>grid, before the leg check</td><td>6</td><td>5</td><td>161</td><td>33</td><td>4 clearance</td></tr>
       <tr><td>grid + nudge, before the leg check</td><td>2</td><td>3</td><td>176</td><td>33</td><td>2 clearance</td></tr>
       <tr><td>grid</td><td>8</td><td>0</td><td>147</td><td></td><td></td></tr>
-      <tr><td><b>grid + nudge</b></td><td><b>7</b></td><td><b>0</b></td><td>148</td><td><b>30</b></td><td><b>none</b> (warnings only)</td></tr>
+      <tr><td>grid + nudge, before the outline fix</td><td>7</td><td>0</td><td>148</td><td>30</td><td>none (warnings only)</td></tr>
+      <tr><td>maze, outline fix</td><td>6</td><td>0</td><td>97</td><td></td><td></td></tr>
+      <tr><td>grid, outline fix</td><td>4</td><td>0</td><td>148</td><td></td><td></td></tr>
+      <tr><td><b>grid + nudge, outline fix</b></td><td><b>3</b></td><td><b>0</b></td><td>150</td><td><b>26</b></td><td><b>none</b> (warnings only)</td></tr>
     </table>
     <ul>
-      <li><code>best/</code> is grid + nudge: 7 open nets and no DRC errors, confirmed by KiCad. Its one new warning is a 0.62 mm LED_D3 stub from <code>route.py</code> whose free end the route doesn't use</li>
+      <li><code>best/</code> is grid + nudge: <b>3 open nets</b> (3V3, VDD_CORE, VSYS) and no DRC errors, confirmed by KiCad. The nudge found no move to try; its final reroute closed one of the grid's 4. The one new warning is the 0.62 mm LED_D3 stub from <code>route.py</code> whose free end the route doesn't use</li>
+      <li><b>Why the maze gave up on routable connections:</b> its 45° room tree bounds each board-outline edge by an octagon. On a long edge off the 45° grid, such as the earring's two 14.5 mm edges at 56.4° and 123.6°, that octagon reaches 1.2–2 mm into the board. Pins inside it (LED1–3, LED32–34, BT1, SW2, R10, U6) got a start room of zero size, so the search could not be created, in every pass. It was not the step budget. Fix (copperroute <code>fork/governance</code>): such edges are cut into pieces short enough that each octagon overshoots by at most 50 µm. The referee's DRC is unchanged. Maze 14 → 6, and the grid router gains too, since the maze finishes its leftovers</li>
+      <li><b>Ripped up</b> (<code>jobs/simple_earring-ripped</code>, the scripted tracks removed: 90 open bare): maze <b>4</b> (one dangling-via warning), grid + nudge 5, negotiated grid 7, all with no new errors. Before the outline fix: 12, 10 and 10. Freerouting: 32 open, 3 new errors. The LEDs are locked, so nudge has nothing to move</li>
+      <li>The router's default <code>copper_to_edge_clearance_um=500</code> overrides this board's 0.2 mm: project rules only ever raise minimums. Left alone for now; lowering it freed only 6 of the stuck pins</li>
       <li>The clearance errors were the leg from a path's last free cell to the pin centre, never checked: a 0.4 mm VBUS trace into a 0.25 mm pad came 0.10 mm from a CHRG via. Legs are now checked and necked down when needed, and commit checks everything it inserts. Cost: 2 → 7 open, because the earlier routes were only that complete by breaking clearance</li>
       <li>KiCad unconnected counts ratsnest edges, from <code>kicad-cli pcb drc</code> after importing the session into the board (bare: 249). Our "open nets" and KiCad's edges still disagree in scale; not yet explained</li>
-      <li>The maze router gives up on routable connections: <code>blame</code> finds a free grid path for all 14 it leaves, so there is nothing for nudging to fix there</li>
     </ul>
   </section>
 
@@ -170,6 +177,7 @@ footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
         <li class="done">PCB skill: governed-autorouter section in <code>references/routing.md</code></li>
         <li class="done">wgpu 30 sees the RTX 3060 (Vulkan; int64 atomics, subgroups, timestamps)</li>
         <li class="done">Fork pushed: <a href="https://github.com/sequoia-hope/copperroute/tree/governance">sequoia-hope/copperroute@governance</a>; default job timeout now 30 min</li>
+        <li class="done"><b>Maze outline fix:</b> long board-outline edges off the 45° grid no longer wall in the pins beside them. Earring 7 → 3 open, bluebuzz 12 → 6, both with no new errors</li>
         <li class="done"><code>tools/route_job.py</code>: governed portfolio routing per board, keeps the best session and its recipe</li>
         <li class="done">Opt-in per-net ripup history (PathFinder history term), <code>COPPERROUTE_RIPUP_HISTORY</code></li>
         <li class="done"><b>No stacked vias:</b> the grid stamps every drilled hole and keeps vias the hole-to-hole distance apart for all nets, own net included; an existing via's centre stays open to its net for reuse. Commit reuses vias at the same point and refuses a path whose via would still clash. Earring: 42 stacked holes, 12 hole-to-hole and 4 shorts down to 0 in KiCad. The runner now hands the board's <code>.kicad_pro</code> to router and referee, and <code>--rescore</code> rescored every kept session</li>
@@ -191,8 +199,9 @@ footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
       <ul class="checks">
         <li>Finish the baseline, then publish the comparison table</li>
         <li>Record the backend name in the result manifest; add a <code>backend</code> argument to MCP <code>route_board</code></li>
-<li>Bluebuzz: get back below 12 with no violations (project rules made it harder: base 10 → 12)</li>
-        <li>Find why the maze router abandons connections that <code>blame</code> shows are routable; fill them with the grid router</li>
+        <li>The 90° room tree has the same flaw for 45° outline edges; not handled yet</li>
+        <li>Whether the 0.5 mm default edge clearance should yield to a board's own smaller rule</li>
+        <li>Bluebuzz's last 6 and the earring's last 3: run <code>blame</code> again now that the maze sees the whole board</li>
         <li>Why our DRC and KiCad disagree on scale (2 open nets vs 25 ratsnest edges)</li>
         <li>Work-efficient GPU shortest paths (delta-stepping or near-far frontier, persistent buffers, GPU traceback) before the GPU can compete with threaded CPU Dijkstra</li>
         <li>Benchmark harness: GPU time and peak GPU memory columns</li>
@@ -219,6 +228,10 @@ footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
   <section class="card">
     <h2>Log</h2>
     <div class="log">
+      <div class="entry">
+        <time datetime="2026-10-23">2026-10-23</time>
+        <div>Found why the maze abandoned routable connections. Its room tree bounds outline edges by 45° octagons, and on long off-angle edges those reach up to 2 mm into the board, leaving start pins with no room. Long edges are now cut into short pieces. Reruns: earring <b>3</b> open (was 7), bluebuzz <b>6</b> (was 12), all with no new errors, earring confirmed in KiCad (26 ratsnest edges, was 30). Ripped-up jobs (scripted copper removed): earring 4, bluebuzz 9; before the fix 10 and 18, so keeping the scripted copper still wins. Hole-to-hole and co-located holes now always count as errors, whatever a board's rules say. Old leaderboards are kept as <code>leaderboard.pre-outline-fix.csv</code>.</div>
+      </div>
       <div class="entry">
         <time datetime="2026-10-23">2026-10-23</time>
         <div>Earring clearance errors fixed: grid commit now checks the leg into each pin (necking down to the pad if needed) and every item it inserts. Earring best: 7 open nets, no DRC errors in our referee or KiCad. Route jobs now rank by new <i>errors</i> as the board's own rules rate them; warnings are counted separately. Bluebuzz rates hole-to-hole as a warning, so its 10-open route (10 hole-to-hole warnings) is back on top.</div>
