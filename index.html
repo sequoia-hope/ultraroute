@@ -123,8 +123,8 @@ footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
     <h2>Route job: bluebuzz</h2>
     <p>Input is the tamed DSN <code>route.py</code> feeds Freerouting (bluebuzz <code>6c5bd5e</code>): 6 layers with only 3 routable, 696 keepouts, and 38 connections open before routing. Every attempt is scored by the same <code>copperroute drc</code> against the bare input. "Unconnected" counts <i>nets</i> with an open connection: the DRC lists one entry per such net, not one per missing connection. <a href="jobs/bluebuzz/leaderboard.csv">Leaderboard</a> (24 attempts), <a href="jobs/bluebuzz/best/recipe.json">best recipe</a>.</p>
     <ul>
-      <li><b>Best: 13 unconnected</b>, 0 new violations, no part moved. Recipe: <code>--backend grid --set router.fanout.enabled=false</code> with <code>COPPERROUTE_GRID_CELL_MM=0.05</code> (104 s, RTX 3060). More copper than maze: 21 vias, 281 mm. At 0.1 mm: 14 unconnected, 13 vias, 73 s</li>
-      <li>Nudge (J4 −0.5 mm, approved): 17 unconnected, 9 vias. Grid and nudge haven't been combined yet</li>
+      <li><b>Best: 10 unconnected</b>, 0 new violations, no part moved. Recipe: <code>--backend grid --set router.fanout.enabled=false</code> with <code>COPPERROUTE_GRID_NEGOTIATE=1 COPPERROUTE_GRID_CELL_MM=0.05</code> (146 s; PathFinder on 12 CPU threads, then maze). Costs copper: 37 vias, 265 mm. Without negotiation: 13</li>
+      <li>Nudge (J4 −0.5 mm, approved): 17 alone. On top of grid it adds nothing (13 → 13)</li>
       <li>Best without moving parts: 18 unconnected, 0 new violations, <b>9 vias</b>, 163.9 mm. Recipe: <code>--set router.fanout.enabled=false</code>, <code>COPPERROUTE_OBSTACLE_HEURISTIC=1</code> and <code>COPPERROUTE_REGION_HISTORY=0.25</code>. Shortest copper: 153.7 mm with 10 vias (heuristic only)</li>
       <li>Freerouting 2.4.1 governed: also 18, but 173 mm, 249 s, 1.3 GB. Freerouting master stalls past 600 s</li>
       <li>Ripup history (factors 0.25–4): no effect. Bluebuzz's failures aren't nets fighting over space</li>

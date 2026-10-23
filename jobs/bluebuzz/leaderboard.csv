@@ -1,4 +1,6 @@
 name,router,unconnected,new_violations,vias,length_mm,wall_s,peak_rss_mb,exit,args,env,finished_at
+cr-gridneg005-nofan,copperroute,10,0,37,265.0,145.8,434,0,--backend grid --set router.fanout.enabled=false,"{""COPPERROUTE_GRID_NEGOTIATE"": ""1"", ""COPPERROUTE_GRID_CELL_MM"": ""0.05""}",2026-10-22T17:50:02
+cr-gridneg-nofan,copperroute,12,0,20,176.5,742.5,526,0,--backend grid --set router.fanout.enabled=false,"{""COPPERROUTE_GRID_NEGOTIATE"": ""1""}",2026-10-22T17:47:36
 cr-grid005-nofan,copperroute,13,0,21,280.7,104.1,322,0,--backend grid --set router.fanout.enabled=false,"{""COPPERROUTE_GRID_CELL_MM"": ""0.05""}",2026-10-22T16:43:54
 cr-nudge-grid005-nofan,copperroute,13,0,21,280.7,441.7,346,0,--backend nudge --set router.fanout.enabled=false,"{""COPPERROUTE_NUDGE_BASE"": ""grid"", ""COPPERROUTE_GRID_CELL_MM"": ""0.05""}",2026-10-22T17:18:40
 cr-grid005-stubs-nofan,copperroute,13,0,21,280.7,104.1,349,0,--backend grid --set router.fanout.enabled=false,"{""COPPERROUTE_GRID_CELL_MM"": ""0.05""}",2026-10-22T17:35:14

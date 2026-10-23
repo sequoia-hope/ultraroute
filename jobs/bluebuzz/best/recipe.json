@@ -1,8 +1,8 @@
 {
   "config": {
-    "name": "cr-grid005-nofan",
+    "name": "cr-gridneg005-nofan",
     "router": "copperroute",
-    "binary": "/home/sequoia/Software/ultraroute/copperroute/target-dev/release/copperroute",
+    "binary": "/home/sequoia/Software/ultraroute/copperroute/target-e1/release/copperroute",
     "args": [
       "--backend",
       "grid",
@@ -10,22 +10,23 @@
       "router.fanout.enabled=false"
     ],
     "env": {
+      "COPPERROUTE_GRID_NEGOTIATE": "1",
       "COPPERROUTE_GRID_CELL_MM": "0.05"
     }
   },
   "score": {
-    "name": "cr-grid005-nofan",
+    "name": "cr-gridneg005-nofan",
     "router": "copperroute",
     "exit": 0,
-    "wall_s": "224.5",
-    "peak_rss_mb": 282,
+    "wall_s": "145.8",
+    "peak_rss_mb": 434,
     "args": "--backend grid --set router.fanout.enabled=false",
-    "env": "{\"COPPERROUTE_GRID_CELL_MM\": \"0.05\"}",
-    "finished_at": "2026-10-22T15:53:02",
-    "unconnected": 13,
+    "env": "{\"COPPERROUTE_GRID_NEGOTIATE\": \"1\", \"COPPERROUTE_GRID_CELL_MM\": \"0.05\"}",
+    "finished_at": "2026-10-22T17:50:02",
+    "unconnected": 10,
     "new_violations": 0,
-    "vias": 21,
-    "length_mm": "278.5"
+    "vias": 37,
+    "length_mm": "265.0"
   },
   "input_dsn": "bluebuzz-rm2.dsn",
   "copperroute": "/home/sequoia/Software/ultraroute/copperroute/target/release/copperroute",
