@@ -261,6 +261,33 @@
    "still_frames": []
   }
  },
+ "reshape-band": {
+  "args": "copperroute reshape bluebuzz from the band-settled board along the 60-step plan: warp, 30 rubber-band rounds (tension 0.2), 15 more with vias free, every step; stops past 50 new violations",
+  "summary": {
+   "closed": [
+    "3V3_SYS: C95 - U1",
+    "3V3_SYS: conductionarea - conductionarea",
+    "VBAT: J2 - conductionarea"
+   ],
+   "moves": 25,
+   "open_end": 14,
+   "open_start": 11,
+   "opened": [
+    "1V1: conductionarea - via",
+    "3V3_SYS: C83 - conductionarea",
+    "3V3_SYS: C95 - R88",
+    "3V3_SYS: U1 - via",
+    "VBAT: C12 - J2",
+    "VREG_LX: U1 - conductionarea"
+   ],
+   "operators": {
+    "reshape/rectangle": 1,
+    "reshape/rectangle \u2192 circle": 24
+   },
+   "parts": 0,
+   "still_frames": []
+  }
+ },
  "reshape-repair": {
   "args": "copperroute reshape bluebuzz along outline-plan: outline as a one-sided contact, USB fan-in carried rigidly, 100 relaxation rounds per step (trace joints move, starting gaps are floors), grid then maze rip-up and reroute (600 s) at each keyframe",
   "summary": {

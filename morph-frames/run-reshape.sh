@@ -1,14 +1,14 @@
 #!/bin/bash
 # Reshape bluebuzz along outline-plan into morph-frames/NAME, then refresh the run summaries.
-#   run-reshape.sh NAME DESCRIPTION [reshape options...]
+#   [SES=session] [PLAN=plan.json] run-reshape.sh NAME DESCRIPTION [reshape options...]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 name=$1; description=$2; shift 2
 rm -rf "morph-frames/$name"
-nice -n 15 copperroute/target-frames/release/copperroute --log-level info reshape \
-  jobs/bluebuzz/input/bluebuzz-rm2.dsn --ses jobs/bluebuzz/best/best.ses \
+nice -n 15 copperroute/target-frames/release/copperroute --log-level ${LOG_LEVEL:-info} reshape \
+  jobs/bluebuzz/input/bluebuzz-rm2.dsn --ses "${SES:-jobs/bluebuzz/best/best.ses}" \
   --kicad-project jobs/bluebuzz/input/bluebuzz-rm2.kicad_pro \
-  --plan morph-frames/outline-plan/plan.json --frames "morph-frames/$name" \
+  --plan "${PLAN:-morph-frames/outline-plan/plan.json}" --frames "morph-frames/$name" \
   -o "morph-frames/$name.ses" "$@" > "morph-frames/$name.log" 2>&1
 python3 - "$name" "$description" <<'PY'
 import json, sys

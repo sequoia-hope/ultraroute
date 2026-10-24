@@ -11,6 +11,9 @@ Interior points (part centres, copper corners) follow mean-value coordinates fro
 rectangle to each superellipse, then the exact bend map. Parts translate rigidly with their centre;
 the anchors are parts like any other, and ride the ends because the ends are where they sit.
 
+Parts joined through a pour (their pads touch it) form a rigid power island, moved as one body
+by the best fit of where the map takes them, so the pours can't tear off a pad.
+
 Each anchor carries its fan-in rigidly: the parts within --fan-in-mm that share a net other than
 ground with it, and the parts among those, keep their place and turn relative to the anchor, so the copper between them (USB's
 pair into its ESD part, say) is never squeezed.
@@ -364,9 +367,75 @@ def fan_in(dsn_text, parts, anchors, radius):
     return groups
 
 
-def relax(parts, positions, poly, fixed, allowed_pairs, allowed_out, angles=None, rounds=800):
+def power_islands(dsn_text, unit_mm, parts, touch_mm=0.1):
+    """Groups of parts joined through pours: a part whose pad touches a plane polygon of the pad's
+    own net (within the pad's size plus `touch_mm`) belongs to that pour, and pours sharing a part
+    share a group, which also takes every part sitting within its members' pads, on either side
+    (decoupling under a chip reaches its pour through vias). Each group moves as one rigid body, so
+    the pours can't be torn off any pad.""" 
+    radii = pad_radii(dsn_text)
+    images = {}
+    for block in sexp_blocks(dsn_text, "image "):
+        name = re.match(r'\(image\s+("[^"]*"|\S+)', block).group(1).strip('"')
+        images[name] = [(m.group(2).strip('"'), radii.get(m.group(1).strip('"'), 0.0) * unit_mm,
+                         float(m.group(3)) * unit_mm, float(m.group(4)) * unit_mm)
+                        for m in re.finditer(r'\(pin\s+("[^"]*"|\S+)\s+(?:\(rotate\s+[-\d.]+\)\s+)?("[^"]*"|\S+)\s+([-\d.]+)\s+([-\d.]+)', block)]
+    net_of = {}
+    for name, pins in re.findall(r'\(net\s+("[^"]*"|\S+)\s*\(pins\s+([^)]*)\)', dsn_text):
+        for p in pins.split():
+            net_of[tuple(p.strip('"').rsplit("-", 1))] = name.strip('"')
+    pads = []
+    for block in sexp_blocks(dsn_text, "component "):
+        image = re.match(r'\(component\s+("[^"]*"|\S+)', block).group(1).strip('"')
+        for m in re.finditer(r'\(place\s+("[^"]*"|\S+)\s+([-\d.]+)\s+([-\d.]+)\s+(front|back)\s+([-\d.]+)', block):
+            ref = m.group(1).strip('"')
+            x0, y0 = float(m.group(2)) * unit_mm, float(m.group(3)) * unit_mm
+            c, s_ = math.cos(math.radians(float(m.group(5)))), math.sin(math.radians(float(m.group(5))))
+            for pin, r, x, y in images.get(image, []):
+                if m.group(4) == "back":
+                    x = -x
+                if (ref, pin) in net_of:
+                    pads.append((ref, net_of[(ref, pin)], np.array([x0 + x * c - y * s_, y0 + x * s_ + y * c]), r))
+    parent = {r: r for r in parts}
+
+    def find(r):
+        while parent[r] != r:
+            parent[r] = parent[parent[r]]
+            r = parent[r]
+        return r
+
+    for net, layer, pts in re.findall(r'\(plane\s+("[^"]*"|\S+)\s+\(polygon\s+(\S+)\s+[-\d.]+\s+([-\d.\s]+)\)', dsn_text):
+        v = list(map(float, pts.split()))
+        poly = np.array(list(zip(v[::2], v[1::2]))) * unit_mm
+        members = set()
+        for ref, pad_net, at, r in pads:
+            if pad_net != net.strip('"') or ref not in parts:
+                continue
+            q, _ = nearest_inside(at, poly)
+            if inside(at[None, :], poly)[0] or np.linalg.norm(q - at) <= r + touch_mm:
+                members.add(ref)
+        members = sorted(members)
+        for r in members[1:]:
+            parent[find(r)] = find(members[0])
+    islands = {}
+    for r in parts:
+        islands.setdefault(find(r), []).append(r)
+    out = []
+    for members in islands.values():
+        if len(members) < 2:
+            continue
+        corners_ = np.vstack([np.asarray(parts[r]["centre"]) + np.array(parts[r]["box"]) for r in members])
+        lo, hi = corners_.min(axis=0), corners_.max(axis=0)
+        under = [r for r in parts if r not in members
+                 and (lo <= parts[r]["centre"]).all() and (parts[r]["centre"] <= hi).all()]
+        out.append(sorted(members + under))
+    return out
+
+
+def relax(parts, positions, poly, fixed, allowed_pairs, allowed_out, angles=None, rounds=800, bodies=()):
     """Pushes overlapping parts apart and stray parts back inside the outline, moving nothing in
-    `fixed`; pairs and parts already in conflict on the original board are left as they are."""
+    `fixed`; pairs and parts already in conflict on the original board are left as they are. Each
+    group in `bodies` slides as one, by the mean of its members' pushes."""
     positions = {r: p.copy() for r, p in positions.items()}
     for _ in range(rounds):
         moved = False
@@ -386,6 +455,10 @@ def relax(parts, positions, poly, fixed, allowed_pairs, allowed_out, angles=None
             shift[a] -= push * wa / (wa + wb)
             shift[b] += push * wb / (wa + wb)
             moved = True
+        for body in bodies:
+            mean = sum(shift[r] for r in body) / len(body)
+            for r in body:
+                shift[r] = mean
         for r, v in shift.items():
             positions[r] = positions[r] + 0.6 * v
         for r in outside_parts(parts, positions, poly, angles) - allowed_out - set(fixed):
@@ -396,7 +469,9 @@ def relax(parts, positions, poly, fixed, allowed_pairs, allowed_out, angles=None
                 q, n = nearest_inside(c, poly)
                 if np.linalg.norm(q - c) >= best:
                     worst, best = (q - c) + n * 0.05, np.linalg.norm(q - c)
-            positions[r] = positions[r] + worst
+            body = next((b for b in bodies if r in b), [r])
+            for m_ in body:
+                positions[m_] = positions[m_] + worst
             moved = True
         if not moved:
             break
@@ -430,8 +505,17 @@ def main():
         wires += read_wires(text, unit_of(text), "routes")
     anchors = [a for a in args.anchors.split(",") if a in parts]
     groups = fan_in(dsn, parts, anchors, args.fan_in_mm)
-    rigid = list(anchors) + [r for members in groups.values() for r in members]
+    islands = []
+    for island in power_islands(dsn, unit, parts):
+        anchor = next((a for a in anchors if a in island or set(island) & set(groups[a])), None)
+        if anchor is None:
+            islands.append(island)
+        else:
+            groups[anchor] = sorted(set(groups[anchor]) | set(island) - {anchor})
+    anchored = list(anchors) + [r for members in groups.values() for r in members]
+    rigid = anchored + [r for i in islands for r in i]
     print("fan-in carried with the anchors:", groups)
+    print("rigid power islands:", islands)
 
     centre, (_, a0, b0, n0), steps = plan(outline, args.steps, args.steps + 10)
     start = superellipse(a0, b0, n0, centre)
@@ -507,6 +591,14 @@ def main():
             angles = {r: float(theta[k]) for k, r in enumerate(refs)}
         elif carried is not None:
             positions = {r: positions[r] + carried[r] for r in refs}
+        for island in islands:
+            before = np.array([parts[r]["centre"] for r in island])
+            after = np.array([positions[r] for r in island])
+            turn_ = float(np.mean([angles[r] for r in island]))
+            c, s_ = math.cos(turn_), math.sin(turn_)
+            for r, b in zip(island, before - before.mean(axis=0)):
+                positions[r] = after.mean(axis=0) + np.array([c * b[0] - s_ * b[1], s_ * b[0] + c * b[1]])
+                angles[r] = turn_
         for a, members in groups.items():
             c, s_ = math.cos(angles[a]), math.sin(angles[a])
             for r in members:
@@ -522,7 +614,7 @@ def main():
             relaxed = {r: x[k] for k, r in enumerate(refs)}
             angles = {r: float(theta[k]) for k, r in enumerate(refs)}
         else:
-            relaxed = relax(parts, positions, poly, rigid, allowed_pairs, allowed_out, angles)
+            relaxed = relax(parts, positions, poly, anchored, allowed_pairs, allowed_out, angles, bodies=islands)
         carried = {r: relaxed[r] - {r: mapped[k] for k, r in enumerate(refs)}[r] for r in refs}
         positions = relaxed
         conn, mesh = body.strain(np.array([positions[r] for r in refs]), np.array([angles[r] for r in refs]))

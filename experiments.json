@@ -1,5 +1,5 @@
 {
- "generated": "2026-10-23T22:00",
+ "generated": "2026-10-23T22:12",
  "groups": [
   {
    "title": "Route jobs",
@@ -262,6 +262,18 @@
       {
        "label": "watch",
        "href": "morph-frames/?run=outline-plan"
+      }
+     ]
+    },
+    {
+     "title": "reshape-band",
+     "about": "copperroute reshape bluebuzz from the band-settled board along the 60-step plan: warp, 30 rubber-band rounds (tension 0.2), 15 more with vias free, every step; stops past 50 new violations",
+     "result": "25 moves of 0 parts (rectangle 1, rectangle \u2192 circle 24); 6 connection(s) opened",
+     "detail": "open 11 \u2192 14",
+     "links": [
+      {
+       "label": "watch",
+       "href": "morph-frames/?run=reshape-band"
       }
      ]
     },
