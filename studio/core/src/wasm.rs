@@ -61,6 +61,65 @@ impl Studio {
         }
     }
 
+    pub fn set_selected(&mut self, part: i32) {
+        self.scene.selected = (part != 0).then_some(part);
+    }
+
+    pub fn set_congestion(&mut self, shown: bool) {
+        self.scene.show_congestion = shown;
+    }
+
+    pub fn set_locked(&mut self, part: i32, locked: bool) {
+        self.scene.lock_overrides.insert(part, locked);
+    }
+
+    pub fn clear_lock_overrides(&mut self) {
+        self.scene.lock_overrides.clear();
+    }
+
+    /// Every part as JSON: id, name, origin, and whether it is locked.
+    pub fn parts(&self) -> String {
+        let s = &self.scene;
+        let parts: Vec<_> = s
+            .parts
+            .values()
+            .map(|p| json!({"id": p.id, "name": p.name, "at": p.at, "locked": s.is_locked(p.id), "fixed": p.fixed}))
+            .collect();
+        serde_json::Value::Array(parts).to_string()
+    }
+
+    /// The fullest cells and the parts nearest them, as JSON.
+    pub fn congestion(&self) -> String {
+        let s = &self.scene;
+        let c = s.congestion();
+        let mut cells: Vec<(usize, f32)> = c.values.iter().copied().enumerate().filter(|(_, v)| *v > 0.0).collect();
+        let used = cells.len().max(1);
+        let mean = cells.iter().map(|(_, v)| v).sum::<f32>() / used as f32;
+        let over = cells.iter().filter(|(_, v)| *v >= 0.8).count();
+        cells.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let mut near: Vec<String> = Vec::new();
+        for (i, v) in &cells {
+            if near.len() == 5 || *v < 0.8 {
+                break;
+            }
+            let x = c.x0 + ((i % c.cols) as f32 + 0.5) * crate::CELL_MM;
+            let y = c.y0 + ((i / c.cols) as f32 + 0.5) * crate::CELL_MM;
+            if let Some(p) = s.nearest_part(x, y)
+                && !near.contains(&p.name)
+            {
+                near.push(p.name.clone());
+            }
+        }
+        json!({
+            "peak": cells.first().map_or(0.0, |c| c.1),
+            "mean": mean,
+            "over": over,
+            "cells": used,
+            "near": near,
+        })
+        .to_string()
+    }
+
     /// Layers, parts and counters, as JSON.
     pub fn status(&self) -> String {
         let s = &self.scene;

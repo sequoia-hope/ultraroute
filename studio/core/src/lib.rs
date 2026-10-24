@@ -22,6 +22,14 @@ const PROBE: Rgba = [1.0, 0.85, 0.2, 0.16];
 const DOOR: Rgba = [1.0, 0.85, 0.2, 0.9];
 const BODY: Rgba = [1.0, 1.0, 1.0, 0.05];
 const PICKED: Rgba = [1.0, 1.0, 1.0, 0.9];
+const SELECTED: Rgba = [0.51, 0.77, 0.69, 1.0];
+const LOCKED: Rgba = [1.0, 0.95, 0.6, 0.95];
+/// Side of a congestion cell, in millimetres.
+pub const CELL_MM: f32 = 1.0;
+/// Share of a cell's area on one layer that copper can fill once clearances are kept.
+const ROUTABLE_SHARE: f32 = 0.5;
+/// Width an open connection will take once routed, track and clearance, in millimetres.
+const AIRLINE_WIDTH_MM: f32 = 0.35;
 
 #[derive(Clone, Debug)]
 pub enum Prim {
@@ -95,6 +103,10 @@ pub struct Scene {
     pub offsets: HashMap<i32, [f32; 2]>,
     pub picked: Option<i32>,
     pub hot_net: Option<i32>,
+    pub selected: Option<i32>,
+    pub show_congestion: bool,
+    /// Lock states set in the client but not yet seen by the router.
+    pub lock_overrides: HashMap<i32, bool>,
 }
 
 fn f(v: &Value) -> f32 {
@@ -168,7 +180,9 @@ impl Scene {
         match v.get("t").and_then(Value::as_str) {
             Some("board") => {
                 let hidden = std::mem::take(&mut self.hidden);
+                let show_congestion = self.show_congestion;
                 *self = Scene::default();
+                self.show_congestion = show_congestion;
                 self.layers = v["layers"]
                     .as_array()
                     .map(|l| l.iter().map(|l| l["name"].as_str().unwrap_or("").to_string()).collect())
@@ -353,6 +367,16 @@ impl Scene {
                 _ => {}
             }
         }
+        if self.show_congestion {
+            let c = self.congestion();
+            for (i, v) in c.values.iter().enumerate() {
+                if *v < 0.15 {
+                    continue;
+                }
+                let (x, y) = (c.x0 + (i % c.cols) as f32 * CELL_MM, c.y0 + (i / c.cols) as f32 * CELL_MM);
+                m.fill(&[x, y, x + CELL_MM, y, x + CELL_MM, y + CELL_MM, x, y + CELL_MM], [0.0, 0.0], heat(*v));
+            }
+        }
         for a in &self.airlines {
             m.segment([a[0], a[1]], [a[2], a[3]], px * 0.6, self.tint(AIRLINE, a[4] as i32));
         }
@@ -364,6 +388,18 @@ impl Scene {
             if probe.door.len() == 4 {
                 m.segment([probe.door[0], probe.door[1]], [probe.door[2], probe.door[3]], px * 1.2, DOOR);
             }
+        }
+        for part in self.parts.values() {
+            if self.is_locked(part.id)
+                && let Some(b) = self.part_box(part.id)
+            {
+                m.dashed_ring(&[b[0], b[1], b[2], b[1], b[2], b[3], b[0], b[3]], px * 0.9, px * 6.0, LOCKED);
+                m.disc([b[2], b[3]], px * 4.0, LOCKED);
+            }
+        }
+        if let Some(b) = self.selected.and_then(|p| self.part_box(p)) {
+            let e = px * 3.0;
+            m.ring(&[b[0] - e, b[1] - e, b[2] + e, b[1] - e, b[2] + e, b[3] + e, b[0] - e, b[3] + e], px * 1.5, SELECTED);
         }
         if let Some(b) = self.picked.and_then(|p| self.part_box(p)) {
             m.ring(&[b[0], b[1], b[2], b[1], b[2], b[3], b[0], b[3]], px, PICKED);
@@ -438,10 +474,133 @@ impl Scene {
         best.map(|(_, n)| n)
     }
 
+    pub fn is_locked(&self, part: i32) -> bool {
+        self.lock_overrides
+            .get(&part)
+            .copied()
+            .unwrap_or_else(|| self.parts.get(&part).is_some_and(|p| p.fixed))
+    }
+
+    /// How full each cell of the board is: copper and pads on the signal layers, plus what
+    /// the open connections will need once routed, over what the cell can hold.
+    pub fn congestion(&self) -> Congestion {
+        let [x0, y0, x1, y1] = self.bbox;
+        let cols = (((x1 - x0) / CELL_MM).ceil() as usize).max(1);
+        let rows = (((y1 - y0) / CELL_MM).ceil() as usize).max(1);
+        let mut demand = vec![0.0f32; cols * rows];
+        let mut add = |x: f32, y: f32, area: f32| {
+            let (c, r) = (((x - x0) / CELL_MM).floor(), ((y - y0) / CELL_MM).floor());
+            if c >= 0.0 && r >= 0.0 && (c as usize) < cols && (r as usize) < rows {
+                demand[r as usize * cols + c as usize] += area;
+            }
+        };
+        let line = |a: [f32; 2], b: [f32; 2], width: f32, add: &mut dyn FnMut(f32, f32, f32)| {
+            let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
+            let steps = ((len / (CELL_MM / 2.0)).ceil() as usize).max(1);
+            let step = len / steps as f32;
+            for k in 0..steps {
+                let t = (k as f32 + 0.5) / steps as f32;
+                add(a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]), width * step);
+            }
+        };
+        for item in self.items.values() {
+            match &item.geom {
+                Geom::Trace { width, points, .. } => {
+                    for w in points.windows(4).step_by(2) {
+                        line([w[0], w[1]], [w[2], w[3]], *width, &mut add);
+                    }
+                }
+                Geom::Via { shape: Some(shape), .. } => {
+                    spread(shape, [0.0, 0.0], prim_area(shape) * self.layers.len().max(1) as f32, &mut add);
+                }
+                Geom::Pin { pads, part, .. } => {
+                    let o = self.offset(*part);
+                    for (_, p) in pads {
+                        spread(p, o, prim_area(p), &mut add);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for a in &self.airlines {
+            line([a[0], a[1]], [a[2], a[3]], AIRLINE_WIDTH_MM, &mut add);
+        }
+        let capacity = CELL_MM * CELL_MM * ROUTABLE_SHARE * self.layers.len().max(1) as f32;
+        Congestion { cols, rows, x0, y0, values: demand.into_iter().map(|d| d / capacity).collect() }
+    }
+
+    /// The part whose centre is nearest the point.
+    pub fn nearest_part(&self, x: f32, y: f32) -> Option<&Part> {
+        self.parts
+            .values()
+            .filter_map(|p| self.part_box(p.id).map(|b| (p, ((b[0] + b[2]) / 2.0 - x).powi(2) + ((b[1] + b[3]) / 2.0 - y).powi(2))))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(p, _)| p)
+    }
+
     pub fn counts(&self) -> (usize, usize) {
         let traces = self.items.values().filter(|i| matches!(i.geom, Geom::Trace { .. })).count();
         let vias = self.items.values().filter(|i| matches!(i.geom, Geom::Via { .. })).count();
         (traces, vias)
+    }
+}
+
+pub struct Congestion {
+    pub cols: usize,
+    pub rows: usize,
+    pub x0: f32,
+    pub y0: f32,
+    pub values: Vec<f32>,
+}
+
+fn heat(v: f32) -> Rgba {
+    let t = (v / 1.2).clamp(0.0, 1.0);
+    let rgb = if t < 0.5 {
+        let k = t * 2.0;
+        [0.2 + 0.8 * k, 0.45 + 0.4 * k, 1.0 - 0.8 * k]
+    } else {
+        let k = (t - 0.5) * 2.0;
+        [1.0, 0.85 - 0.6 * k, 0.2 - 0.1 * k]
+    };
+    [rgb[0], rgb[1], rgb[2], (0.2 + 0.5 * t).min(0.7)]
+}
+
+fn prim_area(p: &Prim) -> f32 {
+    match p {
+        Prim::Circle([_, _, r]) => std::f32::consts::PI * r * r,
+        Prim::Poly(g) => {
+            let n = g.len() / 2;
+            let twice: f32 = (0..n).map(|i| {
+                let j = (i + 1) % n;
+                g[2 * i] * g[2 * j + 1] - g[2 * j] * g[2 * i + 1]
+            }).sum();
+            twice.abs() / 2.0
+        }
+    }
+}
+
+fn prim_box(p: &Prim) -> [f32; 4] {
+    match p {
+        Prim::Circle([x, y, r]) => [x - r, y - r, x + r, y + r],
+        Prim::Poly(g) => g.chunks_exact(2).fold([f32::MAX, f32::MAX, f32::MIN, f32::MIN], |b, c| {
+            [b[0].min(c[0]), b[1].min(c[1]), b[2].max(c[0]), b[3].max(c[1])]
+        }),
+    }
+}
+
+/// Shares `area` out evenly over sample points across the shape's extent, so a large pad
+/// fills every cell it covers rather than the one at its centre.
+fn spread(p: &Prim, o: [f32; 2], area: f32, add: &mut dyn FnMut(f32, f32, f32)) {
+    let b = prim_box(p);
+    let (w, h) = (b[2] - b[0], b[3] - b[1]);
+    let (nx, ny) = (((w / (CELL_MM / 2.0)).ceil() as usize).max(1), ((h / (CELL_MM / 2.0)).ceil() as usize).max(1));
+    let share = area / (nx * ny) as f32;
+    for i in 0..nx {
+        for j in 0..ny {
+            let x = b[0] + w * (i as f32 + 0.5) / nx as f32 + o[0];
+            let y = b[1] + h * (j as f32 + 0.5) / ny as f32 + o[1];
+            add(x, y, share);
+        }
     }
 }
 
@@ -506,6 +665,21 @@ impl Mesh {
         for i in 0..n {
             let j = (i + 1) % n;
             self.segment([points[2 * i], points[2 * i + 1]], [points[2 * j], points[2 * j + 1]], r, c);
+        }
+    }
+
+    fn dashed_ring(&mut self, points: &[f32], r: f32, dash: f32, c: Rgba) {
+        let n = points.len() / 2;
+        for i in 0..n {
+            let j = (i + 1) % n;
+            let (a, b) = ([points[2 * i], points[2 * i + 1]], [points[2 * j], points[2 * j + 1]]);
+            let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
+            let dashes = ((len / (dash * 1.8)).floor() as usize).max(1);
+            for k in 0..dashes {
+                let (t0, t1) = (k as f32 / dashes as f32, (k as f32 + 0.55) / dashes as f32);
+                let at = |t: f32| [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])];
+                self.segment(at(t0), at(t1), r, c);
+            }
         }
     }
 
@@ -578,6 +752,30 @@ mod tests {
         assert_eq!(s.part_at(4.0, 4.0), None);
         s.offsets.insert(7, [2.0, 2.0]);
         assert_eq!(s.part_at(4.0, 4.0), Some(7));
+    }
+
+    #[test]
+    fn copper_and_open_connections_fill_their_cells() {
+        let mut s = Scene::default();
+        s.apply(BOARD);
+        s.apply(&frame(TRACE, ""));
+        let c = s.congestion();
+        assert_eq!((c.cols, c.rows), (10, 10));
+        let at = |x: usize, y: usize| c.values[y * c.cols + x];
+        assert!(at(2, 0) > 0.0);
+        assert_eq!(at(2, 5), 0.0);
+        s.airlines = vec![[0.5, 5.5, 9.5, 5.5, 3.0]];
+        assert!(s.congestion().values[5 * 10 + 4] > 0.0);
+    }
+
+    #[test]
+    fn a_lock_set_in_the_client_overrides_the_routers() {
+        let mut s = Scene::default();
+        s.apply(BOARD);
+        s.apply(&frame(PIN, ""));
+        assert!(!s.is_locked(7));
+        s.lock_overrides.insert(7, true);
+        assert!(s.is_locked(7));
     }
 
     #[test]

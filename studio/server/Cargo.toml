@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 serde_json.workspace = true
+libc = "=0.2.190"
 tungstenite = { version = "=0.28.0", default-features = false, features = ["handshake"] }

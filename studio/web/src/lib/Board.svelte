@@ -3,7 +3,7 @@
   import { Renderer } from './renderer.js';
 
   // studio: the WASM scene. version: bumped whenever the scene changed.
-  let { studio, version, ondrop, onhover } = $props();
+  let { studio, version, ondrop, onselect, onhover } = $props();
 
   let canvas;
   let renderer;
@@ -119,10 +119,13 @@
   }
 
   function up(event) {
-    if (drag?.part && drag.moved) {
-      const at = toBoard(event);
+    const at = toBoard(event);
+    const dragged = drag && Math.hypot(at[0] - drag.start[0], at[1] - drag.start[1]) * view.zoom > 3;
+    if (drag?.part && dragged) {
       const info = JSON.parse(studio.part(drag.part));
       ondrop?.(info, [at[0] - drag.start[0], at[1] - drag.start[1]]);
+    } else if (drag && !dragged) {
+      onselect?.(drag.part ? JSON.parse(studio.part(drag.part)) : null);
     }
     drag = null;
   }

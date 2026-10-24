@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
+use std::os::unix::process::CommandExt;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, sync_channel};
 use std::sync::{Arc, Mutex};
@@ -26,17 +27,77 @@ struct Config {
 
 struct Run {
     id: u64,
+    owner: u64,
     child: Child,
     stdin: Option<ChildStdin>,
 }
 
-#[derive(Default)]
+type Spawn = (Command, std::sync::mpsc::Sender<std::io::Result<Child>>);
+
 struct Runner {
     current: Mutex<Option<Run>>,
     next_id: std::sync::atomic::AtomicU64,
+    spawner: Mutex<std::sync::mpsc::Sender<Spawn>>,
 }
 
 impl Runner {
+    /// Routers are started from one thread that lives as long as the server, and die with it:
+    /// the kernel's parent-death signal follows the thread that forked, not the process.
+    fn new() -> Runner {
+        let (tx, rx) = std::sync::mpsc::channel::<Spawn>();
+        std::thread::spawn(move || {
+            for (mut command, reply) in rx {
+                unsafe {
+                    command.pre_exec(|| {
+                        if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) != 0 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                        Ok(())
+                    });
+                }
+                let _ = reply.send(command.spawn());
+            }
+        });
+        Runner { current: Mutex::new(None), next_id: Default::default(), spawner: Mutex::new(tx) }
+    }
+
+    fn spawn(&self, command: Command) -> std::io::Result<Child> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.spawner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .send((command, tx))
+            .map_err(|_| std::io::Error::other("the spawner thread is gone"))?;
+        rx.recv().map_err(|_| std::io::Error::other("the spawner thread is gone"))?
+    }
+
+    /// Reaps the run as soon as it exits, so a finished router never lingers as a zombie.
+    fn reap(self: &Arc<Self>, id: u64) {
+        let runner = self.clone();
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_millis(200));
+                let mut current = runner.current.lock().unwrap_or_else(|e| e.into_inner());
+                match current.as_mut() {
+                    Some(run) if run.id == id => {
+                        if !matches!(run.child.try_wait(), Ok(None)) {
+                            *current = None;
+                            return;
+                        }
+                    }
+                    _ => return,
+                }
+            }
+        });
+    }
+
+    fn stop_owned_by(self: &Arc<Self>, owner: u64) {
+        let owned = self.current.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|r| r.owner == owner);
+        if owned {
+            self.request_stop();
+        }
+    }
+
     /// Asks the run to stop (it still writes its session), and kills it if it does not.
     fn stop(&self) {
         let Some(mut run) = self.current.lock().unwrap_or_else(|e| e.into_inner()).take() else {
@@ -109,7 +170,7 @@ fn main() {
         .or_else(|| registry_port(&root))
         .unwrap_or_else(|| fail("no port: pass --port, set $PORT, or register the project with `proj add`"));
     let config = Arc::new(Config { runs: root.join("studio/runs"), root, router });
-    let runner = Arc::new(Runner::default());
+    let runner = Arc::new(Runner::new());
     let listener = TcpListener::bind(format!("0.0.0.0:{port}")).unwrap_or_else(|e| fail(&format!("port {port}: {e}")));
     eprintln!("studio on http://localhost:{port}/studio/ serving {}", config.root.display());
     for stream in listener.incoming().flatten() {
@@ -372,7 +433,16 @@ fn csv(text: &str) -> Vec<Vec<String>> {
     rows
 }
 
+/// A closed page's run is stopped: nothing is left routing for nobody.
 fn socket(stream: TcpStream, config: &Config, runner: &Arc<Runner>) -> std::io::Result<()> {
+    static CONNECTIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let owner = CONNECTIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let result = serve_socket(stream, config, runner, owner);
+    runner.stop_owned_by(owner);
+    result
+}
+
+fn serve_socket(stream: TcpStream, config: &Config, runner: &Arc<Runner>, owner: u64) -> std::io::Result<()> {
     let mut ws = tungstenite::accept(stream).map_err(|e| std::io::Error::other(e.to_string()))?;
     ws.get_mut().set_read_timeout(Some(Duration::from_millis(8)))?;
     ws.get_mut().set_nodelay(true)?;
@@ -382,10 +452,10 @@ fn socket(stream: TcpStream, config: &Config, runner: &Arc<Runner>) -> std::io::
             Ok(Message::Text(text)) => {
                 let request: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
                 match request["cmd"].as_str() {
-                    Some("run") => {
+                    Some("run" | "load") => {
                         relay = None;
                         runner.stop();
-                        match start(&request, config, runner) {
+                        match start(&request, config, runner, owner) {
                             Ok(rx) => relay = Some(rx),
                             Err(error) => send(&mut ws, &json!({"t": "error", "message": error}).to_string())?,
                         }
@@ -430,8 +500,9 @@ fn strings(v: &Value) -> Vec<String> {
     v.as_array().into_iter().flatten().filter_map(|s| s.as_str().map(str::to_string)).collect()
 }
 
-/// Starts the router on the job, with the client's arguments, environment and placements.
-fn start(request: &Value, config: &Config, runner: &Arc<Runner>) -> Result<Receiver<String>, String> {
+/// Starts the router on the job, with the client's arguments, environment and placements. A
+/// `load` is a run that only shows the board; its session is kept apart from the routed ones.
+fn start(request: &Value, config: &Config, runner: &Arc<Runner>, owner: u64) -> Result<Receiver<String>, String> {
     let job = request["job"].as_str().ok_or("no job")?;
     if job.contains('/') || job.starts_with('.') {
         return Err(format!("bad job name {job}"));
@@ -441,7 +512,13 @@ fn start(request: &Value, config: &Config, runner: &Arc<Runner>) -> Result<Recei
     let runs = config.runs.join(job);
     std::fs::create_dir_all(&runs).map_err(|e| e.to_string())?;
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
-    let output = runs.join(format!("{stamp}.ses"));
+    let load = request["cmd"].as_str() == Some("load");
+    let output = if load {
+        std::fs::create_dir_all(runs.join("loaded")).map_err(|e| e.to_string())?;
+        runs.join("loaded").join(format!("{stamp}.ses"))
+    } else {
+        runs.join(format!("{stamp}.ses"))
+    };
 
     let mut args: Vec<String> = vec!["-n".into(), "15".into(), config.router.display().to_string(), "route".into()];
     args.push(dsn.display().to_string());
@@ -449,7 +526,8 @@ fn start(request: &Value, config: &Config, runner: &Arc<Runner>) -> Result<Recei
     if let Some(project) = project {
         args.extend(["--kicad-project".into(), project.display().to_string()]);
     }
-    if request["continue"].as_bool() == Some(true)
+    if !load
+        && request["continue"].as_bool() == Some(true)
         && let Some(last) = latest_session(&runs, &output)
     {
         args.extend(["--ses".into(), last.display().to_string()]);
@@ -476,7 +554,7 @@ fn start(request: &Value, config: &Config, runner: &Arc<Runner>) -> Result<Recei
             command.env(key, value);
         }
     }
-    let mut child = command.spawn().map_err(|e| format!("couldn't start the router: {e}"))?;
+    let mut child = runner.spawn(command).map_err(|e| format!("couldn't start the router: {e}"))?;
     let (tx, rx) = sync_channel::<String>(RELAY_DEPTH);
     let _ = tx.send(json!({"t": "run", "args": args, "env": request["env"], "ses": output}).to_string());
     let stdout = child.stdout.take().ok_or("no stdout")?;
@@ -485,7 +563,8 @@ fn start(request: &Value, config: &Config, runner: &Arc<Runner>) -> Result<Recei
     relay_lines(stdout, tx.clone(), |line| line);
     relay_lines(stderr, tx.clone(), |line| json!({"t": "log", "line": line}).to_string());
     let id = runner.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    *runner.current.lock().unwrap_or_else(|e| e.into_inner()) = Some(Run { id, child, stdin });
+    *runner.current.lock().unwrap_or_else(|e| e.into_inner()) = Some(Run { id, owner, child, stdin });
+    runner.reap(id);
     if let Some(timeout) = request["timeout"].as_u64() {
         runner.watch_deadline(id, Duration::from_secs(timeout));
     }

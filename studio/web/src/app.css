@@ -251,3 +251,146 @@ pre {
     padding: 12px 16px;
   }
 }
+
+h1 a {
+  color: inherit;
+}
+
+details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+details > label,
+details > .row {
+  margin-top: 8px;
+}
+
+summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.small {
+  font-size: 12px;
+  margin: 4px 0 0;
+}
+
+button.quiet {
+  border: 0;
+  background: none;
+  color: var(--accent);
+  padding: 0;
+  text-align: left;
+}
+
+.card {
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.card h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.card p {
+  margin: 0;
+}
+
+.pad {
+  display: grid;
+  grid-template-columns: 44px 1fr 44px;
+  gap: 4px;
+  align-items: center;
+}
+
+.pad button {
+  padding: 6px 0;
+}
+
+.pad select {
+  text-align: center;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 1px 6px 1px 8px;
+  display: inline-flex;
+  gap: 2px;
+  align-items: center;
+}
+
+.chip.lock {
+  border-color: #ffb36b;
+}
+
+.chip.fixed {
+  border-style: dashed;
+  padding-right: 8px;
+}
+
+.chip .x {
+  color: var(--muted);
+}
+
+label.inline {
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.meter {
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #335fff66, #ffd94d66 50%, #ff4d3366);
+  position: relative;
+}
+
+.meter span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-right: 2px solid var(--text);
+  background: none;
+}
+
+.legend {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.legend .ramp {
+  width: 90px;
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #335fff, #ffd94d 50%, #ff4d33);
+}

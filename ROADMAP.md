@@ -89,6 +89,13 @@ Phase 5a (now) — play with what we have, on the web first, at `/studio/`:
 - [x] `studio/`: a Rust server that runs the router as a child process and relays its frames
       over a WebSocket; a Rust core (scene, layers, picking) compiled to WASM; a Svelte + Vite
       client: pick a job and a router, watch it live, stop, drag parts, route again.
+- [x] The board as designed is shown on opening, before any routing (`--backend none`).
+- [x] Congestion: copper, pads and open connections against each 1 mm cell's capacity, as a map
+      and a summary naming the parts nearest the fullest cells.
+- [x] Locks shown on the board and listed; lock and unlock, arrow-key nudges, and "nudge it for
+      me" (the nudger with every other part locked) for a selected part.
+- [ ] Rubber-banding while a part is dragged: the attached wires keep their route through the
+      board and are pulled taut live, falling back to airlines and a reroute when that fails.
 - [ ] The grid router's negotiation rounds as live frames (today its copper appears at once).
 - [ ] Steer a run without restarting it: lock or move a part, forbid a region, mid-run.
 - [ ] Routers honour the job's time limit throughout (nudge fixed; grid's maze stage overran).
