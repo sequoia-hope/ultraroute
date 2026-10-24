@@ -2,7 +2,7 @@
  {
   "name": "cr-grid005-stubs-nofan",
   "router": "copperroute",
-  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-e1/release/copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target/release/copperroute",
   "args": [
    "--backend",
    "grid",
@@ -16,7 +16,7 @@
  {
   "name": "cr-gridneg-nofan",
   "router": "copperroute",
-  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-e1/release/copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target/release/copperroute",
   "args": [
    "--backend",
    "grid",
@@ -30,7 +30,7 @@
  {
   "name": "cr-gridneg005-nofan",
   "router": "copperroute",
-  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-e1/release/copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target/release/copperroute",
   "args": [
    "--backend",
    "grid",

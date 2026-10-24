@@ -2,7 +2,7 @@
  {
   "name": "cr-region0.1",
   "router": "copperroute",
-  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-rh/release/copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target/release/copperroute",
   "args": [],
   "env": {
    "COPPERROUTE_REGION_HISTORY": "0.1"
@@ -11,7 +11,7 @@
  {
   "name": "cr-region0.1-nofan",
   "router": "copperroute",
-  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-rh/release/copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target/release/copperroute",
   "args": [
    "--set",
    "router.fanout.enabled=false"
@@ -23,7 +23,7 @@
  {
   "name": "cr-region0.25",
   "router": "copperroute",
-  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-rh/release/copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target/release/copperroute",
   "args": [],
   "env": {
    "COPPERROUTE_REGION_HISTORY": "0.25"
@@ -32,7 +32,7 @@
  {
   "name": "cr-region0.25-nofan",
   "router": "copperroute",
-  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-rh/release/copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target/release/copperroute",
   "args": [
    "--set",
    "router.fanout.enabled=false"
@@ -44,7 +44,7 @@
  {
   "name": "cr-region0.5",
   "router": "copperroute",
-  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-rh/release/copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target/release/copperroute",
   "args": [],
   "env": {
    "COPPERROUTE_REGION_HISTORY": "0.5"
@@ -53,7 +53,7 @@
  {
   "name": "cr-region0.5-nofan",
   "router": "copperroute",
-  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-rh/release/copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target/release/copperroute",
   "args": [
    "--set",
    "router.fanout.enabled=false"
@@ -65,7 +65,7 @@
  {
   "name": "cr-region0.25-nofan-e1",
   "router": "copperroute",
-  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-rh/release/copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target/release/copperroute",
   "args": [
    "--set",
    "router.fanout.enabled=false"

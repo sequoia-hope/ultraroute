@@ -1,0 +1,291 @@
+{
+ "bend-r4": {
+  "args": "--targets bend-r4.targets.json --bend-fixed",
+  "summary": {
+   "closed": [],
+   "moves": 2,
+   "open_end": 10,
+   "open_start": 10,
+   "opened": [],
+   "operators": {
+    "settle/warp": 2
+   },
+   "parts": 1,
+   "still_frames": []
+  }
+ },
+ "bend-r60": {
+  "args": "--targets bend-r60.targets.json --bend-fixed",
+  "summary": {
+   "closed": [],
+   "moves": 1,
+   "open_end": 10,
+   "open_start": 10,
+   "opened": [],
+   "operators": {
+    "settle/warp": 1
+   },
+   "parts": 1,
+   "still_frames": []
+  }
+ },
+ "dipole-all": {
+  "args": "--dipole 102.3,-104.9,0,-0.3,2",
+  "summary": {
+   "closed": [],
+   "moves": 22,
+   "open_end": 10,
+   "open_start": 10,
+   "opened": [],
+   "operators": {
+    "settle/push": 2,
+    "settle/warp": 20
+   },
+   "parts": 16,
+   "still_frames": []
+  }
+ },
+ "dipole-bend": {
+  "args": "--dipole 102.3,-104.9,0,-0.3,2 --bend-fixed",
+  "summary": {
+   "closed": [],
+   "moves": 78,
+   "open_end": 10,
+   "open_start": 10,
+   "opened": [],
+   "operators": {
+    "settle/push": 1,
+    "settle/warp": 77
+   },
+   "parts": 58,
+   "still_frames": []
+  }
+ },
+ "dipole-big-group": {
+  "args": "--dipole 102.3,-104.9,0,-0.6,3 --only group",
+  "summary": {
+   "closed": [],
+   "moves": 24,
+   "open_end": 10,
+   "open_start": 10,
+   "opened": [],
+   "operators": {
+    "settle/group": 24
+   },
+   "parts": 11,
+   "still_frames": []
+  }
+ },
+ "dipole-big-push": {
+  "args": "--dipole 102.3,-104.9,0,-0.6,3 --only push",
+  "summary": {
+   "closed": [],
+   "moves": 26,
+   "open_end": 10,
+   "open_start": 10,
+   "opened": [],
+   "operators": {
+    "settle/push": 26
+   },
+   "parts": 11,
+   "still_frames": []
+  }
+ },
+ "dipole-group": {
+  "args": "--dipole 102.3,-104.9,0,-0.3,2 --only group",
+  "summary": {
+   "closed": [],
+   "moves": 11,
+   "open_end": 10,
+   "open_start": 10,
+   "opened": [],
+   "operators": {
+    "settle/group": 11
+   },
+   "parts": 7,
+   "still_frames": []
+  }
+ },
+ "dipole-push": {
+  "args": "--dipole 102.3,-104.9,0,-0.3,2 --only push",
+  "summary": {
+   "closed": [],
+   "moves": 11,
+   "open_end": 10,
+   "open_start": 10,
+   "opened": [],
+   "operators": {
+    "settle/push": 11
+   },
+   "parts": 7,
+   "still_frames": []
+  }
+ },
+ "dipole-r60": {
+  "args": "--dipole 110.500,-114.400,0.2,0,1.5",
+  "summary": {
+   "closed": [],
+   "moves": 8,
+   "open_end": 10,
+   "open_start": 10,
+   "opened": [],
+   "operators": {
+    "settle/warp": 8
+   },
+   "parts": 7,
+   "still_frames": []
+  }
+ },
+ "dipole-retire": {
+  "args": "--dipole 102.3,-104.9,0,-0.3,2 --retire-fixed all",
+  "summary": {
+   "closed": [],
+   "moves": 83,
+   "open_end": 10,
+   "open_start": 10,
+   "opened": [],
+   "operators": {
+    "settle/shove": 1,
+    "settle/warp": 82
+   },
+   "parts": 60,
+   "still_frames": []
+  }
+ },
+ "dipole-shove": {
+  "args": "--dipole 102.3,-104.9,0,-0.3,2 --only shove",
+  "summary": {
+   "closed": [],
+   "moves": 2,
+   "open_end": 10,
+   "open_start": 10,
+   "opened": [],
+   "operators": {
+    "settle/shove": 2
+   },
+   "parts": 2,
+   "still_frames": []
+  }
+ },
+ "dipole-soft": {
+  "args": "--dipole 102.3,-104.9,0,-0.6,3 --soft",
+  "summary": {
+   "closed": [
+    "VBAT: J2 - conductionarea"
+   ],
+   "moves": 62,
+   "open_end": 27,
+   "open_start": 10,
+   "opened": [
+    "3V3_SENS: C52 - U5",
+    "3V3_SENS: U5 - U5",
+    "3V3_SYS: C102 - via",
+    "3V3_SYS: C102 - via",
+    "3V3_SYS: C130 - R131",
+    "3V3_SYS: C130 - via",
+    "3V3_SYS: C21 - C22",
+    "3V3_SYS: C88 - U30",
+    "3V3_SYS: C91 - C93",
+    "3V3_SYS: U3 - via",
+    "3V3_SYS: U5 - via",
+    "CT_SENS: C50 - U5",
+    "LDO_EN: U3 - via",
+    "MOTOR1_SW: J4 - Q1",
+    "MOTOR2_SW: D4 - Q2",
+    "MOTOR2_SW: J4 - Q2",
+    "SENS_EN: R50 - U5",
+    "VBAT: C12 - J2"
+   ],
+   "operators": {
+    "settle/push": 9,
+    "settle/warp": 53
+   },
+   "parts": 36,
+   "still_frames": []
+  }
+ },
+ "dipole-warp": {
+  "args": "--dipole 102.3,-104.9,0,-0.3,2 --only warp",
+  "summary": {
+   "closed": [],
+   "moves": 20,
+   "open_end": 10,
+   "open_start": 10,
+   "opened": [],
+   "operators": {
+    "settle/warp": 20
+   },
+   "parts": 15,
+   "still_frames": []
+  }
+ },
+ "outline-plan": {
+  "args": "tools/morph_outline.py jobs/bluebuzz: rectangle \u2192 circle \u2192 rounded diamond \u2192 stretched rounded rectangle \u2192 rainbow, anchors J1 (USB) and U7 (radio); outline mode, no DRC",
+  "summary": {
+   "closed": [],
+   "moves": 131,
+   "open_end": 0,
+   "open_start": 0,
+   "opened": [],
+   "operators": {
+    "outline/bending \u2192 rainbow": 39,
+    "outline/circle": 1,
+    "outline/circle \u2192 rounded diamond": 29,
+    "outline/rainbow": 1,
+    "outline/rectangle": 1,
+    "outline/rectangle \u2192 circle": 29,
+    "outline/rounded diamond": 1,
+    "outline/rounded diamond \u2192 stretched rounded rectangle": 29,
+    "outline/stretched rounded rectangle": 1
+   },
+   "parts": 0,
+   "still_frames": []
+  }
+ },
+ "reshape-warp": {
+  "args": "copperroute reshape bluebuzz along outline-plan: continuous field warp, parts turn with the arch, diff pairs move together, no rip-up",
+  "summary": {
+   "closed": [
+    "1V1: U1 - conductionarea",
+    "3V3_SENS: C121 - C123",
+    "3V3_SENS: C122 - C52",
+    "3V3_SENS: C52 - U20",
+    "3V3_SYS: conductionarea - conductionarea",
+    "TAC_SDO: U20 - U21",
+    "VBAT: J2 - conductionarea"
+   ],
+   "moves": 131,
+   "open_end": 17,
+   "open_start": 10,
+   "opened": [
+    "1V1: C80 - conductionarea",
+    "1V1: U1 - via",
+    "3V3_SENS: C121 - C122",
+    "3V3_SENS: C123 - U21",
+    "3V3_SENS: U20 - U5",
+    "3V3_SYS: C83 - C91",
+    "3V3_SYS: U1 - conductionarea",
+    "3V3_SYS: U1 - conductionarea",
+    "3V3_SYS: U1 - conductionarea",
+    "3V3_SYS: U1 - conductionarea",
+    "TAC_SDO: U20 - via",
+    "VBAT: C12 - J2",
+    "VREG_LX: L1 - conductionarea",
+    "VREG_LX: U1 - conductionarea"
+   ],
+   "operators": {
+    "reshape/bending \u2192 rainbow": 39,
+    "reshape/circle": 1,
+    "reshape/circle \u2192 rounded diamond": 29,
+    "reshape/rainbow": 1,
+    "reshape/rectangle": 1,
+    "reshape/rectangle \u2192 circle": 29,
+    "reshape/rounded diamond": 1,
+    "reshape/rounded diamond \u2192 stretched rounded rectangle": 29,
+    "reshape/stretched rounded rectangle": 1
+   },
+   "parts": 0,
+   "still_frames": []
+  }
+ }
+}

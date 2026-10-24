@@ -1,0 +1,169 @@
+{
+  "cycles": 7,
+  "parts": {
+    "C121": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0372
+    },
+    "C140": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0104
+    },
+    "C42": {
+      "arrived": true,
+      "moves": {
+        "warp": 1
+      },
+      "travelled_mm": 0.0054,
+      "wanted_mm": 0.0054
+    },
+    "C43": {
+      "arrived": true,
+      "moves": {
+        "warp": 1
+      },
+      "travelled_mm": 0.0092,
+      "wanted_mm": 0.0092
+    },
+    "C64": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0247
+    },
+    "C81": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0057
+    },
+    "C82": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0401
+    },
+    "C83": {
+      "arrived": true,
+      "moves": {
+        "warp": 1
+      },
+      "travelled_mm": 0.0053,
+      "wanted_mm": 0.0053
+    },
+    "C84": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0066
+    },
+    "C85": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0128
+    },
+    "C89": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.022
+    },
+    "C94": {
+      "arrived": true,
+      "moves": {
+        "warp": 1
+      },
+      "travelled_mm": 0.0178,
+      "wanted_mm": 0.0178
+    },
+    "C95": {
+      "arrived": true,
+      "moves": {
+        "warp": 2
+      },
+      "travelled_mm": 0.0508,
+      "wanted_mm": 0.0508
+    },
+    "C96": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.018
+    },
+    "D2": {
+      "arrived": true,
+      "moves": {
+        "warp": 1
+      },
+      "travelled_mm": 0.0062,
+      "wanted_mm": 0.0062
+    },
+    "R43": {
+      "arrived": true,
+      "moves": {
+        "warp": 1
+      },
+      "travelled_mm": 0.0053,
+      "wanted_mm": 0.0053
+    },
+    "R50": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0069
+    },
+    "R60": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.2
+    },
+    "R61": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.072
+    },
+    "R62": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0095
+    },
+    "R85": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0114
+    },
+    "R86": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0067
+    },
+    "R88": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0529
+    },
+    "U1": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0062
+    },
+    "U40": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0051
+    }
+  }
+}

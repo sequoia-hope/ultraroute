@@ -1,0 +1,13 @@
+{
+  "cycles": 2,
+  "parts": {
+    "R4": {
+      "arrived": true,
+      "moves": {
+        "warp": 2
+      },
+      "travelled_mm": 0.0645,
+      "wanted_mm": 0.0645
+    }
+  }
+}

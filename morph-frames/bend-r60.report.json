@@ -1,0 +1,13 @@
+{
+  "cycles": 1,
+  "parts": {
+    "R60": {
+      "arrived": true,
+      "moves": {
+        "warp": 1
+      },
+      "travelled_mm": 0.0175,
+      "wanted_mm": 0.0175
+    }
+  }
+}

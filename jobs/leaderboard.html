@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Route leaderboard</title>
+<style>
+:root {
+  --bg: #f6f7f9; --card: #ffffff; --line: #e2e5ea; --fg: #14171c;
+  --muted: #5f6875; --accent: #2f6feb; --up: #1a9c5b; --bad: #d1453b; --chip: #eef1f5;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1116; --card: #171b22; --line: #262c36; --fg: #e6e9ee;
+    --muted: #8b94a3; --accent: #5b9bff; --up: #35c07d; --bad: #ff6b60; --chip: #222833;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1116; --card: #171b22; --line: #262c36; --fg: #e6e9ee;
+  --muted: #8b94a3; --accent: #5b9bff; --up: #35c07d; --bad: #ff6b60; --chip: #222833;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg); padding: 1.25rem 1rem 3rem;
+  font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+main { max-width: 1200px; margin: 0 auto; }
+h1 { font-size: 1.2rem; margin: 0 0 .3rem; }
+a { color: var(--accent); }
+p { color: var(--muted); margin: 0 0 1rem; }
+nav { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: .8rem; }
+nav a {
+  text-decoration: none; padding: .1rem .6rem; border-radius: 999px; font-size: .85rem;
+  background: var(--chip); border: 1px solid var(--line);
+}
+nav a.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.wrap { overflow-x: auto; background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+table { border-collapse: collapse; width: 100%; font-size: .84rem; font-variant-numeric: tabular-nums; }
+th, td { padding: .35rem .6rem; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+th { color: var(--muted); font-weight: 600; cursor: pointer; position: sticky; top: 0; background: var(--card); }
+td.args { white-space: normal; min-width: 18rem; color: var(--muted); font-size: .78rem; }
+tr.best td:first-child { box-shadow: inset 3px 0 0 var(--up); }
+.stale { color: var(--muted); font-style: italic; }
+.bad { color: var(--bad); font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <h1><a href="../">ultraroute</a> / leaderboard <span id="job"></span></h1>
+  <p>Ranked by <code>tools/route_job.py</code>: clean attempts (no new errors) first, then open nets, new errors, vias, copper length. Italic rows ran before the maze outline fix (2026-10-23). Click a column to sort.</p>
+  <nav id="jobs"></nav>
+  <div class="wrap"><table id="board"></table></div>
+</main>
+<script>
+const JOBS = ["bluebuzz", "simple_earring", "bluebuzz-ripped", "simple_earring-ripped"];
+const OUTLINE_FIX = "2026-10-23T04:29";
+const SHOWN = ["name", "router", "unconnected", "new_violations", "new_warnings", "vias", "length_mm", "wall_s", "finished_at", "args", "env"];
+const job = new URLSearchParams(location.search).get("job") || JOBS[0];
+document.getElementById("job").textContent = "· " + job;
+document.getElementById("jobs").innerHTML = JOBS.map(j =>
+  `<a href="?job=${j}" class="${j === job ? "on" : ""}">${j}</a>`).join("");
+
+function parse(text) {
+  const rows = [];
+  let row = [], field = "", quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) {
+      if (c === '"' && text[i + 1] === '"') { field += '"'; i++; }
+      else if (c === '"') quoted = false;
+      else field += c;
+    } else if (c === '"') quoted = true;
+    else if (c === ",") { row.push(field); field = ""; }
+    else if (c === "\n") { row.push(field); rows.push(row); row = []; field = ""; }
+    else if (c !== "\r") field += c;
+  }
+  if (field || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+let data = [], sortKey = null, sortDir = 1;
+
+function render() {
+  const rows = sortKey == null ? data : [...data].sort((a, b) => {
+    const x = a[sortKey], y = b[sortKey], nx = parseFloat(x), ny = parseFloat(y);
+    return (isNaN(nx) || isNaN(ny) ? String(x).localeCompare(String(y)) : nx - ny) * sortDir;
+  });
+  const best = data[0];
+  document.getElementById("board").innerHTML =
+    `<thead><tr>${SHOWN.map(k => `<th data-k="${k}">${k.replace(/_/g, " ")}</th>`).join("")}</tr></thead><tbody>` +
+    rows.map(r => {
+      const stale = r.router === "copperroute" && r.finished_at < OUTLINE_FIX;
+      return `<tr class="${r === best ? "best" : ""} ${stale ? "stale" : ""}">` + SHOWN.map(k => {
+        const v = r[k] === "1000000" ? "failed" : r[k];
+        const cls = k === "args" || k === "env" ? "args" : (k === "new_violations" && +r[k] > 0 ? "bad" : "");
+        return `<td class="${cls}">${esc(v)}</td>`;
+      }).join("") + "</tr>";
+    }).join("") + "</tbody>";
+  for (const th of document.querySelectorAll("th")) th.onclick = () => {
+    sortDir = sortKey === th.dataset.k ? -sortDir : 1;
+    sortKey = th.dataset.k;
+    render();
+  };
+}
+
+fetch(`${job}/leaderboard.csv`, { cache: "no-store" }).then(r => {
+  if (!r.ok) throw new Error(r.status);
+  return r.text();
+}).then(text => {
+  const [head, ...body] = parse(text.trim());
+  data = body.map(cells => Object.fromEntries(head.map((h, i) => [h, cells[i] ?? ""])));
+  render();
+}).catch(() => {
+  document.getElementById("board").innerHTML = `<tr><td>No leaderboard for ${esc(job)}.</td></tr>`;
+});
+</script>
+</body>
+</html>

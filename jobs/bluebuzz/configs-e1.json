@@ -2,7 +2,7 @@
  {
   "name": "cr-e1",
   "router": "copperroute",
-  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-e1/release/copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target/release/copperroute",
   "args": [],
   "env": {
    "COPPERROUTE_OBSTACLE_HEURISTIC": "1"
@@ -11,7 +11,7 @@
  {
   "name": "cr-e1-nofan",
   "router": "copperroute",
-  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-e1/release/copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target/release/copperroute",
   "args": [
    "--set",
    "router.fanout.enabled=false"
@@ -23,7 +23,7 @@
  {
   "name": "cr-e1-nofan-via10",
   "router": "copperroute",
-  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-e1/release/copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target/release/copperroute",
   "args": [
    "--set",
    "router.fanout.enabled=false",
@@ -37,7 +37,7 @@
  {
   "name": "cr-e1-nofan-search4m",
   "router": "copperroute",
-  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-e1/release/copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target/release/copperroute",
   "args": [
    "--set",
    "router.fanout.enabled=false",
@@ -51,7 +51,7 @@
  {
   "name": "cr-e1-hist1-nofan",
   "router": "copperroute",
-  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-e1/release/copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/copperroute/target/release/copperroute",
   "args": [
    "--set",
    "router.fanout.enabled=false"

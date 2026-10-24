@@ -70,6 +70,19 @@ code {
 a { color: var(--accent); }
 footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
 @media (max-width: 480px) { .entry { grid-template-columns: 1fr; gap: .1rem; } }
+.xgroup + .xgroup { margin-top: 1.1rem; }
+.xgroup h3 { font-size: .95rem; margin: 0 0 .5rem; display: flex; gap: .6rem; align-items: baseline; }
+.xgrid { display: grid; gap: .6rem; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
+.xitem { border: 1px solid var(--line); border-radius: 10px; padding: .6rem .75rem; display: grid; gap: .2rem; align-content: start; }
+.xitem b { font-size: .9rem; }
+.xitem .about { color: var(--muted); font-size: .78rem; overflow-wrap: anywhere; }
+.xitem .result { font-size: .86rem; }
+.xitem .detail { color: var(--muted); font-size: .78rem; }
+.xitem .links { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .2rem; }
+.xitem .links a, .xgroup h3 a {
+  font-size: .76rem; text-decoration: none; padding: .05rem .5rem; border-radius: 999px;
+  background: var(--chip); border: 1px solid var(--line);
+}
 </style>
 </head>
 <body>
@@ -83,6 +96,12 @@ footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
 </header>
 
 <main>
+
+  <section class="card" id="overview">
+    <h2>Experiments</h2>
+    <div id="xgroups"><p class="todo">Loading experiments.json…</p></div>
+    <p style="color:var(--muted);font-size:.8rem;margin:.8rem 0 0">Built by <code>tools/build_experiments.py</code> from the leaderboards, the morph runs and the benchmark reports<span id="xwhen"></span>.</p>
+  </section>
 
   <section class="card">
     <h2>Where it stands</h2>
@@ -183,6 +202,7 @@ footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
         <li class="done"><b>No stacked vias:</b> the grid stamps every drilled hole and keeps vias the hole-to-hole distance apart for all nets, own net included; an existing via's centre stays open to its net for reuse. Commit reuses vias at the same point and refuses a path whose via would still clash. Earring: 42 stacked holes, 12 hole-to-hole and 4 shorts down to 0 in KiCad. The runner now hands the board's <code>.kicad_pro</code> to router and referee, and <code>--rescore</code> rescored every kept session</li>
         <li class="done"><b>Three bugs found by checking against KiCad:</b> (1) moving a part could move its pins twice, depending on whether each pin's centre was cached, so a reloaded nudged session read every net on the moved part as open (earring scored 31 open instead of 2). (2) <code>--lock</code> wrote <code>lock_type position</code> into the session, which KiCad refuses to import. (3) Nudge counted lone dangling items as open connections. All fixed and tested. The runner now matches violations by what they are between, not by position, so a moved part keeps its old violations</li>
         <li class="done"><b>Targeted nudge and <code>copperroute blame</code>:</b> for each open connection, route it on its net's grid with movable parts passable at a price that grows with how deep the path intrudes into their clearance. Routed copper is a wall (or priced). The intrusions on the cheapest path become per-part displacements, solved by cyclic projection; a part pushed from both sides is reported as unmovable. Nudge tries these moves smallest first, instead of 16 blind guesses per part. <code>--lock REF,...</code> keeps parts in place. <code>blame</code> also tells apart connections that are walled off, pinned by their own part's pins, or blocked by congestion</li>
+        <li class="done"><b>Morph frames</b> (<a href="morph-frames/">viewer</a>): every operator reports each move it keeps; <code>settle --frames DIR</code> and <code>route --morph-frames DIR</code> write one SVG per move with the open connections. New <code>settle --dipole x,y,dx,dy[,r[,decay]]</code> (pcbmorph's push field), <code>--only warp|shove|push|group</code>, <code>--near-partners</code>, <code>--lock</code>. Demos on bluebuzz best caught warp disconnecting a via-in-pad stub (C22); fixed: warp anchors via centres, and warp/shove refuse moves that open a connection. R4 and R60, the parts <code>blame</code> names, cannot move at all: route.py's fixed copper is attached to their pads</li>
         <li class="done"><b>Milestone 5, negotiated congestion (PathFinder):</b> per-net zones, rising present cost and history, greedy legal commit; connections from a spanning tree per net (the DRC lists one entry per open net). Pad escape stubs checked by exact geometry. <b>Runs on governed CPU threads, not the GPU</b>: on bluebuzz grids (1.79M nodes), 32 cost fields take 0.05 s on 12 CPU threads against about 3 s batched on the RTX 3060, and GAMER-style sweeps were slower still. All GPU kernels match the CPU exactly and stay as tested experiments. Parallel negotiation on bm05: 48.8 s → 5.1 s, no new violations</li>
         <li class="done"><b>GPU router, Milestone 4:</b> <code>copper-gpu</code> builds a conservative per-net grid (any accepted path is legal), computes integer cost fields with <code>relax.wgsl</code> on wgpu, identical node for node to the CPU Dijkstra reference, and commits paths ending exactly on pin and via centres. <code>--backend grid</code> routes on the grid first, then maze finishes. No new DRC violations on bm05 or bluebuzz. Not faster than CPU yet on small grids (0.13 vs 0.08 s for six fields)</li>
         <li class="done"><b>settle port done</b> (see <a href="docs/morph-port-plan.md">docs/morph-port-plan.md</a>): pressure, group stepping, copper shove/drag, warp field (CG, rubber's claim rounds), blocker rip-and-reroute, ghost placement and site search, length caps, and the driver. <code>copperroute settle BOARD --ses ROUTED.ses --targets t.json -o OUT.ses</code>. Every piece is tested against the independent DRC on routed DAC2020 bm05. Warping accepts 23 of 30 moves, shoving 24; no lost connections, no added violations</li>
@@ -274,5 +294,32 @@ footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
   <code>proj up ultraroute</code> to start, <code>proj down ultraroute</code> to stop.
 </footer>
 
+<script>
+(async () => {
+  const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+  const box = document.getElementById("xgroups");
+  try {
+    const r = await fetch("experiments.json", { cache: "no-store" });
+    if (!r.ok) throw new Error(r.status);
+    const data = await r.json();
+    document.getElementById("xwhen").textContent = ", " + data.generated.replace("T", " ");
+    box.innerHTML = data.groups.filter(g => g.items.length).map(g => `
+      <div class="xgroup">
+        <h3>${esc(g.title)} ${g.link ? `<a href="${esc(g.link.href)}">${esc(g.link.label)}</a>` : ""}</h3>
+        <div class="xgrid">${g.items.map(i => `
+          <div class="xitem">
+            <b>${esc(i.title)}</b>
+            ${i.about ? `<span class="about">${esc(i.about)}</span>` : ""}
+            <span class="result">${esc(i.result)}</span>
+            ${i.detail ? `<span class="detail">${esc(i.detail)}</span>` : ""}
+            <span class="links">${i.links.map(l => `<a href="${esc(l.href)}">${esc(l.label)}</a>`).join("")}</span>
+          </div>`).join("")}
+        </div>
+      </div>`).join("");
+  } catch (e) {
+    box.innerHTML = `<p class="todo">experiments.json not found: run tools/build_experiments.py.</p>`;
+  }
+})();
+</script>
 </body>
 </html>

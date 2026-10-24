@@ -1,0 +1,645 @@
+{
+  "cycles": 12,
+  "parts": {
+    "C10": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0358
+    },
+    "C100": {
+      "arrived": true,
+      "moves": {
+        "group": 2
+      },
+      "travelled_mm": 0.0677,
+      "wanted_mm": 0.0677
+    },
+    "C101": {
+      "arrived": true,
+      "moves": {
+        "group": 3
+      },
+      "travelled_mm": 0.1251,
+      "wanted_mm": 0.1251
+    },
+    "C102": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.1913
+    },
+    "C11": {
+      "arrived": false,
+      "moves": {
+        "group": 1
+      },
+      "travelled_mm": 0.007,
+      "wanted_mm": 0.1453
+    },
+    "C12": {
+      "arrived": false,
+      "moves": {
+        "group": 3
+      },
+      "travelled_mm": 0.1445,
+      "wanted_mm": 0.2042
+    },
+    "C120": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0234
+    },
+    "C121": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.051
+    },
+    "C122": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0313
+    },
+    "C123": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.007
+    },
+    "C13": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0337
+    },
+    "C130": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0217
+    },
+    "C131": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.018
+    },
+    "C132": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0309
+    },
+    "C133": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0125
+    },
+    "C14": {
+      "arrived": true,
+      "moves": {
+        "group": 2
+      },
+      "travelled_mm": 0.07,
+      "wanted_mm": 0.07
+    },
+    "C140": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0654
+    },
+    "C15": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.1909
+    },
+    "C2": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0134
+    },
+    "C20": {
+      "arrived": true,
+      "moves": {
+        "group": 2
+      },
+      "travelled_mm": 0.0868,
+      "wanted_mm": 0.0868
+    },
+    "C21": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.1716
+    },
+    "C22": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.28
+    },
+    "C40": {
+      "arrived": true,
+      "moves": {
+        "group": 1
+      },
+      "travelled_mm": 0.0114,
+      "wanted_mm": 0.0114
+    },
+    "C41": {
+      "arrived": true,
+      "moves": {
+        "group": 1
+      },
+      "travelled_mm": 0.0156,
+      "wanted_mm": 0.0156
+    },
+    "C42": {
+      "arrived": true,
+      "moves": {
+        "group": 1
+      },
+      "travelled_mm": 0.0138,
+      "wanted_mm": 0.0138
+    },
+    "C43": {
+      "arrived": true,
+      "moves": {
+        "group": 1
+      },
+      "travelled_mm": 0.0194,
+      "wanted_mm": 0.0194
+    },
+    "C50": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.4211
+    },
+    "C51": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0834
+    },
+    "C52": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.4572
+    },
+    "C64": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0209
+    },
+    "C80": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.3208
+    },
+    "C81": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0288
+    },
+    "C82": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0524
+    },
+    "C83": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.2541
+    },
+    "C84": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.1636
+    },
+    "C85": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0832
+    },
+    "C86": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0237
+    },
+    "C87": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0193
+    },
+    "C88": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0316
+    },
+    "C89": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0229
+    },
+    "C91": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.1908
+    },
+    "C92": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0298
+    },
+    "C93": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.4154
+    },
+    "C94": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0549
+    },
+    "C95": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0447
+    },
+    "C96": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0291
+    },
+    "C97": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0527
+    },
+    "C98": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0766
+    },
+    "D1": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0311
+    },
+    "D2": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0148
+    },
+    "D3": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0098
+    },
+    "D4": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0109
+    },
+    "D5": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0248
+    },
+    "D6": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0174
+    },
+    "J2": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.1586
+    },
+    "J3": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0311
+    },
+    "J4": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0145
+    },
+    "J5": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0978
+    },
+    "J6": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0536
+    },
+    "L1": {
+      "arrived": false,
+      "moves": {
+        "group": 7
+      },
+      "travelled_mm": 0.35,
+      "wanted_mm": 0.4015
+    },
+    "Q1": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0131
+    },
+    "Q2": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.015
+    },
+    "Q3": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0157
+    },
+    "R1": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0103
+    },
+    "R10": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0375
+    },
+    "R11": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0451
+    },
+    "R12": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0376
+    },
+    "R13": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0668
+    },
+    "R130": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0203
+    },
+    "R131": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0177
+    },
+    "R14": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0403
+    },
+    "R2": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0108
+    },
+    "R3": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.54
+    },
+    "R4": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.6
+    },
+    "R40": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0203
+    },
+    "R41": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0192
+    },
+    "R42": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0219
+    },
+    "R43": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0218
+    },
+    "R50": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.1187
+    },
+    "R60": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0324
+    },
+    "R61": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0259
+    },
+    "R62": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0176
+    },
+    "R63": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0217
+    },
+    "R64": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0126
+    },
+    "R66": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0197
+    },
+    "R80": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0261
+    },
+    "R81": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.2207
+    },
+    "R84": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.1947
+    },
+    "R85": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.103
+    },
+    "R86": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0272
+    },
+    "R87": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0415
+    },
+    "R88": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.029
+    },
+    "SW1": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0114
+    },
+    "U1": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0847
+    },
+    "U10": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0137
+    },
+    "U11": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0138
+    },
+    "U2": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0683
+    },
+    "U3": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.1448
+    },
+    "U30": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0265
+    },
+    "U40": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.0976
+    },
+    "U5": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.1813
+    },
+    "U6": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.054
+    },
+    "Y1": {
+      "arrived": false,
+      "moves": {},
+      "travelled_mm": 0.0,
+      "wanted_mm": 0.023
+    }
+  }
+}
