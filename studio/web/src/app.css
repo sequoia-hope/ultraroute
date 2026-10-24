@@ -454,3 +454,38 @@ aside h1 a {
   white-space: nowrap;
   margin: 0;
 }
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.field .label {
+  color: var(--muted);
+}
+
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.segmented button {
+  border: 0;
+  border-radius: 0;
+  border-right: 1px solid var(--line);
+  padding: 6px 0;
+}
+
+.segmented button:last-child {
+  border-right: 0;
+}
+
+.segmented button.on {
+  background: var(--accent);
+  color: #08130f;
+  font-weight: 600;
+}

@@ -11,7 +11,6 @@
 
   let jobs = $state([]);
   let jobName = $state('');
-  let presetName = $state('');
   let argsText = $state('');
   let envText = $state('');
   let timeout = $state(120);
@@ -71,12 +70,43 @@
     return { rest, found };
   }
 
+  // A scored recipe, read into the router options.
   function choosePreset(name) {
     const preset = presets.find((p) => p.name === name);
-    const { rest, found } = splitLocks(preset?.args ?? []);
-    argsText = rest.join(' ');
-    locks = found;
-    envText = Object.entries(preset?.env ?? {})
+    if (!preset) return;
+    const { rest, found } = splitLocks(preset.args ?? []);
+    const backend = rest.indexOf('--backend');
+    router = backend >= 0 ? rest[backend + 1] : 'maze';
+    fanout = !rest.includes('router.fanout.enabled=false');
+    negotiate = preset.env?.COPPERROUTE_GRID_NEGOTIATE === '1';
+    fineGrid = preset.env?.COPPERROUTE_GRID_CELL_MM === '0.05';
+    if (found.length) locks = found;
+    compose();
+  }
+
+  const ROUTERS = [
+    { key: 'grid', label: 'Grid', title: 'GPU grid router with negotiated congestion; the maze router finishes what it leaves' },
+    { key: 'maze', label: 'Maze', title: 'The maze router alone' },
+    { key: 'topo', label: 'Topo', title: 'Topological rubber-band routing with rip-up, then the maze router' },
+    { key: 'nudge', label: 'Nudge', title: 'Grid routing, then moves unlocked parts that block open connections (slow)' },
+  ];
+  let router = $state('grid');
+  let negotiate = $state(true);
+  let fineGrid = $state(true);
+  let fanout = $state(false);
+
+  // The router options as arguments and environment; the advanced fields show and can edit them.
+  function compose() {
+    const args = [];
+    const env = {};
+    if (router !== 'maze') args.push('--backend', router);
+    if (!fanout) args.push('--set', 'router.fanout.enabled=false');
+    const grid = router === 'grid' || router === 'nudge';
+    if (grid && negotiate) env.COPPERROUTE_GRID_NEGOTIATE = '1';
+    if (grid && fineGrid) env.COPPERROUTE_GRID_CELL_MM = '0.05';
+    if (router === 'nudge') env.COPPERROUTE_NUDGE_BASE = 'grid';
+    argsText = args.join(' ');
+    envText = Object.entries(env)
       .map(([k, v]) => `${k}=${v}`)
       .join('\n');
   }
@@ -86,9 +116,9 @@
     placements = {};
     selected = null;
     refitNext = true;
-    const first = jobs.find((j) => j.name === name)?.presets?.[0];
-    presetName = first?.name ?? '';
-    choosePreset(presetName);
+    const withLocks = jobs.find((j) => j.name === name)?.presets?.find((p) => splitLocks(p.args ?? []).found.length);
+    locks = withLocks ? splitLocks(withLocks.args).found : [];
+    compose();
   }
 
   function environment() {
@@ -354,8 +384,7 @@
     const first = jobs.find((j) => j.name === asked.get('job')) ?? jobs.find((j) => j.name === 'bluebuzz-1024') ?? jobs[0];
     if (first) chooseJob(first.name);
     if (presets.some((p) => p.name === asked.get('recipe'))) {
-      presetName = asked.get('recipe');
-      choosePreset(presetName);
+      choosePreset(asked.get('recipe'));
     }
     if (STATIC) {
       const rec = recordings.find((r) => r.job === jobName) ?? recordings[0];
@@ -381,21 +410,8 @@
 
 <svelte:window onkeydown={key} />
 
-<main>
-  <aside>
-    <header>
-      <h1><a href="../">Ultraroute</a> Studio</h1>
-      {#if !STATIC}<span class="dot" class:on={connected} title={connected ? 'connected' : 'reconnecting'}></span>{/if}
-    </header>
-
-    {#if STATIC}
-      <p class="note">
-        These are recordings of real runs. To route live, drag parts and let the router follow, run the
-        studio on your machine: see the <a href="https://github.com/sequoia-hope/ultraroute#run-the-studio">README</a>.
-      </p>
-    {/if}
-
-    {#if recordings.length}
+{#snippet recorded()}
+  {#if recordings.length}
       <section>
         <h2>Recorded runs</h2>
         <ul class="recordings">
@@ -429,6 +445,24 @@
         {/if}
       </section>
     {/if}
+{/snippet}
+
+
+<main>
+  <aside>
+    <header>
+      <h1><a href="../">Ultraroute</a> Studio</h1>
+      {#if !STATIC}<span class="dot" class:on={connected} title={connected ? 'connected' : 'reconnecting'}></span>{/if}
+    </header>
+
+    {#if STATIC}
+      <p class="note">
+        These are recordings of real runs. To route live, drag parts and let the router follow, run the
+        studio on your machine: see the <a href="https://github.com/sequoia-hope/ultraroute#run-the-studio">README</a>.
+      </p>
+    {/if}
+
+    {#if STATIC}{@render recorded()}{/if}
 
     {#if !STATIC}
     <label>
@@ -444,21 +478,22 @@
       </select>
     </label>
 
-    <label>
-      Recipe
-      <select
-        value={presetName}
-        onchange={(e) => {
-          presetName = e.currentTarget.value;
-          choosePreset(presetName);
-          load();
-        }}
-      >
-        {#each presets as p}
-          <option value={p.name}>{p.name}{p.open != null ? ` — ${p.open} open` : ''}</option>
+    <div class="field">
+      <span class="label">Router</span>
+      <div class="segmented">
+        {#each ROUTERS as r}
+          <button class:on={router === r.key} title={r.title} onclick={() => { router = r.key; compose(); }}>{r.label}</button>
         {/each}
-      </select>
-    </label>
+      </div>
+    </div>
+    {#if router === 'grid' || router === 'nudge'}
+      <label class="check"><input type="checkbox" bind:checked={negotiate} onchange={compose} /> Negotiate congestion</label>
+      <label class="check"><input type="checkbox" bind:checked={fineGrid} onchange={compose} /> Fine grid (0.05 mm cells)</label>
+    {/if}
+    <label class="check"><input type="checkbox" bind:checked={fanout} onchange={compose} /> Fan out pads first</label>
+    {#if presets[0]?.open != null}
+      <p class="muted small">Best scored on this board: {presets[0].open} open ({presets[0].name})</p>
+    {/if}
 
     <details>
       <summary>Arguments and environment</summary>
@@ -617,6 +652,7 @@
         <pre>{status.events.join('\n')}</pre>
       </details>
     {/if}
+    {#if !STATIC}{@render recorded()}{/if}
     <p class="hint">{STATIC ? 'Click a part to select it.' : 'Click a part to select it, drag to move it.'} Drag empty board to pan, wheel to zoom, double-click to fit.</p>
   </aside>
 
