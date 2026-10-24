@@ -2,326 +2,256 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>ultraroute — status</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ultraroute</title>
+<link rel="icon" href="data:,">
 <style>
-/* Same palette as the hub dashboard, so a project page and the project list
-   read as one system when you tab between them. */
-:root {
-  --bg: #f6f7f9; --card: #ffffff; --line: #e2e5ea; --fg: #14171c;
-  --muted: #5f6875; --accent: #2f6feb; --up: #1a9c5b; --warn: #b7791f;
-  --down: #98a1ae; --chip: #eef1f5;
-  --shadow: 0 1px 2px rgba(16,20,28,.06), 0 4px 12px rgba(16,20,28,.05);
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #0e1116; --card: #171b22; --line: #262c36; --fg: #e6e9ee;
-    --muted: #8b94a3; --accent: #5b9bff; --up: #35c07d; --warn: #d9a441;
-    --down: #4d5563; --chip: #222833; --shadow: none;
+  :root {
+    --bg: #0b141b; --panel: #111d26; --panel-2: #0e1820; --line: #22323e;
+    --text: #d8e2e8; --muted: #8aa0ad; --accent: #83c5af; --accent-ink: #08130f;
+    --warn: #ffb36b; --top: #f26d78; --bottom: #68b8ff;
+    color-scheme: dark;
   }
-}
-* { box-sizing: border-box; }
-body {
-  margin: 0; background: var(--bg); color: var(--fg);
-  font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  padding: 0 0 3rem;
-}
-header, main, footer { max-width: 900px; margin: 0 auto; padding: 0 1.25rem; }
-header { padding-top: 1.75rem; padding-bottom: 1rem; }
-.title { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
-h1 { font-size: 1.5rem; margin: 0; letter-spacing: -.015em; }
-h2 {
-  font-size: .78rem; margin: 0 0 .6rem; text-transform: uppercase;
-  letter-spacing: .08em; color: var(--muted); font-weight: 650;
-}
-.state {
-  display: inline-flex; align-items: center; gap: .4rem; border-radius: 999px;
-  padding: .2rem .65rem; font-size: .76rem; font-weight: 600;
-  background: var(--chip); border: 1px solid var(--line); color: var(--muted);
-}
-.state .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--down); }
-.state.active { color: var(--up); border-color: color-mix(in srgb, var(--up) 35%, var(--line)); }
-.state.active .dot { background: var(--up); box-shadow: 0 0 0 3px color-mix(in srgb, var(--up) 22%, transparent); }
-.state.blocked { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, var(--line)); }
-.state.blocked .dot { background: var(--warn); }
-.lede { color: var(--muted); font-size: .95rem; margin: .55rem 0 0; }
-main { display: grid; gap: .9rem; }
-.card {
-  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
-  padding: 1rem 1.1rem 1.1rem; box-shadow: var(--shadow);
-}
-.cols { display: grid; gap: .9rem; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
-ul { margin: 0; padding-left: 1.15rem; }
-li { margin: .25rem 0; }
-ul.checks { list-style: none; padding-left: 0; }
-ul.checks li { display: flex; gap: .55rem; align-items: baseline; }
-ul.checks li::before { content: "○"; color: var(--muted); font-size: .9em; }
-ul.checks li.done { color: var(--muted); }
-ul.checks li.done::before { content: "●"; color: var(--up); }
-.log { display: grid; gap: .7rem; }
-.entry { display: grid; grid-template-columns: 5.5rem 1fr; gap: .75rem; align-items: baseline; }
-.entry time { color: var(--muted); font-size: .8rem; font-variant-numeric: tabular-nums; }
-.todo { color: var(--muted); font-style: italic; }
-code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em;
-  background: var(--chip); border: 1px solid var(--line);
-  border-radius: 5px; padding: .06em .35em;
-}
-a { color: var(--accent); }
-footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
-@media (max-width: 480px) { .entry { grid-template-columns: 1fr; gap: .1rem; } }
-.xgroup + .xgroup { margin-top: 1.1rem; }
-.xgroup h3 { font-size: .95rem; margin: 0 0 .5rem; display: flex; gap: .6rem; align-items: baseline; }
-.xgrid { display: grid; gap: .6rem; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
-.xitem { border: 1px solid var(--line); border-radius: 10px; padding: .6rem .75rem; display: grid; gap: .2rem; align-content: start; }
-.xitem b { font-size: .9rem; }
-.xitem .about { color: var(--muted); font-size: .78rem; overflow-wrap: anywhere; }
-.xitem .result { font-size: .86rem; }
-.xitem .detail { color: var(--muted); font-size: .78rem; }
-.xitem time { color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
-.xitem .links { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .2rem; }
-.xitem .links a, .xgroup h3 a {
-  font-size: .76rem; text-decoration: none; padding: .05rem .5rem; border-radius: 999px;
-  background: var(--chip); border: 1px solid var(--line);
-}
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #eef2f4; --panel: #ffffff; --panel-2: #f6f8f9; --line: #d3dde3;
+      --text: #15232c; --muted: #5b6f7b; --accent: #2e8a6d; --accent-ink: #ffffff;
+      --warn: #b25b00; --top: #c93a48; --bottom: #2b78c2;
+      color-scheme: light;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #eef2f4; --panel: #ffffff; --panel-2: #f6f8f9; --line: #d3dde3;
+    --text: #15232c; --muted: #5b6f7b; --accent: #2e8a6d; --accent-ink: #ffffff;
+    --warn: #b25b00; --top: #c93a48; --bottom: #2b78c2;
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, sans-serif; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { font: 0.9em ui-monospace, monospace; background: var(--panel-2); border: 1px solid var(--line); border-radius: 3px; padding: 0 3px; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 28px 16px 60px; }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  h1 { margin: 0; font-size: 26px; letter-spacing: 0.01em; }
+  .tagline { color: var(--muted); margin: 4px 0 0; }
+  nav { display: flex; gap: 16px; flex-wrap: wrap; font-size: 14px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 36px 0 12px; }
+
+  .hero { margin-top: 24px; display: grid; grid-template-columns: 1.6fr 1fr; gap: 16px; }
+  .studio { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 22px; display: flex; flex-direction: column; gap: 12px; position: relative; overflow: hidden; }
+  .studio h3 { margin: 0; font-size: 20px; }
+  .studio p { margin: 0; color: var(--muted); max-width: 46ch; }
+  .studio .traces { position: absolute; right: -10px; bottom: -10px; width: 230px; opacity: 0.55; pointer-events: none; }
+  .button { display: inline-block; background: var(--accent); color: var(--accent-ink); font-weight: 600; padding: 9px 18px; border-radius: 6px; align-self: flex-start; }
+  .button:hover { text-decoration: none; filter: brightness(1.08); }
+  .side { display: grid; gap: 16px; }
+  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+  .tile h3 { margin: 0 0 4px; font-size: 16px; }
+  .tile p { margin: 0; color: var(--muted); font-size: 14px; }
+
+  .now { background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 6px; padding: 14px 18px; }
+  .now p { margin: 0 0 8px; }
+  .now p:last-child { margin: 0; }
+
+  .boards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+  .board { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; }
+  .board .name { font-weight: 600; }
+  .board .score { display: flex; align-items: baseline; gap: 8px; }
+  .board .open { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .board .unit { color: var(--muted); font-size: 13px; }
+  .board .recipe { font: 12px ui-monospace, monospace; color: var(--muted); word-break: break-all; }
+  .board .links { display: flex; gap: 4px 12px; flex-wrap: wrap; font-size: 13px; margin-top: auto; padding-top: 6px; white-space: nowrap; }
+  .bad { color: var(--warn); }
+
+  .phases { display: grid; gap: 8px; }
+  details.phase { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  details.phase[open] { padding-bottom: 8px; }
+  details.phase summary { list-style: none; cursor: pointer; padding: 12px 16px; display: grid; grid-template-columns: 1fr 160px 48px; gap: 14px; align-items: center; }
+  details.phase summary::-webkit-details-marker { display: none; }
+  .phase .title { font-weight: 600; }
+  .phase .tag { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent-ink); background: var(--accent); border-radius: 3px; padding: 1px 6px; margin-left: 8px; vertical-align: 2px; }
+  .bar { height: 6px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+  .bar span { display: block; height: 100%; background: var(--accent); }
+  .count { color: var(--muted); font-size: 13px; text-align: right; font-variant-numeric: tabular-nums; }
+  .phase ul { margin: 0; padding: 0 16px 0 40px; }
+  .phase li { margin: 4px 0; color: var(--muted); font-size: 14px; }
+  .phase li.done { list-style: "✓  "; color: var(--text); }
+  .phase li.todo { list-style: "○  "; }
+  .phase .lead { color: var(--muted); font-size: 14px; margin: 0 16px 6px 16px; }
+
+  .runs { display: grid; gap: 8px; }
+  .run { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; display: grid; grid-template-columns: 110px 1fr; gap: 12px; }
+  .run .when { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .run .title { font-weight: 600; }
+  .run .result { font-size: 14px; }
+  .run .links { font-size: 13px; display: flex; gap: 12px; flex-wrap: wrap; }
+  .more { margin-top: 12px; font-size: 14px; }
+  .muted { color: var(--muted); }
+
+  @media (max-width: 760px) {
+    .hero { grid-template-columns: 1fr; }
+    details.phase summary { grid-template-columns: 1fr 70px; }
+    details.phase summary .bar { display: none; }
+    .run { grid-template-columns: 1fr; gap: 2px; }
+    .studio .traces { display: none; }
+  }
 </style>
 </head>
 <body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Ultraroute</h1>
+      <p class="tagline">A GPU autorouter for KiCad boards, and a layout tool built around it.</p>
+    </div>
+    <nav>
+      <a href="ROADMAP.md">Roadmap</a>
+      <a href="jobs/leaderboard.html">Leaderboards</a>
+      <a href="history.html">Experiment history</a>
+      <a href="https://github.com/sequoia-hope/copperroute/tree/governance">Router fork</a>
+    </nav>
+  </header>
 
-<header>
-  <div class="title">
-    <h1>ultraroute</h1>
-    <span class="state active"><span class="dot"></span>Building</span>
-  </div>
-  <p class="lede">A fast, GPU-capable, host-friendly KiCad autorouter, built on a fork of CopperRoute, and a bench for comparing routing approaches.</p>
-</header>
-
-<main>
-
-  <section class="card" id="overview">
-    <h2>Experiments</h2>
-    <div id="xgroups"><p class="todo">Loading experiments.json…</p></div>
-    <p style="color:var(--muted);font-size:.8rem;margin:.8rem 0 0">Built by <code>tools/build_experiments.py</code> from the leaderboards, the morph runs and the benchmark reports<span id="xwhen"></span>.</p>
-  </section>
-
-  <section class="card">
-    <h2>Where it stands</h2>
-    <p>CopperRoute is cloned into <code>copperroute/</code> on a local <code>governance</code> branch. It builds, and its benchmark harness runs against KiCad-refereed PCBench boards. The router now governs itself by default: it runs niced, uses at most half the cores, and stops gracefully at a memory ceiling while still writing the session. Routing goes through a pluggable <code>RouterBackend</code> trait. <code>maze</code> is the existing router; <code>none</code> is the scoring floor. Backends now include grid routing with negotiated congestion (<code>grid</code>) and part nudging (<code>nudge</code>). The aim of nudging is to automate what a designer does by hand: move the parts that stop a connection from routing. Parts the designer wants left alone are locked with <code>--lock</code>. The fork is pushed to <code>sequoia-hope/copperroute@governance</code>.</p>
-  </section>
-
-  <section class="card" id="baseline">
-    <h2>Baseline</h2>
-    <p>42 KiCad-refereed PCBench boards, serial (<code>--jobs 1 --threads 1</code>), 100 passes, 120 s timeout. <a href="copperroute/benchmark/reports/baseline-20261022.html">Full report</a>.</p>
-    <table style="width:100%;border-collapse:collapse;font-size:.88rem;font-variant-numeric:tabular-nums">
-      <tr style="text-align:left;color:var(--muted)"><th>router</th><th>clean boards</th><th>unrouted</th><th>DRC viol.</th><th>vias</th><th>total wall</th><th>median wall</th></tr>
-      <tr><td>Freerouting (Java)</td><td>15 / 42</td><td>98</td><td>185</td><td>392</td><td>328 s</td><td>4.55 s</td></tr>
-      <tr><td>CopperRoute main</td><td>23 / 42</td><td>81</td><td>122</td><td>284</td><td>179 s</td><td>1.15 s</td></tr>
-      <tr><td>CopperRoute governed</td><td>23 / 42</td><td>81</td><td>122</td><td>284</td><td>176 s</td><td>1.05 s</td></tr>
-    </table>
-    <p style="color:var(--muted);font-size:.85rem;margin-bottom:0">Median per-board speedup of governed over Java is 4.5×, but this includes roughly 3 s of JVM startup on every board. On the slowest boards the gap shrinks to about 0.8–1.7×. Governed and main produce identical results on every board. CopperRoute still loses 10 boards to Java on quality: 6 on unrouted count, the rest on score ties.</p>
-  </section>
-
-  <section class="card" id="experiments">
-    <h2>Experiments</h2>
-    <table style="width:100%;border-collapse:collapse;font-size:.88rem;font-variant-numeric:tabular-nums">
-      <tr style="text-align:left;color:var(--muted)"><th>experiment</th><th>clean</th><th>unrouted</th><th>DRC viol.</th><th>vias</th><th>verdict</th></tr>
-      <tr><td>maze, no history (dev build)</td><td>23/42</td><td>81</td><td>122</td><td>284</td><td>reference</td></tr>
-      <tr><td>ripup history ×0.5</td><td>23/42</td><td>80</td><td>144</td><td>314</td><td rowspan="3"><b>Negative.</b> Per-net history makes the router detour around "expensive" nets with more vias and more violations. Stays off. Next variant: per-region history</td></tr>
-      <tr><td>ripup history ×1</td><td>23/42</td><td>88</td><td>189</td><td>311</td></tr>
-      <tr><td>ripup history ×2</td><td>23/42</td><td>86</td><td>178</td><td>335</td></tr>
-      <tr><td>grid → maze (GPU grid first)</td><td>21/42</td><td>83</td><td>117</td><td>302</td><td><b>Neutral on the corpus, a win on dense boards.</b> Better on 8 boards, worse on 6; gains 2 clean boards, loses 4; 3.3× the time. Bluebuzz 18 → 13. The first version lost 609 connections to timeouts; fixed with cached obstacle maps and a 40% time share</td></tr>
-      <tr><td>obstacle-aware heuristic (vs its own base build: 23/42, 81, 122, 284)</td><td>23/42</td><td>87</td><td>119</td><td>275</td><td><b>Neutral, 2.2× slower.</b> 35 of 42 boards unchanged; slightly fewer vias and violations. Abakus_Main lost 6 connections, taking 100 s vs 30 s (search budgets). Bluebuzz: 18, but shortest copper yet (153.7 mm), the new best. Stays opt-in; next fix is caching the field per net</td></tr>
-      <tr><td>region history ×0.1</td><td>23/42</td><td>81</td><td><b>107</b></td><td>277</td><td rowspan="3"><b>Mixed, promising.</b> ×0.1 cuts violations 12% at no cost in connections. ×0.25 closes 8 more connections (−10%), better on 4 boards and worse on 1, but loses a clean board. Base: 23/42, 81, 122, 284. Kept opt-in; next, find why ×0.25 lost a clean board</td></tr>
-      <tr><td>region history ×0.25</td><td>22/42</td><td><b>73</b></td><td>137</td><td>288</td></tr>
-      <tr><td>region history ×0.5</td><td>22/42</td><td>76</td><td>119</td><td>298</td></tr>
-      <tr><td>region history on bluebuzz</td><td colspan="4"></td><td>Bluebuzz: 18 at every factor. With fanout off and the heuristic, ×0.25 gives <b>9 vias</b> (best yet). Without those, it costs copper (184–205 mm)</td></tr>
-    </table>
-    <p style="color:var(--muted);font-size:.85rem;margin-bottom:0">Same 42 PCBench boards, serial, 100 passes, 120 s each. <a href="copperroute/benchmark/reports/hist-20261022.html">History report</a>, <a href="copperroute/benchmark/reports/e1-20261022.html">heuristic report</a>, <a href="copperroute/benchmark/reports/region-20261022.html">region report</a>.</p>
-  </section>
-
-  <section class="card" id="bluebuzz">
-    <h2>Route job: bluebuzz</h2>
-    <p>Input is the tamed DSN <code>route.py</code> feeds Freerouting (bluebuzz <code>6c5bd5e</code>): 6 layers with only 3 routable, 696 keepouts, and 38 connections open before routing. Every attempt is scored by the same <code>copperroute drc</code> against the bare input. "Unconnected" counts <i>nets</i> with an open connection: the DRC lists one entry per such net, not one per missing connection. <a href="jobs/bluebuzz/leaderboard.csv">Leaderboard</a> (49 attempts), <a href="jobs/bluebuzz/best/recipe.json">best recipe</a>.</p>
-    <ul>
-      <li><b>Maze outline fix (2026-10-23): 6 unconnected, 0 new errors</b> (grid + nudge, nothing moved; 24 vias, 224 mm, 393 s). It is now <code>best/</code>, down from 12. Still open: 1V1, 3V3_SENS, 3V3_SYS, MOTOR2_PWM, TAC_SDO, VBAT. The other reruns gained too: maze 19 → 15, no fanout 18 → 16. Bluebuzz has 104 outline edges off the 45° grid. Negotiated grid without nudge reaches 11, but with 10 hole-to-hole errors</li>
-      <li><b>Ripped up</b> (<code>jobs/bluebuzz-ripped</code>, the scripted copper removed: 69 open, 20 violations bare): maze <b>9</b>, grid + nudge 14, negotiated grid 16, all with no new errors. Before the outline fix: 18, 23 and 24. Freerouting hit the one-hour cap without writing a session. Keeping the scripted copper still wins (6)</li>
-      <li><b>Rescored with the KiCad project rules (2026-10-23):</b> the 6-unconnected best below has <b>11 hole-to-hole violations</b>, and the 10-unconnected grid route has 10. The best result with no new violations is now <b>12 unconnected</b> (grid + nudge with the via fix and project rules; 24 vias, 206 mm, 482 s), ahead of the earlier clean best of 14. No part moved: the nudge found nothing to improve, so this is the grid route under the project rules. It is now <code>best/</code>: the leaderboard ranks clean results (no new violations) first</li>
-      <li><i>Before rescoring:</i> 6 unconnected, 0 new violations, by moving <b>C95 0.08 mm</b> (+0.072, +0.025). J1, U7 and U20–U23 locked. Recipe: <code>--backend nudge --set router.fanout.enabled=false --lock J1,U7,U20,U21,U22,U23</code> with <code>COPPERROUTE_NUDGE_BASE=grid COPPERROUTE_GRID_NEGOTIATE=1 COPPERROUTE_GRID_CELL_MM=0.05</code> (282 s; 39 vias, 271 mm). Blame named C95 as the part in TAC_SDO's way. Four connections closed after the move, partly because the router took a different path once the board changed</li>
-      <li>What <code>copperroute blame</code> says about the 6 still open: VBAT and 3V3_SYS have one end buried in the tamed DSN's keepouts and planes (no free grid cell at all); 3V3_SENS, MOTOR2_PWM, TAC_SDO and USB_DM_C cross only other nets' routed copper, so they are congestion, not placement</li>
-      <li>Best without moving parts: 10 unconnected, 0 new violations. Recipe: <code>--backend grid --set router.fanout.enabled=false</code> with <code>COPPERROUTE_GRID_NEGOTIATE=1 COPPERROUTE_GRID_CELL_MM=0.05</code> (146 s; PathFinder on 12 CPU threads, then maze). Costs copper: 37 vias, 265 mm. Without negotiation: 13</li>
-      <li>Nudge (J4 −0.5 mm, approved): 17 alone. On top of grid it adds nothing (13 → 13)</li>
-      <li>Best without moving parts: 18 unconnected, 0 new violations, <b>9 vias</b>, 163.9 mm. Recipe: <code>--set router.fanout.enabled=false</code>, <code>COPPERROUTE_OBSTACLE_HEURISTIC=1</code> and <code>COPPERROUTE_REGION_HISTORY=0.25</code>. Shortest copper: 153.7 mm with 10 vias (heuristic only)</li>
-      <li>Freerouting 2.4.1 governed: also 18, but 173 mm, 249 s, 1.3 GB. Freerouting master stalls past 600 s</li>
-      <li>Ripup history (factors 0.25–4): no effect. Bluebuzz's failures aren't nets fighting over space</li>
-      <li>Obstacle-aware heuristic: also 18. It's sharper in only about 1% of searches, but there by up to 11.6×</li>
-      <li>Fixed copper and keepouts never fully wall off a start on the routable layers, so the remaining 18 aren't impossible by geometry alone. <a href="jobs/bluebuzz/walls.png">Obstacle grid render</a>. <i>Retracted:</i> an earlier "11 of 18 nets walled in" reading came from starts on the unroutable plane layers</li>
-    </ul>
-  </section>
-
-  <section class="card" id="earring">
-    <h2>Route job: simple_earring</h2>
-    <p>Input is exported from the latest rev (<code>afabd86</code>, LiPo and B3U button). The repo's own <code>out/earring.dsn</code> is the stale coin-cell rev. The board holds only the 72 locked scripted tracks and 14 zones from <code>route.py</code>: 89 nets open, 50 violations already present. LED1–LED45, J1 and SW1–SW2 are locked for nudging. <a href="jobs/simple_earring/leaderboard.csv">Leaderboard</a>, <a href="jobs/simple_earring/best/recipe.json">best recipe</a>.</p>
-    <p>Scored with the board's KiCad project rules since 2026-10-23 (the router gets them too). That exposed hole violations the earlier scoring never checked.</p>
-    <table style="width:100%;border-collapse:collapse;font-size:.88rem;font-variant-numeric:tabular-nums">
-      <tr style="text-align:left;color:var(--muted)"><th>attempt</th><th>open nets</th><th>new viol.</th><th>vias</th><th>KiCad unconnected</th><th>KiCad copper errors</th></tr>
-      <tr><td>Freerouting 2.4.1</td><td>34</td><td>61</td><td>81</td><td></td><td></td></tr>
-      <tr><td>maze</td><td>14</td><td>0</td><td>96</td><td>52</td><td>2 clearance</td></tr>
-      <tr><td>grid, before the via fix</td><td>5</td><td>60</td><td>204</td><td>28</td><td>42 stacked holes, 12 hole-to-hole, 4 shorts, 4 clearance</td></tr>
-      <tr><td>grid, before the leg check</td><td>6</td><td>5</td><td>161</td><td>33</td><td>4 clearance</td></tr>
-      <tr><td>grid + nudge, before the leg check</td><td>2</td><td>3</td><td>176</td><td>33</td><td>2 clearance</td></tr>
-      <tr><td>grid</td><td>8</td><td>0</td><td>147</td><td></td><td></td></tr>
-      <tr><td>grid + nudge, before the outline fix</td><td>7</td><td>0</td><td>148</td><td>30</td><td>none (warnings only)</td></tr>
-      <tr><td>maze, outline fix</td><td>6</td><td>0</td><td>97</td><td></td><td></td></tr>
-      <tr><td>grid, outline fix</td><td>4</td><td>0</td><td>148</td><td></td><td></td></tr>
-      <tr><td><b>grid + nudge, outline fix</b></td><td><b>3</b></td><td><b>0</b></td><td>150</td><td><b>26</b></td><td><b>none</b> (warnings only)</td></tr>
-    </table>
-    <ul>
-      <li><code>best/</code> is grid + nudge: <b>3 open nets</b> (3V3, VDD_CORE, VSYS) and no DRC errors, confirmed by KiCad. The nudge found no move to try; its final reroute closed one of the grid's 4. The one new warning is the 0.62 mm LED_D3 stub from <code>route.py</code> whose free end the route doesn't use</li>
-      <li><b>Why the maze gave up on routable connections:</b> its 45° room tree bounds each board-outline edge by an octagon. On a long edge off the 45° grid, such as the earring's two 14.5 mm edges at 56.4° and 123.6°, that octagon reaches 1.2–2 mm into the board. Pins inside it (LED1–3, LED32–34, BT1, SW2, R10, U6) got a start room of zero size, so the search could not be created, in every pass. It was not the step budget. Fix (copperroute <code>fork/governance</code>): such edges are cut into pieces short enough that each octagon overshoots by at most 50 µm. The referee's DRC is unchanged. Maze 14 → 6, and the grid router gains too, since the maze finishes its leftovers</li>
-      <li><b>Ripped up</b> (<code>jobs/simple_earring-ripped</code>, the scripted tracks removed: 90 open bare): maze <b>4</b> (one dangling-via warning), grid + nudge 5, negotiated grid 7, all with no new errors. Before the outline fix: 12, 10 and 10. Freerouting: 32 open, 3 new errors. The LEDs are locked, so nudge has nothing to move</li>
-      <li>The router's default <code>copper_to_edge_clearance_um=500</code> overrides this board's 0.2 mm: project rules only ever raise minimums. Left alone for now; lowering it freed only 6 of the stuck pins</li>
-      <li>The clearance errors were the leg from a path's last free cell to the pin centre, never checked: a 0.4 mm VBUS trace into a 0.25 mm pad came 0.10 mm from a CHRG via. Legs are now checked and necked down when needed, and commit checks everything it inserts. Cost: 2 → 7 open, because the earlier routes were only that complete by breaking clearance</li>
-      <li>KiCad unconnected counts ratsnest edges, from <code>kicad-cli pcb drc</code> after importing the session into the board (bare: 249). Our "open nets" and KiCad's edges still disagree in scale; not yet explained</li>
-    </ul>
-  </section>
-
-  <div class="cols">
-    <section class="card">
-      <h2>Working</h2>
-      <ul class="checks">
-        <li class="done">CopperRoute and Freerouting build locally</li>
-        <li class="done">Benchmark harness with KiCad DRC referee on 42 PCBench boards</li>
-        <li class="done"><code>copper-governor</code>: nice 10, RSS watchdog with soft stop and hard cancel, <code>--nice</code> and <code>--max-memory</code></li>
-        <li class="done">Default thread cap cut from cores−1 to cores/2</li>
-        <li class="done"><code>RouterBackend</code> trait and <code>--backend</code> flag</li>
-        <li class="done">PCB skill: governed-autorouter section in <code>references/routing.md</code></li>
-        <li class="done">wgpu 30 sees the RTX 3060 (Vulkan; int64 atomics, subgroups, timestamps)</li>
-        <li class="done">Fork pushed: <a href="https://github.com/sequoia-hope/copperroute/tree/governance">sequoia-hope/copperroute@governance</a>; default job timeout now 30 min</li>
-        <li class="done"><b>Maze outline fix:</b> long board-outline edges off the 45° grid no longer wall in the pins beside them. Earring 7 → 3 open, bluebuzz 12 → 6, both with no new errors</li>
-        <li class="done"><code>tools/route_job.py</code>: governed portfolio routing per board, keeps the best session and its recipe</li>
-        <li class="done">Opt-in per-net ripup history (PathFinder history term), <code>COPPERROUTE_RIPUP_HISTORY</code></li>
-        <li class="done"><b>No stacked vias:</b> the grid stamps every drilled hole and keeps vias the hole-to-hole distance apart for all nets, own net included; an existing via's centre stays open to its net for reuse. Commit reuses vias at the same point and refuses a path whose via would still clash. Earring: 42 stacked holes, 12 hole-to-hole and 4 shorts down to 0 in KiCad. The runner now hands the board's <code>.kicad_pro</code> to router and referee, and <code>--rescore</code> rescored every kept session</li>
-        <li class="done"><b>Three bugs found by checking against KiCad:</b> (1) moving a part could move its pins twice, depending on whether each pin's centre was cached, so a reloaded nudged session read every net on the moved part as open (earring scored 31 open instead of 2). (2) <code>--lock</code> wrote <code>lock_type position</code> into the session, which KiCad refuses to import. (3) Nudge counted lone dangling items as open connections. All fixed and tested. The runner now matches violations by what they are between, not by position, so a moved part keeps its old violations</li>
-        <li class="done"><b>Targeted nudge and <code>copperroute blame</code>:</b> for each open connection, route it on its net's grid with movable parts passable at a price that grows with how deep the path intrudes into their clearance. Routed copper is a wall (or priced). The intrusions on the cheapest path become per-part displacements, solved by cyclic projection; a part pushed from both sides is reported as unmovable. Nudge tries these moves smallest first, instead of 16 blind guesses per part. <code>--lock REF,...</code> keeps parts in place. <code>blame</code> also tells apart connections that are walled off, pinned by their own part's pins, or blocked by congestion</li>
-        <li class="done"><b>Morph frames</b> (<a href="morph-frames/">viewer</a>): every operator reports each move it keeps; <code>settle --frames DIR</code> and <code>route --morph-frames DIR</code> write one SVG per move with the open connections. New <code>settle --dipole x,y,dx,dy[,r[,decay]]</code> (pcbmorph's push field), <code>--only warp|shove|push|group</code>, <code>--near-partners</code>, <code>--lock</code>. Demos on bluebuzz best caught warp disconnecting a via-in-pad stub (C22); fixed: warp anchors via centres, and warp/shove refuse moves that open a connection. R4 and R60, the parts <code>blame</code> names, cannot move at all: route.py's fixed copper is attached to their pads</li>
-        <li class="done"><b>Milestone 5, negotiated congestion (PathFinder):</b> per-net zones, rising present cost and history, greedy legal commit; connections from a spanning tree per net (the DRC lists one entry per open net). Pad escape stubs checked by exact geometry. <b>Runs on governed CPU threads, not the GPU</b>: on bluebuzz grids (1.79M nodes), 32 cost fields take 0.05 s on 12 CPU threads against about 3 s batched on the RTX 3060, and GAMER-style sweeps were slower still. All GPU kernels match the CPU exactly and stay as tested experiments. Parallel negotiation on bm05: 48.8 s → 5.1 s, no new violations</li>
-        <li class="done"><b>GPU router, Milestone 4:</b> <code>copper-gpu</code> builds a conservative per-net grid (any accepted path is legal), computes integer cost fields with <code>relax.wgsl</code> on wgpu, identical node for node to the CPU Dijkstra reference, and commits paths ending exactly on pin and via centres. <code>--backend grid</code> routes on the grid first, then maze finishes. No new DRC violations on bm05 or bluebuzz. Not faster than CPU yet on small grids (0.13 vs 0.08 s for six fields)</li>
-        <li class="done"><b>settle port done</b> (see <a href="docs/morph-port-plan.md">docs/morph-port-plan.md</a>): pressure, group stepping, copper shove/drag, warp field (CG, rubber's claim rounds), blocker rip-and-reroute, ghost placement and site search, length caps, and the driver. <code>copperroute settle BOARD --ses ROUTED.ses --targets t.json -o OUT.ses</code>. Every piece is tested against the independent DRC on routed DAC2020 bm05. Warping accepts 23 of 30 moves, shoving 24; no lost connections, no added violations</li>
-        <li class="done">Oracle fixed and made referee-consistent. (1) Pins now really move: the component moves before its items re-enter the search tree. (2) Clearance is judged like the DRC and KiCad, using each pad's net-class clearance, which on these boards is far larger than the pin's item class (0.152 vs 0.038 mm on DAC2020). Measured as real gaps. (3) Grandfathered pairs may not lose distance. (4) <code>push()</code>, settle's pressure: blocked parts shove free neighbours aside</li>
-        <li class="done"><code>--backend nudge</code>: route, then try line-searched moves of parts with open connections on board clones, rerouting only what's open. A move is kept only if it closes more. 506 s on bluebuzz, so it needs tuning</li>
-        <li class="done">Session reader applies placement (translation only), so nudged sessions are scored where the parts really are. Round-trip tested; unmoved sessions score identically</li>
-        <li class="done"><code>copper-morph</code> move oracle, ported from settle (lean-jiggle): exact-shape clearance conflicts with grandfathering, guard band, bisection line search. Attached routable copper is ripped for the router; fixed copper pins the part. Independent DRC confirms moves on tomu-fpga add no violations</li>
-        <li class="done">Opt-in obstacle-aware admissible heuristic (survey E1), <code>COPPERROUTE_OBSTACLE_HEURISTIC</code>: per-run coarse obstacle grid plus a backward Dijkstra per search, <code>h = max(box, coarse)</code>, byte-identical when off</li>
-      </ul>
-    </section>
-
-    <section class="card">
-      <h2>Next up</h2>
-      <ul class="checks">
-        <li>Finish the baseline, then publish the comparison table</li>
-        <li>Record the backend name in the result manifest; add a <code>backend</code> argument to MCP <code>route_board</code></li>
-        <li>The 90° room tree has the same flaw for 45° outline edges; not handled yet</li>
-        <li>Whether the 0.5 mm default edge clearance should yield to a board's own smaller rule</li>
-        <li>Bluebuzz's last 6 and the earring's last 3: run <code>blame</code> again now that the maze sees the whole board</li>
-        <li>Why our DRC and KiCad disagree on scale (2 open nets vs 25 ratsnest edges)</li>
-        <li>Work-efficient GPU shortest paths (delta-stepping or near-far frontier, persistent buffers, GPU traceback) before the GPU can compete with threaded CPU Dijkstra</li>
-        <li>Benchmark harness: GPU time and peak GPU memory columns</li>
-      </ul>
-    </section>
-  </div>
-
-  <div class="cols">
-    <section class="card">
-      <h2>Open questions</h2>
-      <ul>
-        <li>Upstreaming governance and the GPU backend: you'll contact the author</li>
-      </ul>
-    </section>
-
-    <section class="card">
-      <h2>Blocked on</h2>
-      <ul>
-        <li>The PCB skill's <code>SKILL.md</code> is read-only, so its hard-rule line is waiting on you.</li>
-      </ul>
-    </section>
-  </div>
-
-  <section class="card">
-    <h2>Log</h2>
-    <div class="log">
-      <div class="entry">
-        <time datetime="2026-10-23">2026-10-23</time>
-        <div>Found why the maze abandoned routable connections. Its room tree bounds outline edges by 45° octagons, and on long off-angle edges those reach up to 2 mm into the board, leaving start pins with no room. Long edges are now cut into short pieces. Reruns: earring <b>3</b> open (was 7), bluebuzz <b>6</b> (was 12), all with no new errors, earring confirmed in KiCad (26 ratsnest edges, was 30). Ripped-up jobs (scripted copper removed): earring 4, bluebuzz 9; before the fix 10 and 18, so keeping the scripted copper still wins. Hole-to-hole and co-located holes now always count as errors, whatever a board's rules say. Old leaderboards are kept as <code>leaderboard.pre-outline-fix.csv</code>.</div>
-      </div>
-      <div class="entry">
-        <time datetime="2026-10-23">2026-10-23</time>
-        <div>Earring clearance errors fixed: grid commit now checks the leg into each pin (necking down to the pad if needed) and every item it inserts. Earring best: 7 open nets, no DRC errors in our referee or KiCad. Route jobs now rank by new <i>errors</i> as the board's own rules rate them; warnings are counted separately. Bluebuzz rates hole-to-hole as a warning, so its 10-open route (10 hole-to-hole warnings) is back on top.</div>
-      </div>
-      <div class="entry">
-        <time datetime="2026-10-23">2026-10-23</time>
-        <div>Route jobs now rank clean results (no new violations) first, then by open connections. Bests: bluebuzz 12 (grid under the project rules, nothing moved), simple_earring 14 (maze).</div>
-      </div>
-      <div class="entry">
-        <time datetime="2026-10-23">2026-10-23</time>
-        <div>Grid router no longer stacks vias or breaks hole-to-hole. Our DRC already had the hole check, but only with the KiCad project rules, which the runner never passed; it now does, for routing and scoring. Rescoring showed the earlier bluebuzz bests (6 and 10 unconnected) carry 11 and 10 hole-to-hole violations. With the fix: earring 2 open nets with 3 new violations, none of them holes; bluebuzz 12 with none.</div>
-      </div>
-      <div class="entry">
-        <time datetime="2026-10-22">2026-10-22</time>
-        <div>simple_earring routed: negotiated grid 5 open nets, then targeted nudge moved C5 0.055 mm and closed 3 more (2 open, KiCad 28 → 25 ratsnest edges, no new violations). Getting there meant fixing pins that moved twice on part moves, <code>--lock</code> leaking into sessions that KiCad then refused, and nudge counting dangling stubs. The bluebuzz best (6) rescored unchanged; its session had the <code>lock_type</code> lines stripped so KiCad can import it. Correction: upstream main fails 18 <code>copper-router</code> tests in release, not 3.</div>
-      </div>
-      <div class="entry">
-        <time datetime="2026-10-22">2026-10-22</time>
-        <div>Targeted nudge: bluebuzz 10 → 6 unconnected by moving C95 0.08 mm, with USB, pressure sensors and RM2 locked. The first targeted run found nothing, because crossing routed copper was priced at one step per cell, so the blame path always crossed copper and never named a part. Pricing it as a wall fixed that. Trial reroutes were also being cut off at 20 s while the grid base needs 146 s; the deadline now scales with the first pass. simple_earring became a route job from the latest rev (afabd86), with LEDs, USB and buttons locked.</div>
-      </div>
-      <div class="entry">
-        <time datetime="2026-10-22">2026-10-22</time>
-        <div>Bluebuzz became a route job (24 attempts, best 18 unconnected, matching Freerouting 2.4.1 in a fifth of the time). Ripup history and the obstacle-aware heuristic both run, are admissible and opt-in, and neither moves bluebuzz. The heuristic's provable bound is loose (median 0.45× the box distance), so it only matters on long pinched detours. Retracted a false "walled in" correlation caused by plane-layer starts. Design doc gained a research appendix; HubRouter and DSBRouter citations checked.</div>
-      </div>
-      <div class="entry">
-        <time datetime="2026-10-22">2026-10-22</time>
-        <div>Cloned CopperRoute, Freerouting and PCBench. Added governance, the backend trait and the GPU probe. Found that wgpu hides the NVIDIA Vulkan adapter when all backends are requested. Pre-existing test failures on upstream main: three in <code>batch_loop</code> (release builds) and <code>float_narrowing</code> (debug builds).</div>
-      </div>
-      <div class="entry">
-        <time datetime="2026-10-22">2026-10-22</time>
-        <div>Project created and registered with the hub. Status page scaffolded.</div>
-      </div>
+  <section class="hero">
+    <div class="studio">
+      <h3>Studio</h3>
+      <p>Watch the router lay copper live, drag parts and let it reroute around them. Every scored
+        recipe from the leaderboards is one click away.</p>
+      <a class="button" href="studio/">Open Studio</a>
+      <svg class="traces" viewBox="0 0 230 150" aria-hidden="true">
+        <g fill="none" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10 130 H70 L110 90 H170 L215 45" stroke="var(--top)"/>
+          <path d="M10 105 H60 L95 70 H140 L180 30 H220" stroke="var(--bottom)"/>
+          <path d="M40 145 L80 105 H200" stroke="var(--top)" opacity="0.7"/>
+        </g>
+        <g fill="#edcf86"><circle cx="110" cy="90" r="7"/><circle cx="140" cy="70" r="7"/><circle cx="200" cy="105" r="7"/></g>
+      </svg>
+    </div>
+    <div class="side">
+      <a class="tile" href="morph-frames/">
+        <h3>Morph viewer</h3>
+        <p>Boards reshaped along an outline plan, frame by frame, with the router repairing at keyframes.</p>
+      </a>
+      <a class="tile" href="jobs/leaderboard.html">
+        <h3>Leaderboards</h3>
+        <p>Every recipe tried on every board, scored by KiCad's DRC.</p>
+      </a>
     </div>
   </section>
 
-</main>
+  <h2>Where it stands</h2>
+  <div class="now">
+    <p>The router streams its work live, and the <a href="studio/">Studio</a> shows it: pick a board and a
+      recipe, watch copper go down, drag a part and the board reroutes with it there. The router runs in its
+      own process behind the studio server, so the studio's code stays separate from the router's GPL code.</p>
+    <p>Best on bluebuzz-1024 is still 10 open connections with no new errors (grid router with negotiated
+      congestion). Physics diffusion placement made every board worse; the reasons are in the roadmap.</p>
+    <p>Next: the grid router's rounds shown live, steering a run without restarting it, then the test suite as
+      a library. Later: boards whose outline grows until they route, offered as several complete layouts.</p>
+  </div>
 
-<footer>
-  Served from <code>~/Software/ultraroute</code> on its registered port.
-  <code>proj up ultraroute</code> to start, <code>proj down ultraroute</code> to stop.
-</footer>
+  <h2>Boards</h2>
+  <div class="boards" id="boards"><p class="muted">Loading…</p></div>
+
+  <h2>Roadmap</h2>
+  <div class="phases" id="phases"><p class="muted">Loading…</p></div>
+
+  <h2>Recent runs</h2>
+  <div class="runs" id="runs"><p class="muted">Loading…</p></div>
+  <p class="more"><a href="history.html">Older experiments, the PCBench baseline and the full log →</a></p>
+</div>
 
 <script>
-(async () => {
-  const esc = (t) => String(t ?? "").replace(/[&<>"]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
-  const box = document.getElementById("xgroups");
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const inline = (s) => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>");
+
+async function boards() {
+  const el = document.getElementById("boards");
   try {
-    const r = await fetch("experiments.json", { cache: "no-store" });
-    if (!r.ok) throw new Error(r.status);
-    const data = await r.json();
-    document.getElementById("xwhen").textContent = ", " + data.generated.replace("T", " ");
-    box.innerHTML = data.groups.filter(g => g.items.length).map(g => `
-      <div class="xgroup">
-        <h3>${esc(g.title)} ${g.link ? `<a href="${esc(g.link.href)}">${esc(g.link.label)}</a>` : ""}</h3>
-        <div class="xgrid">${g.items.map(i => `
-          <div class="xitem">
-            <b>${esc(i.title)}</b>
-            ${i.when ? `<time datetime="${esc(i.when)}">${esc(i.when.replace("T", " "))}</time>` : ""}
-            ${i.about ? `<span class="about">${esc(i.about)}</span>` : ""}
-            <span class="result">${esc(i.result)}</span>
-            ${i.detail ? `<span class="detail">${esc(i.detail)}</span>` : ""}
-            <span class="links">${i.links.map(l => `<a href="${esc(l.href)}">${esc(l.label)}</a>`).join("")}</span>
-          </div>`).join("")}
+    const jobs = await (await fetch("api/jobs", { cache: "no-store" })).json();
+    el.innerHTML = jobs.map((job) => {
+      const best = job.presets.find((p) => p.open != null);
+      const studio = `studio/?job=${encodeURIComponent(job.name)}${best ? `&recipe=${encodeURIComponent(best.name)}` : ""}`;
+      return `<div class="board">
+        <div class="name">${esc(job.name)}</div>
+        <div class="score">${best
+          ? `<span class="open">${best.open}</span><span class="unit">open${best.new_errors ? `, <span class="bad">${best.new_errors} new errors</span>` : ""}</span>`
+          : `<span class="unit">not scored yet</span>`}</div>
+        ${best ? `<div class="recipe">${esc(best.name)}${best.seconds ? ` · ${Math.round(best.seconds)} s` : ""}</div>` : ""}
+        <div class="links">
+          <a href="${studio}">Open in Studio</a>
+          <a href="jobs/leaderboard.html?job=${encodeURIComponent(job.name)}">Leaderboard</a>
+          ${job.notes ? `<a href="jobs/${encodeURIComponent(job.name)}/README.md">Notes</a>` : ""}
         </div>
-      </div>`).join("");
+      </div>`;
+    }).join("");
   } catch (e) {
-    box.innerHTML = `<p class="todo">experiments.json not found: run tools/build_experiments.py.</p>`;
+    el.innerHTML = `<p class="muted">The board list comes from the studio server (<code>./serve.sh</code>).</p>`;
   }
-})();
+}
+
+async function roadmap() {
+  const el = document.getElementById("phases");
+  const text = await (await fetch("ROADMAP.md", { cache: "no-store" })).text();
+  const phases = [];
+  let item = null;
+  for (const line of text.split("\n")) {
+    const head = line.match(/^## (.*)/);
+    if (head) {
+      phases.push({ title: head[1], items: [], lead: [] });
+      item = null;
+      continue;
+    }
+    const phase = phases[phases.length - 1];
+    if (!phase) continue;
+    const box = line.match(/^- \[( |x)\] (.*)/);
+    if (box) {
+      item = { done: box[1] === "x", text: box[2] };
+      phase.items.push(item);
+    } else if (item && /^\s{2,}\S/.test(line)) {
+      item.text += " " + line.trim();
+    } else {
+      item = null;
+      if (/\(now\)/.test(line)) phase.now = true;
+    }
+  }
+  const current = phases.findIndex((p) => p.now) >= 0
+    ? phases.findIndex((p) => p.now)
+    : phases.findIndex((p) => p.items.some((i) => !i.done));
+  el.innerHTML = phases.map((p, i) => {
+    const done = p.items.filter((x) => x.done).length;
+    const total = p.items.length;
+    const title = p.title.replace(/\s*\((in progress|later)\)\s*$/, "");
+    return `<details class="phase"${i === current ? " open" : ""}>
+      <summary>
+        <span class="title">${inline(title)}${i === current ? '<span class="tag">now</span>' : ""}</span>
+        <span class="bar"><span style="width:${total ? (100 * done) / total : 0}%"></span></span>
+        <span class="count">${done}/${total}</span>
+      </summary>
+      <ul>${p.items.map((x) => `<li class="${x.done ? "done" : "todo"}">${inline(x.text)}</li>`).join("")}</ul>
+    </details>`;
+  }).join("");
+}
+
+async function runs() {
+  const el = document.getElementById("runs");
+  const data = await (await fetch("experiments.json", { cache: "no-store" })).json();
+  const items = data.groups.flatMap((g) => g.items.map((it) => ({ ...it, group: g.title })));
+  items.sort((a, b) => String(b.when).localeCompare(String(a.when)));
+  el.innerHTML = items.slice(0, 6).map((it) => `<div class="run">
+      <div class="when">${esc(String(it.when).replace("T", " "))}</div>
+      <div>
+        <div class="title">${esc(it.title)} <span class="muted">· ${esc(it.group)}</span></div>
+        <div class="result">${esc(it.result)}</div>
+        <div class="links">${(it.links || []).map((l) => `<a href="${esc(l.href)}">${esc(l.label)}</a>`).join("")}</div>
+      </div>
+    </div>`).join("");
+}
+
+boards();
+roadmap();
+runs();
 </script>
 </body>
 </html>

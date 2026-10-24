@@ -41,6 +41,13 @@ ride the flow (velocity −∇d/d), so crowded regions spread while relative ord
       starts its route afresh within the same time budget. Next: normalise demand per part,
       spread only toward open airlines' congestion, and route moved parts incrementally.
 
+## Phase 2b — Parts set the board's size; several complete layouts (later)
+
+- [ ] Grow the outline until the board routes: start from the parts' packed area, route,
+      enlarge where the open airlines crowd, repeat; the outline is an output, not an input.
+- [ ] Present several complete laid-out options (placement, outline and copper) that differ
+      in size, shape or layer count, each scored by the suite, for a person to choose from.
+
 ## Phase 3 — The test suite as a library
 
 The route-job bench becomes a package other projects import: boards, configs, governed runs,
@@ -73,6 +80,19 @@ A front end that shows the router working in real time, at a high frame rate, as
 routes; then lets a person guide it while it runs. The aim is a PCB layout tool built around
 the GPU autorouter, and a place to explore the UX paradigms and algorithms that this kind of
 collaboration needs.
+
+Phase 5a (now) — play with what we have, on the web first, at `/studio/`:
+- [x] `copperroute route --live`: frames of copper added and removed, throttled to the frame
+      rate, diffed from the board itself so trial boards show as routes being tried.
+- [x] `--place REF=x,y` so parts dragged in the client are honoured on the next run; the wiring
+      on their pins, fixed or not, is ripped and rerouted.
+- [x] `studio/`: a Rust server that runs the router as a child process and relays its frames
+      over a WebSocket; a Rust core (scene, layers, picking) compiled to WASM; a Svelte + Vite
+      client: pick a job and a router, watch it live, stop, drag parts, route again.
+- [ ] The grid router's negotiation rounds as live frames (today its copper appears at once).
+- [ ] Steer a run without restarting it: lock or move a part, forbid a region, mid-run.
+- [ ] Routers honour the job's time limit throughout (nudge fixed; grid's maze stage overran).
+- [ ] GTK client on the same core (needs `libgtk-4-dev`).
 
 - [ ] Event stream from the routers (copper added, ripped, tried; costs; congestion) with a
       compact wire format, cheap enough to emit every attempt.
