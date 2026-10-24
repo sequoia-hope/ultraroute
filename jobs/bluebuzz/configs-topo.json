@@ -1,0 +1,6 @@
+[
+ {"name": "cr-topo-only", "router": "copperroute", "binary": "/home/sequoia/Software/ultraroute/copperroute/target-topo/release/copperroute",
+  "args": ["--backend", "topo", "--set", "router.fanout.enabled=false"], "env": {"COPPERROUTE_TOPO_ONLY": "1"}, "log_level": "info"},
+ {"name": "cr-topo-nofan", "router": "copperroute", "binary": "/home/sequoia/Software/ultraroute/copperroute/target-topo/release/copperroute",
+  "args": ["--backend", "topo", "--set", "router.fanout.enabled=false"], "env": {}, "log_level": "info"}
+]

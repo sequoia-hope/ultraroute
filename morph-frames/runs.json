@@ -4,11 +4,9 @@
   "summary": {
    "closed": [],
    "moves": 25,
-   "open_end": 11,
+   "open_end": 10,
    "open_start": 10,
-   "opened": [
-    "3V3_SYS: U1 - conductionarea"
-   ],
+   "opened": [],
    "operators": {
     "band/start": 1,
     "band/traces": 15,
@@ -16,7 +14,8 @@
    },
    "parts": 0,
    "still_frames": []
-  }
+  },
+  "when": "2026-10-24T00:00"
  },
  "bend-r4": {
   "args": "--targets bend-r4.targets.json --bend-fixed",
@@ -31,7 +30,8 @@
    },
    "parts": 1,
    "still_frames": []
-  }
+  },
+  "when": "2026-10-23T18:46"
  },
  "bend-r60": {
   "args": "--targets bend-r60.targets.json --bend-fixed",
@@ -46,7 +46,8 @@
    },
    "parts": 1,
    "still_frames": []
-  }
+  },
+  "when": "2026-10-23T18:46"
  },
  "dipole-all": {
   "args": "--dipole 102.3,-104.9,0,-0.3,2",
@@ -62,7 +63,8 @@
    },
    "parts": 16,
    "still_frames": []
-  }
+  },
+  "when": "2026-10-23T18:46"
  },
  "dipole-bend": {
   "args": "--dipole 102.3,-104.9,0,-0.3,2 --bend-fixed",
@@ -78,7 +80,8 @@
    },
    "parts": 58,
    "still_frames": []
-  }
+  },
+  "when": "2026-10-23T18:46"
  },
  "dipole-big-group": {
   "args": "--dipole 102.3,-104.9,0,-0.6,3 --only group",
@@ -93,7 +96,8 @@
    },
    "parts": 11,
    "still_frames": []
-  }
+  },
+  "when": "2026-10-23T18:46"
  },
  "dipole-big-push": {
   "args": "--dipole 102.3,-104.9,0,-0.6,3 --only push",
@@ -108,7 +112,8 @@
    },
    "parts": 11,
    "still_frames": []
-  }
+  },
+  "when": "2026-10-23T18:46"
  },
  "dipole-group": {
   "args": "--dipole 102.3,-104.9,0,-0.3,2 --only group",
@@ -123,7 +128,8 @@
    },
    "parts": 7,
    "still_frames": []
-  }
+  },
+  "when": "2026-10-23T18:46"
  },
  "dipole-push": {
   "args": "--dipole 102.3,-104.9,0,-0.3,2 --only push",
@@ -138,7 +144,8 @@
    },
    "parts": 7,
    "still_frames": []
-  }
+  },
+  "when": "2026-10-23T18:46"
  },
  "dipole-r60": {
   "args": "--dipole 110.500,-114.400,0.2,0,1.5",
@@ -153,7 +160,8 @@
    },
    "parts": 7,
    "still_frames": []
-  }
+  },
+  "when": "2026-10-23T18:46"
  },
  "dipole-retire": {
   "args": "--dipole 102.3,-104.9,0,-0.3,2 --retire-fixed all",
@@ -169,7 +177,8 @@
    },
    "parts": 60,
    "still_frames": []
-  }
+  },
+  "when": "2026-10-23T18:46"
  },
  "dipole-shove": {
   "args": "--dipole 102.3,-104.9,0,-0.3,2 --only shove",
@@ -184,7 +193,8 @@
    },
    "parts": 2,
    "still_frames": []
-  }
+  },
+  "when": "2026-10-23T18:46"
  },
  "dipole-soft": {
   "args": "--dipole 102.3,-104.9,0,-0.6,3 --soft",
@@ -221,7 +231,8 @@
    },
    "parts": 36,
    "still_frames": []
-  }
+  },
+  "when": "2026-10-23T18:46"
  },
  "dipole-warp": {
   "args": "--dipole 102.3,-104.9,0,-0.3,2 --only warp",
@@ -236,7 +247,8 @@
    },
    "parts": 15,
    "still_frames": []
-  }
+  },
+  "when": "2026-10-23T18:46"
  },
  "outline-plan": {
   "args": "tools/morph_outline.py jobs/bluebuzz: rectangle \u2192 circle \u2192 rounded diamond \u2192 stretched rounded rectangle \u2192 rainbow, anchors J1 (USB) and U7 (radio); outline mode, no DRC",
@@ -259,34 +271,46 @@
    },
    "parts": 0,
    "still_frames": []
-  }
+  },
+  "when": "2026-10-23T23:57"
  },
  "reshape-band": {
-  "args": "copperroute reshape bluebuzz from the band-settled board along the 60-step plan: warp, 30 rubber-band rounds (tension 0.2), 15 more with vias free, every step; stops past 50 new violations",
+  "args": "copperroute reshape bluebuzz from the band-settled board along the 60-step plan with rigid power islands: warp, 30 rubber-band rounds (tension 0.2), 15 more with vias free, every step; stops past 50 new violations",
   "summary": {
    "closed": [
-    "3V3_SYS: C95 - U1",
-    "3V3_SYS: conductionarea - conductionarea",
-    "VBAT: J2 - conductionarea"
+    "3V3_SYS: C95 - U1"
    ],
-   "moves": 25,
-   "open_end": 14,
-   "open_start": 11,
+   "moves": 24,
+   "open_end": 10,
+   "open_start": 10,
    "opened": [
-    "1V1: conductionarea - via",
-    "3V3_SYS: C83 - conductionarea",
-    "3V3_SYS: C95 - R88",
-    "3V3_SYS: U1 - via",
-    "VBAT: C12 - J2",
-    "VREG_LX: U1 - conductionarea"
+    "3V3_SYS: C95 - R88"
    ],
    "operators": {
     "reshape/rectangle": 1,
-    "reshape/rectangle \u2192 circle": 24
+    "reshape/rectangle \u2192 circle": 23
    },
    "parts": 0,
    "still_frames": []
-  }
+  },
+  "when": "2026-10-24T00:04"
+ },
+ "reshape-nudge": {
+  "args": "copperroute reshape bluebuzz from the band-settled board along the 60-step plan with rigid power islands: warp, 30 rubber-band rounds (tension 0.2), 15 more with vias free, then each rigid body the copper still presses on (by 0.02 mm or more) moves up to 0.1 mm away (J1, U7, U20\u2013U23 locked) and relaxes again, every step; no repair; stops past 50 new violations",
+  "summary": {
+   "closed": [],
+   "moves": 23,
+   "open_end": 10,
+   "open_start": 10,
+   "opened": [],
+   "operators": {
+    "reshape/rectangle": 1,
+    "reshape/rectangle \u2192 circle": 22
+   },
+   "parts": 0,
+   "still_frames": []
+  },
+  "when": "2026-10-24T02:41"
  },
  "reshape-repair": {
   "args": "copperroute reshape bluebuzz along outline-plan: outline as a one-sided contact, USB fan-in carried rigidly, 100 relaxation rounds per step (trace joints move, starting gaps are floors), grid then maze rip-up and reroute (600 s) at each keyframe",
@@ -434,7 +458,466 @@
    },
    "parts": 0,
    "still_frames": []
-  }
+  },
+  "when": "2026-10-23T21:10"
+ },
+ "reshape-reroute": {
+  "args": "copperroute reshape bluebuzz along the 30-step plan, warp only between keyframes; at each keyframe all routing is ripped and the board routed again from the design's fixed wiring (grid with negotiation, 0.05 mm cells, fanout off, 10 min)",
+  "summary": {
+   "closed": [
+    "3V3_SENS: C121 - C123",
+    "3V3_SENS: C122 - C52",
+    "3V3_SENS: C52 - U20",
+    "3V3_SYS: C96 - U1",
+    "TAC_SDO: U20 - U21"
+   ],
+   "moves": 131,
+   "open_end": 76,
+   "open_start": 10,
+   "opened": [
+    "1V1: C98 - U1",
+    "1V1: U1 - conductionarea",
+    "1V1: U1 - via",
+    "3V3_SENS: C120 - U5",
+    "3V3_SENS: C121 - C122",
+    "3V3_SENS: C123 - U21",
+    "3V3_SENS: C52 - U5",
+    "3V3_SENS: U20 - U20",
+    "3V3_SENS: U5 - U5",
+    "3V3_SYS: C102 - C22",
+    "3V3_SYS: C102 - U3",
+    "3V3_SYS: C130 - C131",
+    "3V3_SYS: C130 - via",
+    "3V3_SYS: C21 - U3",
+    "3V3_SYS: C21 - U7",
+    "3V3_SYS: C22 - via",
+    "3V3_SYS: C91 - via",
+    "3V3_SYS: C92 - R130",
+    "3V3_SYS: C92 - U30",
+    "3V3_SYS: C94 - R85",
+    "3V3_SYS: C95 - R88",
+    "3V3_SYS: C96 - U11",
+    "3V3_SYS: J5 - U1",
+    "3V3_SYS: R88 - conductionarea",
+    "3V3_SYS: U1 - U1",
+    "3V3_SYS: U1 - conductionarea",
+    "3V3_SYS: U1 - conductionarea",
+    "3V3_SYS: U1 - conductionarea",
+    "3V3_SYS: U1 - conductionarea",
+    "3V3_SYS: U1 - via",
+    "3V3_SYS: U30 - U30",
+    "3V3_SYS: U30 - via",
+    "3V3_SYS: U5 - via",
+    "3V3_SYS: via - via",
+    "BTN_RAW: D5 - SW1",
+    "CC1: J1 - R1",
+    "CC2: J1 - R2",
+    "CHG_LED: D1 - R14",
+    "CHG_N: U2 - via",
+    "CT_SENS: C50 - U5",
+    "ILIM: R11 - U2",
+    "LDO_EN: D5 - R63",
+    "LDO_EN: U3 - via",
+    "LED_DIN: D2 - R62",
+    "LED_VDD: C133 - D2",
+    "MOTOR2_G: Q2 - R43",
+    "MOTOR2_G: R42 - R43",
+    "PWR_HOLD: D5 - via",
+    "SCL: U30 - via",
+    "SDA: R130 - via",
+    "SDA: U30 - via",
+    "SENS_EN: R50 - U5",
+    "SWDIO: J3 - J6",
+    "TAC_SCK: U22 - via",
+    "TAC_SCK: U23 - via",
+    "TAC_SDI: U23 - via",
+    "TAC_SDO: U20 - via",
+    "TAC_SDO: U23 - via",
+    "TS: R13 - U2",
+    "USB_DM: U10 - U10",
+    "USB_DM: U10 - via",
+    "USB_DM_C: R4 - U1",
+    "USB_DP: U10 - via",
+    "USB_DP_C: R3 - U1",
+    "VBAT: U2 - U2",
+    "VBAT: U2 - via",
+    "VBUS: C10 - via",
+    "VBUS: C2 - via",
+    "VREG_AVDD: R84 - U1",
+    "WL_DATA: R80 - via",
+    "WL_DOUT: R80 - U7"
+   ],
+   "operators": {
+    "reshape/bending \u2192 rainbow": 39,
+    "reshape/circle": 1,
+    "reshape/circle \u2192 rounded diamond": 29,
+    "reshape/rainbow": 1,
+    "reshape/rectangle": 1,
+    "reshape/rectangle \u2192 circle": 29,
+    "reshape/rounded diamond": 1,
+    "reshape/rounded diamond \u2192 stretched rounded rectangle": 29,
+    "reshape/stretched rounded rectangle": 1
+   },
+   "parts": 0,
+   "still_frames": []
+  },
+  "when": "2026-10-24T03:31"
+ },
+ "reshape-reroute-scratch": {
+  "args": "copperroute reshape bluebuzz along the 30-step plan, warp only between keyframes; at each keyframe every trace and via, the design's own wiring included, is ripped and the board routed from its pads (grid with negotiation, 0.05 mm cells, fanout off, then maze; 10 min)",
+  "summary": {
+   "closed": [
+    "3V3_SENS: C121 - C123",
+    "3V3_SENS: C122 - C52",
+    "3V3_SENS: C52 - U20"
+   ],
+   "moves": 131,
+   "open_end": 155,
+   "open_start": 10,
+   "opened": [
+    "1V1: C81 - U1",
+    "1V1: C82 - U1",
+    "1V1: C98 - U1",
+    "1V1: C98 - conductionarea",
+    "1V1: J5 - conductionarea",
+    "1V1: U1 - conductionarea",
+    "1V1: U1 - conductionarea",
+    "1V1: U1 - conductionarea",
+    "3V3A: C85 - R85",
+    "3V3A: R85 - U1",
+    "3V3_SENS: C120 - U5",
+    "3V3_SENS: C121 - C122",
+    "3V3_SENS: C121 - U21",
+    "3V3_SENS: C122 - U22",
+    "3V3_SENS: C123 - U21",
+    "3V3_SENS: C52 - U5",
+    "3V3_SENS: U20 - U20",
+    "3V3_SENS: U21 - U21",
+    "3V3_SENS: U21 - U5",
+    "3V3_SENS: U22 - U22",
+    "3V3_SENS: U5 - U5",
+    "3V3_SYS: C102 - C22",
+    "3V3_SYS: C102 - U3",
+    "3V3_SYS: C130 - via",
+    "3V3_SYS: C132 - U30",
+    "3V3_SYS: C132 - conductionarea",
+    "3V3_SYS: C140 - R84",
+    "3V3_SYS: C140 - U5",
+    "3V3_SYS: C22 - R84",
+    "3V3_SYS: C51 - U40",
+    "3V3_SYS: C51 - U5",
+    "3V3_SYS: C88 - U30",
+    "3V3_SYS: C91 - C93",
+    "3V3_SYS: C91 - J5",
+    "3V3_SYS: C92 - U30",
+    "3V3_SYS: C94 - R85",
+    "3V3_SYS: C95 - R88",
+    "3V3_SYS: C97 - U1",
+    "3V3_SYS: C97 - conductionarea",
+    "3V3_SYS: J5 - U1",
+    "3V3_SYS: J5 - U6",
+    "3V3_SYS: R84 - R85",
+    "3V3_SYS: R85 - conductionarea",
+    "3V3_SYS: R88 - conductionarea",
+    "3V3_SYS: U1 - U1",
+    "3V3_SYS: U1 - conductionarea",
+    "3V3_SYS: U1 - conductionarea",
+    "3V3_SYS: U1 - conductionarea",
+    "3V3_SYS: U1 - conductionarea",
+    "3V3_SYS: U1 - conductionarea",
+    "3V3_SYS: U3 - via",
+    "3V3_SYS: U30 - U30",
+    "3V3_SYS: U30 - U30",
+    "BOOTSEL: J3 - R87",
+    "BTN: Q3 - U1",
+    "BTN_RAW: D5 - SW1",
+    "CC1: J1 - R1",
+    "CC2: J1 - R2",
+    "CHG_LED: D1 - R14",
+    "CHG_N: R14 - U2",
+    "CT_SENS: C50 - U5",
+    "ILIM: R11 - U2",
+    "IMU_INT1: U1 - U30",
+    "IMU_INT2: U1 - U30",
+    "ISET: R10 - U2",
+    "LDO_EN: D5 - R63",
+    "LDO_EN: D5 - U3",
+    "LDO_EN: R63 - R66",
+    "LED_DIN: D2 - R62",
+    "LED_STAT: R62 - U1",
+    "LED_VDD: C133 - D2",
+    "MOTOR1_PWM: R40 - U1",
+    "MOTOR2_G: Q2 - R43",
+    "MOTOR2_G: R42 - R43",
+    "PDM_CLK: U1 - U40",
+    "PDM_DATA: U1 - U40",
+    "PG_N: U1 - U2",
+    "PWR_HOLD: D5 - U1",
+    "QSPI_SCLK: U1 - U6",
+    "QSPI_SD0: U1 - U6",
+    "QSPI_SD1: U1 - U6",
+    "QSPI_SD2: U1 - U6",
+    "QSPI_SD3: U1 - U6",
+    "QSPI_SS: R87 - U6",
+    "QSPI_SS: U1 - U6",
+    "RUN: C89 - R88",
+    "RUN: J3 - U1",
+    "RUN: R88 - U1",
+    "SCL: R131 - U30",
+    "SCL: U1 - U30",
+    "SDA: R130 - U30",
+    "SDA: U1 - U30",
+    "SENS_EN: R50 - U1",
+    "SENS_EN: R50 - U5",
+    "SWCLK: J3 - U1",
+    "SWDIO: J3 - U1",
+    "TAC_CS1: U1 - U20",
+    "TAC_CS2: U1 - U21",
+    "TAC_CS3: U1 - U22",
+    "TAC_CS4: U1 - U23",
+    "TAC_SCK: U1 - U21",
+    "TAC_SCK: U1 - U22",
+    "TAC_SCK: U20 - U21",
+    "TAC_SCK: U21 - U23",
+    "TAC_SDI: U1 - U21",
+    "TAC_SDI: U1 - U22",
+    "TAC_SDI: U20 - U21",
+    "TAC_SDI: U21 - U23",
+    "TAC_SDO: U1 - U21",
+    "TAC_SDO: U1 - U22",
+    "TAC_SDO: U21 - U23",
+    "TMR: R12 - U2",
+    "TS: J2 - U2",
+    "TS: R13 - U2",
+    "USB_DM: J1 - J1",
+    "USB_DM: J1 - U10",
+    "USB_DM: R4 - U10",
+    "USB_DM_C: R4 - U1",
+    "USB_DP: J1 - J1",
+    "USB_DP: J1 - U10",
+    "USB_DP: R3 - U10",
+    "USB_DP_C: R3 - U1",
+    "VBAT: R60 - conductionarea",
+    "VBAT: U2 - U2",
+    "VBAT: U2 - conductionarea",
+    "VBAT_SENSE: C64 - R61",
+    "VBAT_SENSE: R60 - R61",
+    "VBAT_SENSE: R60 - U1",
+    "VBUS: C10 - U2",
+    "VBUS: C13 - U2",
+    "VBUS: D6 - U2",
+    "VBUS: D6 - via",
+    "VBUS: J1 - J1",
+    "VBUS_EN: D6 - R66",
+    "VREG_AVDD: C84 - R84",
+    "VREG_AVDD: R84 - U1",
+    "WL_CLK: U1 - U7",
+    "WL_CS: U1 - U7",
+    "WL_DATA: R80 - R81",
+    "WL_DATA: R80 - U7",
+    "WL_DATA: R81 - U1",
+    "WL_DOUT: R80 - U7",
+    "WL_ON: U1 - U7",
+    "XIN: C86 - U1",
+    "XIN: C86 - Y1",
+    "XOUT: R86 - U1",
+    "XTAL2: C87 - R86",
+    "XTAL2: C87 - Y1"
+   ],
+   "operators": {
+    "reshape/bending \u2192 rainbow": 39,
+    "reshape/circle": 1,
+    "reshape/circle \u2192 rounded diamond": 29,
+    "reshape/rainbow": 1,
+    "reshape/rectangle": 1,
+    "reshape/rectangle \u2192 circle": 29,
+    "reshape/rounded diamond": 1,
+    "reshape/rounded diamond \u2192 stretched rounded rectangle": 29,
+    "reshape/stretched rounded rectangle": 1
+   },
+   "parts": 0,
+   "still_frames": []
+  },
+  "when": "2026-10-24T04:31"
+ },
+ "reshape-reroute-topo": {
+  "args": "copperroute reshape bluebuzz along the 30-step plan, warp only between keyframes; at each keyframe every trace and via, the design's own wiring included, is ripped and the board routed from its pads (topological rubber-band routing, then maze; fanout off; 10 min)",
+  "summary": {
+   "closed": [
+    "3V3_SENS: C121 - C123",
+    "3V3_SENS: C122 - C52",
+    "3V3_SENS: C52 - U20"
+   ],
+   "moves": 131,
+   "open_end": 157,
+   "open_start": 10,
+   "opened": [
+    "1V1: C81 - U1",
+    "1V1: C82 - U1",
+    "1V1: C98 - U1",
+    "1V1: C98 - conductionarea",
+    "1V1: J5 - conductionarea",
+    "1V1: U1 - conductionarea",
+    "1V1: U1 - conductionarea",
+    "1V1: U1 - conductionarea",
+    "3V3A: C85 - R85",
+    "3V3A: R85 - U1",
+    "3V3_SENS: C120 - U5",
+    "3V3_SENS: C121 - C122",
+    "3V3_SENS: C121 - U21",
+    "3V3_SENS: C122 - U22",
+    "3V3_SENS: C123 - U21",
+    "3V3_SENS: C52 - U5",
+    "3V3_SENS: U20 - U20",
+    "3V3_SENS: U21 - U21",
+    "3V3_SENS: U21 - U5",
+    "3V3_SENS: U22 - U22",
+    "3V3_SENS: U5 - U5",
+    "3V3_SYS: C102 - C22",
+    "3V3_SYS: C102 - U3",
+    "3V3_SYS: C130 - C131",
+    "3V3_SYS: C132 - U30",
+    "3V3_SYS: C132 - conductionarea",
+    "3V3_SYS: C140 - R84",
+    "3V3_SYS: C140 - U5",
+    "3V3_SYS: C22 - R84",
+    "3V3_SYS: C51 - U40",
+    "3V3_SYS: C51 - U5",
+    "3V3_SYS: C88 - U30",
+    "3V3_SYS: C91 - C93",
+    "3V3_SYS: C91 - J5",
+    "3V3_SYS: C92 - U30",
+    "3V3_SYS: C94 - R85",
+    "3V3_SYS: C95 - R88",
+    "3V3_SYS: C97 - U1",
+    "3V3_SYS: C97 - conductionarea",
+    "3V3_SYS: J5 - U1",
+    "3V3_SYS: J5 - U6",
+    "3V3_SYS: R84 - R85",
+    "3V3_SYS: R85 - conductionarea",
+    "3V3_SYS: R88 - conductionarea",
+    "3V3_SYS: U1 - U1",
+    "3V3_SYS: U1 - conductionarea",
+    "3V3_SYS: U1 - conductionarea",
+    "3V3_SYS: U1 - conductionarea",
+    "3V3_SYS: U1 - conductionarea",
+    "3V3_SYS: U1 - conductionarea",
+    "3V3_SYS: U3 - via",
+    "3V3_SYS: U30 - U30",
+    "3V3_SYS: U30 - U30",
+    "BOOTSEL: J3 - R87",
+    "BTN: Q3 - U1",
+    "BTN_RAW: D5 - SW1",
+    "CC1: J1 - R1",
+    "CC2: J1 - R2",
+    "CHG_LED: D1 - R14",
+    "CHG_N: R14 - U2",
+    "CT_SENS: C50 - U5",
+    "ILIM: R11 - U2",
+    "IMU_INT1: U1 - U30",
+    "IMU_INT2: U1 - U30",
+    "ISET: R10 - U2",
+    "LDO_EN: D5 - R63",
+    "LDO_EN: D5 - U3",
+    "LDO_EN: R63 - R66",
+    "LED_DIN: D2 - R62",
+    "LED_STAT: R62 - U1",
+    "LED_VDD: C133 - D2",
+    "LED_VDD: C133 - U11",
+    "MOTOR1_PWM: R40 - U1",
+    "MOTOR2_G: Q2 - R43",
+    "MOTOR2_G: R42 - R43",
+    "PDM_CLK: U1 - U40",
+    "PDM_DATA: U1 - U40",
+    "PG_N: U1 - U2",
+    "PWR_HOLD: D5 - U1",
+    "QSPI_SCLK: U1 - U6",
+    "QSPI_SD0: U1 - U6",
+    "QSPI_SD1: U1 - U6",
+    "QSPI_SD2: U1 - U6",
+    "QSPI_SD3: U1 - U6",
+    "QSPI_SS: R87 - U6",
+    "QSPI_SS: U1 - U6",
+    "RUN: C89 - R88",
+    "RUN: J3 - U1",
+    "RUN: R88 - U1",
+    "SCL: R131 - U30",
+    "SCL: U1 - U30",
+    "SDA: R130 - U30",
+    "SDA: U1 - U30",
+    "SENS_EN: R50 - U1",
+    "SENS_EN: R50 - U5",
+    "SWCLK: U1 - via",
+    "SWDIO: U1 - via",
+    "TAC_CS1: U1 - U20",
+    "TAC_CS2: U1 - U21",
+    "TAC_CS3: U1 - U22",
+    "TAC_CS4: U1 - U23",
+    "TAC_SCK: U1 - U21",
+    "TAC_SCK: U1 - U22",
+    "TAC_SCK: U20 - U21",
+    "TAC_SCK: U21 - U23",
+    "TAC_SDI: U1 - U21",
+    "TAC_SDI: U1 - U22",
+    "TAC_SDI: U20 - U21",
+    "TAC_SDI: U21 - U23",
+    "TAC_SDO: U1 - U21",
+    "TAC_SDO: U1 - U22",
+    "TAC_SDO: U21 - U23",
+    "TMR: R12 - U2",
+    "TS: J2 - U2",
+    "TS: R13 - U2",
+    "USB_DM: J1 - J1",
+    "USB_DM: J1 - U10",
+    "USB_DM: R4 - U10",
+    "USB_DM_C: R4 - U1",
+    "USB_DP: J1 - J1",
+    "USB_DP: J1 - U10",
+    "USB_DP: R3 - U10",
+    "USB_DP_C: R3 - U1",
+    "VBAT: R60 - conductionarea",
+    "VBAT: U2 - U2",
+    "VBAT: U2 - conductionarea",
+    "VBAT_SENSE: C64 - R61",
+    "VBAT_SENSE: R60 - R61",
+    "VBAT_SENSE: R60 - U1",
+    "VBUS: C10 - U2",
+    "VBUS: C13 - U2",
+    "VBUS: C2 - J1",
+    "VBUS: D6 - U10",
+    "VBUS: D6 - U2",
+    "VBUS: J1 - J1",
+    "VBUS_EN: D6 - R66",
+    "VREG_AVDD: C84 - R84",
+    "VREG_AVDD: R84 - U1",
+    "WL_CLK: U1 - U7",
+    "WL_CS: U1 - U7",
+    "WL_DATA: R80 - R81",
+    "WL_DATA: R80 - U7",
+    "WL_DATA: R81 - U1",
+    "WL_DOUT: R80 - U7",
+    "WL_ON: U1 - U7",
+    "XIN: C86 - U1",
+    "XIN: C86 - Y1",
+    "XOUT: R86 - U1",
+    "XTAL2: C87 - R86",
+    "XTAL2: C87 - Y1"
+   ],
+   "operators": {
+    "reshape/bending \u2192 rainbow": 39,
+    "reshape/circle": 1,
+    "reshape/circle \u2192 rounded diamond": 29,
+    "reshape/rainbow": 1,
+    "reshape/rectangle": 1,
+    "reshape/rectangle \u2192 circle": 29,
+    "reshape/rounded diamond": 1,
+    "reshape/rounded diamond \u2192 stretched rounded rectangle": 29,
+    "reshape/stretched rounded rectangle": 1
+   },
+   "parts": 0,
+   "still_frames": []
+  },
+  "when": "2026-10-24T05:19"
  },
  "reshape-warp": {
   "args": "copperroute reshape bluebuzz along outline-plan: continuous field warp only (outline as a one-sided contact, USB fan-in carried rigidly), no relaxation or rip-up",
@@ -481,6 +964,7 @@
    },
    "parts": 0,
    "still_frames": []
-  }
+  },
+  "when": "2026-10-23T18:46"
  }
 }

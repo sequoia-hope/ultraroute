@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 import shutil
+from datetime import datetime
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -44,6 +45,7 @@ def main():
             runs.pop(name)
             continue
         first, last = collections.Counter(frames[0]["open"]), collections.Counter(frames[-1]["open"])
+        runs[name]["when"] = datetime.fromtimestamp(frames_file.stat().st_mtime).isoformat(timespec="minutes")
         runs[name]["summary"] = {
             "moves": len(moves),
             "still_frames": still,

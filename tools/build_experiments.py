@@ -54,6 +54,7 @@ def route_jobs():
         if (board.parent / "README.md").exists():
             links.append({"label": "notes", "href": f"jobs/{job}/README.md"})
         out.append({
+            "when": max(r["finished_at"] for r in rows)[:16],
             "title": job,
             "about": JOBS.get(job, ""),
             "result": f"best {best['unconnected']} open, {best['new_violations']} new errors, "
@@ -65,8 +66,13 @@ def route_jobs():
 
 
 def corpus():
-    return [{"title": title, "result": verdict, "links": [{"label": "report", "href": f"{REPORTS}/{report}"}]}
+    return [{"when": when(ROOT / REPORTS / report), "title": title, "result": verdict,
+             "links": [{"label": "report", "href": f"{REPORTS}/{report}"}]}
             for title, report, verdict in CORPUS if (ROOT / REPORTS / report).exists()]
+
+
+def when(path):
+    return datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="minutes")
 
 
 def morph_runs():
@@ -81,6 +87,7 @@ def morph_runs():
         ops = ", ".join(f"{op.split('/')[-1]} {n}" for op, n in s["operators"].items())
         change = "no connection opened" if not s["opened"] else f"{len(s['opened'])} connection(s) opened"
         out.append({
+            "when": run.get("when") or when(ROOT / "morph-frames" / name / "frames.jsonl"),
             "title": name,
             "about": run["args"],
             "result": f"{s['moves']} moves of {s['parts']} parts ({ops}); {change}",
@@ -91,15 +98,16 @@ def morph_runs():
 
 
 def main():
-    data = {
-        "generated": datetime.now().isoformat(timespec="minutes"),
-        "groups": [
-            {"title": "Route jobs", "items": route_jobs()},
-            {"title": "Morph operators on bluebuzz", "items": morph_runs(),
-             "link": {"label": "viewer", "href": "morph-frames/"}},
-            {"title": "PCBench corpus", "items": corpus()},
-        ],
-    }
+    groups = [
+        {"title": "Route jobs", "items": route_jobs()},
+        {"title": "Morph runs on bluebuzz", "items": morph_runs(),
+         "link": {"label": "viewer", "href": "morph-frames/"}},
+        {"title": "PCBench corpus", "items": corpus()},
+    ]
+    for group in groups:
+        group["items"].sort(key=lambda i: i["when"], reverse=True)
+    groups.sort(key=lambda g: max((i["when"] for i in g["items"]), default=""), reverse=True)
+    data = {"generated": datetime.now().isoformat(timespec="minutes"), "groups": groups}
     (ROOT / "experiments.json").write_text(json.dumps(data, indent=1))
     print(f"experiments.json: {sum(len(g['items']) for g in data['groups'])} experiments")
 

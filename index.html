@@ -78,6 +78,7 @@ footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
 .xitem .about { color: var(--muted); font-size: .78rem; overflow-wrap: anywhere; }
 .xitem .result { font-size: .86rem; }
 .xitem .detail { color: var(--muted); font-size: .78rem; }
+.xitem time { color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
 .xitem .links { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .2rem; }
 .xitem .links a, .xgroup h3 a {
   font-size: .76rem; text-decoration: none; padding: .05rem .5rem; border-radius: 999px;
@@ -309,6 +310,7 @@ footer { margin-top: 1.5rem; color: var(--muted); font-size: .8rem; }
         <div class="xgrid">${g.items.map(i => `
           <div class="xitem">
             <b>${esc(i.title)}</b>
+            ${i.when ? `<time datetime="${esc(i.when)}">${esc(i.when.replace("T", " "))}</time>` : ""}
             ${i.about ? `<span class="about">${esc(i.about)}</span>` : ""}
             <span class="result">${esc(i.result)}</span>
             ${i.detail ? `<span class="detail">${esc(i.detail)}</span>` : ""}

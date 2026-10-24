@@ -1,14 +1,310 @@
 {
- "generated": "2026-10-23T22:12",
+ "generated": "2026-10-24T05:19",
  "groups": [
+  {
+   "title": "Morph runs on bluebuzz",
+   "items": [
+    {
+     "when": "2026-10-24T05:19",
+     "title": "reshape-reroute-topo",
+     "about": "copperroute reshape bluebuzz along the 30-step plan, warp only between keyframes; at each keyframe every trace and via, the design's own wiring included, is ripped and the board routed from its pads (topological rubber-band routing, then maze; fanout off; 10 min)",
+     "result": "131 moves of 0 parts (bending \u2192 rainbow 39, circle 1, circle \u2192 rounded diamond 29, rainbow 1, rectangle 1, rectangle \u2192 circle 29, rounded diamond 1, rounded diamond \u2192 stretched rounded rectangle 29, stretched rounded rectangle 1); 150 connection(s) opened",
+     "detail": "open 10 \u2192 157",
+     "links": [
+      {
+       "label": "watch",
+       "href": "morph-frames/?run=reshape-reroute-topo"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-24T04:31",
+     "title": "reshape-reroute-scratch",
+     "about": "copperroute reshape bluebuzz along the 30-step plan, warp only between keyframes; at each keyframe every trace and via, the design's own wiring included, is ripped and the board routed from its pads (grid with negotiation, 0.05 mm cells, fanout off, then maze; 10 min)",
+     "result": "131 moves of 0 parts (bending \u2192 rainbow 39, circle 1, circle \u2192 rounded diamond 29, rainbow 1, rectangle 1, rectangle \u2192 circle 29, rounded diamond 1, rounded diamond \u2192 stretched rounded rectangle 29, stretched rounded rectangle 1); 148 connection(s) opened",
+     "detail": "open 10 \u2192 155",
+     "links": [
+      {
+       "label": "watch",
+       "href": "morph-frames/?run=reshape-reroute-scratch"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-24T03:31",
+     "title": "reshape-reroute",
+     "about": "copperroute reshape bluebuzz along the 30-step plan, warp only between keyframes; at each keyframe all routing is ripped and the board routed again from the design's fixed wiring (grid with negotiation, 0.05 mm cells, fanout off, 10 min)",
+     "result": "131 moves of 0 parts (bending \u2192 rainbow 39, circle 1, circle \u2192 rounded diamond 29, rainbow 1, rectangle 1, rectangle \u2192 circle 29, rounded diamond 1, rounded diamond \u2192 stretched rounded rectangle 29, stretched rounded rectangle 1); 71 connection(s) opened",
+     "detail": "open 10 \u2192 76",
+     "links": [
+      {
+       "label": "watch",
+       "href": "morph-frames/?run=reshape-reroute"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-24T02:41",
+     "title": "reshape-nudge",
+     "about": "copperroute reshape bluebuzz from the band-settled board along the 60-step plan with rigid power islands: warp, 30 rubber-band rounds (tension 0.2), 15 more with vias free, then each rigid body the copper still presses on (by 0.02 mm or more) moves up to 0.1 mm away (J1, U7, U20\u2013U23 locked) and relaxes again, every step; no repair; stops past 50 new violations",
+     "result": "23 moves of 0 parts (rectangle 1, rectangle \u2192 circle 22); no connection opened",
+     "detail": "open 10 \u2192 10",
+     "links": [
+      {
+       "label": "watch",
+       "href": "morph-frames/?run=reshape-nudge"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-24T00:04",
+     "title": "reshape-band",
+     "about": "copperroute reshape bluebuzz from the band-settled board along the 60-step plan with rigid power islands: warp, 30 rubber-band rounds (tension 0.2), 15 more with vias free, every step; stops past 50 new violations",
+     "result": "24 moves of 0 parts (rectangle 1, rectangle \u2192 circle 23); 1 connection(s) opened",
+     "detail": "open 10 \u2192 10",
+     "links": [
+      {
+       "label": "watch",
+       "href": "morph-frames/?run=reshape-band"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-24T00:00",
+     "title": "band-settle",
+     "about": "copperroute band bluebuzz best: every trace a rubber band (tension 0.2, 0.25 mm segments) for 150 rounds with vias held, then 90 rounds with vias free; shape unchanged",
+     "result": "25 moves of 0 parts (start 1, traces 15, vias 9); no connection opened",
+     "detail": "open 10 \u2192 10",
+     "links": [
+      {
+       "label": "watch",
+       "href": "morph-frames/?run=band-settle"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-23T23:57",
+     "title": "outline-plan",
+     "about": "tools/morph_outline.py jobs/bluebuzz: rectangle \u2192 circle \u2192 rounded diamond \u2192 stretched rounded rectangle \u2192 rainbow, anchors J1 (USB) and U7 (radio); outline mode, no DRC",
+     "result": "131 moves of 0 parts (bending \u2192 rainbow 39, circle 1, circle \u2192 rounded diamond 29, rainbow 1, rectangle 1, rectangle \u2192 circle 29, rounded diamond 1, rounded diamond \u2192 stretched rounded rectangle 29, stretched rounded rectangle 1); no connection opened",
+     "detail": "open 0 \u2192 0",
+     "links": [
+      {
+       "label": "watch",
+       "href": "morph-frames/?run=outline-plan"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-23T21:10",
+     "title": "reshape-repair",
+     "about": "copperroute reshape bluebuzz along outline-plan: outline as a one-sided contact, USB fan-in carried rigidly, 100 relaxation rounds per step (trace joints move, starting gaps are floors), grid then maze rip-up and reroute (600 s) at each keyframe",
+     "result": "131 moves of 0 parts (bending \u2192 rainbow 39, circle 1, circle \u2192 rounded diamond 29, rainbow 1, rectangle 1, rectangle \u2192 circle 29, rounded diamond 1, rounded diamond \u2192 stretched rounded rectangle 29, stretched rounded rectangle 1); 116 connection(s) opened",
+     "detail": "open 10 \u2192 119",
+     "links": [
+      {
+       "label": "watch",
+       "href": "morph-frames/?run=reshape-repair"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-23T18:46",
+     "title": "bend-r4",
+     "about": "--targets bend-r4.targets.json --bend-fixed",
+     "result": "2 moves of 1 parts (warp 2); no connection opened",
+     "detail": "open 10 \u2192 10",
+     "links": [
+      {
+       "label": "watch",
+       "href": "morph-frames/?run=bend-r4"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-23T18:46",
+     "title": "bend-r60",
+     "about": "--targets bend-r60.targets.json --bend-fixed",
+     "result": "1 moves of 1 parts (warp 1); no connection opened",
+     "detail": "open 10 \u2192 10",
+     "links": [
+      {
+       "label": "watch",
+       "href": "morph-frames/?run=bend-r60"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-23T18:46",
+     "title": "dipole-all",
+     "about": "--dipole 102.3,-104.9,0,-0.3,2",
+     "result": "22 moves of 16 parts (push 2, warp 20); no connection opened",
+     "detail": "open 10 \u2192 10",
+     "links": [
+      {
+       "label": "watch",
+       "href": "morph-frames/?run=dipole-all"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-23T18:46",
+     "title": "dipole-bend",
+     "about": "--dipole 102.3,-104.9,0,-0.3,2 --bend-fixed",
+     "result": "78 moves of 58 parts (push 1, warp 77); no connection opened",
+     "detail": "open 10 \u2192 10",
+     "links": [
+      {
+       "label": "watch",
+       "href": "morph-frames/?run=dipole-bend"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-23T18:46",
+     "title": "dipole-big-group",
+     "about": "--dipole 102.3,-104.9,0,-0.6,3 --only group",
+     "result": "24 moves of 11 parts (group 24); no connection opened",
+     "detail": "open 10 \u2192 10",
+     "links": [
+      {
+       "label": "watch",
+       "href": "morph-frames/?run=dipole-big-group"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-23T18:46",
+     "title": "dipole-big-push",
+     "about": "--dipole 102.3,-104.9,0,-0.6,3 --only push",
+     "result": "26 moves of 11 parts (push 26); no connection opened",
+     "detail": "open 10 \u2192 10",
+     "links": [
+      {
+       "label": "watch",
+       "href": "morph-frames/?run=dipole-big-push"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-23T18:46",
+     "title": "dipole-group",
+     "about": "--dipole 102.3,-104.9,0,-0.3,2 --only group",
+     "result": "11 moves of 7 parts (group 11); no connection opened",
+     "detail": "open 10 \u2192 10",
+     "links": [
+      {
+       "label": "watch",
+       "href": "morph-frames/?run=dipole-group"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-23T18:46",
+     "title": "dipole-push",
+     "about": "--dipole 102.3,-104.9,0,-0.3,2 --only push",
+     "result": "11 moves of 7 parts (push 11); no connection opened",
+     "detail": "open 10 \u2192 10",
+     "links": [
+      {
+       "label": "watch",
+       "href": "morph-frames/?run=dipole-push"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-23T18:46",
+     "title": "dipole-r60",
+     "about": "--dipole 110.500,-114.400,0.2,0,1.5",
+     "result": "8 moves of 7 parts (warp 8); no connection opened",
+     "detail": "open 10 \u2192 10",
+     "links": [
+      {
+       "label": "watch",
+       "href": "morph-frames/?run=dipole-r60"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-23T18:46",
+     "title": "dipole-retire",
+     "about": "--dipole 102.3,-104.9,0,-0.3,2 --retire-fixed all",
+     "result": "83 moves of 60 parts (shove 1, warp 82); no connection opened",
+     "detail": "open 10 \u2192 10",
+     "links": [
+      {
+       "label": "watch",
+       "href": "morph-frames/?run=dipole-retire"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-23T18:46",
+     "title": "dipole-shove",
+     "about": "--dipole 102.3,-104.9,0,-0.3,2 --only shove",
+     "result": "2 moves of 2 parts (shove 2); no connection opened",
+     "detail": "open 10 \u2192 10",
+     "links": [
+      {
+       "label": "watch",
+       "href": "morph-frames/?run=dipole-shove"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-23T18:46",
+     "title": "dipole-soft",
+     "about": "--dipole 102.3,-104.9,0,-0.6,3 --soft",
+     "result": "62 moves of 36 parts (push 9, warp 53); 18 connection(s) opened",
+     "detail": "open 10 \u2192 27",
+     "links": [
+      {
+       "label": "watch",
+       "href": "morph-frames/?run=dipole-soft"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-23T18:46",
+     "title": "dipole-warp",
+     "about": "--dipole 102.3,-104.9,0,-0.3,2 --only warp",
+     "result": "20 moves of 15 parts (warp 20); no connection opened",
+     "detail": "open 10 \u2192 10",
+     "links": [
+      {
+       "label": "watch",
+       "href": "morph-frames/?run=dipole-warp"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-23T18:46",
+     "title": "reshape-warp",
+     "about": "copperroute reshape bluebuzz along outline-plan: continuous field warp only (outline as a one-sided contact, USB fan-in carried rigidly), no relaxation or rip-up",
+     "result": "131 moves of 0 parts (bending \u2192 rainbow 39, circle 1, circle \u2192 rounded diamond 29, rainbow 1, rectangle 1, rectangle \u2192 circle 29, rounded diamond 1, rounded diamond \u2192 stretched rounded rectangle 29, stretched rounded rectangle 1); 15 connection(s) opened",
+     "detail": "open 10 \u2192 18",
+     "links": [
+      {
+       "label": "watch",
+       "href": "morph-frames/?run=reshape-warp"
+      }
+     ]
+    }
+   ],
+   "link": {
+    "label": "viewer",
+    "href": "morph-frames/"
+   }
+  },
   {
    "title": "Route jobs",
    "items": [
     {
+     "when": "2026-10-24T03:39",
      "title": "bluebuzz",
      "about": "The priority board: route.py's tamed DSN, 3 routable layers, J1, U7 and U20\u2013U23 locked.",
      "result": "best 6 open, 0 new errors, 24 vias (cr-tnudge-gridneg005-lock)",
-     "detail": "49 attempts",
+     "detail": "51 attempts",
      "links": [
       {
        "label": "leaderboard",
@@ -21,26 +317,7 @@
      ]
     },
     {
-     "title": "bluebuzz-ripped",
-     "about": "Bluebuzz with route.py's scripted copper removed.",
-     "result": "best 9 open, 0 new errors, 129 vias (cr-maze)",
-     "detail": "4 attempts",
-     "links": [
-      {
-       "label": "leaderboard",
-       "href": "jobs/leaderboard.html?job=bluebuzz-ripped"
-      },
-      {
-       "label": "best recipe",
-       "href": "jobs/bluebuzz-ripped/best/recipe.json"
-      },
-      {
-       "label": "notes",
-       "href": "jobs/bluebuzz-ripped/README.md"
-      }
-     ]
-    },
-    {
+     "when": "2026-10-23T13:19",
      "title": "simple_earring",
      "about": "LED earring, latest rev; every LED, J1, SW1 and SW2 locked.",
      "result": "best 3 open, 0 new errors, 150 vias (cr-tnudge-gridneg005-lock)",
@@ -61,6 +338,28 @@
      ]
     },
     {
+     "when": "2026-10-23T07:13",
+     "title": "bluebuzz-ripped",
+     "about": "Bluebuzz with route.py's scripted copper removed.",
+     "result": "best 9 open, 0 new errors, 129 vias (cr-maze)",
+     "detail": "4 attempts",
+     "links": [
+      {
+       "label": "leaderboard",
+       "href": "jobs/leaderboard.html?job=bluebuzz-ripped"
+      },
+      {
+       "label": "best recipe",
+       "href": "jobs/bluebuzz-ripped/best/recipe.json"
+      },
+      {
+       "label": "notes",
+       "href": "jobs/bluebuzz-ripped/README.md"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-23T05:23",
      "title": "simple_earring-ripped",
      "about": "The earring with route.py's scripted copper removed.",
      "result": "best 4 open, 0 new errors, 115 vias (cr-maze)",
@@ -83,274 +382,21 @@
    ]
   },
   {
-   "title": "Morph operators on bluebuzz",
-   "items": [
-    {
-     "title": "band-settle",
-     "about": "copperroute band bluebuzz best: every trace a rubber band (tension 0.2, 0.25 mm segments) for 150 rounds with vias held, then 90 rounds with vias free; shape unchanged",
-     "result": "25 moves of 0 parts (start 1, traces 15, vias 9); 1 connection(s) opened",
-     "detail": "open 10 \u2192 11",
-     "links": [
-      {
-       "label": "watch",
-       "href": "morph-frames/?run=band-settle"
-      }
-     ]
-    },
-    {
-     "title": "bend-r4",
-     "about": "--targets bend-r4.targets.json --bend-fixed",
-     "result": "2 moves of 1 parts (warp 2); no connection opened",
-     "detail": "open 10 \u2192 10",
-     "links": [
-      {
-       "label": "watch",
-       "href": "morph-frames/?run=bend-r4"
-      }
-     ]
-    },
-    {
-     "title": "bend-r60",
-     "about": "--targets bend-r60.targets.json --bend-fixed",
-     "result": "1 moves of 1 parts (warp 1); no connection opened",
-     "detail": "open 10 \u2192 10",
-     "links": [
-      {
-       "label": "watch",
-       "href": "morph-frames/?run=bend-r60"
-      }
-     ]
-    },
-    {
-     "title": "dipole-all",
-     "about": "--dipole 102.3,-104.9,0,-0.3,2",
-     "result": "22 moves of 16 parts (push 2, warp 20); no connection opened",
-     "detail": "open 10 \u2192 10",
-     "links": [
-      {
-       "label": "watch",
-       "href": "morph-frames/?run=dipole-all"
-      }
-     ]
-    },
-    {
-     "title": "dipole-bend",
-     "about": "--dipole 102.3,-104.9,0,-0.3,2 --bend-fixed",
-     "result": "78 moves of 58 parts (push 1, warp 77); no connection opened",
-     "detail": "open 10 \u2192 10",
-     "links": [
-      {
-       "label": "watch",
-       "href": "morph-frames/?run=dipole-bend"
-      }
-     ]
-    },
-    {
-     "title": "dipole-big-group",
-     "about": "--dipole 102.3,-104.9,0,-0.6,3 --only group",
-     "result": "24 moves of 11 parts (group 24); no connection opened",
-     "detail": "open 10 \u2192 10",
-     "links": [
-      {
-       "label": "watch",
-       "href": "morph-frames/?run=dipole-big-group"
-      }
-     ]
-    },
-    {
-     "title": "dipole-big-push",
-     "about": "--dipole 102.3,-104.9,0,-0.6,3 --only push",
-     "result": "26 moves of 11 parts (push 26); no connection opened",
-     "detail": "open 10 \u2192 10",
-     "links": [
-      {
-       "label": "watch",
-       "href": "morph-frames/?run=dipole-big-push"
-      }
-     ]
-    },
-    {
-     "title": "dipole-group",
-     "about": "--dipole 102.3,-104.9,0,-0.3,2 --only group",
-     "result": "11 moves of 7 parts (group 11); no connection opened",
-     "detail": "open 10 \u2192 10",
-     "links": [
-      {
-       "label": "watch",
-       "href": "morph-frames/?run=dipole-group"
-      }
-     ]
-    },
-    {
-     "title": "dipole-push",
-     "about": "--dipole 102.3,-104.9,0,-0.3,2 --only push",
-     "result": "11 moves of 7 parts (push 11); no connection opened",
-     "detail": "open 10 \u2192 10",
-     "links": [
-      {
-       "label": "watch",
-       "href": "morph-frames/?run=dipole-push"
-      }
-     ]
-    },
-    {
-     "title": "dipole-r60",
-     "about": "--dipole 110.500,-114.400,0.2,0,1.5",
-     "result": "8 moves of 7 parts (warp 8); no connection opened",
-     "detail": "open 10 \u2192 10",
-     "links": [
-      {
-       "label": "watch",
-       "href": "morph-frames/?run=dipole-r60"
-      }
-     ]
-    },
-    {
-     "title": "dipole-retire",
-     "about": "--dipole 102.3,-104.9,0,-0.3,2 --retire-fixed all",
-     "result": "83 moves of 60 parts (shove 1, warp 82); no connection opened",
-     "detail": "open 10 \u2192 10",
-     "links": [
-      {
-       "label": "watch",
-       "href": "morph-frames/?run=dipole-retire"
-      }
-     ]
-    },
-    {
-     "title": "dipole-shove",
-     "about": "--dipole 102.3,-104.9,0,-0.3,2 --only shove",
-     "result": "2 moves of 2 parts (shove 2); no connection opened",
-     "detail": "open 10 \u2192 10",
-     "links": [
-      {
-       "label": "watch",
-       "href": "morph-frames/?run=dipole-shove"
-      }
-     ]
-    },
-    {
-     "title": "dipole-soft",
-     "about": "--dipole 102.3,-104.9,0,-0.6,3 --soft",
-     "result": "62 moves of 36 parts (push 9, warp 53); 18 connection(s) opened",
-     "detail": "open 10 \u2192 27",
-     "links": [
-      {
-       "label": "watch",
-       "href": "morph-frames/?run=dipole-soft"
-      }
-     ]
-    },
-    {
-     "title": "dipole-warp",
-     "about": "--dipole 102.3,-104.9,0,-0.3,2 --only warp",
-     "result": "20 moves of 15 parts (warp 20); no connection opened",
-     "detail": "open 10 \u2192 10",
-     "links": [
-      {
-       "label": "watch",
-       "href": "morph-frames/?run=dipole-warp"
-      }
-     ]
-    },
-    {
-     "title": "outline-plan",
-     "about": "tools/morph_outline.py jobs/bluebuzz: rectangle \u2192 circle \u2192 rounded diamond \u2192 stretched rounded rectangle \u2192 rainbow, anchors J1 (USB) and U7 (radio); outline mode, no DRC",
-     "result": "131 moves of 0 parts (bending \u2192 rainbow 39, circle 1, circle \u2192 rounded diamond 29, rainbow 1, rectangle 1, rectangle \u2192 circle 29, rounded diamond 1, rounded diamond \u2192 stretched rounded rectangle 29, stretched rounded rectangle 1); no connection opened",
-     "detail": "open 0 \u2192 0",
-     "links": [
-      {
-       "label": "watch",
-       "href": "morph-frames/?run=outline-plan"
-      }
-     ]
-    },
-    {
-     "title": "reshape-band",
-     "about": "copperroute reshape bluebuzz from the band-settled board along the 60-step plan: warp, 30 rubber-band rounds (tension 0.2), 15 more with vias free, every step; stops past 50 new violations",
-     "result": "25 moves of 0 parts (rectangle 1, rectangle \u2192 circle 24); 6 connection(s) opened",
-     "detail": "open 11 \u2192 14",
-     "links": [
-      {
-       "label": "watch",
-       "href": "morph-frames/?run=reshape-band"
-      }
-     ]
-    },
-    {
-     "title": "reshape-repair",
-     "about": "copperroute reshape bluebuzz along outline-plan: outline as a one-sided contact, USB fan-in carried rigidly, 100 relaxation rounds per step (trace joints move, starting gaps are floors), grid then maze rip-up and reroute (600 s) at each keyframe",
-     "result": "131 moves of 0 parts (bending \u2192 rainbow 39, circle 1, circle \u2192 rounded diamond 29, rainbow 1, rectangle 1, rectangle \u2192 circle 29, rounded diamond 1, rounded diamond \u2192 stretched rounded rectangle 29, stretched rounded rectangle 1); 116 connection(s) opened",
-     "detail": "open 10 \u2192 119",
-     "links": [
-      {
-       "label": "watch",
-       "href": "morph-frames/?run=reshape-repair"
-      }
-     ]
-    },
-    {
-     "title": "reshape-warp",
-     "about": "copperroute reshape bluebuzz along outline-plan: continuous field warp only (outline as a one-sided contact, USB fan-in carried rigidly), no relaxation or rip-up",
-     "result": "131 moves of 0 parts (bending \u2192 rainbow 39, circle 1, circle \u2192 rounded diamond 29, rainbow 1, rectangle 1, rectangle \u2192 circle 29, rounded diamond 1, rounded diamond \u2192 stretched rounded rectangle 29, stretched rounded rectangle 1); 15 connection(s) opened",
-     "detail": "open 10 \u2192 18",
-     "links": [
-      {
-       "label": "watch",
-       "href": "morph-frames/?run=reshape-warp"
-      }
-     ]
-    }
-   ],
-   "link": {
-    "label": "viewer",
-    "href": "morph-frames/"
-   }
-  },
-  {
    "title": "PCBench corpus",
    "items": [
     {
-     "title": "Baseline",
-     "result": "42 KiCad-refereed PCBench boards. Freerouting 15/42 clean, CopperRoute 23/42 (81 unrouted, 122 violations); governed matches main.",
+     "when": "2026-10-22T16:40",
+     "title": "Grid \u2192 maze (GPU grid first)",
+     "result": "Neutral on the corpus (21/42, 83 unrouted, 117 violations), a win on dense boards; 3.3\u00d7 the time.",
      "links": [
       {
        "label": "report",
-       "href": "copperroute/benchmark/reports/baseline-20261022.html"
+       "href": "copperroute/benchmark/reports/grid2-20261022.html"
       }
      ]
     },
     {
-     "title": "Ripup history",
-     "result": "Negative: per-net history detours with more vias and violations (80\u201388 unrouted, 144\u2013189 violations). Off.",
-     "links": [
-      {
-       "label": "report",
-       "href": "copperroute/benchmark/reports/hist-20261022.html"
-      }
-     ]
-    },
-    {
-     "title": "Obstacle-aware heuristic (E1)",
-     "result": "Neutral and 2.2\u00d7 slower: 87 unrouted, 119 violations, fewest vias. Opt-in.",
-     "links": [
-      {
-       "label": "report",
-       "href": "copperroute/benchmark/reports/e1-20261022.html"
-      }
-     ]
-    },
-    {
-     "title": "Region history",
-     "result": "Mixed, promising: \u00d70.1 cuts violations to 107 at no cost; \u00d70.25 reaches 73 unrouted but loses a clean board.",
-     "links": [
-      {
-       "label": "report",
-       "href": "copperroute/benchmark/reports/region-20261022.html"
-      }
-     ]
-    },
-    {
+     "when": "2026-10-22T16:21",
      "title": "Grid \u2192 maze, first version",
      "result": "Lost 609 connections to timeouts (19/42 clean); fixed by cached obstacle maps and a 40% time share.",
      "links": [
@@ -361,12 +407,46 @@
      ]
     },
     {
-     "title": "Grid \u2192 maze (GPU grid first)",
-     "result": "Neutral on the corpus (21/42, 83 unrouted, 117 violations), a win on dense boards; 3.3\u00d7 the time.",
+     "when": "2026-10-22T14:34",
+     "title": "Region history",
+     "result": "Mixed, promising: \u00d70.1 cuts violations to 107 at no cost; \u00d70.25 reaches 73 unrouted but loses a clean board.",
      "links": [
       {
        "label": "report",
-       "href": "copperroute/benchmark/reports/grid2-20261022.html"
+       "href": "copperroute/benchmark/reports/region-20261022.html"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-22T13:52",
+     "title": "Obstacle-aware heuristic (E1)",
+     "result": "Neutral and 2.2\u00d7 slower: 87 unrouted, 119 violations, fewest vias. Opt-in.",
+     "links": [
+      {
+       "label": "report",
+       "href": "copperroute/benchmark/reports/e1-20261022.html"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-22T13:29",
+     "title": "Ripup history",
+     "result": "Negative: per-net history detours with more vias and violations (80\u201388 unrouted, 144\u2013189 violations). Off.",
+     "links": [
+      {
+       "label": "report",
+       "href": "copperroute/benchmark/reports/hist-20261022.html"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-22T12:21",
+     "title": "Baseline",
+     "result": "42 KiCad-refereed PCBench boards. Freerouting 15/42 clean, CopperRoute 23/42 (81 unrouted, 122 violations); governed matches main.",
+     "links": [
+      {
+       "label": "report",
+       "href": "copperroute/benchmark/reports/baseline-20261022.html"
       }
      ]
     }

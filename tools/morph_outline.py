@@ -647,6 +647,7 @@ def main():
         "anchors": anchors, "centre": centre.tolist(),
         "board_outline": resample(from_bottom(outline)).round(4).tolist(),
         "view": [lo[0], lo[1], hi[0], hi[1]],
+        "bodies": [[a] + groups[a] for a in anchors] + islands,
         "steps": plan_steps}))
     worst = max(lines, key=lambda l: l["stats"]["overlapping parts"])
     for l in lines:

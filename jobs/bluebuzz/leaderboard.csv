@@ -29,6 +29,7 @@ cr-hist2,copperroute,15,0,0,16,200.7,166.6,294,0,,"{""COPPERROUTE_RIPUP_HISTORY"
 cr-hist4,copperroute,15,0,0,16,200.7,164.1,293,0,,"{""COPPERROUTE_RIPUP_HISTORY"": ""4""}",2026-10-23T11:10:18
 cr-hist1-search4m,copperroute,15,0,0,16,200.7,174.5,301,0,--set router.connection_search_steps=4000000,"{""COPPERROUTE_RIPUP_HISTORY"": ""1""}",2026-10-23T11:13:16
 cr-e1,copperroute,15,0,0,16,207.8,204.9,305,0,,"{""COPPERROUTE_OBSTACLE_HEURISTIC"": ""1""}",2026-10-23T11:31:40
+cr-topo-nofan,copperroute,16,0,0,8,156.7,873.7,82,0,--backend topo --set router.fanout.enabled=false,{},2026-10-24T03:39:15
 cr-nofan-hist2,copperroute,16,0,0,9,169.6,172.9,131,0,--set router.fanout.enabled=false,"{""COPPERROUTE_RIPUP_HISTORY"": ""2""}",2026-10-23T11:22:00
 cr-e1-hist1-nofan,copperroute,16,0,0,10,157.4,162.1,146,0,--set router.fanout.enabled=false,"{""COPPERROUTE_OBSTACLE_HEURISTIC"": ""1"", ""COPPERROUTE_RIPUP_HISTORY"": ""1""}",2026-10-23T11:43:38
 cr-region0.25-nofan-e1,copperroute,16,0,0,10,159.0,208.2,487,0,--set router.fanout.enabled=false,"{""COPPERROUTE_REGION_HISTORY"": ""0.25"", ""COPPERROUTE_OBSTACLE_HEURISTIC"": ""1""}",2026-10-23T12:04:35
@@ -46,5 +47,6 @@ cr-region0.5-nofan,copperroute,16,0,0,13,190.1,142.7,107,0,--set router.fanout.e
 cr-nofan-via10,copperroute,16,0,0,18,178.9,175.6,478,0,--set router.fanout.enabled=false --set router.scoring.via_costs=10,{},2026-10-23T11:25:03
 cr-nofan-via10-hist1,copperroute,16,0,0,18,178.9,173.9,476,0,--set router.fanout.enabled=false --set router.scoring.via_costs=10,"{""COPPERROUTE_RIPUP_HISTORY"": ""1""}",2026-10-23T11:28:02
 cr-e1-nofan-via10,copperroute,16,0,0,18,178.9,193.6,489,0,--set router.fanout.enabled=false --set router.scoring.via_costs=10,"{""COPPERROUTE_OBSTACLE_HEURISTIC"": ""1""}",2026-10-23T11:38:03
+cr-topo-only,copperroute,21,0,0,8,148.4,12.7,84,0,--backend topo --set router.fanout.enabled=false,"{""COPPERROUTE_TOPO_ONLY"": ""1""}",2026-10-24T03:24:39
 fr-2.4.1,freerouting,18,3,0,10,173.4,249.2,1305,0,-mp 100 -mt 1,{},2026-10-22T12:45:40
 fr-current,freerouting,1000000,1000000,,0,0,600.5,1463,124,-mp 100 -mt 1,{},2026-10-22T12:55:41
