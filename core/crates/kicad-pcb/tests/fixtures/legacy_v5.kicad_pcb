@@ -1,0 +1,11 @@
+(kicad_pcb (version 20171130) (host pcbnew 5.1.10)
+
+  (general
+    (thickness 1.6)
+  )
+
+  (module MountingHole:MountingHole_3.2mm (layer F.Cu) (tedit 56D1B4CB) (tstamp 5F0E6A20)
+    (at 5 5)
+    (pad "" np_thru_hole circle (at 0 0) (size 3.2 3.2) (drill 3.2) (layers *.Cu *.Mask))
+  )
+)

@@ -1,0 +1,302 @@
+(kicad_pcb
+	(version 20241229)
+	(generator "pcbnew")
+	(generator_version "9.0")
+	(general
+		(thickness 1.6)
+		(legacy_teardrops no)
+	)
+	(paper "A4")
+	(title_block
+		(title "Rounded board with a slot")
+		(rev "B")
+	)
+	(layers
+		(0 "F.Cu" signal)
+		(4 "In1.Cu" signal)
+		(6 "In2.Cu" signal)
+		(2 "B.Cu" signal)
+		(25 "Edge.Cuts" user)
+	)
+	(setup
+		(pad_to_mask_clearance 0)
+	)
+	(net 0 "")
+	(net 1 "GND")
+	(footprint "Waffle:Slot_6x2mm"
+		(layer "F.Cu")
+		(uuid "2c3d4e5f-0000-4000-8000-000000000001")
+		(at 30 20 90)
+		(property "Reference" "SLOT1"
+			(at 0 -2 90)
+			(layer "F.SilkS")
+			(uuid "2c3d4e5f-0000-4000-8000-000000000011")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Value" "Slot"
+			(at 0 2 90)
+			(layer "F.Fab")
+			(uuid "2c3d4e5f-0000-4000-8000-000000000012")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Footprint" "Waffle:Slot_6x2mm"
+			(at 0 0 90)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "2c3d4e5f-0000-4000-8000-000000000013")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 0 0 90)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "2c3d4e5f-0000-4000-8000-000000000014")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(attr board_only exclude_from_pos_files exclude_from_bom)
+		(fp_line
+			(start -2 -1)
+			(end 2 -1)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "Edge.Cuts")
+			(uuid "2c3d4e5f-0000-4000-8000-000000000015")
+		)
+		(fp_arc
+			(start 2 -1)
+			(mid 3 0)
+			(end 2 1)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "Edge.Cuts")
+			(uuid "2c3d4e5f-0000-4000-8000-000000000016")
+		)
+		(fp_line
+			(start 2 1)
+			(end -2 1)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "Edge.Cuts")
+			(uuid "2c3d4e5f-0000-4000-8000-000000000017")
+		)
+		(fp_arc
+			(start -2 1)
+			(mid -3 0)
+			(end -2 -1)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "Edge.Cuts")
+			(uuid "2c3d4e5f-0000-4000-8000-000000000018")
+		)
+	)
+	(footprint "Package_TO_SOT_SMD:SOT-23"
+		(layer "F.Cu")
+		(uuid "2c3d4e5f-0000-4000-8000-000000000002")
+		(at 10 10)
+		(property "Reference" "Q1"
+			(at 0 -2.5 0)
+			(layer "F.SilkS")
+			(uuid "2c3d4e5f-0000-4000-8000-000000000021")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Value" "BSS138"
+			(at 0 2.5 0)
+			(layer "F.Fab")
+			(uuid "2c3d4e5f-0000-4000-8000-000000000022")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Footprint" "Package_TO_SOT_SMD:SOT-23"
+			(at 0 0 0)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "2c3d4e5f-0000-4000-8000-000000000023")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" "https://example.invalid/bss138.pdf"
+			(at 0 0 0)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "2c3d4e5f-0000-4000-8000-000000000024")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(attr smd dnp)
+		(pad "1" smd rect
+			(at -1 0.95)
+			(size 0.9 0.8)
+			(layers "F.Cu" "F.Paste" "F.Mask")
+			(net 1 "GND")
+			(uuid "2c3d4e5f-0000-4000-8000-000000000025")
+		)
+		(pad "2" smd rect
+			(at -1 -0.95)
+			(size 0.9 0.8)
+			(layers "F.Cu" "F.Paste" "F.Mask")
+			(uuid "2c3d4e5f-0000-4000-8000-000000000026")
+		)
+		(pad "3" smd rect
+			(at 1 0)
+			(size 0.9 0.8)
+			(layers "F.Cu" "F.Paste" "F.Mask")
+			(uuid "2c3d4e5f-0000-4000-8000-000000000027")
+		)
+		(model "${KICAD9_3DMODEL_DIR}/Package_TO_SOT_SMD.3dshapes/SOT-23.step"
+			(hide yes)
+			(offset
+				(xyz 0 0 0)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz 0 0 0)
+			)
+		)
+	)
+	(gr_line
+		(start 5 0)
+		(end 55 0)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "Edge.Cuts")
+		(uuid "2c3d4e5f-0000-4000-8000-000000000101")
+	)
+	(gr_arc
+		(start 55 0)
+		(mid 58.535533905932738 1.464466094067262)
+		(end 60 5)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "Edge.Cuts")
+		(uuid "2c3d4e5f-0000-4000-8000-000000000102")
+	)
+	(gr_line
+		(start 60 5)
+		(end 60 35)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "Edge.Cuts")
+		(uuid "2c3d4e5f-0000-4000-8000-000000000103")
+	)
+	(gr_arc
+		(start 60 35)
+		(mid 58.535533905932738 38.535533905932738)
+		(end 55 40)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "Edge.Cuts")
+		(uuid "2c3d4e5f-0000-4000-8000-000000000104")
+	)
+	(gr_line
+		(start 55 40)
+		(end 5 40)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "Edge.Cuts")
+		(uuid "2c3d4e5f-0000-4000-8000-000000000105")
+	)
+	(gr_arc
+		(start 5 40)
+		(mid 1.464466094067262 38.535533905932738)
+		(end 0 35)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "Edge.Cuts")
+		(uuid "2c3d4e5f-0000-4000-8000-000000000106")
+	)
+	(gr_line
+		(start 0 35)
+		(end 0 5)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "Edge.Cuts")
+		(uuid "2c3d4e5f-0000-4000-8000-000000000107")
+	)
+	(gr_arc
+		(start 0 5)
+		(mid 1.464466094067262 1.464466094067262)
+		(end 5 0)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "Edge.Cuts")
+		(uuid "2c3d4e5f-0000-4000-8000-000000000108")
+	)
+	(gr_poly
+		(pts
+			(xy 45 25) (xy 50 25)
+			(arc
+				(start 50 25)
+				(mid 52.5 27.5)
+				(end 50 30)
+			)
+			(xy 45 30)
+		)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(fill none)
+		(layer "Edge.Cuts")
+		(uuid "2c3d4e5f-0000-4000-8000-000000000109")
+	)
+	(embedded_fonts no)
+)

@@ -55,9 +55,12 @@ copper-morph, copper-topo, copper-governor) is ~7k. A core written fresh, never 
 copperroute or freerouting, would let the studio link the router (and route in a browser tab
 with WebGPU) under MIT. Estimate ~15k lines:
 
-- [ ] Board I/O from `.kicad_pcb` directly: start from waffle-iron's `kicad-pcb` crate (MIT,
-      ours: S-expression parser, footprints, pads, nets, Edge.Cuts loops); add tracks, arcs,
-      vias, zones, rule areas, pad layer sets and shapes, `.kicad_pro` rules, and a writer.
+- [x] Board I/O from `.kicad_pcb` directly (`core/crates/kicad-pcb`, from waffle-iron's reader):
+      copper layers, tracks, arcs, vias, zones and rule areas, pad layer sets and exact shapes
+      (custom pads included), `.kicad_pro` rules and net classes, and a writer that replaces
+      routed copper and keeps every other byte. On bluebuzz all 2290 tracks and 331 vias
+      rewritten give KiCad's DRC the same result (0 violations, 0 unconnected).
+- [ ] Locked flags kept when copper is written back; `.kicad_dru` custom rules applied.
 - [ ] Geometry in integer nanometres with MIT/Apache crates (`rstar`, `i_overlay`).
 - [ ] Board model, connectivity, a clearance checker (KiCad's `kicad-cli` stays the referee).
 - [ ] Our routers moved onto it: grid with negotiation, topo with rip-up, nudge and diffusion.

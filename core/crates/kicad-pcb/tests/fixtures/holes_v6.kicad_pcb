@@ -1,0 +1,70 @@
+(kicad_pcb (version 20211014) (generator pcbnew)
+
+  (general
+    (thickness 1.2)
+  )
+
+  (paper "A4")
+  (layers
+    (0 "F.Cu" signal)
+    (31 "B.Cu" signal)
+    (44 "Edge.Cuts" user)
+    (49 "F.Fab" user)
+  )
+
+  (setup
+    (pad_to_mask_clearance 0)
+    (pcbplotparams
+      (layerselection 0x00010fc_ffffffff)
+      (disableapertmacros false)
+    )
+  )
+
+  (net 0 "")
+
+  (footprint "MountingHole:MountingHole_3.2mm" (layer "F.Cu")
+    (tstamp 1b2c3d4e-0000-4000-8000-000000000001)
+    (at 5 5)
+    (descr "Mounting Hole 3.2mm, no annular ring")
+    (tags "mounting hole 3.2mm no annular ring")
+    (attr exclude_from_pos_files exclude_from_bom)
+    (fp_text reference "H1" (at 0 -4.2) (layer "F.SilkS")
+        (effects (font (size 1 1) (thickness 0.15)))
+      (tstamp 1b2c3d4e-0000-4000-8000-000000000011)
+    )
+    (fp_text value "MountingHole" (at 0 4.2) (layer "F.Fab")
+        (effects (font (size 1 1) (thickness 0.15)))
+      (tstamp 1b2c3d4e-0000-4000-8000-000000000012)
+    )
+    (fp_circle (center 0 0) (end 3.2 0) (layer "Cmts.User") (width 0.15) (fill none) (tstamp 1b2c3d4e-0000-4000-8000-000000000013))
+    (pad "" np_thru_hole circle (at 0 0) (size 3.2 3.2) (drill 3.2) (layers *.Cu *.Mask) (tstamp 1b2c3d4e-0000-4000-8000-000000000014))
+  )
+
+  (footprint "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical" (layer "F.Cu")
+    (tstamp 1b2c3d4e-0000-4000-8000-000000000002)
+    (at 20 12.5 270)
+    (attr through_hole)
+    (fp_text reference "J1" (at 0 -2.33 90) (layer "F.SilkS")
+        (effects (font (size 1 1) (thickness 0.15)))
+      (tstamp 1b2c3d4e-0000-4000-8000-000000000021)
+    )
+    (fp_text value "Conn_01x02" (at 0 4.87 90) (layer "F.Fab")
+        (effects (font (size 1 1) (thickness 0.15)))
+      (tstamp 1b2c3d4e-0000-4000-8000-000000000022)
+    )
+    (pad "1" thru_hole rect (at 0 0 270) (size 1.7 1.7) (drill 1) (layers *.Cu *.Mask)
+      (net 1 "SIG") (tstamp 1b2c3d4e-0000-4000-8000-000000000023))
+    (pad "2" thru_hole oval (at 0 2.54 270) (size 1.7 1.7) (drill oval 1 1.2) (layers *.Cu *.Mask)
+      (tstamp 1b2c3d4e-0000-4000-8000-000000000024))
+    (model "${KICAD6_3DMODEL_DIR}/Connector_PinHeader_2.54mm.3dshapes/PinHeader_1x02_P2.54mm_Vertical.wrl"
+      (offset (xyz 0 0 0))
+      (scale (xyz 1 1 1))
+      (rotate (xyz 0 0 0))
+    )
+  )
+
+  (gr_rect (start 0 0) (end 40 25) (layer "Edge.Cuts") (width 0.1) (fill none) (tstamp 1b2c3d4e-0000-4000-8000-000000000101))
+  (gr_circle (center 10 12.5) (end 11.6 12.5) (layer "Edge.Cuts") (width 0.1) (fill none) (tstamp 1b2c3d4e-0000-4000-8000-000000000102))
+  (gr_circle (center 30 12.5) (end 31.6 12.5) (layer "Edge.Cuts") (width 0.1) (fill none) (tstamp 1b2c3d4e-0000-4000-8000-000000000103))
+
+)

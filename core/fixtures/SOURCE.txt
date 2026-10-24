@@ -1,0 +1,3 @@
+Real boards for tests, copied unchanged from their repositories:
+  bluebuzz-rm2.kicad_pcb, .kicad_pro   github.com/sequoia-hope/bluebuzz        out/ at bf235b5
+  earring.kicad_pcb, .kicad_pro        github.com/sequoia-hope/simple-earring  out/ at 1300fe6

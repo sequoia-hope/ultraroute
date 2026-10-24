@@ -1,0 +1,476 @@
+(kicad_pcb
+	(version 20240108)
+	(generator "pcbnew")
+	(generator_version "8.0")
+	(general
+		(thickness 1.6)
+		(legacy_teardrops no)
+	)
+	(paper "A4")
+	(title_block
+		(title "Waffle test board")
+		(date "2026-09-26")
+		(rev "B")
+		(company "Waffle Iron")
+		(comment 2 "second comment")
+		(comment 1 "authored fixture, no library content")
+	)
+	(layers
+		(0 "F.Cu" signal)
+		(31 "B.Cu" signal)
+		(32 "B.Adhes" user "B.Adhesive")
+		(36 "B.SilkS" user "B.Silkscreen")
+		(37 "F.SilkS" user "F.Silkscreen")
+		(38 "B.Mask" user)
+		(39 "F.Mask" user)
+		(44 "Edge.Cuts" user)
+		(46 "B.CrtYd" user "B.Courtyard")
+		(47 "F.CrtYd" user "F.Courtyard")
+	)
+	(setup
+		(stackup
+			(layer "F.SilkS"
+				(type "Top Silk Screen")
+			)
+			(layer "F.Mask"
+				(type "Top Solder Mask")
+				(thickness 0.01)
+			)
+			(layer "F.Cu"
+				(type "copper")
+				(thickness 0.035)
+			)
+			(layer "dielectric 1"
+				(type "core")
+				(thickness 1.53)
+				(material "FR4")
+				(epsilon_r 4.5)
+				(loss_tangent 0.02)
+			)
+			(layer "B.Cu"
+				(type "copper")
+				(thickness 0.035)
+			)
+			(layer "B.Mask"
+				(type "Bottom Solder Mask")
+				(thickness 0.01)
+			)
+			(layer "B.SilkS"
+				(type "Bottom Silk Screen")
+			)
+			(copper_finish "None")
+			(dielectric_constraints no)
+		)
+		(pad_to_mask_clearance 0)
+		(allow_soldermask_bridges_in_footprints no)
+	)
+	(net 0 "")
+	(net 1 "GND")
+	(net 2 "VCC")
+	(footprint "Resistor_SMD:R_0603_1608Metric"
+		(layer "F.Cu")
+		(uuid "0a1b2c3d-0000-4000-8000-000000000001")
+		(at 25 12 45)
+		(descr "Resistor SMD 0603")
+		(tags "resistor")
+		(property "Reference" "R1"
+			(at 0 -1.5 90)
+			(layer "F.SilkS")
+			(uuid "0a1b2c3d-0000-4000-8000-000000000011")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Value" "10k"
+			(at 0 1.5 90)
+			(layer "F.Fab")
+			(uuid "0a1b2c3d-0000-4000-8000-000000000012")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
+			(at 0 0 90)
+			(layer "F.Fab")
+			hide yes
+			(uuid "0a1b2c3d-0000-4000-8000-000000000013")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" "https://example.invalid/r.pdf"
+			(at 0 0 90)
+			(layer "F.Fab")
+			hide yes
+			(uuid "0a1b2c3d-0000-4000-8000-000000000014")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(attr smd)
+		(fp_line
+			(start -0.8 -0.4)
+			(end 0.8 -0.4)
+			(stroke
+				(width 0.1)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "0a1b2c3d-0000-4000-8000-000000000015")
+		)
+		(pad "1" smd roundrect
+			(at -0.825 0 90)
+			(size 0.8 0.95)
+			(layers "F.Cu" "F.Paste" "F.Mask")
+			(roundrect_rratio 0.25)
+			(net 1 "GND")
+			(uuid "0a1b2c3d-0000-4000-8000-000000000016")
+		)
+		(pad "2" smd roundrect
+			(at 0.825 0 90)
+			(size 0.8 0.95)
+			(layers "F.Cu" "F.Paste" "F.Mask")
+			(roundrect_rratio 0.25)
+			(net 2 "VCC")
+			(uuid "0a1b2c3d-0000-4000-8000-000000000017")
+		)
+		(model "${KICAD8_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.step"
+			(offset
+				(xyz 0 0 0)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz 0 0 0)
+			)
+		)
+	)
+	(footprint "Capacitor_SMD:C_0805_2012Metric"
+		(layer "B.Cu")
+		(uuid "0a1b2c3d-0000-4000-8000-000000000002")
+		(at 35 10 180)
+		(property "Reference" "C1"
+			(at 0 1.5 180)
+			(layer "B.SilkS")
+			(uuid "0a1b2c3d-0000-4000-8000-000000000021")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+				(justify mirror)
+			)
+		)
+		(property "Value" "220n"
+			(at 0 -1.5 180)
+			(layer "B.Fab")
+			(uuid "0a1b2c3d-0000-4000-8000-000000000022")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+				(justify mirror)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric"
+			(at 0 0 180)
+			(layer "B.Fab")
+			hide yes
+			(uuid "0a1b2c3d-0000-4000-8000-000000000023")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify mirror)
+			)
+		)
+		(property "Datasheet" ""
+			(at 0 0 180)
+			(layer "B.Fab")
+			hide yes
+			(uuid "0a1b2c3d-0000-4000-8000-000000000024")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(attr smd)
+		(pad "1" smd roundrect
+			(at -0.95 0 180)
+			(size 1 1.45)
+			(layers "B.Cu" "B.Paste" "B.Mask")
+			(roundrect_rratio 0.25)
+			(net 2 "VCC")
+			(uuid "0a1b2c3d-0000-4000-8000-000000000025")
+		)
+		(pad "2" smd roundrect
+			(at 0.95 0 180)
+			(size 1 1.45)
+			(layers "B.Cu" "B.Paste" "B.Mask")
+			(roundrect_rratio 0.25)
+			(net 1 "GND")
+			(uuid "0a1b2c3d-0000-4000-8000-000000000026")
+		)
+		(model "${KICAD8_3DMODEL_DIR}/Capacitor_SMD.3dshapes/C_0805_2012Metric.step"
+			(offset
+				(xyz 1 2 0.5)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz 0 0 90)
+			)
+		)
+	)
+	(footprint "Resistor_SMD:R_0603_1608Metric"
+		(layer "F.Cu")
+		(uuid "0a1b2c3d-0000-4000-8000-000000000004")
+		(at 30 20)
+		(property "Reference" "R2"
+			(at 0 -1.5 0)
+			(layer "F.SilkS")
+			(uuid "0a1b2c3d-0000-4000-8000-000000000041")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Value" "4k7"
+			(at 0 1.5 0)
+			(layer "F.Fab")
+			(uuid "0a1b2c3d-0000-4000-8000-000000000042")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0603_1608Metric"
+			(at 0 0 0)
+			(layer "F.Fab")
+			hide yes
+			(uuid "0a1b2c3d-0000-4000-8000-000000000043")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 0 0 0)
+			(layer "F.Fab")
+			hide yes
+			(uuid "0a1b2c3d-0000-4000-8000-000000000044")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(attr smd)
+		(pad "1" smd roundrect
+			(at -0.825 0)
+			(size 0.8 0.95)
+			(layers "F.Cu" "F.Paste" "F.Mask")
+			(roundrect_rratio 0.25)
+			(net 1 "GND")
+			(uuid "0a1b2c3d-0000-4000-8000-000000000045")
+		)
+		(pad "2" smd roundrect
+			(at 0.825 0)
+			(size 0.8 0.95)
+			(layers "F.Cu" "F.Paste" "F.Mask")
+			(roundrect_rratio 0.25)
+			(net 2 "VCC")
+			(uuid "0a1b2c3d-0000-4000-8000-000000000046")
+		)
+	)
+	(footprint "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"
+		(layer "F.Cu")
+		(uuid "0a1b2c3d-0000-4000-8000-000000000005")
+		(at 15 22)
+		(property "Reference" "U1"
+			(at 0 -3.5 0)
+			(layer "F.SilkS")
+			(uuid "0a1b2c3d-0000-4000-8000-000000000051")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Value" "LM358"
+			(at 0 3.5 0)
+			(layer "F.Fab")
+			(uuid "0a1b2c3d-0000-4000-8000-000000000052")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Footprint" "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"
+			(at 0 0 0)
+			(layer "F.Fab")
+			hide yes
+			(uuid "0a1b2c3d-0000-4000-8000-000000000053")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 0 0 0)
+			(layer "F.Fab")
+			hide yes
+			(uuid "0a1b2c3d-0000-4000-8000-000000000054")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(attr smd)
+		(pad "1" smd roundrect
+			(at -2.475 -1.905)
+			(size 1.475 0.6)
+			(layers "F.Cu" "F.Paste" "F.Mask")
+			(roundrect_rratio 0.25)
+			(net 1 "GND")
+			(uuid "0a1b2c3d-0000-4000-8000-000000000055")
+		)
+		(pad "8" smd roundrect
+			(at 2.475 -1.905)
+			(size 1.475 0.6)
+			(layers "F.Cu" "F.Paste" "F.Mask")
+			(roundrect_rratio 0.25)
+			(net 2 "VCC")
+			(uuid "0a1b2c3d-0000-4000-8000-000000000056")
+		)
+		(pad "4" smd roundrect
+			(at -2.475 1.905)
+			(size 1.475 0.6)
+			(layers "F.Cu" "F.Paste" "F.Mask")
+			(roundrect_rratio 0.25)
+			(uuid "0a1b2c3d-0000-4000-8000-000000000057")
+		)
+		(pad "5" smd roundrect
+			(at 2.475 1.905)
+			(size 1.475 0.6)
+			(layers "F.Cu" "F.Paste" "F.Mask")
+			(roundrect_rratio 0.25)
+			(uuid "0a1b2c3d-0000-4000-8000-000000000058")
+		)
+	)
+	(gr_line
+		(start 0 0)
+		(end 60 0)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "Edge.Cuts")
+		(uuid "0a1b2c3d-0000-4000-8000-000000000101")
+	)
+	(gr_line
+		(start 60 0)
+		(end 60 30)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "Edge.Cuts")
+		(uuid "0a1b2c3d-0000-4000-8000-000000000102")
+	)
+	(gr_line
+		(start 60 30)
+		(end 0 30)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "Edge.Cuts")
+		(uuid "0a1b2c3d-0000-4000-8000-000000000103")
+	)
+	(gr_line
+		(start 0 30)
+		(end 0 0)
+		(stroke
+			(width 0.1)
+			(type default)
+		)
+		(layer "Edge.Cuts")
+		(uuid "0a1b2c3d-0000-4000-8000-000000000104")
+	)
+	(gr_line
+		(start 2 2)
+		(end 48 2)
+		(stroke
+			(width 0.15)
+			(type default)
+		)
+		(layer "F.SilkS")
+		(uuid "0a1b2c3d-0000-4000-8000-000000000105")
+	)
+	(segment
+		(start 20 15.825)
+		(end 30 15.825)
+		(width 0.25)
+		(layer "F.Cu")
+		(net 1)
+		(uuid "0a1b2c3d-0000-4000-8000-000000000201")
+	)
+	(via
+		(at 30 15.825)
+		(size 0.8)
+		(drill 0.4)
+		(layers "F.Cu" "B.Cu")
+		(net 1)
+		(uuid "0a1b2c3d-0000-4000-8000-000000000202")
+	)
+	(zone
+		(net 1)
+		(net_name "GND")
+		(layer "B.Cu")
+		(uuid "0a1b2c3d-0000-4000-8000-000000000203")
+		(hatch edge 0.5)
+		(connect_pads
+			(clearance 0.5)
+		)
+		(min_thickness 0.25)
+		(filled_areas_thickness no)
+		(fill yes
+			(thermal_gap 0.5)
+			(thermal_bridge_width 0.5)
+		)
+		(polygon
+			(pts
+				(xy 1 1) (xy 49 1) (xy 49 29) (xy 1 29)
+			)
+		)
+	)
+	(x_future_form 1)
+	(x_future_form 2)
+	(y_other_form "text")
+	(embedded_fonts no)
+)

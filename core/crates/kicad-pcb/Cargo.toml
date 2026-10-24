@@ -1,0 +1,19 @@
+[package]
+name = "kicad-pcb"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+# `.kicad_pcb` reader and writer. The reader started as waffle-iron's `kicad-pcb` crate
+# (github.com/sequoia-hope/waffle-iron, MIT, same author): S-expression text to a neutral `Pcb`
+# record (metres, board frame) with the Edge.Cuts loops chained. Here it also reads the copper a
+# router needs, the design rules, and writes routed copper back. No C, WASM-clean.
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"
+serde_json = "1"
+
+[dev-dependencies]
+# float_roundtrip: the golden JSON must re-read to the same f64 bit pattern.
+serde_json = { version = "1", features = ["float_roundtrip"] }

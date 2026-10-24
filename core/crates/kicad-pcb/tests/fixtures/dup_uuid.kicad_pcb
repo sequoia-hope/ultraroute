@@ -1,0 +1,23 @@
+(kicad_pcb
+	(version 20240108)
+	(generator "pcbnew")
+	(general
+		(thickness 1.6)
+	)
+	(net 0 "")
+	(footprint "MountingHole:MountingHole_3.2mm"
+		(layer "F.Cu")
+		(uuid "71829304-0000-4000-8000-000000000001")
+		(at 5 5)
+		(property "Reference" "H1" (at 0 0 0) (layer "F.SilkS") (uuid "71829304-0000-4000-8000-000000000011") (effects (font (size 1 1))))
+		(pad "" np_thru_hole circle (at 0 0) (size 3.2 3.2) (drill 3.2) (layers "*.Cu" "*.Mask") (uuid "71829304-0000-4000-8000-000000000012"))
+	)
+	(footprint "MountingHole:MountingHole_3.2mm"
+		(layer "F.Cu")
+		(uuid "71829304-0000-4000-8000-000000000001")
+		(at 45 5)
+		(property "Reference" "H2" (at 0 0 0) (layer "F.SilkS") (uuid "71829304-0000-4000-8000-000000000021") (effects (font (size 1 1))))
+		(pad "" np_thru_hole circle (at 0 0) (size 3.2 3.2) (drill 3.2) (layers "*.Cu" "*.Mask") (uuid "71829304-0000-4000-8000-000000000022"))
+	)
+	(gr_rect (start 0 0) (end 50 10) (layer "Edge.Cuts") (uuid "71829304-0000-4000-8000-000000000101"))
+)

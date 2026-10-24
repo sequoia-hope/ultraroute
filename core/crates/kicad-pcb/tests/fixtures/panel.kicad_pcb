@@ -1,0 +1,10 @@
+(kicad_pcb
+	(version 20240108)
+	(generator "pcbnew")
+	(general
+		(thickness 1.6)
+	)
+	(net 0 "")
+	(gr_rect (start 0 0) (end 20 10) (layer "Edge.Cuts") (uuid "5f607182-0000-4000-8000-000000000101"))
+	(gr_rect (start 30 0) (end 50 10) (layer "Edge.Cuts") (uuid "5f607182-0000-4000-8000-000000000102"))
+)

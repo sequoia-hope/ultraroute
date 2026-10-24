@@ -1,0 +1,56 @@
+{
+  "pcb": {
+    "version": 20240108,
+    "generator": "pcbnew",
+    "thickness_m": 0.001,
+    "thickness_general_m": 0.001,
+    "thickness_stackup_m": null,
+    "title_block": {
+      "title": "",
+      "date": "",
+      "rev": "",
+      "company": "",
+      "comments": []
+    },
+    "copper_layers": 2,
+    "nets": [
+      {
+        "number": 0,
+        "name": ""
+      }
+    ],
+    "outline": [
+      {
+        "shape": {
+          "type": "Circle",
+          "center": [
+            0.025,
+            0.025
+          ],
+          "radius": 0.019999999999999997
+        },
+        "footprint": null
+      }
+    ],
+    "footprints": [],
+    "warnings": []
+  },
+  "loops": {
+    "Ok": {
+      "outer": {
+        "segments": [
+          {
+            "type": "Circle",
+            "center": [
+              0.025,
+              0.025
+            ],
+            "radius": 0.019999999999999997
+          }
+        ],
+        "signed_area_m2": 0.0012566370614359168
+      },
+      "holes": []
+    }
+  }
+}

@@ -1,0 +1,636 @@
+{
+  "pcb": {
+    "version": 20241229,
+    "generator": "pcbnew",
+    "thickness_m": 0.0016,
+    "thickness_general_m": 0.0016,
+    "thickness_stackup_m": null,
+    "title_block": {
+      "title": "Rounded board with a slot",
+      "date": "",
+      "rev": "B",
+      "company": "",
+      "comments": []
+    },
+    "copper_layers": 4,
+    "nets": [
+      {
+        "number": 0,
+        "name": ""
+      },
+      {
+        "number": 1,
+        "name": "GND"
+      }
+    ],
+    "outline": [
+      {
+        "shape": {
+          "type": "Line",
+          "start": [
+            0.028999999999999998,
+            0.022
+          ],
+          "end": [
+            0.028999999999999998,
+            0.018000000000000002
+          ]
+        },
+        "footprint": "2c3d4e5f-0000-4000-8000-000000000001"
+      },
+      {
+        "shape": {
+          "type": "Arc",
+          "start": [
+            0.028999999999999998,
+            0.018000000000000002
+          ],
+          "mid": [
+            0.03,
+            0.017
+          ],
+          "end": [
+            0.031,
+            0.018000000000000002
+          ]
+        },
+        "footprint": "2c3d4e5f-0000-4000-8000-000000000001"
+      },
+      {
+        "shape": {
+          "type": "Line",
+          "start": [
+            0.031,
+            0.018000000000000002
+          ],
+          "end": [
+            0.031,
+            0.022
+          ]
+        },
+        "footprint": "2c3d4e5f-0000-4000-8000-000000000001"
+      },
+      {
+        "shape": {
+          "type": "Arc",
+          "start": [
+            0.031,
+            0.022
+          ],
+          "mid": [
+            0.03,
+            0.023
+          ],
+          "end": [
+            0.028999999999999998,
+            0.022
+          ]
+        },
+        "footprint": "2c3d4e5f-0000-4000-8000-000000000001"
+      },
+      {
+        "shape": {
+          "type": "Line",
+          "start": [
+            0.005,
+            0.0
+          ],
+          "end": [
+            0.055,
+            0.0
+          ]
+        },
+        "footprint": null
+      },
+      {
+        "shape": {
+          "type": "Arc",
+          "start": [
+            0.055,
+            0.0
+          ],
+          "mid": [
+            0.05853553390593274,
+            0.001464466094067262
+          ],
+          "end": [
+            0.06,
+            0.005
+          ]
+        },
+        "footprint": null
+      },
+      {
+        "shape": {
+          "type": "Line",
+          "start": [
+            0.06,
+            0.005
+          ],
+          "end": [
+            0.06,
+            0.035
+          ]
+        },
+        "footprint": null
+      },
+      {
+        "shape": {
+          "type": "Arc",
+          "start": [
+            0.06,
+            0.035
+          ],
+          "mid": [
+            0.05853553390593274,
+            0.038535533905932735
+          ],
+          "end": [
+            0.055,
+            0.04
+          ]
+        },
+        "footprint": null
+      },
+      {
+        "shape": {
+          "type": "Line",
+          "start": [
+            0.055,
+            0.04
+          ],
+          "end": [
+            0.005,
+            0.04
+          ]
+        },
+        "footprint": null
+      },
+      {
+        "shape": {
+          "type": "Arc",
+          "start": [
+            0.005,
+            0.04
+          ],
+          "mid": [
+            0.001464466094067262,
+            0.038535533905932735
+          ],
+          "end": [
+            0.0,
+            0.035
+          ]
+        },
+        "footprint": null
+      },
+      {
+        "shape": {
+          "type": "Line",
+          "start": [
+            0.0,
+            0.035
+          ],
+          "end": [
+            0.0,
+            0.005
+          ]
+        },
+        "footprint": null
+      },
+      {
+        "shape": {
+          "type": "Arc",
+          "start": [
+            0.0,
+            0.005
+          ],
+          "mid": [
+            0.001464466094067262,
+            0.001464466094067262
+          ],
+          "end": [
+            0.005,
+            0.0
+          ]
+        },
+        "footprint": null
+      },
+      {
+        "shape": {
+          "type": "Line",
+          "start": [
+            0.045,
+            0.025
+          ],
+          "end": [
+            0.05,
+            0.025
+          ]
+        },
+        "footprint": null
+      },
+      {
+        "shape": {
+          "type": "Arc",
+          "start": [
+            0.05,
+            0.025
+          ],
+          "mid": [
+            0.0525,
+            0.0275
+          ],
+          "end": [
+            0.05,
+            0.03
+          ]
+        },
+        "footprint": null
+      },
+      {
+        "shape": {
+          "type": "Line",
+          "start": [
+            0.05,
+            0.03
+          ],
+          "end": [
+            0.045,
+            0.03
+          ]
+        },
+        "footprint": null
+      },
+      {
+        "shape": {
+          "type": "Line",
+          "start": [
+            0.045,
+            0.03
+          ],
+          "end": [
+            0.045,
+            0.025
+          ]
+        },
+        "footprint": null
+      }
+    ],
+    "footprints": [
+      {
+        "uuid": "2c3d4e5f-0000-4000-8000-000000000001",
+        "library_id": "Waffle:Slot_6x2mm",
+        "side": "Front",
+        "at": [
+          0.03,
+          0.02
+        ],
+        "rotation_deg": 90.0,
+        "reference": "SLOT1",
+        "value": "Slot",
+        "footprint": "Waffle:Slot_6x2mm",
+        "datasheet": "",
+        "attrs": [
+          "board_only",
+          "exclude_from_pos_files",
+          "exclude_from_bom"
+        ],
+        "pads": [],
+        "models": []
+      },
+      {
+        "uuid": "2c3d4e5f-0000-4000-8000-000000000002",
+        "library_id": "Package_TO_SOT_SMD:SOT-23",
+        "side": "Front",
+        "at": [
+          0.01,
+          0.01
+        ],
+        "rotation_deg": 0.0,
+        "reference": "Q1",
+        "value": "BSS138",
+        "footprint": "Package_TO_SOT_SMD:SOT-23",
+        "datasheet": "https://example.invalid/bss138.pdf",
+        "attrs": [
+          "smd",
+          "dnp"
+        ],
+        "pads": [
+          {
+            "number": "1",
+            "kind": "Smd",
+            "shape": "rect",
+            "position": [
+              0.009000000000000001,
+              0.01095
+            ],
+            "rotation_deg": 0.0,
+            "size": [
+              0.0009000000000000001,
+              0.0008
+            ],
+            "drill": null,
+            "net": {
+              "number": 1,
+              "name": "GND"
+            }
+          },
+          {
+            "number": "2",
+            "kind": "Smd",
+            "shape": "rect",
+            "position": [
+              0.009000000000000001,
+              0.00905
+            ],
+            "rotation_deg": 0.0,
+            "size": [
+              0.0009000000000000001,
+              0.0008
+            ],
+            "drill": null,
+            "net": null
+          },
+          {
+            "number": "3",
+            "kind": "Smd",
+            "shape": "rect",
+            "position": [
+              0.011,
+              0.01
+            ],
+            "rotation_deg": 0.0,
+            "size": [
+              0.0009000000000000001,
+              0.0008
+            ],
+            "drill": null,
+            "net": null
+          }
+        ],
+        "models": [
+          {
+            "path": "${KICAD9_3DMODEL_DIR}/Package_TO_SOT_SMD.3dshapes/SOT-23.step",
+            "offset_m": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "rotate_deg": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "hidden": true
+          }
+        ]
+      }
+    ],
+    "warnings": []
+  },
+  "loops": {
+    "Ok": {
+      "outer": {
+        "segments": [
+          {
+            "type": "Line",
+            "start": [
+              0.005,
+              0.0
+            ],
+            "end": [
+              0.055,
+              0.0
+            ]
+          },
+          {
+            "type": "Arc",
+            "start": [
+              0.055,
+              0.0
+            ],
+            "end": [
+              0.06,
+              0.005
+            ],
+            "center": [
+              0.05500000000000001,
+              0.004999999999999993
+            ],
+            "radius": 0.004999999999999993,
+            "ccw": true
+          },
+          {
+            "type": "Line",
+            "start": [
+              0.06,
+              0.005
+            ],
+            "end": [
+              0.06,
+              0.035
+            ]
+          },
+          {
+            "type": "Arc",
+            "start": [
+              0.06,
+              0.035
+            ],
+            "end": [
+              0.055,
+              0.04
+            ],
+            "center": [
+              0.055,
+              0.035
+            ],
+            "radius": 0.0049999999999999975,
+            "ccw": true
+          },
+          {
+            "type": "Line",
+            "start": [
+              0.055,
+              0.04
+            ],
+            "end": [
+              0.005,
+              0.04
+            ]
+          },
+          {
+            "type": "Arc",
+            "start": [
+              0.005,
+              0.04
+            ],
+            "end": [
+              0.0,
+              0.035
+            ],
+            "center": [
+              0.0050000000000000044,
+              0.034999999999999996
+            ],
+            "radius": 0.0050000000000000044,
+            "ccw": true
+          },
+          {
+            "type": "Line",
+            "start": [
+              0.0,
+              0.035
+            ],
+            "end": [
+              0.0,
+              0.005
+            ]
+          },
+          {
+            "type": "Arc",
+            "start": [
+              0.0,
+              0.005
+            ],
+            "end": [
+              0.005,
+              0.0
+            ],
+            "center": [
+              0.004999999999999998,
+              0.004999999999999999
+            ],
+            "radius": 0.004999999999999998,
+            "ccw": true
+          }
+        ],
+        "signed_area_m2": 0.0023785398163397448
+      },
+      "holes": [
+        {
+          "segments": [
+            {
+              "type": "Line",
+              "start": [
+                0.028999999999999998,
+                0.022
+              ],
+              "end": [
+                0.028999999999999998,
+                0.018000000000000002
+              ]
+            },
+            {
+              "type": "Arc",
+              "start": [
+                0.028999999999999998,
+                0.018000000000000002
+              ],
+              "end": [
+                0.031,
+                0.018000000000000002
+              ],
+              "center": [
+                0.03,
+                0.018000000000000002
+              ],
+              "radius": 0.0010000000000000009,
+              "ccw": true
+            },
+            {
+              "type": "Line",
+              "start": [
+                0.031,
+                0.018000000000000002
+              ],
+              "end": [
+                0.031,
+                0.022
+              ]
+            },
+            {
+              "type": "Arc",
+              "start": [
+                0.031,
+                0.022
+              ],
+              "end": [
+                0.028999999999999998,
+                0.022
+              ],
+              "center": [
+                0.03,
+                0.022
+              ],
+              "radius": 0.0010000000000000009,
+              "ccw": true
+            }
+          ],
+          "signed_area_m2": 0.000011141592653589885
+        },
+        {
+          "segments": [
+            {
+              "type": "Line",
+              "start": [
+                0.045,
+                0.025
+              ],
+              "end": [
+                0.05,
+                0.025
+              ]
+            },
+            {
+              "type": "Arc",
+              "start": [
+                0.05,
+                0.025
+              ],
+              "end": [
+                0.05,
+                0.03
+              ],
+              "center": [
+                0.05,
+                0.0275
+              ],
+              "radius": 0.0024999999999999988,
+              "ccw": true
+            },
+            {
+              "type": "Line",
+              "start": [
+                0.05,
+                0.03
+              ],
+              "end": [
+                0.045,
+                0.03
+              ]
+            },
+            {
+              "type": "Line",
+              "start": [
+                0.045,
+                0.03
+              ],
+              "end": [
+                0.045,
+                0.025
+              ]
+            }
+          ],
+          "signed_area_m2": 0.00003481747704246794
+        }
+      ]
+    }
+  }
+}

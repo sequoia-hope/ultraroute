@@ -1,0 +1,308 @@
+{
+  "pcb": {
+    "version": 20211014,
+    "generator": "pcbnew",
+    "thickness_m": 0.0012,
+    "thickness_general_m": 0.0012,
+    "thickness_stackup_m": null,
+    "title_block": {
+      "title": "",
+      "date": "",
+      "rev": "",
+      "company": "",
+      "comments": []
+    },
+    "copper_layers": 2,
+    "nets": [
+      {
+        "number": 0,
+        "name": ""
+      }
+    ],
+    "outline": [
+      {
+        "shape": {
+          "type": "Line",
+          "start": [
+            0.0,
+            0.0
+          ],
+          "end": [
+            0.04,
+            0.0
+          ]
+        },
+        "footprint": null
+      },
+      {
+        "shape": {
+          "type": "Line",
+          "start": [
+            0.04,
+            0.0
+          ],
+          "end": [
+            0.04,
+            0.025
+          ]
+        },
+        "footprint": null
+      },
+      {
+        "shape": {
+          "type": "Line",
+          "start": [
+            0.04,
+            0.025
+          ],
+          "end": [
+            0.0,
+            0.025
+          ]
+        },
+        "footprint": null
+      },
+      {
+        "shape": {
+          "type": "Line",
+          "start": [
+            0.0,
+            0.025
+          ],
+          "end": [
+            0.0,
+            0.0
+          ]
+        },
+        "footprint": null
+      },
+      {
+        "shape": {
+          "type": "Circle",
+          "center": [
+            0.01,
+            0.0125
+          ],
+          "radius": 0.001599999999999999
+        },
+        "footprint": null
+      },
+      {
+        "shape": {
+          "type": "Circle",
+          "center": [
+            0.03,
+            0.0125
+          ],
+          "radius": 0.0016000000000000042
+        },
+        "footprint": null
+      }
+    ],
+    "footprints": [
+      {
+        "uuid": "1b2c3d4e-0000-4000-8000-000000000001",
+        "library_id": "MountingHole:MountingHole_3.2mm",
+        "side": "Front",
+        "at": [
+          0.005,
+          0.005
+        ],
+        "rotation_deg": 0.0,
+        "reference": "H1",
+        "value": "MountingHole",
+        "footprint": "MountingHole:MountingHole_3.2mm",
+        "datasheet": "",
+        "attrs": [
+          "exclude_from_pos_files",
+          "exclude_from_bom"
+        ],
+        "pads": [
+          {
+            "number": "",
+            "kind": "NpThruHole",
+            "shape": "circle",
+            "position": [
+              0.005,
+              0.005
+            ],
+            "rotation_deg": 0.0,
+            "size": [
+              0.0032,
+              0.0032
+            ],
+            "drill": [
+              0.0032,
+              0.0032
+            ],
+            "net": null
+          }
+        ],
+        "models": []
+      },
+      {
+        "uuid": "1b2c3d4e-0000-4000-8000-000000000002",
+        "library_id": "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical",
+        "side": "Front",
+        "at": [
+          0.02,
+          0.0125
+        ],
+        "rotation_deg": 270.0,
+        "reference": "J1",
+        "value": "Conn_01x02",
+        "footprint": "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical",
+        "datasheet": "",
+        "attrs": [
+          "through_hole"
+        ],
+        "pads": [
+          {
+            "number": "1",
+            "kind": "ThruHole",
+            "shape": "rect",
+            "position": [
+              0.02,
+              0.0125
+            ],
+            "rotation_deg": 540.0,
+            "size": [
+              0.0017,
+              0.0017
+            ],
+            "drill": [
+              0.001,
+              0.001
+            ],
+            "net": {
+              "number": 1,
+              "name": "SIG"
+            }
+          },
+          {
+            "number": "2",
+            "kind": "ThruHole",
+            "shape": "oval",
+            "position": [
+              0.01746,
+              0.0125
+            ],
+            "rotation_deg": 540.0,
+            "size": [
+              0.0017,
+              0.0017
+            ],
+            "drill": [
+              0.001,
+              0.0012
+            ],
+            "net": null
+          }
+        ],
+        "models": [
+          {
+            "path": "${KICAD6_3DMODEL_DIR}/Connector_PinHeader_2.54mm.3dshapes/PinHeader_1x02_P2.54mm_Vertical.wrl",
+            "offset_m": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "rotate_deg": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "hidden": false
+          }
+        ]
+      }
+    ],
+    "warnings": []
+  },
+  "loops": {
+    "Ok": {
+      "outer": {
+        "segments": [
+          {
+            "type": "Line",
+            "start": [
+              0.0,
+              0.0
+            ],
+            "end": [
+              0.04,
+              0.0
+            ]
+          },
+          {
+            "type": "Line",
+            "start": [
+              0.04,
+              0.0
+            ],
+            "end": [
+              0.04,
+              0.025
+            ]
+          },
+          {
+            "type": "Line",
+            "start": [
+              0.04,
+              0.025
+            ],
+            "end": [
+              0.0,
+              0.025
+            ]
+          },
+          {
+            "type": "Line",
+            "start": [
+              0.0,
+              0.025
+            ],
+            "end": [
+              0.0,
+              0.0
+            ]
+          }
+        ],
+        "signed_area_m2": 0.001
+      },
+      "holes": [
+        {
+          "segments": [
+            {
+              "type": "Circle",
+              "center": [
+                0.01,
+                0.0125
+              ],
+              "radius": 0.001599999999999999
+            }
+          ],
+          "signed_area_m2": 8.04247719318986e-6
+        },
+        {
+          "segments": [
+            {
+              "type": "Circle",
+              "center": [
+                0.03,
+                0.0125
+              ],
+              "radius": 0.0016000000000000042
+            }
+          ],
+          "signed_area_m2": 8.042477193189913e-6
+        }
+      ]
+    }
+  }
+}

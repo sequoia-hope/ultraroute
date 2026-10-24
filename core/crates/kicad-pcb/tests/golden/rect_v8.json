@@ -1,0 +1,347 @@
+{
+  "pcb": {
+    "version": 20240108,
+    "generator": "pcbnew",
+    "thickness_m": 0.0016,
+    "thickness_general_m": 0.0016,
+    "thickness_stackup_m": 0.0016000000000000003,
+    "title_block": {
+      "title": "Waffle test board",
+      "date": "2026-09-26",
+      "rev": "A",
+      "company": "Waffle Iron",
+      "comments": [
+        "authored fixture, no library content",
+        "second comment"
+      ]
+    },
+    "copper_layers": 2,
+    "nets": [
+      {
+        "number": 0,
+        "name": ""
+      },
+      {
+        "number": 1,
+        "name": "GND"
+      },
+      {
+        "number": 2,
+        "name": "VCC"
+      }
+    ],
+    "outline": [
+      {
+        "shape": {
+          "type": "Line",
+          "start": [
+            0.0,
+            0.0
+          ],
+          "end": [
+            0.05,
+            0.0
+          ]
+        },
+        "footprint": null
+      },
+      {
+        "shape": {
+          "type": "Line",
+          "start": [
+            0.05,
+            0.0
+          ],
+          "end": [
+            0.05,
+            0.03
+          ]
+        },
+        "footprint": null
+      },
+      {
+        "shape": {
+          "type": "Line",
+          "start": [
+            0.05,
+            0.03
+          ],
+          "end": [
+            0.0,
+            0.03
+          ]
+        },
+        "footprint": null
+      },
+      {
+        "shape": {
+          "type": "Line",
+          "start": [
+            0.0,
+            0.03
+          ],
+          "end": [
+            0.0,
+            0.0
+          ]
+        },
+        "footprint": null
+      }
+    ],
+    "footprints": [
+      {
+        "uuid": "0a1b2c3d-0000-4000-8000-000000000001",
+        "library_id": "Resistor_SMD:R_0603_1608Metric",
+        "side": "Front",
+        "at": [
+          0.02,
+          0.015
+        ],
+        "rotation_deg": 90.0,
+        "reference": "R1",
+        "value": "10k",
+        "footprint": "Resistor_SMD:R_0603_1608Metric",
+        "datasheet": "https://example.invalid/r.pdf",
+        "attrs": [
+          "smd"
+        ],
+        "pads": [
+          {
+            "number": "1",
+            "kind": "Smd",
+            "shape": "roundrect",
+            "position": [
+              0.02,
+              0.015825
+            ],
+            "rotation_deg": 180.0,
+            "size": [
+              0.0008,
+              0.00095
+            ],
+            "drill": null,
+            "net": {
+              "number": 1,
+              "name": "GND"
+            }
+          },
+          {
+            "number": "2",
+            "kind": "Smd",
+            "shape": "roundrect",
+            "position": [
+              0.02,
+              0.014175
+            ],
+            "rotation_deg": 180.0,
+            "size": [
+              0.0008,
+              0.00095
+            ],
+            "drill": null,
+            "net": {
+              "number": 2,
+              "name": "VCC"
+            }
+          }
+        ],
+        "models": [
+          {
+            "path": "${KICAD8_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.step",
+            "offset_m": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "rotate_deg": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "hidden": false
+          }
+        ]
+      },
+      {
+        "uuid": "0a1b2c3d-0000-4000-8000-000000000002",
+        "library_id": "Capacitor_SMD:C_0805_2012Metric",
+        "side": "Back",
+        "at": [
+          0.035,
+          0.01
+        ],
+        "rotation_deg": 180.0,
+        "reference": "C1",
+        "value": "100n",
+        "footprint": "Capacitor_SMD:C_0805_2012Metric",
+        "datasheet": "",
+        "attrs": [
+          "smd"
+        ],
+        "pads": [
+          {
+            "number": "1",
+            "kind": "Smd",
+            "shape": "roundrect",
+            "position": [
+              0.03595,
+              0.01
+            ],
+            "rotation_deg": 360.0,
+            "size": [
+              0.001,
+              0.00145
+            ],
+            "drill": null,
+            "net": {
+              "number": 2,
+              "name": "VCC"
+            }
+          },
+          {
+            "number": "2",
+            "kind": "Smd",
+            "shape": "roundrect",
+            "position": [
+              0.034050000000000004,
+              0.01
+            ],
+            "rotation_deg": 360.0,
+            "size": [
+              0.001,
+              0.00145
+            ],
+            "drill": null,
+            "net": {
+              "number": 1,
+              "name": "GND"
+            }
+          }
+        ],
+        "models": [
+          {
+            "path": "${KICAD8_3DMODEL_DIR}/Capacitor_SMD.3dshapes/C_0805_2012Metric.step",
+            "offset_m": [
+              0.001,
+              0.002,
+              0.0005
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "rotate_deg": [
+              0.0,
+              0.0,
+              90.0
+            ],
+            "hidden": false
+          }
+        ]
+      },
+      {
+        "uuid": "0a1b2c3d-0000-4000-8000-000000000003",
+        "library_id": "MountingHole:MountingHole_3.2mm",
+        "side": "Front",
+        "at": [
+          0.005,
+          0.005
+        ],
+        "rotation_deg": 0.0,
+        "reference": "H1",
+        "value": "MountingHole",
+        "footprint": "MountingHole:MountingHole_3.2mm",
+        "datasheet": "",
+        "attrs": [
+          "exclude_from_pos_files",
+          "exclude_from_bom"
+        ],
+        "pads": [
+          {
+            "number": "",
+            "kind": "NpThruHole",
+            "shape": "circle",
+            "position": [
+              0.005,
+              0.005
+            ],
+            "rotation_deg": 0.0,
+            "size": [
+              0.0032,
+              0.0032
+            ],
+            "drill": [
+              0.0032,
+              0.0032
+            ],
+            "net": null
+          }
+        ],
+        "models": []
+      }
+    ],
+    "warnings": [
+      "skipped 3 unknown top-level forms (x_future_form ×2, y_other_form ×1)"
+    ]
+  },
+  "loops": {
+    "Ok": {
+      "outer": {
+        "segments": [
+          {
+            "type": "Line",
+            "start": [
+              0.0,
+              0.0
+            ],
+            "end": [
+              0.05,
+              0.0
+            ]
+          },
+          {
+            "type": "Line",
+            "start": [
+              0.05,
+              0.0
+            ],
+            "end": [
+              0.05,
+              0.03
+            ]
+          },
+          {
+            "type": "Line",
+            "start": [
+              0.05,
+              0.03
+            ],
+            "end": [
+              0.0,
+              0.03
+            ]
+          },
+          {
+            "type": "Line",
+            "start": [
+              0.0,
+              0.03
+            ],
+            "end": [
+              0.0,
+              0.0
+            ]
+          }
+        ],
+        "signed_area_m2": 0.0015
+      },
+      "holes": []
+    }
+  }
+}

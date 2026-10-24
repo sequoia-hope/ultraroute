@@ -1,0 +1,9 @@
+(kicad_pcb
+	(version 20240108)
+	(generator "pcbnew")
+	(general
+		(legacy_teardrops no)
+	)
+	(net 0 "")
+	(gr_rect (start 0 0) (end 50 10) (layer "Edge.Cuts") (uuid "82930415-0000-4000-8000-000000000101"))
+)
