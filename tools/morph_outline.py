@@ -28,6 +28,8 @@ from pathlib import Path
 
 import numpy as np
 
+import softbody
+
 N = 256
 LAYER_COLOURS = {"F.Cu": "#f26d78", "B.Cu": "#68b8ff", "In2.Cu": "#ce9fff"}
 
@@ -407,6 +409,11 @@ def main():
     ap.add_argument("out")
     ap.add_argument("--anchors", default="J1,U7")
     ap.add_argument("--fan-in-mm", type=float, default=9.2)
+    ap.add_argument("--model", choices=["soft", "map"], default="map",
+                    help="soft: parts are a node-and-beam soft body pushed by the outline; "
+                         "map: parts ride the outline map, overlaps relaxed apart")
+    ap.add_argument("--free-turns", action="store_true",
+                    help="soft model: let beams and the mesh turn parts, not only the arch")
     ap.add_argument("--steps", type=int, default=30)
     args = ap.parse_args()
 
@@ -458,13 +465,47 @@ def main():
     original = {r: parts[r]["centre"] for r in refs}
     allowed_pairs = set(overlap_pairs(parts, original))
     allowed_out = outside_parts(parts, original, outline)
+    body = softbody.SoftBoard(parts, softbody.read_pins(dsn, unit, sexp_blocks), softbody.read_nets(dsn))
+    pinned = np.array([r in rigid for r in refs])
+    state = (body.rest.copy(), np.zeros(n))
+    previous = (centres.copy(), np.zeros(n))
+
+    def contacts(x, theta):
+        positions = {r: x[k] for k, r in enumerate(refs)}
+        angles = {r: float(theta[k]) for k, r in enumerate(refs)}
+        return {(body.index[a], body.index[b]): v for (a, b), v in overlap_pairs(parts, positions, angles).items()
+                if (a, b) not in allowed_pairs}
+
+    def walls(x, theta):
+        positions = {r: x[k] for k, r in enumerate(refs)}
+        angles = {r: float(theta[k]) for k, r in enumerate(refs)}
+        out = {}
+        for r in outside_parts(parts, positions, poly, angles) - allowed_out:
+            box = corners(parts, r, positions[r], angles[r])
+            worst, best = None, 0.0
+            for c in box[~inside(box, poly)]:
+                q, nrm = nearest_inside(c, poly)
+                if np.linalg.norm(q - c) >= best:
+                    worst, best = (q - c) + nrm * 0.05, np.linalg.norm(q - c)
+            out[body.index[r]] = worst
+        return out
+
     carried = None
     for i, (step, (poly, mapped, turn)) in enumerate(zip(steps, polys)):
         positions = {r: mapped[k] for k, r in enumerate(refs)}
         angles = {r: float(turn[k]) for k, r in enumerate(refs)}
         copper = np.split(mapped[len(refs):], splits) if fine else []
         wires_mapped = [(layer, w, c) for (layer, w, _), c in zip(fine, copper)]
-        if carried is not None:
+        if args.model == "soft":
+            x = state[0] + (mapped[:n] - previous[0])
+            theta = state[1] + (turn[:n] - previous[1])
+            previous = (mapped[:n].copy(), turn[:n].copy())
+            for k, r in enumerate(refs):
+                if r in anchors:
+                    x[k], theta[k] = mapped[k], turn[k]
+            positions = {r: x[k] for k, r in enumerate(refs)}
+            angles = {r: float(theta[k]) for k, r in enumerate(refs)}
+        elif carried is not None:
             positions = {r: positions[r] + carried[r] for r in refs}
         for a, members in groups.items():
             c, s_ = math.cos(angles[a]), math.sin(angles[a])
@@ -472,9 +513,19 @@ def main():
                 offset = np.asarray(parts[r]["centre"]) - np.asarray(parts[a]["centre"])
                 positions[r] = positions[a] + np.array([c * offset[0] - s_ * offset[1], s_ * offset[0] + c * offset[1]])
                 angles[r] = angles[a]
-        relaxed = relax(parts, positions, poly, rigid, allowed_pairs, allowed_out, angles)
-        carried = {r: relaxed[r] - positions[r] + (carried[r] if carried is not None else 0) for r in refs}
+        if args.model == "soft":
+            x = np.array([positions[r] for r in refs])
+            theta = np.array([angles[r] for r in refs])
+            x, theta = body.solve(x, theta, pinned, poly, contacts, walls,
+                                  turns=None if args.free_turns else theta.copy())
+            state = (x, theta)
+            relaxed = {r: x[k] for k, r in enumerate(refs)}
+            angles = {r: float(theta[k]) for k, r in enumerate(refs)}
+        else:
+            relaxed = relax(parts, positions, poly, rigid, allowed_pairs, allowed_out, angles)
+        carried = {r: relaxed[r] - {r: mapped[k] for k, r in enumerate(refs)}[r] for r in refs}
         positions = relaxed
+        conn, mesh = body.strain(np.array([positions[r] for r in refs]), np.array([angles[r] for r in refs]))
         pairs = {p for p in overlap_pairs(parts, positions, angles) if p not in allowed_pairs}
         overlaps = {r for p in pairs for r in p}
         outside = outside_parts(parts, positions, poly, angles) - allowed_out
@@ -486,7 +537,13 @@ def main():
         lines.append({
             "frame": i, "file": file, "operators": ["outline", step["label"]], "parts": sorted(overlaps | outside),
             "by_mm": [0.0, 0.0], "unconnected": len(overlaps), "open": [],
-            "stats": {"shape": step["label"], "relaxed mm (max)": round(max(np.linalg.norm(v) for v in carried.values()), 2), "area mm²": round(area(poly), 1), "n": round(step["n"], 2),
+            "stats": {"shape": step["label"], "model": args.model,
+                      "off the map mm (max)": round(max(np.linalg.norm(v) for v in carried.values()), 2),
+                      "connections stretched >25%": int((conn > 1.25).sum()),
+                      "connection stretch (max)": round(float(conn.max()), 2),
+                      "mesh squeezed <80%": int((mesh < 0.8).sum()),
+                      "mesh squeeze (min)": round(float(mesh.min()), 2),
+                      "area mm²": round(area(poly), 1), "n": round(step["n"], 2),
                       "bend °": round(math.degrees(step["beta"]), 1),
                       "largest part turn °": round(max(abs(math.degrees(a)) for a in angles.values()), 1),
                       "overlapping parts": len(overlaps), "parts past the edge": len(outside),
@@ -500,6 +557,12 @@ def main():
         "view": [lo[0], lo[1], hi[0], hi[1]],
         "steps": plan_steps}))
     worst = max(lines, key=lambda l: l["stats"]["overlapping parts"])
+    for l in lines:
+        if "→" not in l["stats"]["shape"]:
+            st = l["stats"]
+            print(f'{st["shape"]:>28}: mesh squeezed <80% {st["mesh squeezed <80%"]:3d} (min {st["mesh squeeze (min)"]}), '
+                  f'connections stretched >25% {st["connections stretched >25%"]:3d} (max {st["connection stretch (max)"]}), '
+                  f'overlaps {st["overlapping parts"]}, past edge {st["parts past the edge"]}')
     print(f"{len(lines)} steps; worst overlap {worst['stats']['overlapping parts']} parts at step {worst['frame']} "
           f"({worst['stats']['shape']}); parts past the edge peak {max(l['stats']['parts past the edge'] for l in lines)}")
 

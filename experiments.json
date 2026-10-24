@@ -1,5 +1,5 @@
 {
- "generated": "2026-10-23T18:46",
+ "generated": "2026-10-23T22:00",
  "groups": [
   {
    "title": "Route jobs",
@@ -85,6 +85,18 @@
   {
    "title": "Morph operators on bluebuzz",
    "items": [
+    {
+     "title": "band-settle",
+     "about": "copperroute band bluebuzz best: every trace a rubber band (tension 0.2, 0.25 mm segments) for 150 rounds with vias held, then 90 rounds with vias free; shape unchanged",
+     "result": "25 moves of 0 parts (start 1, traces 15, vias 9); 1 connection(s) opened",
+     "detail": "open 10 \u2192 11",
+     "links": [
+      {
+       "label": "watch",
+       "href": "morph-frames/?run=band-settle"
+      }
+     ]
+    },
     {
      "title": "bend-r4",
      "about": "--targets bend-r4.targets.json --bend-fixed",
@@ -250,6 +262,18 @@
       {
        "label": "watch",
        "href": "morph-frames/?run=outline-plan"
+      }
+     ]
+    },
+    {
+     "title": "reshape-repair",
+     "about": "copperroute reshape bluebuzz along outline-plan: outline as a one-sided contact, USB fan-in carried rigidly, 100 relaxation rounds per step (trace joints move, starting gaps are floors), grid then maze rip-up and reroute (600 s) at each keyframe",
+     "result": "131 moves of 0 parts (bending \u2192 rainbow 39, circle 1, circle \u2192 rounded diamond 29, rainbow 1, rectangle 1, rectangle \u2192 circle 29, rounded diamond 1, rounded diamond \u2192 stretched rounded rectangle 29, stretched rounded rectangle 1); 116 connection(s) opened",
+     "detail": "open 10 \u2192 119",
+     "links": [
+      {
+       "label": "watch",
+       "href": "morph-frames/?run=reshape-repair"
       }
      ]
     },
