@@ -48,6 +48,23 @@ ride the flow (velocity −∇d/d), so crowded regions spread while relative ord
 - [ ] Present several complete laid-out options (placement, outline and copper) that differ
       in size, shape or layer count, each scored by the suite, for a person to choose from.
 
+## Phase 2c — An MIT routing core (proposed)
+
+copperroute is ~106k lines, almost all a port of freerouting (GPL); ours inside it (copper-gpu,
+copper-morph, copper-topo, copper-governor) is ~7k. A core written fresh, never ported from
+copperroute or freerouting, would let the studio link the router (and route in a browser tab
+with WebGPU) under MIT. Estimate ~15k lines:
+
+- [ ] Board I/O from `.kicad_pcb` directly: start from waffle-iron's `kicad-pcb` crate (MIT,
+      ours: S-expression parser, footprints, pads, nets, Edge.Cuts loops); add tracks, arcs,
+      vias, zones, rule areas, pad layer sets and shapes, `.kicad_pro` rules, and a writer.
+- [ ] Geometry in integer nanometres with MIT/Apache crates (`rstar`, `i_overlay`).
+- [ ] Board model, connectivity, a clearance checker (KiCad's `kicad-cli` stays the referee).
+- [ ] Our routers moved onto it: grid with negotiation, topo with rip-up, nudge and diffusion.
+- [ ] Our own finisher and cleanup in place of freerouting's maze router and optimizer.
+- [ ] copperroute kept as the reference router across the process boundary until the core
+      matches it on the leaderboards.
+
 ## Phase 3 — The test suite as a library
 
 The route-job bench becomes a package other projects import: boards, configs, governed runs,
