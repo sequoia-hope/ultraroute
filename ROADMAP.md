@@ -61,8 +61,15 @@ with WebGPU) under MIT. Estimate ~15k lines:
       routed copper and keeps every other byte. On bluebuzz all 2290 tracks and 331 vias
       rewritten give KiCad's DRC the same result (0 violations, 0 unconnected).
 - [ ] Locked flags kept when copper is written back; `.kicad_dru` custom rules applied.
-- [ ] Geometry in integer nanometres with MIT/Apache crates (`rstar`, `i_overlay`).
-- [ ] Board model, connectivity, a clearance checker (KiCad's `kicad-cli` stays the referee).
+- [x] Geometry in integer nanometres and a board model (`core/crates/board`): capsules and
+      polygons per copper layer, a grid index, holes, keepouts and the outline; written without
+      outside crates.
+- [x] Connectivity as KiCad joins copper (at anchors: track ends, via and round-pad discs, pad
+      centres; pours wherever they touch) and a clearance check (copper, edge, plated-hole, hole
+      to hole, keepouts; KiCad's 0.5 µm epsilon). Against KiCad 9's DRC on bluebuzz and the
+      earring, clean, stripped, half-stripped and shifted: identical open-connection and
+      clearance counts, except 455 vs 458 open on half-stripped bluebuzz. 66 ms connectivity,
+      0.5 s full check on bluebuzz.
 - [ ] Our routers moved onto it: grid with negotiation, topo with rip-up, nudge and diffusion.
 - [ ] Our own finisher and cleanup in place of freerouting's maze router and optimizer.
 - [ ] copperroute kept as the reference router across the process boundary until the core

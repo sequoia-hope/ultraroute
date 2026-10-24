@@ -1,0 +1,11 @@
+[package]
+name = "board"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+# The routing board model in integer nanometres: copper shapes per layer, a spatial index,
+# connectivity and a clearance check. Built from kicad-pcb's record.
+
+[dependencies]
+kicad-pcb = { path = "../kicad-pcb" }

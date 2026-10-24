@@ -349,6 +349,39 @@ fn signed_area(segs: &[Segment]) -> f64 {
     0.5 * shoelace + bulge
 }
 
+impl Loop {
+    /// The loop as a polygon whose chords stray at most `max_error_m` from its arcs.
+    pub fn points(&self, max_error_m: f64) -> Vec<[f64; 2]> {
+        let steps = |radius: f64, sweep: f64| {
+            let per = 2.0 * (1.0 - (max_error_m / radius).min(1.0)).acos();
+            ((sweep.abs() / per.max(1e-6)).ceil() as usize).max(2)
+        };
+        let mut pts = Vec::new();
+        for s in &self.segments {
+            match s {
+                Segment::Line { start, .. } => pts.push(*start),
+                Segment::Arc { start, end, center, radius, ccw } => {
+                    let a0 = angle(*center, *start);
+                    let th = sweep(*center, *start, *end, *ccw);
+                    let n = steps(*radius, th);
+                    for k in 0..n {
+                        let t = a0 + if *ccw { 1.0 } else { -1.0 } * th * (k as f64 / n as f64);
+                        pts.push([center[0] + radius * t.cos(), center[1] + radius * t.sin()]);
+                    }
+                }
+                Segment::Circle { center, radius } => {
+                    let n = steps(*radius, std::f64::consts::TAU);
+                    for k in 0..n {
+                        let t = std::f64::consts::TAU * (k as f64 / n as f64);
+                        pts.push([center[0] + radius * t.cos(), center[1] + radius * t.sin()]);
+                    }
+                }
+            }
+        }
+        pts
+    }
+}
+
 /// Polyline sample of a loop for containment tests (32 steps per arc).
 fn sample(l: &Loop) -> Vec<[f64; 2]> {
     let mut pts = Vec::new();

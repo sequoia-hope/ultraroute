@@ -1,0 +1,161 @@
+//! Which copper is joined: same-net items that touch on a shared layer are one cluster. A net
+//! with several clusters is open; its airlines join the clusters most cheaply.
+
+use std::collections::HashMap;
+
+use crate::model::{Board, ItemId, Kind};
+use crate::geom::{Point, Shape};
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Airline {
+    pub net: u32,
+    pub from: Point,
+    pub to: Point,
+    pub from_item: ItemId,
+    pub to_item: ItemId,
+}
+
+#[derive(Debug, Clone)]
+pub struct Connectivity {
+    /// The cluster of every copper item.
+    pub cluster: HashMap<ItemId, usize>,
+    pub airlines: Vec<Airline>,
+}
+
+type Anchor = (Point, ItemId);
+
+struct Sets(Vec<usize>);
+
+impl Sets {
+    fn find(&mut self, mut i: usize) -> usize {
+        while self.0[i] != i {
+            self.0[i] = self.0[self.0[i]];
+            i = self.0[i];
+        }
+        i
+    }
+
+    fn join(&mut self, a: usize, b: usize) -> bool {
+        let (a, b) = (self.find(a), self.find(b));
+        if a == b {
+            return false;
+        }
+        self.0[a] = b;
+        true
+    }
+}
+
+/// Points of an item a connection may start from: a pad or via centre, a track's ends.
+fn anchors(board: &Board, id: ItemId) -> Vec<Point> {
+    let Some(item) = board.item(id) else { return Vec::new() };
+    match (&item.kind, &item.shape) {
+        (_, crate::geom::Shape::Capsule { a, b, .. }) if a == b => vec![*a],
+        (Kind::Track, crate::geom::Shape::Capsule { a, b, .. }) => vec![*a, *b],
+        (Kind::Pad { .. }, crate::geom::Shape::Polygon(p)) => {
+            let n = p.len().max(1) as i64;
+            vec![Point::new(p.iter().map(|q| q.x).sum::<i64>() / n, p.iter().map(|q| q.y).sum::<i64>() / n)]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// As KiCad joins them: at anchors. A track anchors at its round ends, a via or a round pad at
+/// its whole disc, any other pad at its centre; two items join where an anchor of one meets the
+/// other's copper, so copper that merely overlaps a pad's corner or crosses a track does not
+/// connect. Pours join wherever they touch.
+fn joined(board: &Board, a: ItemId, b: ItemId) -> bool {
+    let (Some(x), Some(y)) = (board.item(a), board.item(b)) else { return false };
+    let pour = |it: &crate::model::Item| matches!(it.kind, Kind::Pour { .. });
+    if pour(x) || pour(y) {
+        return x.shape.gap_within(&y.shape, 0.0) == 0.0;
+    }
+    let reaches = |from: &crate::model::Item, from_id: ItemId, into: &crate::model::Item| {
+        let reach = match &from.shape {
+            Shape::Capsule { r, .. } => *r as f64,
+            Shape::Polygon(_) => 0.0,
+        };
+        anchors(board, from_id).iter().any(|p| {
+            let dot = Shape::Capsule { a: *p, b: *p, r: 0 };
+            into.shape.gap_within(&dot, reach) <= reach
+        })
+    };
+    reaches(x, a, y) || reaches(y, b, x)
+}
+
+pub fn connectivity(board: &Board) -> Connectivity {
+    let ids: Vec<ItemId> = board.items().filter(|(_, it)| it.is_copper() && it.net != 0).map(|(id, _)| id).collect();
+    let max = ids.iter().copied().max().map_or(0, |m| m + 1);
+    let mut sets = Sets((0..max).collect());
+    for &id in &ids {
+        let item = board.item(id).expect("listed above");
+        for layer in (0..board.layers.len()).filter(|l| item.on(*l)) {
+            for other in board.near(layer, item.shape.bbox()) {
+                if other <= id {
+                    continue;
+                }
+                let Some(o) = board.item(other) else { continue };
+                if o.net == item.net && o.is_copper() && o.on(layer) && joined(board, id, other) {
+                    sets.join(id, other);
+                }
+            }
+        }
+    }
+    let cluster: HashMap<ItemId, usize> = ids.iter().map(|&id| (id, sets.find(id))).collect();
+
+    // Per net, the clusters that must be joined and each cluster's anchor points. As in KiCad, a
+    // loose piece of track or a via still needs connecting; a pour island alone does not.
+    let mut by_net: HashMap<u32, HashMap<usize, Vec<(Point, ItemId)>>> = HashMap::new();
+    for &id in &ids {
+        let item = board.item(id).expect("listed above");
+        if matches!(item.kind, Kind::Pour { .. }) {
+            continue;
+        }
+        by_net.entry(item.net).or_default().entry(cluster[&id]).or_default();
+    }
+    for &id in &ids {
+        let item = board.item(id).expect("listed above");
+        if let Some(points) = by_net.get_mut(&item.net).and_then(|c| c.get_mut(&cluster[&id])) {
+            points.extend(anchors(board, id).into_iter().map(|p| (p, id)));
+        }
+    }
+
+    let mut airlines = Vec::new();
+    let mut nets: Vec<u32> = by_net.keys().copied().collect();
+    nets.sort_unstable();
+    for net in nets {
+        let clusters: Vec<&Vec<(Point, ItemId)>> = by_net[&net].values().filter(|p| !p.is_empty()).collect();
+        if clusters.len() < 2 {
+            continue;
+        }
+        // Prim's tree over the clusters, each edge the closest pair of anchors between two.
+        let closest = |a: &Vec<(Point, ItemId)>, b: &Vec<(Point, ItemId)>| {
+            let mut best = (f64::INFINITY, a[0], b[0]);
+            for pa in a {
+                for pb in b {
+                    let d = pa.0.distance(pb.0);
+                    if d < best.0 {
+                        best = (d, *pa, *pb);
+                    }
+                }
+            }
+            best
+        };
+        let mut joined = vec![false; clusters.len()];
+        joined[0] = true;
+        for _ in 1..clusters.len() {
+            let mut best: Option<(f64, Anchor, Anchor, usize)> = None;
+            for a in clusters.iter().enumerate().filter(|(i, _)| joined[*i]).map(|(_, a)| a) {
+                for (j, b) in clusters.iter().enumerate().filter(|(j, _)| !joined[*j]) {
+                    let (d, pa, pb) = closest(a, b);
+                    if best.as_ref().is_none_or(|bst| d < bst.0) {
+                        best = Some((d, pa, pb, j));
+                    }
+                }
+            }
+            let Some((_, pa, pb, j)) = best else { break };
+            joined[j] = true;
+            airlines.push(Airline { net, from: pa.0, to: pb.0, from_item: pa.1, to_item: pb.1 });
+        }
+    }
+    Connectivity { cluster, airlines }
+}
