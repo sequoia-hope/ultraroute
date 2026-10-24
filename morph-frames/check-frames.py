@@ -22,38 +22,6 @@ def geometry(svg):
     return hashlib.md5(text.encode()).hexdigest()
 
 
-ELEMENT = re.compile(r"<(polygon|polyline|circle)\b[^>]*/>")
-
-
-def elements(svg):
-    text = svg.read_text().replace("#ffffff", "#edcf86")
-    text = re.sub(r'<g class="(ratsnest|dipole)".*?</g>', "", text)
-    return {m.group(0) for m in ELEMENT.finditer(text)}
-
-
-def bounds(element):
-    if element.startswith("<circle"):
-        a = dict(re.findall(r'(\w+)="([^"]*)"', element))
-        x, y, r = float(a["cx"]), float(a["cy"]), float(a["r"])
-        return [x - r, y - r, x + r, y + r]
-    pts = re.search(r'points="([^"]*)"', element).group(1).split()
-    xy = [tuple(map(float, p.split(","))) for p in pts]
-    xs, ys = [p[0] for p in xy], [p[1] for p in xy]
-    return [min(xs), min(ys), max(xs), max(ys)]
-
-
-def focus(before, after):
-    """Where the viewer zooms in, in SVG coordinates: the smallest pad that changed, which moved
-    by the whole step, else the smallest changed copper with some extent in both directions."""
-    changed = after - before
-    if not changed:
-        return None
-    pads = [e for e in changed if 'fill="#edcf86"' in e and not e.startswith("<polyline")]
-    boxes = [bounds(e) for e in (pads or changed)]
-    solid = [b for b in boxes if b[2] > b[0] and b[3] > b[1]] or boxes
-    return min(solid, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))
-
-
 def main():
     runs = json.loads((HERE / "runs.json").read_text())
     for name in sorted(runs):
@@ -75,10 +43,6 @@ def main():
                 (HERE / f"{name}{suffix}").unlink(missing_ok=True)
             runs.pop(name)
             continue
-        sets = [elements(HERE / name / f["file"]) for f in frames]
-        for f, before, after in zip(frames[1:], sets, sets[1:]):
-            f["focus"] = focus(before, after)
-        frames_file.write_text("".join(json.dumps(f) + "\n" for f in frames))
         first, last = collections.Counter(frames[0]["open"]), collections.Counter(frames[-1]["open"])
         runs[name]["summary"] = {
             "moves": len(moves),

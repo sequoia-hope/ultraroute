@@ -1,5 +1,5 @@
 {
- "generated": "2026-10-23T16:24",
+ "generated": "2026-10-23T18:46",
  "groups": [
   {
    "title": "Route jobs",
@@ -255,9 +255,9 @@
     },
     {
      "title": "reshape-warp",
-     "about": "copperroute reshape bluebuzz along outline-plan: continuous field warp, parts turn with the arch, diff pairs move together, no rip-up",
-     "result": "131 moves of 0 parts (bending \u2192 rainbow 39, circle 1, circle \u2192 rounded diamond 29, rainbow 1, rectangle 1, rectangle \u2192 circle 29, rounded diamond 1, rounded diamond \u2192 stretched rounded rectangle 29, stretched rounded rectangle 1); 14 connection(s) opened",
-     "detail": "open 10 \u2192 17",
+     "about": "copperroute reshape bluebuzz along outline-plan: continuous field warp only (outline as a one-sided contact, USB fan-in carried rigidly), no relaxation or rip-up",
+     "result": "131 moves of 0 parts (bending \u2192 rainbow 39, circle 1, circle \u2192 rounded diamond 29, rainbow 1, rectangle 1, rectangle \u2192 circle 29, rounded diamond 1, rounded diamond \u2192 stretched rounded rectangle 29, stretched rounded rectangle 1); 15 connection(s) opened",
+     "detail": "open 10 \u2192 18",
      "links": [
       {
        "label": "watch",

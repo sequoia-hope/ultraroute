@@ -11,10 +11,14 @@ Interior points (part centres, copper corners) follow mean-value coordinates fro
 rectangle to each superellipse, then the exact bend map. Parts translate rigidly with their centre;
 the anchors are parts like any other, and ride the ends because the ends are where they sit.
 
+Each anchor carries its fan-in rigidly: the parts within --fan-in-mm that share a net other than
+ground with it, and the parts among those, keep their place and turn relative to the anchor, so the copper between them (USB's
+pair into its ESD part, say) is never squeezed.
+
 Parts turn with the map's local rotation. Writes frames for the morph-frames viewer and plan.json
 (per step: outline, and per part [dx, dy, turn in degrees] from where it starts).
 
-    morph_outline.py JOB_DIR OUT_DIR [--anchors J1,U7] [--steps 30]
+    morph_outline.py JOB_DIR OUT_DIR [--anchors J1,U7] [--fan-in-mm 9.2] [--steps 30]
 """
 import argparse
 import json
@@ -339,6 +343,25 @@ def outside_parts(parts, positions, poly, angles=None):
     return {r for k, r in enumerate(refs) if not ins[k].all()}
 
 
+def fan_in(dsn_text, parts, anchors, radius):
+    """Each anchor's fan-in: the parts within `radius` of it sharing a net other than ground, and
+    every part sitting among them (centre inside their bounding box, 1 mm grown)."""
+    nets = [{p.rsplit("-", 1)[0] for p in pins.split()}
+            for name, pins in re.findall(r'\(net\s+("[^"]*"|\S+)\s*\(pins\s+([^)]*)\)', dsn_text)
+            if name.strip('"').upper() not in ("GND", "AGND", "DGND")]
+    groups = {}
+    for a in anchors:
+        centre = np.asarray(parts[a]["centre"])
+        groups[a] = sorted(r for r in parts if r not in anchors
+                           and np.linalg.norm(np.asarray(parts[r]["centre"]) - centre) <= radius
+                           and any(a in ps and r in ps for ps in nets))
+        box = np.array([parts[r]["centre"] for r in [a] + groups[a]])
+        lo, hi = box.min(axis=0) - 1.0, box.max(axis=0) + 1.0
+        groups[a] += sorted(r for r in parts if r not in anchors and r not in groups[a]
+                            and (lo <= parts[r]["centre"]).all() and (parts[r]["centre"] <= hi).all())
+    return groups
+
+
 def relax(parts, positions, poly, fixed, allowed_pairs, allowed_out, angles=None, rounds=800):
     """Pushes overlapping parts apart and stray parts back inside the outline, moving nothing in
     `fixed`; pairs and parts already in conflict on the original board are left as they are."""
@@ -383,6 +406,7 @@ def main():
     ap.add_argument("job")
     ap.add_argument("out")
     ap.add_argument("--anchors", default="J1,U7")
+    ap.add_argument("--fan-in-mm", type=float, default=9.2)
     ap.add_argument("--steps", type=int, default=30)
     args = ap.parse_args()
 
@@ -398,6 +422,9 @@ def main():
         text = ses.read_text(errors="replace")
         wires += read_wires(text, unit_of(text), "routes")
     anchors = [a for a in args.anchors.split(",") if a in parts]
+    groups = fan_in(dsn, parts, anchors, args.fan_in_mm)
+    rigid = list(anchors) + [r for members in groups.values() for r in members]
+    print("fan-in carried with the anchors:", groups)
 
     centre, (_, a0, b0, n0), steps = plan(outline, args.steps, args.steps + 10)
     start = superellipse(a0, b0, n0, centre)
@@ -439,7 +466,13 @@ def main():
         wires_mapped = [(layer, w, c) for (layer, w, _), c in zip(fine, copper)]
         if carried is not None:
             positions = {r: positions[r] + carried[r] for r in refs}
-        relaxed = relax(parts, positions, poly, anchors, allowed_pairs, allowed_out, angles)
+        for a, members in groups.items():
+            c, s_ = math.cos(angles[a]), math.sin(angles[a])
+            for r in members:
+                offset = np.asarray(parts[r]["centre"]) - np.asarray(parts[a]["centre"])
+                positions[r] = positions[a] + np.array([c * offset[0] - s_ * offset[1], s_ * offset[0] + c * offset[1]])
+                angles[r] = angles[a]
+        relaxed = relax(parts, positions, poly, rigid, allowed_pairs, allowed_out, angles)
         carried = {r: relaxed[r] - positions[r] + (carried[r] if carried is not None else 0) for r in refs}
         positions = relaxed
         pairs = {p for p in overlap_pairs(parts, positions, angles) if p not in allowed_pairs}

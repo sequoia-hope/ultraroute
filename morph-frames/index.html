@@ -3,394 +3,97 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Morph frames</title>
+<title>Morph Playback</title>
 <style>
-:root {
-  --bg: #f6f7f9; --card: #ffffff; --line: #e2e5ea; --fg: #14171c;
-  --muted: #5f6875; --accent: #2f6feb; --up: #1a9c5b; --warn: #b7791f; --bad: #d1453b;
-  --chip: #eef1f5;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #0e1116; --card: #171b22; --line: #262c36; --fg: #e6e9ee;
-    --muted: #8b94a3; --accent: #5b9bff; --up: #35c07d; --warn: #d9a441; --bad: #ff6b60;
-    --chip: #222833;
-  }
-}
-:root[data-theme="dark"] {
-  --bg: #0e1116; --card: #171b22; --line: #262c36; --fg: #e6e9ee;
-  --muted: #8b94a3; --accent: #5b9bff; --up: #35c07d; --warn: #d9a441; --bad: #ff6b60;
-  --chip: #222833;
-}
+:root { --bg: #0d1820; --panel: #15232d; --text: #dce6ec; --muted: #8aa0ad; --accent: #edcf86; }
 * { box-sizing: border-box; }
-html, body { height: 100%; }
-body {
-  margin: 0; background: var(--bg); color: var(--fg);
-  font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  display: grid; grid-template-rows: auto 1fr; overflow: hidden;
-}
-header {
-  display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center;
-  padding: .6rem 1rem; border-bottom: 1px solid var(--line); background: var(--card);
-}
-header h1 { font-size: 1rem; margin: 0; }
-header a { color: var(--accent); text-decoration: none; }
-select, button, input[type=number] {
-  font: inherit; color: var(--fg); background: var(--chip);
-  border: 1px solid var(--line); border-radius: 6px; padding: .2rem .5rem;
-}
-button { cursor: pointer; min-width: 2.2rem; }
-button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
-.group { display: flex; gap: .3rem; align-items: center; flex-wrap: wrap; }
-.muted { color: var(--muted); }
-main { display: grid; grid-template-columns: 1fr 330px; min-height: 0; }
-#stage {
-  position: relative; overflow: hidden; background: #101c25; cursor: grab; touch-action: none;
-}
-#stage.dragging { cursor: grabbing; }
-#stage > div { position: absolute; inset: 0; }
-#stage svg { width: 100%; height: 100%; display: block; }
-#prev { opacity: 0; }
-body.onion #prev { opacity: .45; }
-body.onion #cur { opacity: .75; }
-body.diff #prev { opacity: 1; }
-body.diff #cur { mix-blend-mode: difference; }
-/* Outlines, not fills: a pad sliding over copper of its own colour leaves fills unchanged. */
-body.diff #stage svg :is(polygon, polyline, circle) {
-  fill: none !important; stroke: #fff !important; stroke-width: 1.5px !important;
-  stroke-dasharray: none !important; vector-effect: non-scaling-stroke; opacity: 1 !important;
-}
-body.diff #stage svg .ratsnest, body.diff #stage svg .dipole { display: none; }
-#stage .dipole * { vector-effect: non-scaling-stroke; stroke-width: 2.5px; stroke-dasharray: 6 4; }
-#stage .dipole circle { fill: rgba(255, 216, 77, .08); }
-#stage .dipole line, #stage .dipole path { stroke-dasharray: none; }
-#stage .ratsnest path { vector-effect: non-scaling-stroke; stroke-width: 1.5px; stroke-dasharray: 5 4; opacity: .9; stroke: #fff; }
-#stage > #hud {
-  position: absolute; inset: auto .6rem .6rem .6rem; pointer-events: none;
-  color: #e8f0f2; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
-  text-shadow: 0 0 3px #000;
-}
-aside {
-  border-left: 1px solid var(--line); background: var(--card);
-  display: grid; grid-template-rows: auto auto 1fr; min-height: 0;
-}
-aside section { padding: .7rem 1rem; border-bottom: 1px solid var(--line); }
-aside h2 {
-  font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--muted);
-  margin: 0 0 .4rem;
-}
-dl { display: grid; grid-template-columns: auto 1fr; gap: .15rem .8rem; margin: 0; }
-dt { color: var(--muted); }
-dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.chips { display: flex; flex-wrap: wrap; gap: .3rem; }
-.chip {
-  border-radius: 999px; padding: .05rem .55rem; font-size: .78rem;
-  background: var(--chip); border: 1px solid var(--line); cursor: pointer;
-}
-.chip.off { opacity: .4; }
-#list { overflow: auto; min-height: 0; font-variant-numeric: tabular-nums; }
-#list table { width: 100%; border-collapse: collapse; font-size: .8rem; }
-#list td { padding: .15rem .5rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
-#list tr { cursor: pointer; }
-#list tr.cur { background: var(--chip); outline: 1px solid var(--accent); }
-.worse { color: var(--bad); font-weight: 600; }
-.better { color: var(--up); font-weight: 600; }
-input[type=range] { width: 100%; }
-#scrub { padding: .4rem 1rem; grid-column: 1 / -1; }
-@media (max-width: 760px) {
-  body { overflow: auto; }
-  main { grid-template-columns: 1fr; }
-  #stage { height: 60vh; }
-  aside { border-left: 0; }
-}
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, sans-serif;
+       display: flex; flex-direction: column; height: 100vh; }
+header { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 10px 16px; background: var(--panel); }
+select, button { background: var(--bg); color: var(--text); border: 1px solid #2c3f4c; border-radius: 6px;
+                 padding: 6px 10px; font: inherit; cursor: pointer; }
+button#play { min-width: 76px; color: var(--accent); }
+input[type=range] { flex: 1; min-width: 160px; accent-color: var(--accent); }
+#count { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 90px; text-align: right; }
+#about { padding: 6px 16px; color: var(--muted); background: var(--panel); border-top: 1px solid #22323d; }
+#label { color: var(--accent); }
+main { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 8px; }
+main img { max-width: 100%; max-height: 100%; object-fit: contain; }
 </style>
 </head>
 <body>
 <header>
-  <h1><a href="../">ultraroute</a> / morph frames</h1>
-  <div class="group">
-    <select id="run" aria-label="Run"></select>
-    <button id="first" title="First frame (Home)">⏮</button>
-    <button id="back" title="Previous frame (←)">◀</button>
-    <button id="play" title="Play / pause (space)">▶</button>
-    <button id="next" title="Next frame (→)">▶|</button>
-    <label class="muted">fps <input id="fps" type="number" min="0.5" max="30" step="0.5" value="3" style="width:4rem"></label>
-  </div>
-  <div class="group" role="group" aria-label="Compare with previous frame">
-    <button data-mode="plain" class="on">plain</button>
-    <button data-mode="onion" title="Previous frame faintly underneath">onion</button>
-    <button data-mode="diff" title="Only what changed lights up">diff</button>
-  </div>
-  <div class="group">
-    <button id="follow" class="on" title="Zoom to the parts that moved (f)">follow</button>
-    <label class="muted" title="Largest zoom window; small moves zoom in further">max window mm <input id="win" type="number" min="0.5" max="80" step="0.5" value="4" style="width:4rem"></label>
-    <button id="whole" title="Whole board (0)">whole</button>
-  </div>
+  <select id="run" aria-label="Run"></select>
+  <button id="play">Play</button>
+  <input id="scrub" type="range" min="0" max="0" value="0" aria-label="Frame">
+  <span id="count"></span>
+  <select id="speed" aria-label="Speed">
+    <option value="2">2 fps</option>
+    <option value="5">5 fps</option>
+    <option value="10" selected>10 fps</option>
+    <option value="20">20 fps</option>
+  </select>
 </header>
-<main>
-  <div style="display:grid;grid-template-rows:1fr auto;min-height:0">
-    <div id="stage">
-      <div id="prev"></div>
-      <div id="cur"></div>
-      <div id="hud"></div>
-    </div>
-    <div id="scrub"><input id="slider" type="range" min="0" max="0" value="0" aria-label="Frame"></div>
-  </div>
-  <aside>
-    <section>
-      <h2>Frame</h2>
-      <dl id="info"></dl>
-    </section>
-    <section>
-      <h2>Run</h2>
-      <dl id="summary"></dl>
-      <div class="chips" id="ops" style="margin-top:.5rem"></div>
-    </section>
-    <div id="list"><table><tbody id="rows"></tbody></table></div>
-  </aside>
-</main>
+<div id="about"><span id="label"></span> <span id="desc"></span></div>
+<main><img id="frame" alt="Board frame"></main>
 <script>
-const $ = (id) => document.getElementById(id);
-const UNIT = 10000; // board units per mm in these sessions (0.1 µm)
-let runs = {}, frames = [], shown = [], cache = new Map(), at = 0, timer = null;
-let view = null, whole = null, hidden = new Set();
+const $ = id => document.getElementById(id);
+let runs = {}, frames = [], images = [], at = 0, timer = null;
 
-async function text(url) {
-  const r = await fetch(url, { cache: "no-store" });
-  if (!r.ok) throw new Error(url + ": " + r.status);
-  return r.text();
-}
-async function svgFor(i) {
-  const f = frames[i];
-  const key = $("run").value + "/" + f.file;
-  if (!cache.has(key)) {
-    cache.set(key, text(key));
-    if (cache.size > 60) cache.delete(cache.keys().next().value);
-  }
-  return cache.get(key);
-}
-
-async function loadRuns() {
-  try { runs = JSON.parse(await text("runs.json")); } catch { runs = {}; }
-  const names = Object.keys(runs).sort();
-  $("run").innerHTML = names.map(n => `<option>${n}</option>`).join("");
-  const want = new URLSearchParams(location.search).get("run");
-  if (want && names.includes(want)) $("run").value = want;
-  if (names.length) await loadRun();
-  else $("hud").textContent = "No runs yet: morph-frames/run-demos.sh writes them.";
-}
-
-async function loadRun() {
+async function load(name) {
   stop();
-  const name = $("run").value;
-  const keep = new URLSearchParams(location.search);
-  if (keep.get("run") !== name) history.replaceState(null, "", "?run=" + encodeURIComponent(name));
-  frames = (await text(name + "/frames.jsonl")).trim().split("\n").filter(Boolean).map(l => JSON.parse(l));
-  hidden.clear();
-  view = null; whole = null;
-  summarise(name);
-  filter();
-  const params = new URLSearchParams(location.search);
-  const mode = params.get("mode");
-  if (mode) document.querySelector(`[data-mode="${mode}"]`)?.click();
-  await show(+(params.get("frame") ?? 0) || 0);
+  const text = await (await fetch(`${name}/frames.jsonl`, { cache: "no-store" })).text();
+  frames = text.split("\n").filter(Boolean).map(l => JSON.parse(l));
+  images = frames.map(f => { const im = new Image(); im.src = `${name}/${f.file}`; return im; });
+  $("desc").textContent = runs[name]?.args || "";
+  $("scrub").max = frames.length - 1;
+  history.replaceState(null, "", `?run=${encodeURIComponent(name)}`);
+  show(0);
 }
 
-function opName(f) { return f.operators.join("/"); }
-
-function summarise(name) {
-  const counts = {};
-  frames.forEach(f => counts[opName(f)] = (counts[opName(f)] || 0) + 1);
-  const u0 = frames[0]?.unconnected, u1 = frames.at(-1)?.unconnected;
-  const parts = new Set(frames.slice(1, -1).flatMap(f => f.parts));
-  $("summary").innerHTML = `
-    <dt>args</dt><dd>${runs[name]?.args ?? ""}</dd>
-    <dt>frames</dt><dd>${frames.length}</dd>
-    <dt>airlines</dt><dd>${u0} → <span class="${u1 > u0 ? "worse" : u1 < u0 ? "better" : ""}">${u1}</span></dd>
-    <dt>parts moved</dt><dd>${parts.size}</dd>`;
-  $("ops").innerHTML = Object.entries(counts).map(([op, n]) =>
-    `<span class="chip" data-op="${op}" title="Show or hide these frames">${op} ${n}</span>`).join("");
-  for (const c of $("ops").children) c.onclick = () => {
-    hidden.has(c.dataset.op) ? hidden.delete(c.dataset.op) : hidden.add(c.dataset.op);
-    c.classList.toggle("off");
-    filter();
-    show(Math.max(0, shown.indexOf(at)) === -1 ? 0 : at);
-  };
+function show(i) {
+  at = Math.max(0, Math.min(frames.length - 1, i));
+  const f = frames[at];
+  $("frame").src = images[at].src;
+  $("scrub").value = at;
+  $("count").textContent = `${at + 1} / ${frames.length}`;
+  $("label").textContent = f.stats?.shape || f.operators?.filter(o => o !== "reshape" && o !== "outline").join(" ") || "";
 }
 
-function filter() {
-  shown = frames.map((_, i) => i).filter(i => !hidden.has(opName(frames[i])));
-  $("slider").max = Math.max(0, shown.length - 1);
-  $("rows").innerHTML = shown.map(i => {
-    const f = frames[i], prev = frames[i - 1];
-    const d = prev ? f.unconnected - prev.unconnected : 0;
-    const mm = Math.hypot(...f.by_mm);
-    return `<tr data-i="${i}"><td>${i}</td><td>${opName(f)}</td><td>${f.parts.slice(0, 3).join(" ")}${f.parts.length > 3 ? " …" : ""}</td>
-      <td>${mm ? mm.toFixed(4) : ""}</td><td class="${d > 0 ? "worse" : d < 0 ? "better" : ""}">${f.unconnected}${d ? (d > 0 ? " +" : " ") + d : ""}</td></tr>`;
-  }).join("");
-  for (const tr of $("rows").children) tr.onclick = () => { stop(); show(+tr.dataset.i); };
-}
-
-function setView(svg, box) {
-  svg.setAttribute("viewBox", box.join(" "));
-  svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
-}
-
-function focusBox(svg, frame) {
-  if (frame.operators[0] === "outline" || frame.stats?.shape) return null;
-  let box = frame.focus;
-  if (!box) {
-    const lit = [...svg.querySelectorAll('[fill="#ffffff"]')];
-    if (!lit.length) return null;
-    box = [Infinity, Infinity, -Infinity, -Infinity];
-    for (const el of lit) {
-      const b = el.getBBox();
-      box = [Math.min(box[0], b.x), Math.min(box[1], b.y), Math.max(box[2], b.x + b.width), Math.max(box[3], b.y + b.height)];
-    }
-  }
-  const [x0, y0, x1, y1] = box;
-  // Small enough that the move spans about a dozen pixels, so diff mode can show it.
-  const r = $("stage").getBoundingClientRect();
-  const moveMm = Math.hypot(...frame.by_mm);
-  const span = Math.min(+$("win").value, Math.max(0.02, moveMm * Math.min(r.width, r.height) / 12));
-  const w = span * UNIT, h = span * UNIT;
-  let cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
-  if (moveMm > 0 && (x1 - x0 > w || y1 - y0 > h)) {
-    // Centre on the changed element's leading edge, where it sweeps new area.
-    const ux = frame.by_mm[0] / moveMm, uy = -frame.by_mm[1] / moveMm;
-    cx += ux * (x1 - x0) / 2;
-    cy += uy * (y1 - y0) / 2;
-  }
-  return [cx - w / 2, cy - h / 2, w, h];
-}
-
-async function show(i) {
-  if (!frames.length) return;
-  i = Math.max(0, Math.min(frames.length - 1, i));
-  at = i;
-  const [cur, prev] = await Promise.all([svgFor(i), svgFor(Math.max(0, i - 1))]);
-  if (at !== i) return;
-  $("cur").innerHTML = cur;
-  $("prev").innerHTML = prev;
-  const c = $("cur").firstElementChild, p = $("prev").firstElementChild;
-  if (!whole) whole = c.getAttribute("viewBox").split(" ").map(Number);
-  const f = frames[i];
-  if ($("follow").classList.contains("on") && i > 0 && i < frames.length - 1) {
-    view = focusBox(c, f) || view;
-  }
-  if (!view) view = whole.slice();
-  setView(c, view); setView(p, view);
-  const k = shown.indexOf(i);
-  if (k >= 0) $("slider").value = k;
-  const prevF = frames[i - 1];
-  const d = prevF ? f.unconnected - prevF.unconnected : 0;
-  $("info").innerHTML = `
-    <dt>frame</dt><dd>${i} / ${frames.length - 1}</dd>
-    <dt>operator</dt><dd>${opName(f)}</dd>
-    <dt>parts</dt><dd>${f.parts.join(", ")}</dd>
-    <dt>moved by</dt><dd>${f.by_mm.map(v => v.toFixed(4)).join(", ")} mm</dd>
-    <dt>airlines</dt><dd class="${d > 0 ? "worse" : d < 0 ? "better" : ""}">${f.unconnected}${d ? ` (${d > 0 ? "+" : ""}${d})` : ""}</dd>
-    ${changes(prevF, f)}
-    ${Object.entries(f.stats ?? {}).filter(([, v]) => v !== null).map(([k, v]) => `<dt>${k}</dt><dd>${statText(v)}</dd>`).join("")}`;
-  $("hud").textContent = `#${i} ${opName(f)} ${f.parts.slice(0, 4).join(" ")} (${f.by_mm.map(v => v.toFixed(3)).join(", ")}) mm · white = moved part · yellow = dipole or anchor`;
-  for (const tr of $("rows").children) tr.classList.toggle("cur", +tr.dataset.i === i);
-  $("rows").querySelector("tr.cur")?.scrollIntoView({ block: "nearest" });
-  const nextK = shown[shown.indexOf(i) + 1];
-  if (nextK !== undefined) svgFor(nextK);
-}
-
-function statText(v) {
-  if (v === null || typeof v !== "object") return String(v);
-  const parts = Object.entries(v).map(([k, x]) => `${k} ${typeof x === "object" && x !== null ? statText(x) : x}`);
-  return parts.length ? parts.join(", ") : "none";
-}
-
-function changes(before, after) {
-  if (!before || !after.open || !before.open) return "";
-  const count = (list) => list.reduce((m, k) => m.set(k, (m.get(k) || 0) + 1), new Map());
-  const b = count(before.open), a = count(after.open);
-  const opened = [...a].filter(([k, n]) => n > (b.get(k) || 0)).map(([k]) => k);
-  const closed = [...b].filter(([k, n]) => n > (a.get(k) || 0)).map(([k]) => k);
-  return (opened.length ? `<dt class="worse">opened</dt><dd class="worse">${opened.join("<br>")}</dd>` : "")
-       + (closed.length ? `<dt class="better">closed</dt><dd class="better">${closed.join("<br>")}</dd>` : "");
-}
-
-function step(dir) {
-  const k = shown.indexOf(at);
-  const target = shown[(k < 0 ? 0 : k) + dir];
-  if (target !== undefined) show(target); else stop();
-}
 function play() {
-  if (timer) return stop();
-  $("play").textContent = "⏸"; $("play").classList.add("on");
-  const tick = async () => {
-    const k = shown.indexOf(at);
-    if (k >= shown.length - 1) return stop();
-    await show(shown[k + 1]);
-    if (timer) timer = setTimeout(tick, 1000 / Math.max(0.5, +$("fps").value));
-  };
-  timer = setTimeout(tick, 0);
+  if (at >= frames.length - 1) show(0);
+  $("play").textContent = "Pause";
+  timer = setInterval(() => {
+    if (at >= frames.length - 1) return stop();
+    show(at + 1);
+  }, 1000 / Number($("speed").value));
 }
+
 function stop() {
-  clearTimeout(timer); timer = null;
-  $("play").textContent = "▶"; $("play").classList.remove("on");
+  clearInterval(timer);
+  timer = null;
+  $("play").textContent = "Play";
 }
 
-function zoomAt(factor, cx, cy) {
-  const r = $("stage").getBoundingClientRect();
-  const [x, y, w, h] = view;
-  const s = Math.max(w / r.width, h / r.height);
-  const ox = x + w / 2 + (cx - r.left - r.width / 2) * s;
-  const oy = y + h / 2 + (cy - r.top - r.height / 2) * s;
-  view = [ox - (ox - x) * factor, oy - (oy - y) * factor, w * factor, h * factor];
-  for (const svg of document.querySelectorAll("#stage svg")) setView(svg, view);
-}
+$("play").onclick = () => (timer ? stop() : play());
+$("scrub").oninput = e => { stop(); show(Number(e.target.value)); };
+$("speed").onchange = () => { if (timer) { stop(); play(); } };
+$("run").onchange = e => load(e.target.value);
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "SELECT") return;
+  if (e.key === " ") { e.preventDefault(); $("play").click(); }
+  else if (e.key === "ArrowRight") { stop(); show(at + 1); }
+  else if (e.key === "ArrowLeft") { stop(); show(at - 1); }
+});
 
-$("stage").addEventListener("wheel", (e) => {
-  e.preventDefault();
-  $("follow").classList.remove("on");
-  zoomAt(e.deltaY > 0 ? 1.2 : 1 / 1.2, e.clientX, e.clientY);
-}, { passive: false });
-let drag = null;
-$("stage").addEventListener("pointerdown", (e) => {
-  drag = { x: e.clientX, y: e.clientY, view: view.slice() };
-  $("stage").classList.add("dragging");
-  $("stage").setPointerCapture(e.pointerId);
-});
-$("stage").addEventListener("pointermove", (e) => {
-  if (!drag) return;
-  $("follow").classList.remove("on");
-  const r = $("stage").getBoundingClientRect();
-  const s = Math.max(drag.view[2] / r.width, drag.view[3] / r.height);
-  view = [drag.view[0] - (e.clientX - drag.x) * s, drag.view[1] - (e.clientY - drag.y) * s, drag.view[2], drag.view[3]];
-  for (const svg of document.querySelectorAll("#stage svg")) setView(svg, view);
-});
-$("stage").addEventListener("pointerup", () => { drag = null; $("stage").classList.remove("dragging"); });
-
-$("run").onchange = loadRun;
-$("play").onclick = play;
-$("back").onclick = () => { stop(); step(-1); };
-$("next").onclick = () => { stop(); step(1); };
-$("first").onclick = () => { stop(); show(shown[0] ?? 0); };
-$("slider").oninput = () => { stop(); show(shown[+$("slider").value]); };
-$("follow").onclick = () => { $("follow").classList.toggle("on"); show(at); };
-$("whole").onclick = () => { $("follow").classList.remove("on"); view = whole.slice(); show(at); };
-$("win").onchange = () => show(at);
-for (const b of document.querySelectorAll("[data-mode]")) b.onclick = () => {
-  document.querySelectorAll("[data-mode]").forEach(x => x.classList.toggle("on", x === b));
-  document.body.classList.remove("onion", "diff");
-  if (b.dataset.mode !== "plain") document.body.classList.add(b.dataset.mode);
-};
-document.addEventListener("keydown", (e) => {
-  if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
-  if (e.key === " ") { e.preventDefault(); play(); }
-  else if (e.key === "ArrowRight") { stop(); step(1); }
-  else if (e.key === "ArrowLeft") { stop(); step(-1); }
-  else if (e.key === "Home") { stop(); show(shown[0] ?? 0); }
-  else if (e.key === "f") $("follow").click();
-  else if (e.key === "0") $("whole").click();
-});
-loadRuns();
+(async () => {
+  try { runs = await (await fetch("runs.json", { cache: "no-store" })).json(); } catch { runs = {}; }
+  const names = Object.keys(runs).sort((a, b) => (b.startsWith("reshape") || b === "outline-plan") - (a.startsWith("reshape") || a === "outline-plan") || a.localeCompare(b));
+  for (const n of names) $("run").add(new Option(n, n));
+  const wanted = new URLSearchParams(location.search).get("run");
+  if (wanted && runs[wanted]) $("run").value = wanted;
+  if (names.length) load($("run").value);
+})();
 </script>
 </body>
 </html>

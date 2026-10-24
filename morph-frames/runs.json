@@ -243,7 +243,7 @@
   }
  },
  "reshape-warp": {
-  "args": "copperroute reshape bluebuzz along outline-plan: continuous field warp, parts turn with the arch, diff pairs move together, no rip-up",
+  "args": "copperroute reshape bluebuzz along outline-plan: continuous field warp only (outline as a one-sided contact, USB fan-in carried rigidly), no relaxation or rip-up",
   "summary": {
    "closed": [
     "1V1: U1 - conductionarea",
@@ -255,15 +255,16 @@
     "VBAT: J2 - conductionarea"
    ],
    "moves": 131,
-   "open_end": 17,
+   "open_end": 18,
    "open_start": 10,
    "opened": [
-    "1V1: C80 - conductionarea",
+    "1V1: L1 - conductionarea",
     "1V1: U1 - via",
+    "3V3_SENS: C120 - U5",
     "3V3_SENS: C121 - C122",
     "3V3_SENS: C123 - U21",
-    "3V3_SENS: U20 - U5",
     "3V3_SYS: C83 - C91",
+    "3V3_SYS: C95 - conductionarea",
     "3V3_SYS: U1 - conductionarea",
     "3V3_SYS: U1 - conductionarea",
     "3V3_SYS: U1 - conductionarea",
