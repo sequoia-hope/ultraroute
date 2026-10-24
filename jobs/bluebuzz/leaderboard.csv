@@ -2,6 +2,7 @@ name,router,unconnected,new_violations,new_warnings,vias,length_mm,wall_s,peak_r
 cr-tnudge-gridneg005-lock,copperroute,6,0,0,24,224.3,392.8,743,0,"--backend nudge --set router.fanout.enabled=false --lock J1,U7,U20,U21,U22,U23","{""COPPERROUTE_NUDGE_BASE"": ""grid"", ""COPPERROUTE_GRID_NEGOTIATE"": ""1"", ""COPPERROUTE_GRID_CELL_MM"": ""0.05""}",2026-10-23T05:51:16
 cr-gridneg-nofan,copperroute,10,0,0,19,214.0,245.5,694,0,--backend grid --set router.fanout.enabled=false,"{""COPPERROUTE_GRID_NEGOTIATE"": ""1""}",2026-10-23T12:25:18
 cr-gridneg005-nofan,copperroute,10,0,0,22,212.1,278.0,741,0,--backend grid --set router.fanout.enabled=false,"{""COPPERROUTE_GRID_NEGOTIATE"": ""1"", ""COPPERROUTE_GRID_CELL_MM"": ""0.05""}",2026-10-23T15:12:09
+cr-topo-nofan,copperroute,12,0,0,15,217.7,109.6,88,0,--backend topo --set router.fanout.enabled=false,{},2026-10-24T11:40:57
 cr-grid,copperroute,13,0,0,10,252.8,227.6,455,0,--backend grid,{},2026-10-23T12:08:33
 cr-nudge-grid-nofan,copperroute,13,0,0,15,279.0,687.9,330,0,--backend nudge --set router.fanout.enabled=false,"{""COPPERROUTE_NUDGE_BASE"": ""grid""}",2026-10-23T13:10:49
 cr-nudge-grid005-nofan,copperroute,13,0,0,17,255.7,744.7,412,0,--backend nudge --set router.fanout.enabled=false,"{""COPPERROUTE_NUDGE_BASE"": ""grid"", ""COPPERROUTE_GRID_CELL_MM"": ""0.05""}",2026-10-23T12:59:15
@@ -29,7 +30,6 @@ cr-hist2,copperroute,15,0,0,16,200.7,166.6,294,0,,"{""COPPERROUTE_RIPUP_HISTORY"
 cr-hist4,copperroute,15,0,0,16,200.7,164.1,293,0,,"{""COPPERROUTE_RIPUP_HISTORY"": ""4""}",2026-10-23T11:10:18
 cr-hist1-search4m,copperroute,15,0,0,16,200.7,174.5,301,0,--set router.connection_search_steps=4000000,"{""COPPERROUTE_RIPUP_HISTORY"": ""1""}",2026-10-23T11:13:16
 cr-e1,copperroute,15,0,0,16,207.8,204.9,305,0,,"{""COPPERROUTE_OBSTACLE_HEURISTIC"": ""1""}",2026-10-23T11:31:40
-cr-topo-nofan,copperroute,16,0,0,8,156.7,873.7,82,0,--backend topo --set router.fanout.enabled=false,{},2026-10-24T03:39:15
 cr-nofan-hist2,copperroute,16,0,0,9,169.6,172.9,131,0,--set router.fanout.enabled=false,"{""COPPERROUTE_RIPUP_HISTORY"": ""2""}",2026-10-23T11:22:00
 cr-e1-hist1-nofan,copperroute,16,0,0,10,157.4,162.1,146,0,--set router.fanout.enabled=false,"{""COPPERROUTE_OBSTACLE_HEURISTIC"": ""1"", ""COPPERROUTE_RIPUP_HISTORY"": ""1""}",2026-10-23T11:43:38
 cr-region0.25-nofan-e1,copperroute,16,0,0,10,159.0,208.2,487,0,--set router.fanout.enabled=false,"{""COPPERROUTE_REGION_HISTORY"": ""0.25"", ""COPPERROUTE_OBSTACLE_HEURISTIC"": ""1""}",2026-10-23T12:04:35

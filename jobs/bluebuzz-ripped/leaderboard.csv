@@ -1,5 +1,9 @@
 name,router,unconnected,new_violations,new_warnings,vias,length_mm,wall_s,peak_rss_mb,exit,args,env,finished_at
 cr-maze,copperroute,9,0,0,129,1339.8,616.9,800,0,,{},2026-10-23T06:01:36
+cr-diffuse-maze-lock,copperroute,9,0,0,129,1339.8,417.8,801,0,"--backend diffuse --lock J1,U7,U20,U21,U22,U23",{},2026-10-24T13:02:13
+cr-topo-rip,copperroute,12,0,2,135,1364.9,446.5,787,0,--backend topo,{},2026-10-24T11:58:38
+cr-topo-norip-nofan,copperroute,14,0,0,117,1223.6,233.0,532,0,--backend topo --set router.fanout.enabled=false,"{""COPPERROUTE_TOPO_RIP_PASSES"": ""0""}",2026-10-24T11:44:52
 cr-tnudge-gridneg005-lock,copperroute,14,0,0,157,1347.4,3597.0,934,0,"--backend nudge --set router.fanout.enabled=false --lock J1,U7,U20,U21,U22,U23","{""COPPERROUTE_GRID_NEGOTIATE"": ""1"", ""COPPERROUTE_GRID_CELL_MM"": ""0.05"", ""COPPERROUTE_NUDGE_BASE"": ""grid""}",2026-10-23T07:13:51
+cr-topo-rip-nofan,copperroute,15,0,0,121,1217.9,376.6,732,0,--backend topo --set router.fanout.enabled=false,{},2026-10-24T11:51:10
 cr-gridneg005-nofan,copperroute,16,0,0,145,1227.8,735.3,929,0,--backend grid --set router.fanout.enabled=false,"{""COPPERROUTE_GRID_NEGOTIATE"": ""1"", ""COPPERROUTE_GRID_CELL_MM"": ""0.05""}",2026-10-23T06:13:53
 freerouting,freerouting,1000000,1000000,0,0,0,3600.7,1865,124,-mp 40,{},2026-10-23T03:19:19

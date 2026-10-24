@@ -1,0 +1,23 @@
+[
+ {
+  "name": "cr-diffuse-gridneg005-lock-t2",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/jobs/bluebuzz-1024/bin/copperroute-diffuse",
+  "args": [
+   "--backend",
+   "diffuse",
+   "--set",
+   "router.fanout.enabled=false",
+   "--lock",
+   "J1,U7,U20,U21,U22,U23"
+  ],
+  "env": {
+   "COPPERROUTE_DIFFUSE_BASE": "grid",
+   "COPPERROUTE_GRID_NEGOTIATE": "1",
+   "COPPERROUTE_GRID_CELL_MM": "0.05",
+   "COPPERROUTE_DIFFUSE_TARGET": "2.0",
+   "COPPERROUTE_DIFFUSE_MAX_MM": "0.5"
+  },
+  "log_level": "info"
+ }
+]

@@ -1,0 +1,90 @@
+# Roadmap
+
+Work proceeds one phase at a time; each phase ends with its scores on the test boards
+(bluebuzz, bluebuzz-1024, bluebuzz-ripped, the morph keyframes) and a commit.
+
+## Phase 1 — Topological routing with rip-up
+
+- [x] `copper-topo`: rubber-band routing through a triangulation of the copper, as backend `topo`.
+- [x] Rip-up: an open connection may cross other connections' copper at a price that grows with
+      each rip; what it crosses is ripped and rerouted, and the board joining most is kept.
+- [x] The maze stage after topo runs with a bounded via optimizer (it stalled on one pass).
+- [x] Latest bluebuzz with its updated rules as job `bluebuzz-1024`.
+- [x] Scores (open connections, all with 0 new errors): bluebuzz-1024 topo+maze 12 (grid 10,
+      maze 16); bluebuzz 12; bluebuzz-ripped topo alone 55 → 62 of 69 joined with rip-up, but after
+      maze 14 without and 15 with (maze alone 9).
+- [x] Keyframe reroute from bare pads, open connections (grid / topo / topo + rip-up): rectangle
+      25 / 35 / 24, circle 26 / 33 / 35, diamond 21 / 29 / 33, stretched 53 / 59 / 65, rainbow
+      155 / 157 / 157 (topo finds a channel for 5 of 69 there: the parts are packed shut).
+- [ ] Known gaps, not blocking: legs from pads within clearance of a keepout, bends that push
+      into the next obstacle, connections to traces and pours.
+
+## Phase 2 — Physics diffusion placement
+
+Placement migration after Ren et al. (DAC 2005): part density diffuses as heat does, and parts
+ride the flow (velocity −∇d/d), so crowded regions spread while relative order is kept.
+
+- [x] `copper-morph::diffuse`: density from part footprints per side, pin demand and optional
+      routing demand (open airlines); walls at the outline; locked parts and groups.
+- [x] Moves applied through `MoveOracle`, so no move adds a clearance conflict.
+- [x] Backend `diffuse`: route, spread by the open connections' demand, reroute, keep the better.
+- [x] Reshape: spread at keyframes, after ripping and before rerouting (`--diffuse-target`).
+- [x] Unit tests: spreading lowers the peak, locked parts stay, groups move as one, the move
+      limit holds, demand pushes, applied moves add no violation.
+- [x] Scores: no gain yet. The backend's spread board was worse every time, so it kept the
+      first route: bluebuzz-1024 10 open (29 spread; 17 at target 2.0 and 0.5 mm, 10 parts
+      moved), bluebuzz-ripped 9 (70 spread). Keyframe reroute with spreading, open connections
+      (vs. without): rectangle 56 (25), circle 62 (26), diamond 59 (21), stretched 83 (53),
+      rainbow 104 (155); every keyframe hit the 10 min limit.
+- [ ] Why: pin demand puts the peak density near fine-pitch parts above 1 (2.4–7), which no
+      move can fix, so at target 0.8 nearly every part moves the full limit; and a moved board
+      starts its route afresh within the same time budget. Next: normalise demand per part,
+      spread only toward open airlines' congestion, and route moved parts incrementally.
+
+## Phase 3 — The test suite as a library
+
+The route-job bench becomes a package other projects import: boards, configs, governed runs,
+the referee, leaderboards and best results.
+
+- [ ] Python package (`ultraroute`): `Job`, `Config`, `run`, `score`, `compare`; usable as a
+      library, a CLI and from JSON configs; any router (copperroute backends, freerouting, an
+      external command) behind one interface; KiCad import/export and checks.
+- [ ] Rust side: one facade crate over copperroute for routing and placement, with a stable
+      options type.
+- [ ] Documentation: quick start, API reference, how to add a board, a router, a placer; served
+      locally with the project.
+- [ ] Tests: unit tests for the runner and referee, small fixture boards end to end, and a
+      single command that runs them.
+
+## Phase 4 — ML diffusion placement
+
+A denoising diffusion model that generates part positions, conditioned on the netlist graph and
+the board outline (in the manner of diffusion models for chip placement), judged by the Phase 3
+suite.
+
+- [ ] Data: placements from PCBench and real boards, plus synthetic boards generated at scale.
+- [ ] Model and training on the local GPU; guidance toward legality and routability.
+- [ ] As a placer in the suite, followed by the physics spreader and the routers; scored against
+      the human placements.
+
+## Phase 5 — Live, interactive, autorouter-first layout tool
+
+A front end that shows the router working in real time, at a high frame rate, as it tries
+routes; then lets a person guide it while it runs. The aim is a PCB layout tool built around
+the GPU autorouter, and a place to explore the UX paradigms and algorithms that this kind of
+collaboration needs.
+
+- [ ] Event stream from the routers (copper added, ripped, tried; costs; congestion) with a
+      compact wire format, cheap enough to emit every attempt.
+- [ ] Shared Rust core for scene, layers, picking and the stream protocol.
+- [ ] Two clients on that core: native GTK (gtk4-rs, GPU-drawn) and web (Svelte + Vite, the
+      core compiled to WASM, WebGPU/WebGL drawing).
+- [ ] Interactivity while routing: lock or drag parts, keep or forbid regions, sketch a path
+      for a net, reorder or pin connections; the router replans around the edits live.
+- [ ] Written new: nothing copied from copperroute's `web/` (copperroute.net) or `copper-web`.
+
+**Open decision — licensing.** copperroute is GPL-3.0-only, and everything added inside the
+fork (copper-topo, diffusion, the backends) is GPL with it. If the layout tool should be
+licensed otherwise, its code has to live outside the fork and reach the router only across a
+process boundary (the event stream). Linking the router into the tool, including a WASM build
+in the web client, makes the tool GPL.

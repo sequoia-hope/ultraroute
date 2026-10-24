@@ -1,9 +1,35 @@
 {
- "generated": "2026-10-24T05:19",
+ "generated": "2026-10-24T14:08",
  "groups": [
   {
    "title": "Morph runs on bluebuzz",
    "items": [
+    {
+     "when": "2026-10-24T14:08",
+     "title": "reshape-reroute-diffuse",
+     "about": "copperroute reshape bluebuzz along the 30-step plan, warp only between keyframes; at each keyframe every trace and via is ripped, crowded parts are spread by diffusion (target density 0.8, up to 2 mm, J1 U7 U20-U23 locked) and the board routed from its pads (grid with negotiation, 0.05 mm cells, fanout off, then maze; 10 min)",
+     "result": "131 moves of 0 parts (bending \u2192 rainbow 39, circle 1, circle \u2192 rounded diamond 29, rainbow 1, rectangle 1, rectangle \u2192 circle 29, rounded diamond 1, rounded diamond \u2192 stretched rounded rectangle 29, stretched rounded rectangle 1); 102 connection(s) opened",
+     "detail": "open 10 \u2192 104",
+     "links": [
+      {
+       "label": "watch",
+       "href": "morph-frames/?run=reshape-reroute-diffuse"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-24T12:51",
+     "title": "reshape-reroute-topo-rip",
+     "about": "copperroute reshape bluebuzz along the 30-step plan, warp only between keyframes; at each keyframe every trace and via, the design's own wiring included, is ripped and the board routed from its pads (topological rubber-band routing with rip-up, then maze; fanout off; 10 min)",
+     "result": "131 moves of 0 parts (bending \u2192 rainbow 39, circle 1, circle \u2192 rounded diamond 29, rainbow 1, rectangle 1, rectangle \u2192 circle 29, rounded diamond 1, rounded diamond \u2192 stretched rounded rectangle 29, stretched rounded rectangle 1); 150 connection(s) opened",
+     "detail": "open 10 \u2192 157",
+     "links": [
+      {
+       "label": "watch",
+       "href": "morph-frames/?run=reshape-reroute-topo-rip"
+      }
+     ]
+    },
     {
      "when": "2026-10-24T05:19",
      "title": "reshape-reroute-topo",
@@ -300,7 +326,45 @@
    "title": "Route jobs",
    "items": [
     {
-     "when": "2026-10-24T03:39",
+     "when": "2026-10-24T13:02",
+     "title": "bluebuzz-ripped",
+     "about": "Bluebuzz with route.py's scripted copper removed.",
+     "result": "best 9 open, 0 new errors, 129 vias (cr-maze)",
+     "detail": "8 attempts",
+     "links": [
+      {
+       "label": "leaderboard",
+       "href": "jobs/leaderboard.html?job=bluebuzz-ripped"
+      },
+      {
+       "label": "best recipe",
+       "href": "jobs/bluebuzz-ripped/best/recipe.json"
+      },
+      {
+       "label": "notes",
+       "href": "jobs/bluebuzz-ripped/README.md"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-24T12:55",
+     "title": "bluebuzz-1024",
+     "about": "",
+     "result": "best 10 open, 0 new errors, 21 vias (cr-tnudge-gridneg005-lock)",
+     "detail": "8 attempts",
+     "links": [
+      {
+       "label": "leaderboard",
+       "href": "jobs/leaderboard.html?job=bluebuzz-1024"
+      },
+      {
+       "label": "best recipe",
+       "href": "jobs/bluebuzz-1024/best/recipe.json"
+      }
+     ]
+    },
+    {
+     "when": "2026-10-24T11:40",
      "title": "bluebuzz",
      "about": "The priority board: route.py's tamed DSN, 3 routable layers, J1, U7 and U20\u2013U23 locked.",
      "result": "best 6 open, 0 new errors, 24 vias (cr-tnudge-gridneg005-lock)",
@@ -334,27 +398,6 @@
       {
        "label": "notes",
        "href": "jobs/simple_earring/README.md"
-      }
-     ]
-    },
-    {
-     "when": "2026-10-23T07:13",
-     "title": "bluebuzz-ripped",
-     "about": "Bluebuzz with route.py's scripted copper removed.",
-     "result": "best 9 open, 0 new errors, 129 vias (cr-maze)",
-     "detail": "4 attempts",
-     "links": [
-      {
-       "label": "leaderboard",
-       "href": "jobs/leaderboard.html?job=bluebuzz-ripped"
-      },
-      {
-       "label": "best recipe",
-       "href": "jobs/bluebuzz-ripped/best/recipe.json"
-      },
-      {
-       "label": "notes",
-       "href": "jobs/bluebuzz-ripped/README.md"
       }
      ]
     },

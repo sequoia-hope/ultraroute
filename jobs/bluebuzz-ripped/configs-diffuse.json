@@ -1,0 +1,15 @@
+[
+ {
+  "name": "cr-diffuse-maze-lock",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/jobs/bluebuzz-ripped/bin/copperroute-diffuse",
+  "args": [
+   "--backend",
+   "diffuse",
+   "--lock",
+   "J1,U7,U20,U21,U22,U23"
+  ],
+  "env": {},
+  "log_level": "info"
+ }
+]

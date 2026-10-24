@@ -1,0 +1,41 @@
+[
+ {
+  "name": "cr-topo-norip-nofan",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/jobs/bluebuzz-ripped/bin/copperroute-topo-rip",
+  "args": [
+   "--backend",
+   "topo",
+   "--set",
+   "router.fanout.enabled=false"
+  ],
+  "env": {
+   "COPPERROUTE_TOPO_RIP_PASSES": "0"
+  },
+  "log_level": "info"
+ },
+ {
+  "name": "cr-topo-rip-nofan",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/jobs/bluebuzz-ripped/bin/copperroute-topo-rip",
+  "args": [
+   "--backend",
+   "topo",
+   "--set",
+   "router.fanout.enabled=false"
+  ],
+  "env": {},
+  "log_level": "info"
+ },
+ {
+  "name": "cr-topo-rip",
+  "router": "copperroute",
+  "binary": "/home/sequoia/Software/ultraroute/jobs/bluebuzz-ripped/bin/copperroute-topo-rip",
+  "args": [
+   "--backend",
+   "topo"
+  ],
+  "env": {},
+  "log_level": "info"
+ }
+]

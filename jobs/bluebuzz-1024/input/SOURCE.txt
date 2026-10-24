@@ -1,0 +1,3 @@
+6c5bd5e
+03cf4f6ef534d5c80fbdb50bf3d680758292f7609e4a10cb4c8e03fc483195d1  out/bluebuzz-rm2.dsn
+ffadb45d996ac8918e9580937fe83c4ef4c5f0588b6a911eb26e2598f4f09c16  out/bluebuzz-rm2.kicad_pro
