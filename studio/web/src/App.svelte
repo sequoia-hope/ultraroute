@@ -4,6 +4,8 @@
   import Board from './lib/Board.svelte';
 
   const studio = new Studio();
+  // Built for a static host: no router to talk to, only recorded runs.
+  const STATIC = import.meta.env.VITE_STATIC === '1';
   let version = $state(0);
   let board;
 
@@ -37,6 +39,19 @@
   let frameTimes = [];
   let refitNext = true;
   let rerouteTimer;
+
+  let recordings = $state([]);
+  let recording = $state(null);
+  let replaying = $state(false);
+  let playing = $state(false);
+  let speed = $state(1);
+  let position = $state(0);
+  let duration = $state(0);
+  let lines = [];
+  let times = [];
+  let next = 0;
+  let wallStart = 0;
+  let positionStart = 0;
 
   const STEPS = [0.1, 0.25, 0.5, 1, 2];
   const job = $derived(jobs.find((j) => j.name === jobName));
@@ -116,17 +131,81 @@
     logs = [];
   }
 
+  async function openRecording(rec) {
+    clearTimeout(rerouteTimer);
+    if (mode !== 'idle') stop();
+    recording = rec;
+    replaying = true;
+    playing = false;
+    refitNext = true;
+    const buffer = new Uint8Array(await (await fetch(`replays/${rec.file}`)).arrayBuffer());
+    const gzipped = buffer[0] === 0x1f && buffer[1] === 0x8b;
+    const text = gzipped
+      ? await new Response(new Blob([buffer]).stream().pipeThrough(new DecompressionStream('gzip'))).text()
+      : new TextDecoder().decode(buffer);
+    lines = text.split('\n').filter(Boolean);
+    times = lines.map((l) => Number(l.match(/"ms":(\d+)/)?.[1] ?? -1));
+    duration = Math.max(0, ...times);
+    seek(0);
+    play();
+  }
+
+  // Replays from the start: frames carry only what changed, so a jump back rebuilds the board.
+  function seek(to) {
+    if (to < position || next === 0) {
+      next = 0;
+      studio.clear_offsets();
+    }
+    while (next < lines.length && times[next] <= to) receive(lines[next++], true);
+    position = to;
+    positionStart = to;
+    wallStart = performance.now();
+  }
+
+  function play() {
+    if (position >= duration) seek(0);
+    playing = true;
+    positionStart = position;
+    wallStart = performance.now();
+    requestAnimationFrame(tick);
+  }
+
+  function tick() {
+    if (!playing || !replaying) return;
+    const to = positionStart + (performance.now() - wallStart) * speed;
+    while (next < lines.length && times[next] <= to) receive(lines[next++], true);
+    position = Math.min(to, duration);
+    if (next >= lines.length) {
+      playing = false;
+      return;
+    }
+    requestAnimationFrame(tick);
+  }
+
+  function pause() {
+    playing = false;
+  }
+
+  function leaveReplay() {
+    replaying = false;
+    playing = false;
+    recording = null;
+  }
+
   function load() {
+    leaveReplay();
     clearTimeout(rerouteTimer);
     send('load', ['--backend', 'none'], locks);
   }
 
   function route(options = {}) {
     clearTimeout(rerouteTimer);
+    leaveReplay();
     send('run', argsText.split(/\s+/).filter(Boolean), locks, options);
   }
 
   function nudgeAll() {
+    leaveReplay();
     send('run', withBackend(argsText.split(/\s+/).filter(Boolean), 'nudge'), locks, { continue: keepGoing });
   }
 
@@ -134,6 +213,7 @@
   function nudgeThis() {
     if (!selected) return;
     const others = parts.map((p) => p.name).filter((n) => n !== selected.name);
+    leaveReplay();
     send('run', withBackend(argsText.split(/\s+/).filter(Boolean), 'nudge'), others, { continue: keepGoing });
   }
 
@@ -193,7 +273,8 @@
     return Math.round(v * 1000) / 1000;
   }
 
-  function receive(line) {
+  function receive(line, fromRecording = false) {
+    if (replaying && !fromRecording && /"t":"(board|frame|done)"\}$/.test(line)) return;
     if (studio.apply(line)) {
       version++;
       if (line.includes('"t":"frame"')) frameTimes.push(performance.now());
@@ -251,6 +332,7 @@
 
   function key(event) {
     if (!selected || /INPUT|TEXTAREA|SELECT/.test(event.target.tagName)) return;
+    if (STATIC && event.key !== 'Escape') return;
     const k = event.shiftKey ? 5 : 1;
     const moves = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] };
     if (moves[event.key]) {
@@ -264,7 +346,10 @@
   }
 
   onMount(async () => {
-    jobs = await (await fetch('/api/jobs')).json();
+    jobs = await (await fetch('../api/jobs')).json();
+    recordings = await fetch('replays/index.json')
+      .then((r) => (r.ok ? r.json() : []))
+      .catch(() => []);
     const asked = new URLSearchParams(location.search);
     const first = jobs.find((j) => j.name === asked.get('job')) ?? jobs.find((j) => j.name === 'bluebuzz-1024') ?? jobs[0];
     if (first) chooseJob(first.name);
@@ -272,7 +357,12 @@
       presetName = asked.get('recipe');
       choosePreset(presetName);
     }
-    connect();
+    if (STATIC) {
+      const rec = recordings.find((r) => r.job === jobName) ?? recordings[0];
+      if (rec) openRecording(rec);
+    } else {
+      connect();
+    }
     const timer = setInterval(() => {
       const now = performance.now();
       frameTimes = frameTimes.filter((t) => now - t < 1000);
@@ -294,10 +384,53 @@
 <main>
   <aside>
     <header>
-      <h1><a href="/">Ultraroute</a> Studio</h1>
-      <span class="dot" class:on={connected} title={connected ? 'connected' : 'reconnecting'}></span>
+      <h1><a href="../">Ultraroute</a> Studio</h1>
+      {#if !STATIC}<span class="dot" class:on={connected} title={connected ? 'connected' : 'reconnecting'}></span>{/if}
     </header>
 
+    {#if STATIC}
+      <p class="note">
+        These are recordings of real runs. To route live, drag parts and let the router follow, run the
+        studio on your machine: see the <a href="https://github.com/sequoia-hope/ultraroute#run-the-studio">README</a>.
+      </p>
+    {/if}
+
+    {#if recordings.length}
+      <section>
+        <h2>Recorded runs</h2>
+        <ul class="recordings">
+          {#each recordings as rec}
+            <li>
+              <button class="link" class:current={recording?.file === rec.file} onclick={() => openRecording(rec)}>
+                {rec.job} · {rec.recipe}
+              </button>
+              <span class="muted small">{rec.open} open, {Math.round(rec.seconds)} s</span>
+            </li>
+          {/each}
+        </ul>
+        {#if replaying}
+          <div class="player">
+            <button onclick={() => (playing ? pause() : play())}>{playing ? 'Pause' : 'Play'}</button>
+            <input
+              type="range"
+              min="0"
+              max={duration}
+              value={position}
+              oninput={(e) => {
+                pause();
+                seek(Number(e.currentTarget.value));
+              }}
+            />
+            <select bind:value={speed} onchange={() => playing && play()} title="Playback speed">
+              {#each [1, 2, 4, 8] as s}<option value={s}>{s}×</option>{/each}
+            </select>
+          </div>
+          <p class="muted small">{(position / 1000).toFixed(1)} s of {(duration / 1000).toFixed(1)} s</p>
+        {/if}
+      </section>
+    {/if}
+
+    {#if !STATIC}
     <label>
       Board
       <select
@@ -356,6 +489,7 @@
     </div>
     <button class="quiet" onclick={load} disabled={!connected}>Show the board as designed</button>
     {#if message}<p class="warn">{message}</p>{/if}
+    {/if}
 
     {#if selectedPart}
       <section class="card">
@@ -367,6 +501,7 @@
           at {(placements[selectedPart.name] ?? selectedPart.at).map((v) => v.toFixed(2)).join(', ')} mm
           {#if placements[selectedPart.name]}· placed by hand{/if}
         </p>
+        {#if !STATIC}
         <div class="pad">
           <span></span><button onclick={() => moveSelected(0, step)} title="Up (↑)">↑</button><span></span>
           <button onclick={() => moveSelected(-step, 0)} title="Left (←)">←</button>
@@ -382,20 +517,21 @@
           </button>
           <button onclick={nudgeThis} title="Route, then let the nudger move only this part">Nudge it for me</button>
         </div>
+        {/if}
         {#if selectedPart.fixed && !locks.includes(selectedPart.name) && !sentLocks.includes(selectedPart.name)}
           <p class="muted">Fixed in the design: the router won't move it, but you can.</p>
         {/if}
         {#if placements[selectedPart.name]}
           <button class="link" onclick={() => unplace(selectedPart.name)}>Put it back where the design has it</button>
         {/if}
-        <p class="hint">Arrow keys move it (Shift for 5×), L locks, Esc closes.</p>
+        {#if !STATIC}<p class="hint">Arrow keys move it (Shift for 5×), L locks, Esc closes.</p>{/if}
       </section>
     {/if}
 
     <section>
       <h2>Locked <span class="muted">{locks.length + designFixed.length}</span></h2>
       {#if locks.length + designFixed.length === 0}
-        <p class="muted">Nothing is locked. Select a part and press L, or Lock.</p>
+        <p class="muted">Nothing is locked.{STATIC ? '' : ' Select a part and press L, or Lock.'}</p>
       {:else}
         <div class="chips">
           {#each locks as name}
@@ -450,7 +586,7 @@
 
     {#if status}
       <section>
-        <h2>{mode === 'routing' ? 'Routing' : mode === 'loading' ? 'Loading' : status.done ? 'Finished' : 'Idle'}</h2>
+        <h2>{replaying ? (playing ? 'Playing a recording' : 'Recording paused') : mode === 'routing' ? 'Routing' : mode === 'loading' ? 'Loading' : status.done ? 'Finished' : 'Idle'}</h2>
         <dl>
           <dt>Open</dt><dd class="big">{status.open ?? '–'}</dd>
           <dt>Elapsed</dt><dd>{seconds(status.ms)} s</dd>
@@ -481,11 +617,11 @@
         <pre>{status.events.join('\n')}</pre>
       </details>
     {/if}
-    <p class="hint">Click a part to select it, drag to move it. Drag empty board to pan, wheel to zoom, double-click to fit.</p>
+    <p class="hint">{STATIC ? 'Click a part to select it.' : 'Click a part to select it, drag to move it.'} Drag empty board to pan, wheel to zoom, double-click to fit.</p>
   </aside>
 
   <div class="stage">
-    <Board bind:this={board} {studio} {version} ondrop={dropped} onselect={select} onhover={(h) => (hover = h)} />
+    <Board bind:this={board} {studio} {version} editable={!STATIC} ondrop={dropped} onselect={select} onhover={(h) => (hover = h)} />
     {#if hover.part || hover.net}
       <div class="hover">
         {#if hover.part}<b>{hover.part.name}</b>{#if hover.part.fixed}<span class="muted">locked</span>{/if}{/if}

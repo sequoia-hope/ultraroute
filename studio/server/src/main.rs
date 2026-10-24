@@ -161,6 +161,13 @@ fn main() {
     let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
     let root = PathBuf::from(flag("--root").unwrap_or_else(|| ".".into()));
     let root = root.canonicalize().unwrap_or_else(|e| fail(&format!("--root {}: {e}", root.display())));
+    if let Some(path) = flag("--dump-jobs") {
+        let written = std::fs::write(&path, jobs(&root).to_string());
+        if let Err(error) = written {
+            fail(&format!("--dump-jobs {path}: {error}"));
+        }
+        return;
+    }
     let router = flag("--router").map_or_else(|| root.join("target-topo/release/copperroute"), PathBuf::from);
     if !router.is_file() {
         fail(&format!("no router at {} (build it, or pass --router)", router.display()));

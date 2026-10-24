@@ -394,3 +394,63 @@ label.inline {
   border-radius: 4px;
   background: linear-gradient(90deg, #335fff, #ffd94d 50%, #ff4d33);
 }
+
+.note {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.note a,
+aside a {
+  color: var(--accent);
+}
+
+.recordings {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.recordings li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.recordings .current {
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+.player {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.player select {
+  width: auto;
+}
+
+aside h1 a {
+  color: inherit;
+}
+
+.recordings .link {
+  text-align: left;
+  padding: 0;
+}
+
+.recordings .small {
+  white-space: nowrap;
+  margin: 0;
+}

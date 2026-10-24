@@ -1,0 +1,61 @@
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --version 0.14.0 --locked
+      - name: Build the studio for a static host
+        run: |
+          cd studio
+          cargo build --release -p studio-server
+          wasm-pack build core --release --target web --out-dir ../web/src/core --out-name studio_core --no-pack -- --features wasm
+          cd web
+          npm ci --no-audit --no-fund
+          VITE_STATIC=1 npx vite build
+      # The site is the repository as it is, with the built studio in place of its sources and
+      # the board list the studio server would serve written out as a file.
+      - name: Assemble the site
+        run: |
+          mkdir -p _site
+          git archive HEAD | tar -x -C _site
+          rm -rf _site/studio _site/.github
+          mkdir -p _site/studio _site/api
+          cp -r studio/web/dist/. _site/studio/
+          studio/target/release/studio-server --root . --dump-jobs _site/api/jobs
+          touch _site/.nojekyll
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -110,8 +110,7 @@ Phase 5a (now) — play with what we have, on the web first, at `/studio/`:
       for a net, reorder or pin connections; the router replans around the edits live.
 - [ ] Written new: nothing copied from copperroute's `web/` (copperroute.net) or `copper-web`.
 
-**Open decision — licensing.** copperroute is GPL-3.0-only, and everything added inside the
-fork (copper-topo, diffusion, the backends) is GPL with it. If the layout tool should be
-licensed otherwise, its code has to live outside the fork and reach the router only across a
-process boundary (the event stream). Linking the router into the tool, including a WASM build
-in the web client, makes the tool GPL.
+**Licensing (decided 2026-10-24).** ultraroute is MIT. copperroute stays GPL-3.0-only (a
+derivative of freerouting, with parts of KiCad's DRC), and so is everything added inside the
+fork. The studio reaches the router only across a process boundary (the live stream); linking
+the router into the studio, including a WASM build in the web client, would make it GPL.

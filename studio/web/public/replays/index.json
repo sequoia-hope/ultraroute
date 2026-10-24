@@ -1,0 +1,26 @@
+[
+ {
+  "file": "bluebuzz-1024--cr-gridneg005-nofan.jsonl.gz",
+  "job": "bluebuzz-1024",
+  "recipe": "cr-gridneg005-nofan",
+  "open": 15,
+  "seconds": 123.114,
+  "bytes": 176707
+ },
+ {
+  "file": "bluebuzz-1024--cr-no-fanout.jsonl.gz",
+  "job": "bluebuzz-1024",
+  "recipe": "cr-no-fanout",
+  "open": 33,
+  "seconds": 75.592,
+  "bytes": 300761
+ },
+ {
+  "file": "simple_earring-ripped--cr-maze.jsonl.gz",
+  "job": "simple_earring-ripped",
+  "recipe": "cr-maze",
+  "open": 5,
+  "seconds": 91.593,
+  "bytes": 729078
+ }
+]
