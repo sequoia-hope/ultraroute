@@ -5,4 +5,5 @@ export default defineConfig({
   base: './',
   plugins: [svelte()],
   build: { target: 'es2022' },
+  worker: { format: 'es' },
 });

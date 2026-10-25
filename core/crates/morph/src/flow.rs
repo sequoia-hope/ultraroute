@@ -65,7 +65,7 @@ pub fn flow(board: &mut Board, moves: &HashMap<usize, Point>, soft: &mut Vec<Ite
     for id in ids {
         let Some(it) = board.item(id) else { continue };
         let Shape::Capsule { a, b, .. } = it.shape else { continue };
-        let points = if a == b { vec![a] } else { cut(a, b, junctions.get(&layer_of(it)).map_or(&[][..], Vec::as_slice)) };
+        let points = if a == b { vec![a] } else { cut(a, b, junctions.get(&layer_of(it)).map_or(&[][..], Vec::as_slice), PIECE) };
         let moved: Vec<(Point, Point)> = points
             .iter()
             .map(|&p| {
@@ -113,7 +113,7 @@ pub fn flow(board: &mut Board, moves: &HashMap<usize, Point>, soft: &mut Vec<Ite
     stats
 }
 
-fn layer_of(it: &Item) -> usize {
+pub(crate) fn layer_of(it: &Item) -> usize {
     it.layers.trailing_zeros() as usize
 }
 
@@ -154,7 +154,7 @@ fn field_for(board: &Board, moves: &HashMap<usize, Point>) -> WarpField {
 }
 
 /// Track ends and via centres on each layer: where other copper may join a track partway along.
-fn junctions(board: &Board) -> HashMap<usize, Vec<Point>> {
+pub(crate) fn junctions(board: &Board) -> HashMap<usize, Vec<Point>> {
     let mut out: HashMap<usize, BTreeSet<Point>> = HashMap::new();
     for (_, it) in board.items() {
         let Shape::Capsule { a, b, .. } = it.shape else { continue };
@@ -173,12 +173,12 @@ fn junctions(board: &Board) -> HashMap<usize, Vec<Point>> {
     out.into_iter().map(|(l, s)| (l, s.into_iter().collect())).collect()
 }
 
-/// The points a track from `a` to `b` is cut at: its ends, every `PIECE` between, and wherever a
+/// The points a track from `a` to `b` is cut at: its ends, every `piece` between, and wherever a
 /// junction lies on it.
-fn cut(a: Point, b: Point, junctions: &[Point]) -> Vec<Point> {
+pub(crate) fn cut(a: Point, b: Point, junctions: &[Point], piece: f64) -> Vec<Point> {
     let (dx, dy) = ((b.x - a.x) as f64, (b.y - a.y) as f64);
     let len2 = dx * dx + dy * dy;
-    let pieces = (len2.sqrt() / PIECE).ceil().max(1.0) as usize;
+    let pieces = (len2.sqrt() / piece).ceil().max(1.0) as usize;
     let mut stops: Vec<f64> = (0..=pieces).map(|k| k as f64 / pieces as f64).collect();
     for p in junctions {
         let t = ((p.x - a.x) as f64 * dx + (p.y - a.y) as f64 * dy) / len2;
@@ -204,7 +204,7 @@ mod tests {
     #[test]
     fn a_track_is_cut_short_and_at_every_junction_on_it() {
         let (a, b) = (Point::new(0, 0), Point::new(1_200_000, 0));
-        let at = cut(a, b, &[Point::new(100_000, 0), Point::new(100_000, 5_000), b]);
+        let at = cut(a, b, &[Point::new(100_000, 0), Point::new(100_000, 5_000), b], PIECE);
         assert_eq!(at.first(), Some(&a));
         assert_eq!(at.last(), Some(&b));
         assert!(at.contains(&Point::new(100_000, 0)), "the junction on it");

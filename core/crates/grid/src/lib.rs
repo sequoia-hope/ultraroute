@@ -3,7 +3,9 @@
 
 #[cfg(feature = "gpu")]
 pub mod gpu;
+pub mod blame;
 pub mod cleanup;
+pub mod clock;
 pub mod grid;
 pub mod negotiate;
 pub mod report;
@@ -15,10 +17,11 @@ pub mod search;
 #[cfg(feature = "gpu")]
 pub mod sweep;
 
+pub use blame::{blame, Blame, BlameOptions, BlameReport};
 pub use cleanup::{pull_tight, CleanStats};
 pub use grid::{ObstacleMap, Profile, RouteGrid, ViaSpec};
 pub use nudge::{nudge, NudgeOptions, NudgeStats};
-pub use push::{push, Field, PushOptions, PushStats};
+pub use push::{push, rip_broken, Field, PushOptions, PushStats};
 pub use report::{item_name, Activity, Focus, Log};
 pub use negotiate::{route_negotiated, NegotiationOptions, NegotiationStats, Trial};
 pub use ripup::{rip_up, RipOptions, RipStats};

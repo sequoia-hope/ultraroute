@@ -6,6 +6,8 @@
   const studio = new Studio();
   // Built for a static host: no router to talk to, only recorded runs.
   const STATIC = import.meta.env.VITE_STATIC === '1';
+  // Built to route in the tab itself: the core router runs here, in a worker, with no server.
+  const LOCAL = import.meta.env.VITE_LOCAL === '1';
   let version = $state(0);
   let board;
 
@@ -13,7 +15,8 @@
   let jobName = $state('');
   let argsText = $state('');
   let envText = $state('');
-  let timeout = $state(120);
+  // A tab routes on one thread, several times slower than the server on a phone.
+  let timeout = $state(LOCAL ? 600 : 120);
   let fps = $state(60);
   let keepGoing = $state(false);
   let rerouteOnDrop = $state(true);
@@ -38,6 +41,10 @@
   let frameTimes = [];
   let refitNext = true;
   let rerouteTimer;
+  // The router in this tab, when it routes here, and the last board it routed.
+  let worker = null;
+  let inTab = $state(LOCAL);
+  let routedText = $state('');
 
   let recordings = $state([]);
   let recording = $state(null);
@@ -189,6 +196,7 @@
   }
 
   function send(cmd, args, lockList, options = {}) {
+    if (inTab && engine === 'core') return sendToTab(cmd, args, lockList, options);
     if (!socket || socket.readyState !== WebSocket.OPEN || !jobName) return;
     if (lockList.length) args = [...args, '--lock', lockList.join(',')];
     if (retireDesign) args = [...args, '--retire-fixed', 'all'];
@@ -209,6 +217,60 @@
     mode = cmd === 'load' ? 'loading' : 'routing';
     message = '';
     logs = [];
+  }
+
+  // A run in this tab, built as the server builds one for the core: the job's board, stripped
+  // as the job says unless continuing from the last result, then placements, locks and options.
+  async function sendToTab(cmd, args, lockList, options = {}) {
+    if (!job?.kicad_pcb) return;
+    worker?.terminate();
+    const load = cmd === 'load';
+    const input = `../jobs/${encodeURIComponent(jobName)}/input/`;
+    const fetchText = (name) => fetch(input + encodeURIComponent(name)).then((r) => (r.ok ? r.text() : Promise.reject(new Error(`${name}: ${r.status}`))));
+    const continuing = !load && options.continue && routedText;
+    let pcb, pro;
+    try {
+      [pcb, pro] = await Promise.all([continuing ? routedText : fetchText(job.kicad_pcb), job.kicad_project ? fetchText(job.kicad_project) : '{}']);
+    } catch (e) {
+      message = `couldn't fetch the board: ${e.message}`;
+      return;
+    }
+    const all = [];
+    if (!continuing) all.push(...(job.strip === 'all' ? ['--strip-all'] : job.strip === true ? ['--strip'] : []));
+    if (load) all.push('--no-route');
+    else if (Number(timeout)) all.push('--timeout', String(Number(timeout)));
+    for (const [name, at] of Object.entries(placements)) all.push(`--place=${name}=${at[0].toFixed(4)},${at[1].toFixed(4)}`);
+    if (lockList.length) all.push('--lock', lockList.join(','));
+    all.push(...args);
+    sentLocks = [...lockList];
+    studio.clear_offsets();
+    studio.clear_lock_overrides();
+    mode = load ? 'loading' : 'routing';
+    message = '';
+    logs = [];
+    worker = new Worker(new URL('./lib/router-worker.js', import.meta.url), { type: 'module' });
+    worker.onmessage = ({ data }) => {
+      if (data.line !== undefined) receive(data.line);
+      else {
+        if (data.error) message = data.error;
+        else if (!load) routedText = data.done;
+        mode = 'idle';
+        worker?.terminate();
+        worker = null;
+      }
+    };
+    worker.onerror = (e) => {
+      message = `the router stopped: ${e.message ?? e}`;
+      mode = 'idle';
+    };
+    worker.postMessage({ pcb, pro, options: all.join(' '), fps: Number(fps) || 30 });
+  }
+
+  function downloadRouted() {
+    const url = URL.createObjectURL(new Blob([routedText], { type: 'text/plain' }));
+    const a = Object.assign(document.createElement('a'), { href: url, download: `${jobName}-routed.kicad_pcb` });
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   async function openRecording(rec) {
@@ -299,6 +361,13 @@
   }
 
   function stop() {
+    if (worker) {
+      worker.terminate();
+      worker = null;
+      mode = 'idle';
+      message = 'Stopped.';
+      return;
+    }
     socket?.send(JSON.stringify({ cmd: 'stop' }));
   }
 
@@ -463,8 +532,9 @@
 
   onMount(async () => {
     const all = await (await fetch('../api/jobs')).json();
-    // The studio offers the boards marked for it, when any are.
+    // The studio offers the boards marked for it, when any are; routing here, only KiCad boards.
     jobs = all.some((j) => j.studio) ? all.filter((j) => j.studio) : all;
+    if (LOCAL) jobs = jobs.filter((j) => j.kicad_pcb);
     jobs.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9));
     recordings = await fetch('replays/index.json')
       .then((r) => (r.ok ? r.json() : []))
@@ -472,12 +542,19 @@
     const asked = new URLSearchParams(location.search);
     const first = jobs.find((j) => j.name === asked.get('job')) ?? jobs[0];
     if (first) chooseJob(first.name);
+    if (LOCAL) {
+      router = 'core';
+      compose();
+    }
     if (presets.some((p) => p.name === asked.get('recipe'))) {
       choosePreset(asked.get('recipe'));
     }
     if (STATIC) {
       const rec = recordings.find((r) => r.job === jobName) ?? recordings[0];
       if (rec) openRecording(rec);
+    } else if (LOCAL) {
+      connected = true;
+      load();
     } else {
       connect();
     }
@@ -555,9 +632,12 @@
   <aside>
     <header>
       <h1><a href="../">Ultraroute</a> Studio</h1>
-      {#if !STATIC}<span class="dot" class:on={connected} title={connected ? 'connected' : 'reconnecting'}></span>{/if}
+      {#if !STATIC && !LOCAL}<span class="dot" class:on={connected} title={connected ? 'connected' : 'reconnecting'}></span>{/if}
     </header>
 
+    {#if LOCAL}
+      <p class="note">The router runs right here, in this tab: nothing is sent to a server. It routes on one thread, so a phone takes a few minutes.</p>
+    {/if}
     {#if STATIC}
       <p class="note">
         These are recordings of real runs. To route live, drag parts and let the router follow, run the
@@ -581,7 +661,7 @@
       </select>
     </label>
 
-    {#if job?.dsn}
+    {#if job?.dsn && !LOCAL}
     <div class="field">
       <span class="label">Router</span>
       <div class="segmented">
@@ -604,6 +684,11 @@
       <label class="check"><input type="checkbox" bind:checked={fineGrid} onchange={compose} /> Fine grid (0.05 mm cells)</label>
     {/if}
     {#if router === 'core'}
+      {#if !LOCAL}
+        <label class="check" title="Run the core router in this tab, compiled to WebAssembly, instead of on the server">
+          <input type="checkbox" bind:checked={inTab} /> Route in this tab
+        </label>
+      {/if}
       <label class="check"><input type="checkbox" bind:checked={ripUp} onchange={compose} /> Rip up and retry what is left</label>
       <label class="check"><input type="checkbox" bind:checked={tighten} onchange={compose} /> Pull the copper tight</label>
     {:else}
@@ -649,6 +734,9 @@
       Each press is one complete run.
     </p>
     <button class="quiet" onclick={load} disabled={!connected}>Show the board as designed</button>
+    {#if routedText && !running}
+      <button class="quiet" onclick={downloadRouted}>Download the routed board (.kicad_pcb)</button>
+    {/if}
     {#if message}<p class="warn">{message}</p>{/if}
     {/if}
 

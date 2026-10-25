@@ -186,7 +186,7 @@ pub fn route_negotiated(
     watch: &mut dyn FnMut(&Board),
     trials: &mut dyn FnMut(usize, &[Trial]),
 ) -> NegotiationStats {
-    let started = std::time::Instant::now();
+    let started = crate::clock::Instant::now();
     let out_of_time = || {
         options.max_seconds.is_some_and(|limit| started.elapsed().as_secs_f64() > limit)
             || options.cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
@@ -251,7 +251,7 @@ pub fn route_negotiated(
     let own_ends: Vec<BTreeSet<usize>> =
         ends.iter().map(|(s, t)| s.iter().chain(t).filter(|t| t.1.is_none()).map(|t| t.0).collect()).collect();
 
-    let mut shown = std::time::Instant::now();
+    let mut shown = crate::clock::Instant::now();
     let (mut best_colliding, mut stale) = (usize::MAX, 0);
     for round in 0..options.max_rounds {
         if out_of_time() {
@@ -288,7 +288,7 @@ pub fn route_negotiated(
                 zones.add(c.net, &c.zone);
                 if shown.elapsed() > TRIAL_INTERVAL {
                     trials(round, &trial_list(&connections, &sample));
-                    shown = std::time::Instant::now();
+                    shown = crate::clock::Instant::now();
                 }
             }
         }
@@ -307,7 +307,7 @@ pub fn route_negotiated(
             c.colliding = collides;
         }
         trials(round, &trial_list(&connections, &sample));
-        shown = std::time::Instant::now();
+        shown = crate::clock::Instant::now();
         stats.conflicted = colliding;
         tell(&options.log, "negotiating", || format!("round {}: {colliding} of {} routes still collide", round + 1, connections.len()), None);
         if colliding == 0 {

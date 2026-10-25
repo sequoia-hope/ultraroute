@@ -1,0 +1,49 @@
+[
+ {
+  "name": "core-c0025-escape-U1",
+  "router": "ultraroute",
+  "args": [
+   "--negotiate",
+   "--rip-up",
+   "--tighten",
+   "--timeout",
+   "900",
+   "--cell",
+   "0.025",
+   "--escape",
+   "U1"
+  ]
+ },
+ {
+  "name": "core-c0025-escape-auto",
+  "router": "ultraroute",
+  "args": [
+   "--negotiate",
+   "--rip-up",
+   "--tighten",
+   "--timeout",
+   "900",
+   "--cell",
+   "0.025",
+   "--escape",
+   "auto"
+  ]
+ },
+ {
+  "name": "core-c0025-escape-U1-z15",
+  "router": "ultraroute",
+  "args": [
+   "--negotiate",
+   "--rip-up",
+   "--tighten",
+   "--timeout",
+   "900",
+   "--cell",
+   "0.025",
+   "--escape",
+   "U1",
+   "--escape-zone",
+   "1.5"
+  ]
+ }
+]

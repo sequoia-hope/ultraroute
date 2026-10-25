@@ -194,21 +194,9 @@ pub fn push(board: &mut Board, field: &Field, options: &PushOptions, soft: &mut 
         stats.removed_spans.extend(flowed.removed_spans);
 
         // Copper the flow pushed into something it may not touch is ripped, to be routed again.
-        let mut ids: Vec<ItemId> = board.items().filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked).map(|(id, _)| id).collect();
-        ids.sort_unstable();
-        for id in ids {
-            if board.item(id).is_none() {
-                continue;
-            }
-            let broken = if options.pours_block { check_item_with_pours(board, id) } else { check_item(board, id) };
-            if !broken.is_empty() {
-                if let Some(it) = board.remove(id) {
-                    stats.removed_spans.extend(it.span);
-                }
-                stats.ripped += 1;
-            }
-        }
-        soft.retain(|id| board.item(*id).is_some());
+        let (ripped, spans) = rip_broken(board, soft, options.pours_block);
+        stats.ripped += ripped;
+        stats.removed_spans.extend(spans);
         tell(&options.log, "pushing", || format!("step {} of {steps}: {} parts moved, {} ripped so far", step + 1, moves.len(), stats.ripped), None);
         watch(board);
     }
@@ -216,6 +204,28 @@ pub fn push(board: &mut Board, field: &Field, options: &PushOptions, soft: &mut 
     moved.sort_unstable_by_key(|(f, _)| *f);
     stats.moved = moved;
     stats
+}
+
+/// Rips every unlocked track and via that breaks a rule, to be routed again: how many, and the
+/// board file's spans among them.
+pub fn rip_broken(board: &mut Board, soft: &mut Vec<ItemId>, pours_block: bool) -> (usize, Vec<Span>) {
+    let mut ids: Vec<ItemId> = board.items().filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked).map(|(id, _)| id).collect();
+    ids.sort_unstable();
+    let (mut ripped, mut spans) = (0, Vec::new());
+    for id in ids {
+        if board.item(id).is_none() {
+            continue;
+        }
+        let broken = if pours_block { check_item_with_pours(board, id) } else { check_item(board, id) };
+        if !broken.is_empty() {
+            if let Some(it) = board.remove(id) {
+                spans.extend(it.span);
+            }
+            ripped += 1;
+        }
+    }
+    soft.retain(|id| board.item(*id).is_some());
+    (ripped, spans)
 }
 
 #[cfg(test)]

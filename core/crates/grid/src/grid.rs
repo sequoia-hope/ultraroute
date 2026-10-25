@@ -255,7 +255,7 @@ impl ObstacleMap {
     }
 
     /// The clearance between this class's copper and an item of `net`.
-    fn clearance_to(&self, board: &Board, net: u32) -> Nm {
+    pub(crate) fn clearance_to(&self, board: &Board, net: u32) -> Nm {
         let other = board.rules.class_of(board.net_name(net)).map_or(0.0, |c| c.clearance);
         self.profile.clearance.max(nm(other)).max(nm(board.rules.min_clearance))
     }

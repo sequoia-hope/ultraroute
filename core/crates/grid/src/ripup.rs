@@ -63,7 +63,7 @@ fn open_count(board: &Board, pours_block: bool) -> usize {
 /// that closes any lets the next try them all again. `soft`
 /// holds the copper the router laid; it is updated as copper is ripped and laid.
 pub fn rip_up(board: &mut Board, solver: &mut dyn FieldSolver, options: &RipOptions, soft: &mut Vec<ItemId>, watch: &mut dyn FnMut(&Board)) -> RipStats {
-    let started = std::time::Instant::now();
+    let started = crate::clock::Instant::now();
     let out_of_time = || {
         options.max_seconds.is_some_and(|limit| started.elapsed().as_secs_f64() > limit)
             || options.cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))

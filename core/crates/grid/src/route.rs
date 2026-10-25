@@ -87,7 +87,7 @@ pub(crate) type Terminal = (usize, Option<(Point, Nm)>);
 /// Routes the board's open connections, shortest first, until a round joins nothing more.
 /// `watch` sees the board after every connection laid.
 pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Options, watch: &mut dyn FnMut(&Board)) -> Stats {
-    let started = std::time::Instant::now();
+    let started = crate::clock::Instant::now();
     let out_of_time = || {
         options.max_seconds.is_some_and(|limit| started.elapsed().as_secs_f64() > limit)
             || options.cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
