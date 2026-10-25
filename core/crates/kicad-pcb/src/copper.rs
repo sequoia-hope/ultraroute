@@ -28,6 +28,8 @@ pub struct Copper {
     pub locked_footprints: Vec<bool>,
     /// Where each footprint's `(at x y angle)` is in the text, in the order of `Pcb::footprints`.
     pub footprint_at: Vec<Option<Span>>,
+    /// The board's groups, each a named set of items by uuid.
+    pub groups: Vec<Group>,
     /// Each footprint's courtyard as the convex hull of its courtyard drawing, in board
     /// coordinates; `None` for a footprint without one. In the order of `Pcb::footprints`.
     pub courtyards: Vec<Option<Vec<[f64; 2]>>>,
@@ -92,8 +94,18 @@ pub struct Via {
     pub span: Span,
 }
 
+/// A KiCad group: its name and its members' uuids, footprints, zones, copper or other groups.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Group {
+    pub name: String,
+    pub uuid: String,
+    pub members: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Zone {
+    /// `(name …)`, empty when the zone has none.
+    pub name: String,
     pub net: u32,
     pub net_name: String,
     /// Layer names as written, wildcards (`*.Cu`, `F&B.Cu`) included; see [`Copper::expand`].
@@ -201,6 +213,7 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
         pads: Vec::new(),
         locked_footprints: Vec::new(),
         footprint_at: Vec::new(),
+        groups: Vec::new(),
         courtyards: Vec::new(),
         warnings: Vec::new(),
     };
@@ -250,6 +263,11 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
                 });
             }
             Some("zone") => copper.zones.push(read_zone(child, None)?),
+            Some("group") => copper.groups.push(Group {
+                name: child.args().first().and_then(Node::text).unwrap_or("").to_string(),
+                uuid: uuid(child),
+                members: child.find("members").map(|m| m.args().iter().filter_map(Node::text).map(str::to_string).collect()).unwrap_or_default(),
+            }),
             Some("gr_line" | "gr_arc" | "gr_circle" | "gr_rect" | "gr_poly")
                 if child.find("layer").and_then(|l| l.args().first()).and_then(Node::text).is_some_and(|l| l.ends_with(".Cu")) =>
             {
@@ -373,6 +391,7 @@ fn read_zone(z: &Node, footprint: Option<usize>) -> Result<Zone, KicadParse> {
         }
     }
     Ok(Zone {
+        name: z.find("name").and_then(|n| n.args().first()).and_then(Node::text).unwrap_or("").to_string(),
         net: net(z),
         net_name: z.find("net_name").and_then(|n| n.args().first()).and_then(Node::text).unwrap_or("").to_string(),
         layers,

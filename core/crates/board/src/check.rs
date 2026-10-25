@@ -79,7 +79,7 @@ pub fn check(board: &Board) -> Vec<Violation> {
 }
 
 /// What one item breaks against everything else: how a router tests copper before keeping it.
-/// Pours are left out, as they are refilled around new copper.
+/// Pours are left out, as they are refilled around new copper; a block's kept pours are not.
 pub fn check_item(board: &Board, id: ItemId) -> Vec<Violation> {
     let mut found = Vec::new();
     item_checks(board, id, true, true, &Limits::of(board), &mut HashSet::new(), &mut found);
@@ -112,7 +112,7 @@ fn item_checks(
         for layer in (0..board.layers.len()).filter(|l| item.on(*l)) {
             for other in board.near(layer, item_bbox.grow(limits.max_clearance)) {
                 let Some(o) = board.item(other) else { continue };
-                if !o.on(layer) || (skip_pours && matches!(o.kind, Kind::Pour { .. })) {
+                if !o.on(layer) || (skip_pours && o.refilled()) {
                     continue;
                 }
                 match &o.kind {
@@ -186,7 +186,7 @@ fn item_checks(
         for layer in 0..board.layers.len() {
             for other in board.near(layer, reach) {
                 let Some(o) = board.item(other) else { continue };
-                if !holds_clear(item, o) || (skip_pours && matches!(o.kind, Kind::Pour { .. })) {
+                if !holds_clear(item, o) || (skip_pours && o.refilled()) {
                     continue;
                 }
                 // One violation per pair, as KiCad reports them: a pair already too close is not

@@ -5,6 +5,7 @@
 use std::collections::{HashMap, HashSet};
 
 use board::{check_item, joined, Board, Item, ItemId, Kind, Point, Shape};
+use kicad_pcb::Span;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CleanStats {
@@ -52,7 +53,7 @@ fn chains(board: &Board, soft: &HashSet<ItemId>) -> Vec<Chain> {
         let probe = board::BBox::of([p]);
         (0..board.layers.len()).filter(|l| layers & (1 << l) != 0).any(|l| {
             board.near(l, probe).into_iter().any(|other| {
-                !soft.contains(&other) && board.item(other).is_some_and(|o| o.is_copper() && o.shape.contains(p) && !matches!(o.kind, Kind::Pour { .. }))
+                !soft.contains(&other) && board.item(other).is_some_and(|o| o.is_copper() && o.shape.contains(p) && !o.refilled())
                     || board.item(other).is_some_and(|o| matches!(o.kind, Kind::Via) && o.shape.contains(p))
             })
         })
@@ -105,6 +106,150 @@ fn chains(board: &Board, soft: &HashSet<ItemId>) -> Vec<Chain> {
         out.push(Chain { points, tracks, layer: item.layers, net: item.net, half_width: r });
     }
     out
+}
+
+/// Takes out the router's tracks lying exactly on another of the same net, layer and width, which
+/// a reroute along copper its net already has can lay. Which one goes does not matter; the
+/// router's own goes before the board file's. How many, and the file's spans among them.
+pub fn drop_duplicates(board: &mut Board, soft: &mut Vec<ItemId>) -> (usize, Vec<Span>) {
+    let soft_set: HashSet<ItemId> = soft.iter().copied().collect();
+    let key = |item: &Item| match &item.shape {
+        Shape::Capsule { a, b, r } if item.kind == Kind::Track => Some((item.net, item.layers, *r, (*a).min(*b), (*a).max(*b))),
+        _ => None,
+    };
+    let mut seen: HashMap<(u32, u64, board::Nm, Point, Point), ItemId> = HashMap::new();
+    // The file's tracks first, so a duplicate of one is the router's and goes.
+    let mut ids: Vec<ItemId> = board.items().filter(|(_, it)| it.kind == Kind::Track).map(|(id, _)| id).collect();
+    ids.sort_by_key(|id| (soft_set.contains(id), *id));
+    let mut doubled = Vec::new();
+    for id in ids {
+        let Some(k) = board.item(id).and_then(key) else { continue };
+        if seen.insert(k, id).is_some() && soft_set.contains(&id) {
+            doubled.push(id);
+        }
+    }
+    let mut spans = Vec::new();
+    for &id in &doubled {
+        if let Some(item) = board.remove(id) {
+            spans.extend(item.span);
+        }
+    }
+    soft.retain(|id| board.item(*id).is_some());
+    (doubled.len(), spans)
+}
+
+/// Takes out the router's copper that leads nowhere, as KiCad would flag it (see [`dangles`]).
+/// Taking one out can leave the next loose, so it goes round until none is left. How many went,
+/// and the board file's spans among them, for removing from the file.
+pub fn prune_dangling(board: &mut Board, soft: &mut Vec<ItemId>) -> (usize, Vec<Span>) {
+    let (mut pruned, mut spans) = (0, Vec::new());
+    loop {
+        let loose: Vec<ItemId> = soft.iter().copied().filter(|&id| dangles(board, id)).collect();
+        let before = pruned;
+        // One at a time, judged again: two stubs covering each other must not both go. What
+        // carries a connection stays however it looks, so a round may take nothing out.
+        for id in loose {
+            if !dangles(board, id) || !bridges_nothing(board, id) {
+                continue;
+            }
+            if let Some(item) = board.remove(id) {
+                spans.extend(item.span);
+                pruned += 1;
+            }
+        }
+        soft.retain(|id| board.item(*id).is_some());
+        if pruned == before {
+            break;
+        }
+    }
+    (pruned, spans)
+}
+
+/// Pieces a search for another way round may visit before giving up and keeping the piece.
+const DETOUR_LIMIT: usize = 400;
+
+/// Its net's copper joined to an item, leaving out pours a refill may take back.
+fn neighbours(board: &Board, id: ItemId) -> Vec<ItemId> {
+    let Some(item) = board.item(id) else { return Vec::new() };
+    let bb = board.bbox(id).unwrap_or_else(|| item.shape.bbox());
+    let mut out: Vec<ItemId> = (0..board.layers.len())
+        .filter(|l| item.on(*l))
+        .flat_map(|l| board.near(l, bb).into_iter().filter(move |&o| o != id))
+        .filter(|&o| board.item(o).is_some_and(|it| it.net == item.net && it.is_copper() && !it.refilled()) && joined(board, id, o))
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// Whether taking the item out leaves everything it joins still joined: true when it joins at
+/// most one piece, or when a short search finds a way between all its neighbours without it.
+/// Whatever KiCad calls a dangling end, copper that carries a connection stays.
+fn bridges_nothing(board: &Board, id: ItemId) -> bool {
+    let around = neighbours(board, id);
+    let Some((&first, rest)) = around.split_first() else { return true };
+    if rest.is_empty() {
+        return true;
+    }
+    let mut wanted: HashSet<ItemId> = rest.iter().copied().collect();
+    let mut seen: HashSet<ItemId> = HashSet::from([id, first]);
+    let mut stack = vec![first];
+    while let Some(at) = stack.pop() {
+        if seen.len() > DETOUR_LIMIT {
+            return false;
+        }
+        for next in neighbours(board, at) {
+            if seen.insert(next) {
+                wanted.remove(&next);
+                if wanted.is_empty() {
+                    return true;
+                }
+                stack.push(next);
+            }
+        }
+    }
+    false
+}
+
+/// Whether KiCad would call it dangling: a track with an end that meets nothing of its net, or
+/// lying wholly inside another piece of its net's copper that already joins everything it joins
+/// (a stub that adds nothing); a via that meets its net's copper on fewer than two layers. Ends
+/// meet as [`joined`] has them, by the track's round end. Pours do not count as covering a
+/// track, as a refill may draw them back from it.
+fn dangles(board: &Board, id: ItemId) -> bool {
+    let Some(item) = board.item(id) else { return false };
+    if item.net == 0 {
+        return false;
+    }
+    let ours = |layer: usize, other: ItemId| {
+        (other != id).then(|| board.item(other)).flatten().filter(|o| o.net == item.net && o.is_copper() && o.on(layer))
+    };
+    match (&item.kind, &item.shape) {
+        (Kind::Track, Shape::Capsule { a, b, r }) => {
+            let layer = item.layers.trailing_zeros() as usize;
+            let near = board.near(layer, item.shape.bbox());
+            let loose_end = [*a, *b].iter().any(|&p| {
+                let end = Shape::Capsule { a: p, b: p, r: *r };
+                !near.iter().any(|&o| ours(layer, o).is_some_and(|o| o.shape.gap_within(&end, 0.0) == 0.0))
+            });
+            if loose_end {
+                return true;
+            }
+            let neighbours: Vec<ItemId> = near.iter().copied().filter(|&o| ours(layer, o).is_some() && joined(board, id, o)).collect();
+            near.iter().any(|&cover| {
+                ours(layer, cover).is_some_and(|c| !matches!(c.kind, Kind::Pour { .. }) && c.shape.contains(*a) && c.shape.contains(*b))
+                    && neighbours.iter().all(|&o| o == cover || joined(board, cover, o))
+            })
+        }
+        (Kind::Via, _) => {
+            let met = (0..board.layers.len())
+                .filter(|l| item.on(*l))
+                .filter(|&l| board.near(l, item.shape.bbox()).into_iter().any(|o| ours(l, o).is_some_and(|o| o.shape.gap_within(&item.shape, 0.0) == 0.0)))
+                .count();
+            met < 2
+        }
+        _ => false,
+    }
 }
 
 fn length(points: &[Point]) -> f64 {

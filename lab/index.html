@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ultraroute Lab</title>
+<!-- The local experiment lab: served only from ~/Software/ultraroute-lab (proj up ultraroute-lab),
+     filled by tools/lab.py. Never part of the Pages site. -->
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --ink: #1d1f21; --muted: #6b6f76; --line: #e2e2de;
+  --accent: #2f6fdb; --good: #1f8a4c; --bad: #c43d3d; --warn: #b7791f; --bar: #2f6fdb; --code: #f0f0ec;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161a; --panel: #1c1f24; --ink: #e6e6e3; --muted: #9298a2; --line: #2c3038;
+    --accent: #6ea0ff; --good: #4cc27f; --bad: #ff6b6b; --warn: #e3a948; --bar: #6ea0ff; --code: #111316;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; align-items: baseline; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 2; }
+header h1 { font-size: 17px; margin: 0; }
+header .muted { font-size: 12px; }
+main { display: grid; grid-template-columns: 280px 1fr; min-height: calc(100vh - 50px); }
+nav { border-right: 1px solid var(--line); padding: 8px; overflow-y: auto; }
+nav a { display: block; padding: 8px 10px; border-radius: 8px; color: inherit; text-decoration: none; }
+nav a:hover { background: var(--code); }
+nav a.on { background: var(--accent); color: #fff; }
+nav a.on .muted { color: #e6ecff; }
+nav a.on .badge { color: #fff; border-color: #fff; }
+section { padding: 16px; min-width: 0; }
+h2 { font-size: 18px; margin: 0 0 4px; }
+h3 { font-size: 15px; margin: 22px 0 8px; }
+.muted { color: var(--muted); }
+.badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); margin-left: 6px; }
+.badge.running { color: var(--warn); border-color: var(--warn); }
+.badge.done { color: var(--good); border-color: var(--good); }
+.badge.bad { color: var(--bad); border-color: var(--bad); }
+.notes p { margin: 4px 0; }
+.tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { padding: 6px 10px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+th { font-size: 12px; color: var(--muted); font-weight: 600; background: var(--panel); position: sticky; top: 0; }
+th:first-child, td:first-child { text-align: left; }
+tr:last-child td { border-bottom: 0; }
+tbody tr { cursor: pointer; }
+tbody tr:hover td { background: var(--code); }
+tbody tr.on td { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+td.best { color: var(--good); font-weight: 650; }
+td.worst { color: var(--bad); }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+.card .k { font-size: 11px; color: var(--muted); }
+.card .v { font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.timeline { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; }
+.tl-row { display: grid; grid-template-columns: 130px 1fr 110px; gap: 8px; align-items: center; font-size: 12px; margin: 3px 0; }
+.tl-track { position: relative; height: 14px; background: var(--code); border-radius: 4px; }
+.tl-bar { position: absolute; top: 0; bottom: 0; background: var(--bar); border-radius: 4px; min-width: 2px; opacity: .85; }
+.tl-row .r { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.log { background: var(--code); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; max-height: 60vh; overflow: auto; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
+.log .t { color: var(--muted); }
+.log .p { color: var(--accent); }
+.log .s { font-weight: 650; }
+.controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+input[type=search], select { font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); }
+.chips span { display: inline-block; font-size: 12px; padding: 2px 8px; margin: 2px; border-radius: 999px; background: var(--code); border: 1px solid var(--line); }
+pre.small { font-size: 12px; white-space: pre-wrap; margin: 0; }
+.empty { padding: 40px 0; color: var(--muted); }
+@media (max-width: 760px) {
+  main { grid-template-columns: 1fr; }
+  nav { border-right: 0; border-bottom: 1px solid var(--line); max-height: 30vh; }
+  .tl-row { grid-template-columns: 90px 1fr 80px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Ultraroute Lab</h1>
+  <span class="muted" id="stamp"></span>
+</header>
+<main>
+  <nav id="list"></nav>
+  <section id="view"><p class="empty">Loading…</p></section>
+</main>
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const num = (v, d = 0) => (v == null || Number.isNaN(v) ? '–' : Number(v).toFixed(d));
+let experiments = [], current = null, logCache = {}, timer = null;
+
+async function getJson(path) {
+  const r = await fetch(path + '?t=' + Date.now());
+  if (!r.ok) throw new Error(path + ': ' + r.status);
+  return r.json();
+}
+
+function route() {
+  const [exp, run] = decodeURIComponent(location.hash.slice(1)).split('/');
+  return { exp: exp || experiments[0]?.id, run };
+}
+
+async function refresh() {
+  try { experiments = await getJson('index.json'); } catch { experiments = []; }
+  $('#stamp').textContent = 'updated ' + new Date().toLocaleTimeString();
+  const { exp } = route();
+  $('#list').innerHTML = experiments.length ? experiments.map((e) => `
+    <a href="#${encodeURIComponent(e.id)}" class="${e.id === exp ? 'on' : ''}">
+      <div>${esc(e.title)}${badge(e.status)}</div>
+      <div class="muted" style="font-size:12px">${esc(e.id)} · ${e.runs} runs · ${esc((e.started || '').replace('T', ' ').slice(0, 16))}</div>
+    </a>`).join('') : '<p class="empty" style="padding:10px">No experiments yet. Record one with tools/lab.py.</p>';
+  if (exp) {
+    try { current = await getJson(`experiments/${encodeURIComponent(exp)}/experiment.json`); } catch { current = null; }
+  }
+  render();
+  clearTimeout(timer);
+  // Poll while anything runs, so a live run's log and stats fill in.
+  if (current?.status === 'running' || experiments.some((e) => e.status === 'running')) timer = setTimeout(refresh, 3000);
+}
+
+function badge(status) {
+  const cls = status === 'running' ? 'running' : status === 'done' ? 'done' : 'bad';
+  return status ? `<span class="badge ${cls}">${esc(status)}</span>` : '';
+}
+
+// The columns of the comparison table: what each run's record says, and which way is better.
+const COLUMNS = [
+  ['KiCad open', (r) => r.drc?.unconnected, 'low'],
+  ['errors', (r) => r.drc ? Object.values(r.drc.errors).reduce((a, b) => a + b, 0) : null, 'low'],
+  ['router open', (r) => r.stats?.result?.open, 'low'],
+  ['block cuts', (r) => r.blocks?.intrusions, 'low'],
+  ['negotiated', (r) => r.stats?.negotiate ? `${r.stats.negotiate.done}/${r.stats.negotiate.total}` : null],
+  ['rounds', (r) => r.stats?.negotiate?.rounds],
+  ['vias', (r) => r.stats?.negotiate?.vias, 'low'],
+  ['rip-up kept', (r) => r.stats?.['rip-up']?.kept, 'high'],
+  ['nudge kept', (r) => r.stats?.nudge?.kept, 'high'],
+  ['doubled', (r) => r.stats?.cleanup?.doubled],
+  ['pruned', (r) => r.stats?.cleanup?.pruned],
+  ['mm', (r) => r.stats?.tighten?.mm_after, 'low'],
+  ['wall s', (r) => r.wall_s ?? r.stats?.result?.t, 'low'],
+  ['peak MB', (r) => r.peak_mb, 'low'],
+];
+
+function render() {
+  const view = $('#view');
+  if (!current) { view.innerHTML = '<p class="empty">Pick an experiment.</p>'; return; }
+  const e = current, { run } = route();
+  const runs = e.runs || [];
+  const extremes = COLUMNS.map(([, get, better]) => {
+    if (!better) return null;
+    const vals = runs.map(get).filter((v) => typeof v === 'number');
+    if (vals.length < 2 || Math.min(...vals) === Math.max(...vals)) return null;
+    return better === 'low' ? [Math.min(...vals), Math.max(...vals)] : [Math.max(...vals), Math.min(...vals)];
+  });
+  view.innerHTML = `
+    <h2>${esc(e.title)}${badge(e.status)}</h2>
+    <div class="muted">${esc(e.id)} · started ${esc((e.started || '').replace('T', ' '))}${e.finished ? ' · finished ' + esc(e.finished.replace('T', ' ')) : ''}
+      · commit ${esc(e.commit?.head)}${e.commit?.dirty ? ' + uncommitted core changes' : ''}</div>
+    ${(e.notes || []).length ? `<div class="notes">${e.notes.map((n) => `<p>${esc(n.text)} <span class="muted">(${esc(n.at.replace('T', ' ').slice(0, 16))})</span></p>`).join('')}</div>` : ''}
+    <h3>Runs</h3>
+    <div class="tablewrap"><table>
+      <thead><tr><th>run</th>${COLUMNS.map(([h]) => `<th>${h}</th>`).join('')}</tr></thead>
+      <tbody>${runs.map((r) => `<tr data-run="${esc(r.name)}" class="${r.name === run ? 'on' : ''}">
+        <td>${esc(r.name)}${r.status !== 'done' ? badge(r.status) : ''}</td>
+        ${COLUMNS.map(([, get], i) => {
+          const v = get(r), x = extremes[i];
+          const cls = x && v === x[0] ? 'best' : x && v === x[1] ? 'worst' : '';
+          return `<td class="${cls}">${v ?? '–'}</td>`;
+        }).join('')}</tr>`).join('')}</tbody>
+    </table></div>
+    <p class="muted" style="font-size:12px">KiCad figures are after a zone refill. Green is the best of the experiment, red the worst. Pick a run for its passes and log.</p>
+    <div id="run"></div>`;
+  view.querySelectorAll('tbody tr').forEach((tr) => tr.addEventListener('click', () => {
+    location.hash = encodeURIComponent(e.id) + '/' + encodeURIComponent(tr.dataset.run);
+  }));
+  const chosen = runs.find((r) => r.name === run);
+  if (chosen) renderRun(e, chosen);
+}
+
+async function renderRun(e, r) {
+  const el = $('#run');
+  const drc = r.drc;
+  const end = Math.max(r.wall_s ?? 0, r.stats?.result?.t ?? 0, ...(r.phases || []).map((p) => p.last), 1);
+  el.innerHTML = `
+    <h3>${esc(r.name)} <span class="muted" style="font-weight:400" title="${esc(r.board || '')}">${esc((r.board || '').split('/').pop())}</span></h3>
+    <div class="muted" style="font-size:12px;margin-bottom:8px"><code>${esc((r.args || []).join(' '))}</code></div>
+    <div class="cards">
+      ${card('KiCad open', drc?.unconnected)}${card('errors', drc ? Object.values(drc.errors).reduce((a, b) => a + b, 0) : null)}
+      ${card('warnings', drc?.warnings)}${card('router open', r.stats?.result?.open)}
+      ${card('block cuts', r.blocks?.intrusions)}${card('wall', r.wall_s != null ? num(r.wall_s, 1) + ' s' : null)}
+      ${card('peak memory', r.peak_mb != null ? r.peak_mb + ' MB' : null)}
+      ${card('cleanup open', r.stats?.cleanup ? `${r.stats.cleanup.open_before} → ${r.stats.cleanup.open_after}` : null)}
+    </div>
+    <h3>Passes</h3>
+    ${(r.phases || []).length ? `<div class="timeline">${r.phases.map((p) => `
+      <div class="tl-row"><span>${esc(p.phase)}</span>
+        <div class="tl-track"><div class="tl-bar" style="left:${(100 * p.first) / end}%;width:${(100 * (p.last - p.first)) / end}%"></div></div>
+        <span class="r">${num(p.first, 1)}–${num(p.last, 1)} s · ${p.lines}</span></div>`).join('')}
+      <div class="muted" style="font-size:11px;margin-top:4px">0 – ${num(end, 1)} s · each bar spans a phase's first to last log line</div></div>`
+      : '<p class="muted">No per-pass log (run without --verbose).</p>'}
+    ${Object.keys(r.stats || {}).length ? `<h3>Stage summaries</h3><div class="tablewrap"><table><thead><tr><th>stage</th><th>says</th></tr></thead><tbody>
+      ${Object.entries(r.stats).map(([k, v]) => `<tr><td>${esc(k)}</td><td style="text-align:left;white-space:normal">${Object.entries(v).map(([a, b]) => `${esc(a)} <b>${esc(b)}</b>`).join(' · ')}</td></tr>`).join('')}
+    </tbody></table></div>` : ''}
+    ${drc ? `<h3>Open nets <span class="muted" style="font-weight:400">${drc.unconnected}</span></h3>
+      <div class="chips">${Object.entries(drc.open_nets).sort((a, b) => b[1] - a[1]).map(([n, c]) => `<span>${esc(n)}${c > 1 ? ' ×' + c : ''}</span>`).join('') || '<span>none</span>'}</div>
+      <h3>Violations <span class="muted" style="font-weight:400">${drc.violations.length}${drc.violations.length >= 300 ? '+' : ''}</span></h3>
+      <div class="controls"><select id="sev"><option value="error">errors</option><option value="">all</option></select></div>
+      <div class="tablewrap" style="max-height:40vh;overflow:auto"><table><thead><tr><th>type</th><th>severity</th><th>at (mm)</th><th>item</th></tr></thead><tbody id="viol"></tbody></table></div>` : ''}
+    ${r.blocks?.report ? `<h3>Blocks</h3><div class="log"><pre class="small">${esc(r.blocks.report)}</pre></div>` : ''}
+    <h3>Log</h3>
+    <div class="controls"><input type="search" id="filter" placeholder="filter lines (regex)"><select id="phase"><option value="">every phase</option>
+      ${(r.phases || []).map((p) => `<option>${esc(p.phase)}</option>`).join('')}</select><span class="muted" id="count"></span></div>
+    <div class="log" id="log">Loading…</div>`;
+  if (drc) {
+    const fill = () => {
+      const sev = $('#sev').value;
+      $('#viol').innerHTML = drc.violations.filter((v) => !sev || v.severity === sev).map((v) =>
+        `<tr><td>${esc(v.type)}</td><td>${esc(v.severity)}</td><td>${v.at.join(', ')}</td><td style="text-align:left">${esc(v.what)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">none</td></tr>';
+    };
+    $('#sev').addEventListener('change', fill);
+    fill();
+  }
+  const key = e.id + '/' + r.name;
+  let text = logCache[key];
+  if (text == null || r.status === 'running') {
+    const res = await fetch(`experiments/${encodeURIComponent(e.id)}/${encodeURIComponent(r.name)}/log.txt?t=${Date.now()}`);
+    text = res.ok ? await res.text() : '(no log)';
+    logCache[key] = text;
+  }
+  const lines = text.split('\n');
+  const show = () => {
+    let re = null;
+    try { re = $('#filter').value ? new RegExp($('#filter').value, 'i') : null; } catch { re = null; }
+    const phase = $('#phase').value;
+    const kept = lines.filter((l) => (!re || re.test(l)) && (!phase || l.includes('] ' + phase + ':')));
+    $('#count').textContent = `${kept.length} of ${lines.length} lines`;
+    $('#log').innerHTML = kept.slice(-5000).map((l) => {
+      const m = l.match(/^\s+\[\s*([\d.]+) s\] ([^:]+): (.*)$/);
+      return m ? `<span class="t">${m[1].padStart(8)}</span> <span class="p">${esc(m[2])}</span> ${esc(m[3])}` : `<span class="s">${esc(l)}</span>`;
+    }).join('\n');
+  };
+  $('#filter').addEventListener('input', show);
+  $('#phase').addEventListener('change', show);
+  show();
+}
+
+function card(k, v) {
+  return `<div class="card"><div class="k">${esc(k)}</div><div class="v">${v ?? '–'}</div></div>`;
+}
+
+window.addEventListener('hashchange', refresh);
+refresh();
+</script>
+</body>
+</html>

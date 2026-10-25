@@ -578,7 +578,7 @@ pub fn run(a: &Args, mut board: Board, text: &str, mut live: Option<Live>, cance
     let log = (streaming || verbose).then(|| {
         grid::Log(Arc::new(move |act| {
             if verbose {
-                eprintln!("  {}: {}", act.phase, act.text);
+                eprintln!("  [{:8.3} s] {}: {}", started.elapsed().as_secs_f64(), act.phase, act.text);
             }
             if let Some(l) = shared.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
                 l.note(act);
@@ -905,6 +905,16 @@ pub fn run(a: &Args, mut board: Board, text: &str, mut live: Option<Live>, cance
             c.length_after,
             started.elapsed().as_secs_f64()
         );
+    }
+    let open_now = |board: &Board| if a.pours_block { connectivity(board) } else { connectivity_without_pours(board) }.airlines.len();
+    let open_before = open_now(&board);
+    let (doubled, spans) = grid::drop_duplicates(&mut board, &mut laid);
+    removed.extend(spans);
+    let (pruned, spans) = grid::prune_dangling(&mut board, &mut laid);
+    removed.extend(spans);
+    if doubled + pruned > 0 {
+        say("cleaning", format!("{doubled} doubled tracks and {pruned} pieces of copper leading nowhere taken out"));
+        eprintln!("dropped {doubled} doubled, pruned {pruned} dangling, open {open_before} -> {}, {:.1} s", open_now(&board), started.elapsed().as_secs_f64());
     }
     let open = if a.pours_block { connectivity(&board) } else { connectivity_without_pours(&board) }.airlines.len();
     eprintln!("routed {} more, {} failed, {} open, {:.1} s", stats.routed, stats.failed, open, started.elapsed().as_secs_f64());

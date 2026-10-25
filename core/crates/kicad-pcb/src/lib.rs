@@ -22,7 +22,7 @@ pub mod rules;
 pub mod sexpr;
 pub mod write;
 
-pub use copper::{read_copper, ArcTrack, Copper, CopperLayer, Keepout, Outline, PadCopper, PadShape, Span, Track, Via, Zone};
+pub use copper::{read_copper, ArcTrack, Copper, CopperLayer, Group, Keepout, Outline, PadCopper, PadShape, Span, Track, Via, Zone};
 pub use model::*;
 pub use outline::{
     arc_is_ccw, chain, circumcenter, Loop, OutlineError, OutlineLoops, Segment, OUTLINE_WELD_M,

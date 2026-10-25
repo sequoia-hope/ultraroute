@@ -116,7 +116,7 @@ impl World {
             let rule = match &item.kind {
                 Kind::Keepout { forbids, .. } if forbids.tracks || forbids.vias => Some(Rule::Keepout { tracks: forbids.tracks, vias: forbids.vias }),
                 Kind::Keepout { .. } => None,
-                Kind::Pour { .. } if !self.pours_block => None,
+                Kind::Pour { .. } if !self.pours_block && item.refilled() => None,
                 _ if item.is_copper() => Some(Rule::Copper),
                 _ => None,
             };

@@ -305,7 +305,7 @@ impl ObstacleMap {
             }
             return;
         }
-        if item.is_copper() && (self.pours_block || !matches!(item.kind, Kind::Pour { .. })) {
+        if item.is_copper() && (self.pours_block || !item.refilled()) {
             let clearance = self.clearance_to(board, item.net);
             let mut hit = Vec::new();
             self.cells_near(&item.shape, half_width + clearance + reach, &mut |c| hit.push(c));

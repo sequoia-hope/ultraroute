@@ -279,3 +279,63 @@ fn combing_escapes_into_lanes_breaks_no_connection() {
     assert!(now.difference(&was).next().is_none());
 }
 
+
+#[test]
+fn copper_leading_nowhere_is_pruned_and_connected_copper_is_kept() {
+    let mut b = earring();
+    // Every track and via the file has counts as the router's, and none of it dangles.
+    let mut soft: Vec<ItemId> = b.items().filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via)).map(|(id, _)| id).collect();
+    let before = soft.len();
+    let dangling_before: Vec<ItemId> = {
+        let mut probe = b.clone();
+        let mut s = soft.clone();
+        prune_dangling(&mut probe, &mut s);
+        soft.iter().copied().filter(|id| probe.item(*id).is_none()).collect()
+    };
+    // A stub off the end of a routed track of a net with no pour, to a point clear of its net,
+    // then a via there meeting only the stub.
+    let poured: BTreeSet<u32> = b.items().filter(|(_, it)| matches!(it.kind, Kind::Pour { .. })).map(|(_, it)| it.net).collect();
+    let clear = |b: &Board, net: u32, p: Point| {
+        let dot = Shape::Capsule { a: p, b: p, r: 300_000 };
+        b.items().all(|(_, o)| o.net != net || !o.is_copper() || o.shape.gap_within(&dot, 0.0) > 0.0)
+    };
+    let (net, layers, from, far, r) = b
+        .items()
+        .find_map(|(id, it)| match (&it.kind, &it.shape) {
+            (Kind::Track, Shape::Capsule { a, r, .. }) if !dangling_before.contains(&id) && !poured.contains(&it.net) => {
+                let far = [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().map(|(dx, dy)| Point::new(a.x + dx * 800_000, a.y + dy * 800_000)).find(|p| clear(&b, it.net, *p))?;
+                Some((it.net, it.layers, *a, far, *r))
+            }
+            _ => None,
+        })
+        .unwrap();
+    let stub = b.insert(Item { kind: Kind::Track, net, layers, shape: Shape::Capsule { a: from, b: far, r }, hole: None, locked: false, span: None });
+    let via = b.insert(Item { kind: Kind::Via, net, layers: (1 << b.layers.len()) - 1, shape: Shape::Capsule { a: far, b: far, r: 200_000 }, hole: Some((far, 100_000)), locked: false, span: None });
+    soft.extend([stub, via]);
+    let (pruned, _) = prune_dangling(&mut b, &mut soft);
+    assert!(b.item(stub).is_none() && b.item(via).is_none(), "the via meets only the stub, so both go");
+    assert_eq!(pruned, 2 + dangling_before.len());
+    assert_eq!(soft.len(), before - dangling_before.len());
+}
+
+#[test]
+fn a_track_laid_on_an_identical_one_is_dropped_and_the_files_is_kept() {
+    let mut b = earring();
+    let (file_track, twin) = b.items().find(|(_, it)| it.kind == Kind::Track && it.net != 0).map(|(id, it)| (id, it.clone())).unwrap();
+    let laid = b.insert(Item { span: None, ..twin });
+    let mut soft = vec![laid];
+    assert_eq!(drop_duplicates(&mut b, &mut soft).0, 1);
+    assert!(b.item(laid).is_none() && b.item(file_track).is_some());
+    assert!(soft.is_empty());
+}
+
+#[test]
+fn pruning_never_opens_a_connection() {
+    let mut b = earring();
+    let open = |b: &Board| connectivity_without_pours(b).airlines.len();
+    let before = open(&b);
+    let mut soft: Vec<ItemId> = b.items().filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via)).map(|(id, _)| id).collect();
+    drop_duplicates(&mut b, &mut soft);
+    prune_dangling(&mut b, &mut soft);
+    assert!(open(&b) <= before, "{} open after pruning, {before} before", open(&b));
+}

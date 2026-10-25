@@ -209,8 +209,7 @@ fn joined_to(board: &Board, from: ItemId, pours: bool) -> HashSet<ItemId> {
                     continue;
                 }
                 let Some(o) = board.item(other) else { continue };
-                let pour = matches!(o.kind, Kind::Pour { .. });
-                if o.net == net && o.is_copper() && o.on(layer) && (pours || !pour) && board::joined(board, id, other) {
+                if o.net == net && o.is_copper() && o.on(layer) && (pours || !o.refilled()) && board::joined(board, id, other) {
                     seen.insert(other);
                     stack.push(other);
                 }
@@ -677,7 +676,7 @@ fn faults(board: &Board, id: ItemId, pours_block: bool) -> Vec<Option<ItemId>> {
         for layer in (0..board.layers.len()).filter(|l| item.on(*l)) {
             for other in board.near(layer, item.shape.bbox().grow(widest)) {
                 let Some(o) = board.item(other) else { continue };
-                if !matches!(o.kind, Kind::Pour { .. }) || !o.on(layer) || (o.net == item.net && item.net != 0) {
+                if !o.refilled() || !o.on(layer) || (o.net == item.net && item.net != 0) {
                     continue;
                 }
                 let required = board.clearance(item.net, o.net) as f64;

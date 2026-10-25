@@ -20,7 +20,7 @@ pub mod sweep;
 
 pub use blame::{blame, Blame, BlameOptions, BlameReport};
 pub use chase::{chase, ChaseOptions, ChaseStats};
-pub use cleanup::{pull_tight, CleanStats};
+pub use cleanup::{drop_duplicates, prune_dangling, pull_tight, CleanStats};
 pub use grid::{ObstacleMap, Profile, RouteGrid, ViaSpec};
 pub use nudge::{nudge, NudgeOptions, NudgeStats};
 pub use push::{push, rip_broken, Field, PushOptions, PushStats};

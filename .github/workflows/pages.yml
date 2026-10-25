@@ -45,7 +45,7 @@ jobs:
         run: |
           mkdir -p _site
           git archive HEAD | tar -x -C _site
-          rm -rf _site/studio _site/.github
+          rm -rf _site/studio _site/.github _site/lab
           mkdir -p _site/studio _site/api
           cp -r studio/web/dist/. _site/studio/
           studio/target/release/studio-server --root . --dump-jobs _site/api/jobs

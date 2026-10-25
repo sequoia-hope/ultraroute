@@ -60,7 +60,7 @@ fn anchors(board: &Board, id: ItemId) -> Vec<Point> {
 }
 
 fn cluster_member(item: &crate::model::Item, with_pours: bool) -> bool {
-    with_pours || !matches!(item.kind, Kind::Pour { .. })
+    with_pours || !item.refilled()
 }
 
 /// As KiCad joins them: at anchors. A track anchors at its round ends, a via or a round pad at
@@ -90,7 +90,8 @@ pub fn connectivity(board: &Board) -> Connectivity {
     joined_copper(board, true)
 }
 
-/// Connectivity as it will stand whatever the pours are refilled to: poured copper joins nothing.
+/// Connectivity as it will stand whatever the pours are refilled to: poured copper joins nothing,
+/// except a block's kept pours, which are not refilled.
 pub fn connectivity_without_pours(board: &Board) -> Connectivity {
     joined_copper(board, false)
 }
@@ -98,7 +99,7 @@ pub fn connectivity_without_pours(board: &Board) -> Connectivity {
 fn joined_copper(board: &Board, with_pours: bool) -> Connectivity {
     let ids: Vec<ItemId> = board
         .items()
-        .filter(|(_, it)| it.is_copper() && it.net != 0 && (with_pours || !matches!(it.kind, Kind::Pour { .. })))
+        .filter(|(_, it)| it.is_copper() && it.net != 0 && (with_pours || !it.refilled()))
         .map(|(id, _)| id)
         .collect();
     let max = ids.iter().copied().max().map_or(0, |m| m + 1);

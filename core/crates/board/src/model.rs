@@ -18,8 +18,9 @@ pub enum Kind {
     Pad { footprint: usize, number: String, plated: bool },
     Track,
     Via,
-    /// Copper a zone poured, one item per filled polygon.
-    Pour { zone: usize },
+    /// Copper a zone poured, one item per filled polygon. A kept pour belongs to a block: it is
+    /// a plane other nets keep clear of, not copper refilled around them.
+    Pour { zone: usize, kept: bool },
     /// A rule area, and the footprint it belongs to, whose own pads it does not keep out.
     Keepout { forbids: Keepout, footprint: Option<usize> },
 }
@@ -49,6 +50,11 @@ impl Item {
         self.hole.is_some() && matches!(self.kind, Kind::Via | Kind::Pad { plated: true, .. })
     }
 
+    /// Poured copper that is refilled around new copper, so routing may treat it as absent.
+    pub fn refilled(&self) -> bool {
+        matches!(self.kind, Kind::Pour { kept: false, .. })
+    }
+
     pub fn is_copper(&self) -> bool {
         !matches!(self.kind, Kind::Keepout { .. }) && self.layers != 0
     }
@@ -69,12 +75,54 @@ pub struct FootprintInfo {
     pub courtyard: Option<Vec<Point>>,
 }
 
+/// A functional block: a KiCad group of parts and zones laid out by hand (an RP2350's regulator,
+/// say) that routing must leave whole. Its pours are kept as planes other nets keep clear of, and
+/// its parts are held still; moving a block as one piece is left for later.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Block {
+    pub name: String,
+    /// Footprints, by index.
+    pub footprints: Vec<usize>,
+    /// Zones, by index into the board's copper zones.
+    pub zones: Vec<usize>,
+}
+
+impl Block {
+    /// Each outermost group with parts or zones in it, nested groups taken in.
+    pub fn of(pcb: &Pcb, copper: &Copper) -> Vec<Block> {
+        let groups: HashMap<&str, &kicad_pcb::Group> = copper.groups.iter().map(|g| (g.uuid.as_str(), g)).collect();
+        let nested: std::collections::HashSet<&str> = copper.groups.iter().flat_map(|g| &g.members).map(String::as_str).filter(|m| groups.contains_key(m)).collect();
+        let mut blocks = Vec::new();
+        for group in copper.groups.iter().filter(|g| !nested.contains(g.uuid.as_str())) {
+            let (mut members, mut stack, mut seen) = (Vec::new(), vec![group], std::collections::HashSet::new());
+            while let Some(g) = stack.pop() {
+                if !seen.insert(g.uuid.as_str()) {
+                    continue;
+                }
+                for m in &g.members {
+                    match groups.get(m.as_str()) {
+                        Some(inner) => stack.push(inner),
+                        None => members.push(m.as_str()),
+                    }
+                }
+            }
+            let footprints: Vec<usize> = pcb.footprints.iter().enumerate().filter(|(_, f)| members.contains(&f.uuid.as_str())).map(|(i, _)| i).collect();
+            let zones: Vec<usize> = copper.zones.iter().enumerate().filter(|(_, z)| members.contains(&z.uuid.as_str())).map(|(i, _)| i).collect();
+            if !footprints.is_empty() || !zones.is_empty() {
+                blocks.push(Block { name: group.name.clone(), footprints, zones });
+            }
+        }
+        blocks
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Board {
     pub layers: Vec<String>,
     /// Net names by net number; 0 is the unconnected net.
     pub nets: Vec<String>,
     pub footprints: Vec<FootprintInfo>,
+    pub blocks: Vec<Block>,
     pub outline: Vec<Vec<Point>>,
     /// Precomputed outline edge segments `(a, b, BBox::of([a, b]))` for fast edge-clearance checks.
     pub outline_edges: Vec<(Point, Point, BBox)>,
@@ -127,6 +175,7 @@ impl Board {
             .iter()
             .map(|name| nm(rules.class_of(name).map_or(0.0, |c| c.clearance)).max(min_clearance_nm))
             .collect();
+        let blocks = Block::of(pcb, copper);
         let mut board = Board {
             layers: layers.clone(),
             nets,
@@ -136,16 +185,18 @@ impl Board {
                 .zip(&copper.locked_footprints)
                 .zip(&copper.footprint_at)
                 .zip(&copper.courtyards)
-                .map(|(((f, locked), at_span), yard)| FootprintInfo {
+                .enumerate()
+                .map(|(i, (((f, locked), at_span), yard))| FootprintInfo {
                     reference: f.reference.clone(),
                     at: Point::from_m(f.at),
                     rotation_deg: f.rotation_deg,
                     back: matches!(f.side, kicad_pcb::Side::Back),
-                    locked: *locked,
+                    locked: *locked || blocks.iter().any(|b| b.footprints.contains(&i)),
                     at_span: *at_span,
                     courtyard: yard.as_ref().map(|y| y.iter().copied().map(Point::from_m).collect()),
                 })
                 .collect(),
+            blocks: blocks.clone(),
             outline: Vec::new(),
             outline_edges: Vec::new(),
             rules,
@@ -264,7 +315,7 @@ impl Board {
             for (layer, poly) in &zone.filled {
                 if poly.len() >= 3 {
                     board.insert(Item {
-                        kind: Kind::Pour { zone: z },
+                        kind: Kind::Pour { zone: z, kept: blocks.iter().any(|b| b.zones.contains(&z)) },
                         net: zone.net,
                         layers: one(layer),
                         shape: Shape::Polygon(poly.iter().copied().map(Point::from_m).collect()),

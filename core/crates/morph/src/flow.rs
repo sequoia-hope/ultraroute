@@ -142,7 +142,7 @@ fn field_for(board: &Board, moves: &HashMap<usize, Point>) -> WarpField {
             Kind::Pad { footprint, .. } => moves.get(&footprint).is_none_or(|v| *v == Point::new(0, 0)),
             Kind::Keepout { .. } => true,
             Kind::Track | Kind::Via => it.locked,
-            Kind::Pour { .. } => false,
+            Kind::Pour { kept, .. } => kept,
         })
         .map(|(_, it)| it.shape.clone())
         .collect();
