@@ -180,7 +180,13 @@ pub(crate) fn cut(a: Point, b: Point, junctions: &[Point], piece: f64) -> Vec<Po
     let len2 = dx * dx + dy * dy;
     let pieces = (len2.sqrt() / piece).ceil().max(1.0) as usize;
     let mut stops: Vec<f64> = (0..=pieces).map(|k| k as f64 / pieces as f64).collect();
-    for p in junctions {
+    let bb = BBox::of([a, b]).grow(2);
+    let i0 = junctions.partition_point(|p| p.x < bb.min.x);
+    let i1 = junctions.partition_point(|p| p.x <= bb.max.x);
+    for p in &junctions[i0..i1] {
+        if p.y < bb.min.y || p.y > bb.max.y {
+            continue;
+        }
         let t = ((p.x - a.x) as f64 * dx + (p.y - a.y) as f64 * dy) / len2;
         if t > 0.0 && t < 1.0 {
             let (qx, qy) = (a.x as f64 + dx * t, a.y as f64 + dy * t);

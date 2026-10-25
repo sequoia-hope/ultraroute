@@ -121,22 +121,24 @@ impl WarpField {
         for (k, &c) in free.iter().enumerate() {
             slot[c] = k;
         }
-        let neighbours = |c: usize| [c - 1, c + 1, c - nx, c + nx];
-        // A x = b with A = 4I - (free neighbours), b = the sum of fixed neighbours' values.
+        // Precompute the 4 neighbor slots per free node so CG iterations do not index `slot` over the full grid.
+        let mut adj: Vec<[usize; 4]> = Vec::with_capacity(free.len());
         let mut b = vec![0.0; free.len()];
         for (k, &c) in free.iter().enumerate() {
-            for n in neighbours(c) {
+            let ns = [c - 1, c + 1, c - nx, c + nx];
+            for &n in &ns {
                 if slot[n] == usize::MAX {
                     b[k] += value(&self.u[n]);
                 }
             }
+            adj.push(ns.map(|n| slot[n]));
         }
         let apply = |x: &[f64], out: &mut [f64]| {
-            for (k, &c) in free.iter().enumerate() {
+            for (k, ns) in adj.iter().enumerate() {
                 let mut sum = 4.0 * x[k];
-                for n in neighbours(c) {
-                    if slot[n] != usize::MAX {
-                        sum -= x[slot[n]];
+                for &s in ns {
+                    if s != usize::MAX {
+                        sum -= x[s];
                     }
                 }
                 out[k] = sum;

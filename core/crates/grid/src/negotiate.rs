@@ -238,11 +238,12 @@ pub fn route_negotiated(
     let mut zones = Claims::new(classes.iter().cloned(), layers * cells);
     let mut history = vec![0u32; layers * cells];
     let mut present = options.present;
+    let mut grid_buf = sample.clone();
     let ends: Vec<(Vec<Terminal>, Vec<Terminal>)> = connections
         .iter()
         .map(|c| {
-            let grid = maps[&c.class].view(c.net);
-            (terminals(board, &grid, c.from), terminals(board, &grid, c.to))
+            maps[&c.class].view_into(c.net, &mut grid_buf);
+            (terminals(board, &grid_buf, c.from), terminals(board, &grid_buf, c.to))
         })
         .collect();
     let cells_of = |t: &[Terminal]| t.iter().map(|t| t.0).collect::<Vec<usize>>();
@@ -280,10 +281,10 @@ pub fn route_negotiated(
                 let c = &mut connections[k];
                 tell(&options.log, "negotiating", || format!("round {}: rerouting {}", round + 1, board.net_name(c.net)), None);
                 zones.remove(c.net, &c.zone);
-                let mut grid = maps[&c.class].view(c.net);
-                grid.penalty = penalties(zones.seen_by(&c.class), &history, present, c.net);
+                maps[&c.class].view_into(c.net, &mut grid_buf);
+                penalties_into(zones.seen_by(&c.class), &history, present, c.net, &mut grid_buf.penalty);
                 let (sources, targets) = &ends[k];
-                c.path = solver.route(&grid, &cells_of(sources), &cells_of(targets), options.via_cost);
+                c.path = solver.route(&grid_buf, &cells_of(sources), &cells_of(targets), options.via_cost);
                 c.zone = c.path.as_ref().map(|p| claims_of(p, &c.class)).unwrap_or_default();
                 zones.add(c.net, &c.zone);
                 if shown.elapsed() > TRIAL_INTERVAL {
@@ -336,9 +337,9 @@ pub fn route_negotiated(
         if path.iter().map(|&(l, i, j)| l * cells + j * nx + i).any(|n| !own_ends[k].contains(&n) && committed.seen_by(&c.class).others(c.net, n) > 0) {
             continue;
         }
-        let grid = maps[&c.class].view(c.net);
+        maps[&c.class].view_into(c.net, &mut grid_buf);
         let (sources, targets) = &ends[k];
-        let Some(items) = lay(board, &grid, path, sources, targets) else { continue };
+        let Some(items) = lay(board, &grid_buf, path, sources, targets) else { continue };
         committed.add(c.net, &c.zone);
         stats.committed += 1;
         tell(&options.log, "committing", || format!("{}: laid its negotiated route", board.net_name(c.net)), None);

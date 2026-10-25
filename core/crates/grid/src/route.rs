@@ -94,6 +94,21 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
     };
     let mut stats = Stats::default();
     let mut maps: HashMap<String, ObstacleMap> = HashMap::new();
+    let mut grid = RouteGrid {
+        net: 0,
+        x0: 0,
+        y0: 0,
+        h: options.cell,
+        nx: 0,
+        ny: 0,
+        layers: Vec::new(),
+        half_width: 0,
+        via: None,
+        blocked: Vec::new(),
+        via_blocked: Vec::new(),
+        penalty: Vec::new(),
+        pours_block: options.pours_block,
+    };
     let mut given_up: BTreeSet<(ItemId, ItemId)> = BTreeSet::new();
     loop {
         // Unless pours are kept as planes, they will be refilled around what is routed, and may
@@ -118,7 +133,7 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
             );
             let profile = Profile::for_net(board, airline.net);
             let map = maps.entry(profile.class.clone()).or_insert_with(|| ObstacleMap::new(board, profile, options.cell, options.pours_block));
-            let grid = map.view(airline.net);
+            map.view_into(airline.net, &mut grid);
             let sources = terminals(board, &grid, airline.from_item);
             let targets = terminals(board, &grid, airline.to_item);
             let laid = if sources.is_empty() || targets.is_empty() {

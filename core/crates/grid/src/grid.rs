@@ -176,10 +176,28 @@ impl ObstacleMap {
         match shape {
             Shape::Capsule { a, b, r } => {
                 let bb = shape.bbox().grow(margin);
-                for j in range(bb.min.y, bb.max.y, self.y0, self.ny) {
-                    for i in range(bb.min.x, bb.max.x, self.x0, self.nx) {
-                        if point_segment(self.centre(i, j), *a, *b) < (*r + margin) as f64 {
-                            f(j * self.nx + i);
+                let limit = (*r + margin) as f64;
+                if a == b {
+                    let limit2 = limit * limit;
+                    for j in range(bb.min.y, bb.max.y, self.y0, self.ny) {
+                        let dy = (self.centre(0, j).y - a.y) as f64;
+                        let dy2 = dy * dy;
+                        if dy2 >= limit2 {
+                            continue;
+                        }
+                        for i in range(bb.min.x, bb.max.x, self.x0, self.nx) {
+                            let dx = (self.centre(i, j).x - a.x) as f64;
+                            if dx * dx + dy2 < limit2 {
+                                f(j * self.nx + i);
+                            }
+                        }
+                    }
+                } else {
+                    for j in range(bb.min.y, bb.max.y, self.y0, self.ny) {
+                        for i in range(bb.min.x, bb.max.x, self.x0, self.nx) {
+                            if point_segment(self.centre(i, j), *a, *b) < limit {
+                                f(j * self.nx + i);
+                            }
                         }
                     }
                 }
@@ -256,30 +274,31 @@ impl ObstacleMap {
 
     /// The clearance between this class's copper and an item of `net`.
     pub(crate) fn clearance_to(&self, board: &Board, net: u32) -> Nm {
-        let other = board.rules.class_of(board.net_name(net)).map_or(0.0, |c| c.clearance);
-        self.profile.clearance.max(nm(other)).max(nm(board.rules.min_clearance))
+        self.profile.clearance.max(board.clearance(net, net))
     }
 
     /// Records what `id` claims.
     pub fn stamp(&mut self, board: &Board, id: ItemId) {
         let Some(item) = board.item(id) else { return };
         let cells = self.nx * self.ny;
-        let p = self.profile.clone();
+        let half_width = self.profile.half_width;
+        let via_radius = self.profile.via_radius;
+        let drill_radius = self.profile.drill_radius;
         let reach = self.reach();
         let rules = &board.rules;
         if let Kind::Keepout { forbids, .. } = &item.kind {
             if forbids.tracks {
+                let mut hit = Vec::new();
+                self.cells_near(&item.shape, half_width + reach, &mut |c| hit.push(c));
                 for l in (0..self.layers).filter(|l| item.on(*l)) {
-                    let mut hit = Vec::new();
-                    self.cells_near(&item.shape, p.half_width + reach, &mut |c| hit.push(c));
-                    for c in hit {
+                    for &c in &hit {
                         self.owner[l * cells + c] = SEVERAL;
                     }
                 }
             }
             if forbids.vias && item.layers != 0 {
                 let mut hit = Vec::new();
-                self.cells_near(&item.shape, p.via_radius, &mut |c| hit.push(c));
+                self.cells_near(&item.shape, via_radius, &mut |c| hit.push(c));
                 for c in hit {
                     self.via_owner[c] = SEVERAL;
                 }
@@ -289,21 +308,21 @@ impl ObstacleMap {
         if item.is_copper() && (self.pours_block || !matches!(item.kind, Kind::Pour { .. })) {
             let clearance = self.clearance_to(board, item.net);
             let mut hit = Vec::new();
-            self.cells_near(&item.shape, p.half_width + clearance + reach, &mut |c| hit.push(c));
+            self.cells_near(&item.shape, half_width + clearance + reach, &mut |c| hit.push(c));
             for l in (0..self.layers).filter(|l| item.on(*l)) {
                 for &c in &hit {
                     ObstacleMap::claim(&mut self.owner[l * cells + c], item.net);
                 }
             }
             let mut hit = Vec::new();
-            self.cells_near(&item.shape, p.via_radius + clearance, &mut |c| hit.push(c));
+            self.cells_near(&item.shape, via_radius + clearance, &mut |c| hit.push(c));
             for c in hit {
                 ObstacleMap::claim(&mut self.via_owner[c], item.net);
             }
         }
         if let Some((centre, r)) = item.hole {
             let hole = Shape::Capsule { a: centre, b: centre, r };
-            let margin = (p.drill_radius + nm(rules.min_hole_to_hole)).max(p.via_radius + nm(rules.min_hole_clearance));
+            let margin = (drill_radius + nm(rules.min_hole_to_hole)).max(via_radius + nm(rules.min_hole_clearance));
             let mut hit = Vec::new();
             self.cells_near(&hole, margin, &mut |c| hit.push(c));
             for c in hit {
@@ -312,13 +331,19 @@ impl ObstacleMap {
             }
             // Tracks keep the hole clearance from every hole, unplated ones too.
             let mut hit = Vec::new();
-            self.cells_near(&hole, p.half_width + nm(rules.min_hole_clearance) + reach, &mut |c| hit.push(c));
+            self.cells_near(&hole, half_width + nm(rules.min_hole_clearance) + reach, &mut |c| hit.push(c));
             for l in 0..self.layers {
                 for &c in &hit {
                     ObstacleMap::claim(&mut self.owner[l * cells + c], if item.plated_hole() { item.net } else { 0 });
                 }
             }
         }
+    }
+
+    /// Checks if any cell in the map is claimed by an item other than `net`.
+    pub fn blocked_at(&self, net: u32, index: usize) -> bool {
+        let o = self.owner[index];
+        o != FREE && o != net as i32
     }
 
     /// The grid a net sees: a cell is blocked unless nothing claims it or only this net does.

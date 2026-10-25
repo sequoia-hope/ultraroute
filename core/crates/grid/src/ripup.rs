@@ -70,6 +70,22 @@ pub fn rip_up(board: &mut Board, solver: &mut dyn FieldSolver, options: &RipOpti
     };
     let mut stats = RipStats::default();
     let mut hard: HashMap<String, ObstacleMap> = HashMap::new();
+    let mut soft_maps: HashMap<String, ObstacleMap> = HashMap::new();
+    let mut grid = crate::grid::RouteGrid {
+        net: 0,
+        x0: 0,
+        y0: 0,
+        h: options.cell,
+        nx: 0,
+        ny: 0,
+        layers: Vec::new(),
+        half_width: 0,
+        via: None,
+        blocked: Vec::new(),
+        via_blocked: Vec::new(),
+        penalty: Vec::new(),
+        pours_block: options.pours_block,
+    };
     let mut tried: HashSet<(ItemId, ItemId)> = HashSet::new();
     loop {
         let mut open = if options.pours_block { connectivity(board) } else { connectivity_without_pours(board) }.airlines;
@@ -100,10 +116,13 @@ pub fn rip_up(board: &mut Board, solver: &mut dyn FieldSolver, options: &RipOpti
             let hard_map = hard.entry(profile.class.clone()).or_insert_with(|| {
                 ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| soft_set.contains(&id))
             });
-            let mut grid = hard_map.view(airline.net);
-            let soft_map = ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| !soft_set.contains(&id));
-            let soft_view = soft_map.view(airline.net);
-            grid.penalty = soft_view.blocked.iter().map(|&b| if b { options.rip_cost } else { 0 }).collect();
+            hard_map.view_into(airline.net, &mut grid);
+            let soft_map = soft_maps.entry(profile.class.clone()).or_insert_with(|| {
+                ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| !soft_set.contains(&id))
+            });
+            grid.penalty.clear();
+            let nodes = grid.blocked.len();
+            grid.penalty.extend((0..nodes).map(|idx| if soft_map.blocked_at(airline.net, idx) { options.rip_cost } else { 0 }));
             let sources = terminals(board, &grid, airline.from_item);
             let targets = terminals(board, &grid, airline.to_item);
             if sources.is_empty() || targets.is_empty() {
@@ -169,6 +188,7 @@ pub fn rip_up(board: &mut Board, solver: &mut dyn FieldSolver, options: &RipOpti
             if open_count(board, options.pours_block) < before {
                 stats.kept += 1;
                 stats.ripped += ripped;
+                soft_maps.clear();
                 tell(&options.log, "ripping up", || format!("{net_name}: kept, {} connections open", open_count(board, options.pours_block)), None);
                 watch(board);
             } else {

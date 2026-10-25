@@ -76,8 +76,17 @@ pub struct Board {
     pub nets: Vec<String>,
     pub footprints: Vec<FootprintInfo>,
     pub outline: Vec<Vec<Point>>,
+    /// Precomputed outline edge segments `(a, b, BBox::of([a, b]))` for fast edge-clearance checks.
+    pub outline_edges: Vec<(Point, Point, BBox)>,
     pub rules: Rules,
+    /// Clearances per net number, in nanometres, so `clearance(a, b)` is two array lookups.
+    net_clearances: Vec<Nm>,
+    min_clearance_nm: Nm,
     items: Vec<Option<Item>>,
+    /// Cached shape bounding boxes (`item.shape.bbox()`) parallel to `items`.
+    shape_bboxes: Vec<BBox>,
+    /// Cached footprint bounding boxes (`footprint_of`) parallel to `items`.
+    bboxes: Vec<BBox>,
     /// Item ids per (layer, cell); holes are filed under the layer count.
     cells: HashMap<(usize, Nm, Nm), Vec<ItemId>>,
 }
@@ -113,6 +122,11 @@ impl Board {
         for n in &pcb.nets {
             nets[n.number as usize] = n.name.clone();
         }
+        let min_clearance_nm = nm(rules.min_clearance);
+        let net_clearances: Vec<Nm> = nets
+            .iter()
+            .map(|name| nm(rules.class_of(name).map_or(0.0, |c| c.clearance)).max(min_clearance_nm))
+            .collect();
         let mut board = Board {
             layers: layers.clone(),
             nets,
@@ -133,13 +147,24 @@ impl Board {
                 })
                 .collect(),
             outline: Vec::new(),
+            outline_edges: Vec::new(),
             rules,
+            net_clearances,
+            min_clearance_nm,
             items: Vec::new(),
+            shape_bboxes: Vec::new(),
+            bboxes: Vec::new(),
             cells: HashMap::new(),
         };
         if let Ok(loops) = pcb.outline_loops() {
             for l in std::iter::once(&loops.outer).chain(&loops.holes) {
                 board.outline.push(l.points(MAX_ERROR_M).into_iter().map(Point::from_m).collect());
+            }
+            for poly in &board.outline {
+                for i in 0..poly.len() {
+                    let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+                    board.outline_edges.push((a, b, BBox::of([a, b])));
+                }
             }
         }
 
@@ -257,6 +282,10 @@ impl Board {
         self.items.get(id).and_then(Option::as_ref)
     }
 
+    pub fn bbox(&self, id: ItemId) -> Option<BBox> {
+        self.items.get(id).and_then(Option::as_ref).map(|_| self.shape_bboxes[id])
+    }
+
     pub fn items(&self) -> impl Iterator<Item = (ItemId, &Item)> {
         self.items.iter().enumerate().filter_map(|(i, it)| Some((i, it.as_ref()?)))
     }
@@ -275,29 +304,31 @@ impl Board {
         (x0..=x1).flat_map(move |x| (y0..=y1).map(move |y| (x, y)))
     }
 
-    fn footprint_of(item: &Item) -> BBox {
-        let b = item.shape.bbox();
-        match item.hole {
-            Some((c, r)) => b.union(BBox::of([c]).grow(r)),
-            None => b,
-        }
-    }
-
     pub fn insert(&mut self, item: Item) -> ItemId {
         let id = self.items.len();
-        let b = Board::footprint_of(&item);
+        let sb = item.shape.bbox();
+        let b = match item.hole {
+            Some((c, r)) => sb.union(BBox::of([c]).grow(r)),
+            None => sb,
+        };
         for slot in self.slots(&item) {
             for (x, y) in Board::cells_of(b) {
                 self.cells.entry((slot, x, y)).or_default().push(id);
             }
         }
         self.items.push(Some(item));
+        self.shape_bboxes.push(sb);
+        self.bboxes.push(b);
         id
     }
 
     /// Puts a removed item back under the id it had.
     pub fn restore(&mut self, id: ItemId, item: Item) {
-        let b = Board::footprint_of(&item);
+        let sb = item.shape.bbox();
+        let b = match item.hole {
+            Some((c, r)) => sb.union(BBox::of([c]).grow(r)),
+            None => sb,
+        };
         for slot in self.slots(&item) {
             for (x, y) in Board::cells_of(b) {
                 self.cells.entry((slot, x, y)).or_default().push(id);
@@ -305,13 +336,17 @@ impl Board {
         }
         if id >= self.items.len() {
             self.items.resize(id + 1, None);
+            self.shape_bboxes.resize(id + 1, BBox { min: Point::new(0, 0), max: Point::new(0, 0) });
+            self.bboxes.resize(id + 1, BBox { min: Point::new(0, 0), max: Point::new(0, 0) });
         }
         self.items[id] = Some(item);
+        self.shape_bboxes[id] = sb;
+        self.bboxes[id] = b;
     }
 
     pub fn remove(&mut self, id: ItemId) -> Option<Item> {
         let item = self.items.get_mut(id)?.take()?;
-        let b = Board::footprint_of(&item);
+        let b = self.bboxes[id];
         for slot in self.slots(&item) {
             for (x, y) in Board::cells_of(b) {
                 if let Some(ids) = self.cells.get_mut(&(slot, x, y)) {
@@ -325,11 +360,25 @@ impl Board {
     /// Items on `layer` whose extent may reach into `b`, each once. `layer == layers.len()`
     /// asks for holes.
     pub fn near(&self, layer: usize, b: BBox) -> Vec<ItemId> {
+        let (x0, x1) = (b.min.x.div_euclid(CELL), b.max.x.div_euclid(CELL));
+        let (y0, y1) = (b.min.y.div_euclid(CELL), b.max.y.div_euclid(CELL));
+        if x0 == x1 && y0 == y1 {
+            let mut out: Vec<ItemId> = self
+                .cells
+                .get(&(layer, x0, y0))
+                .into_iter()
+                .flatten()
+                .copied()
+                .filter(|&id| self.items.get(id).is_some_and(Option::is_some) && self.bboxes[id].overlaps(b))
+                .collect();
+            out.sort_unstable();
+            return out;
+        }
         let mut out: Vec<ItemId> = Board::cells_of(b)
             .filter_map(|(x, y)| self.cells.get(&(layer, x, y)))
             .flatten()
             .copied()
-            .filter(|id| self.item(*id).is_some_and(|it| Board::footprint_of(it).overlaps(b)))
+            .filter(|&id| self.items.get(id).is_some_and(Option::is_some) && self.bboxes[id].overlaps(b))
             .collect();
         out.sort_unstable();
         out.dedup();
@@ -404,7 +453,9 @@ impl Board {
 
     /// The clearance the rules ask between two nets' copper, in nanometres.
     pub fn clearance(&self, a: u32, b: u32) -> Nm {
-        nm(self.rules.clearance(self.net_name(a), self.net_name(b)))
+        let ca = self.net_clearances.get(a as usize).copied().unwrap_or(self.min_clearance_nm);
+        let cb = self.net_clearances.get(b as usize).copied().unwrap_or(self.min_clearance_nm);
+        ca.max(cb)
     }
 }
 

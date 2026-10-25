@@ -73,7 +73,7 @@ pub fn check(board: &Board) -> Vec<Violation> {
     let mut found = Vec::new();
     let mut failed_pairs = HashSet::new();
     for (id, _) in board.items() {
-        item_checks(board, id, false, &limits, &mut failed_pairs, &mut found);
+        item_checks(board, id, false, false, &limits, &mut failed_pairs, &mut found);
     }
     found
 }
@@ -81,15 +81,15 @@ pub fn check(board: &Board) -> Vec<Violation> {
 /// What one item breaks against everything else: how a router tests copper before keeping it.
 /// Pours are left out, as they are refilled around new copper.
 pub fn check_item(board: &Board, id: ItemId) -> Vec<Violation> {
-    let mut found = check_item_with_pours(board, id);
-    found.retain(|v| v.b.and_then(|b| board.item(b)).is_none_or(|o| !matches!(o.kind, Kind::Pour { .. })));
+    let mut found = Vec::new();
+    item_checks(board, id, true, true, &Limits::of(board), &mut HashSet::new(), &mut found);
     found
 }
 
 /// What one item breaks, pours included: for routing that keeps pours as planes.
 pub fn check_item_with_pours(board: &Board, id: ItemId) -> Vec<Violation> {
     let mut found = Vec::new();
-    item_checks(board, id, true, &Limits::of(board), &mut HashSet::new(), &mut found);
+    item_checks(board, id, true, false, &Limits::of(board), &mut HashSet::new(), &mut found);
     found
 }
 
@@ -99,18 +99,20 @@ fn item_checks(
     board: &Board,
     id: ItemId,
     everyone: bool,
+    skip_pours: bool,
     limits: &Limits,
     failed_pairs: &mut HashSet<(ItemId, ItemId)>,
     found: &mut Vec<Violation>,
 ) {
     let Some(item) = board.item(id) else { return };
+    let item_bbox = board.bbox(id).unwrap_or_else(|| item.shape.bbox());
     let partner = |other: ItemId| other != id && (everyone || other > id);
     let holes = board.layers.len();
     if item.is_copper() {
         for layer in (0..board.layers.len()).filter(|l| item.on(*l)) {
-            for other in board.near(layer, item.shape.bbox().grow(limits.max_clearance)) {
+            for other in board.near(layer, item_bbox.grow(limits.max_clearance)) {
                 let Some(o) = board.item(other) else { continue };
-                if !o.on(layer) {
+                if !o.on(layer) || (skip_pours && matches!(o.kind, Kind::Pour { .. })) {
                     continue;
                 }
                 match &o.kind {
@@ -128,6 +130,10 @@ fn item_checks(
                     }
                     _ if partner(other) && o.is_copper() && (o.net != item.net || item.net == 0) && !same_pad(item, o) => {
                         let required = board.clearance(item.net, o.net);
+                        let other_bbox = board.bbox(other).unwrap_or_else(|| o.shape.bbox());
+                        if !item_bbox.grow(required).overlaps(other_bbox) {
+                            continue;
+                        }
                         let gap = item.shape.gap_within(&o.shape, required as f64);
                         if gap + SLACK < required as f64 {
                             failed_pairs.insert((id.min(other), id.max(other)));
@@ -139,14 +145,14 @@ fn item_checks(
             }
         }
         if limits.edge > 0 {
-            let gap = edge_gap(board, &item.shape);
+            let gap = edge_gap(board, limits.edge, &item.shape, item_bbox);
             if gap + SLACK < limits.edge as f64 {
                 found.push(Violation { rule: Rule::EdgeClearance, a: id, b: None, layer: None, gap, required: limits.edge });
             }
         }
         // Copper against the plated holes of others, when they are not walked themselves.
         if everyone {
-            for other in board.near(holes, item.shape.bbox().grow(limits.hole_clearance)) {
+            for other in board.near(holes, item_bbox.grow(limits.hole_clearance)) {
                 let Some(o) = board.item(other) else { continue };
                 let Some(h) = o.hole else { continue };
                 if other == id || !holds_clear(o, item) || same_pad(item, o) || (o.plated_hole() && o.net == item.net && item.net != 0) {
@@ -180,7 +186,7 @@ fn item_checks(
         for layer in 0..board.layers.len() {
             for other in board.near(layer, reach) {
                 let Some(o) = board.item(other) else { continue };
-                if !holds_clear(item, o) {
+                if !holds_clear(item, o) || (skip_pours && matches!(o.kind, Kind::Pour { .. })) {
                     continue;
                 }
                 // One violation per pair, as KiCad reports them: a pair already too close is not
@@ -228,19 +234,29 @@ pub fn intrudes(copper: &Shape, keepout: &Shape) -> bool {
 }
 
 /// The shortest distance from a shape to the board edge; 0 when it crosses it.
-fn edge_gap(board: &Board, shape: &Shape) -> f64 {
-    let b = shape.bbox();
-    let mut best = f64::INFINITY;
-    for poly in &board.outline {
-        for i in 0..poly.len() {
-            let (p, q) = (poly[i], poly[(i + 1) % poly.len()]);
-            let edge = Shape::Capsule { a: p, b: q, r: 0 };
-            let eb = edge.bbox();
+fn edge_gap(board: &Board, limit: Nm, shape: &Shape, b: crate::geom::BBox) -> f64 {
+    let mut best = (limit + 1) as f64;
+    if !board.outline_edges.is_empty() {
+        for &(p, q, eb) in &board.outline_edges {
             let far = (eb.min.x - b.max.x).max(b.min.x - eb.max.x).max(eb.min.y - b.max.y).max(b.min.y - eb.max.y);
             if far as f64 >= best {
                 continue;
             }
-            best = best.min(shape.gap(&edge));
+            let edge = Shape::Capsule { a: p, b: q, r: 0 };
+            best = best.min(shape.gap_within(&edge, best));
+        }
+        return best;
+    }
+    for poly in &board.outline {
+        for i in 0..poly.len() {
+            let (p, q) = (poly[i], poly[(i + 1) % poly.len()]);
+            let eb = crate::geom::BBox::of([p, q]);
+            let far = (eb.min.x - b.max.x).max(b.min.x - eb.max.x).max(eb.min.y - b.max.y).max(b.min.y - eb.max.y);
+            if far as f64 >= best {
+                continue;
+            }
+            let edge = Shape::Capsule { a: p, b: q, r: 0 };
+            best = best.min(shape.gap_within(&edge, best));
         }
     }
     best

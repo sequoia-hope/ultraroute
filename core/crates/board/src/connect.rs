@@ -105,8 +105,9 @@ fn joined_copper(board: &Board, with_pours: bool) -> Connectivity {
     let mut sets = Sets((0..max).collect());
     for &id in &ids {
         let item = board.item(id).expect("listed above");
+        let bb = board.bbox(id).expect("listed above");
         for layer in (0..board.layers.len()).filter(|l| item.on(*l)) {
-            for other in board.near(layer, item.shape.bbox()) {
+            for other in board.near(layer, bb) {
                 if other <= id {
                     continue;
                 }
@@ -157,21 +158,29 @@ fn joined_copper(board: &Board, with_pours: bool) -> Connectivity {
             }
             best
         };
-        let mut joined = vec![false; clusters.len()];
-        joined[0] = true;
+        let mut best_to: Vec<Option<(f64, Anchor, Anchor)>> = (0..clusters.len())
+            .map(|j| (j > 0).then(|| closest(clusters[0], clusters[j])))
+            .collect();
         for _ in 1..clusters.len() {
-            let mut best: Option<(f64, Anchor, Anchor, usize)> = None;
-            for a in clusters.iter().enumerate().filter(|(i, _)| joined[*i]).map(|(_, a)| a) {
-                for (j, b) in clusters.iter().enumerate().filter(|(j, _)| !joined[*j]) {
-                    let (d, pa, pb) = closest(a, b);
-                    if best.as_ref().is_none_or(|bst| d < bst.0) {
-                        best = Some((d, pa, pb, j));
+            let mut pick: Option<(f64, Anchor, Anchor, usize)> = None;
+            for (j, slot) in best_to.iter().enumerate() {
+                if let Some((d, pa, pb)) = slot {
+                    if pick.as_ref().is_none_or(|bst| *d < bst.0) {
+                        pick = Some((*d, *pa, *pb, j));
                     }
                 }
             }
-            let Some((_, pa, pb, j)) = best else { break };
-            joined[j] = true;
+            let Some((_, pa, pb, j)) = pick else { break };
+            best_to[j] = None;
             airlines.push(Airline { net, from: pa.0, to: pb.0, from_item: pa.1, to_item: pb.1 });
+            for (k, slot) in best_to.iter_mut().enumerate() {
+                if let Some(cur) = slot {
+                    let cand = closest(clusters[j], clusters[k]);
+                    if cand.0 < cur.0 {
+                        *cur = cand;
+                    }
+                }
+            }
         }
     }
     Connectivity { cluster, airlines }

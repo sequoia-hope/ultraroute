@@ -51,6 +51,10 @@ impl BBox {
         self.min.x <= o.max.x && o.min.x <= self.max.x && self.min.y <= o.max.y && o.min.y <= self.max.y
     }
 
+    pub fn contains(self, p: Point) -> bool {
+        p.x >= self.min.x && p.x <= self.max.x && p.y >= self.min.y && p.y <= self.max.y
+    }
+
     pub fn union(self, o: BBox) -> BBox {
         BBox {
             min: Point::new(self.min.x.min(o.min.x), self.min.y.min(o.min.y)),
@@ -108,7 +112,10 @@ impl Shape {
                     return f64::INFINITY;
                 }
                 let zone = BBox::of([*a, *b]).grow(*r + reach);
-                if inside(*a, p) || inside(*b, p) {
+                if !BBox::of(p.iter().copied()).overlaps(zone) {
+                    return limit + 1.0;
+                }
+                if inside(*a, p) || (a != b && inside(*b, p)) {
                     return 0.0;
                 }
                 let d = edges(p)
@@ -151,7 +158,7 @@ impl Shape {
     pub fn contains(&self, pt: Point) -> bool {
         match self {
             Shape::Capsule { a, b, r } => point_segment(pt, *a, *b) <= *r as f64,
-            Shape::Polygon(p) => inside(pt, p),
+            Shape::Polygon(p) => BBox::of(p.iter().copied()).contains(pt) && inside(pt, p),
         }
     }
 }
@@ -211,7 +218,7 @@ pub fn segment_polygon(a: Point, b: Point, poly: &[Point]) -> f64 {
     if poly.is_empty() {
         return f64::INFINITY;
     }
-    if inside(a, poly) || inside(b, poly) {
+    if inside(a, poly) || (a != b && inside(b, poly)) {
         return 0.0;
     }
     edges(poly).map(|(c, d)| segment_segment(a, b, c, d)).fold(f64::INFINITY, f64::min)
