@@ -33,6 +33,16 @@ pub trait FieldSolver {
         let cost = self.solve(grid, sources, via_cost);
         trace_back(grid, &cost, targets, via_cost)
     }
+
+    /// Cheapest routes for several grids of one shape at once.
+    fn route_batch(&mut self, jobs: &[(&RouteGrid, &[usize], &[usize])], via_cost: u32) -> Vec<Option<GridPath>> {
+        let solve_jobs: Vec<(&RouteGrid, &[usize])> = jobs.iter().map(|&(g, s, _)| (g, s)).collect();
+        let fields = self.solve_batch(&solve_jobs, via_cost);
+        jobs.iter()
+            .zip(fields)
+            .map(|(&(grid, _, targets), cost)| trace_back(grid, &cost, targets, via_cost))
+            .collect()
+    }
 }
 
 pub struct CpuSolver;

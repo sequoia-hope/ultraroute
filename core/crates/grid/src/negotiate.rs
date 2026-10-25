@@ -14,7 +14,7 @@ use board::{connectivity, connectivity_without_pours, nm, Board, ItemId, Kind, N
 use crate::grid::{ObstacleMap, Profile, RouteGrid};
 use crate::report::{tell, Log};
 use crate::route::{lay, terminals, FieldSolver, Terminal};
-use crate::search::{route_astar, trace_back, GridPath};
+use crate::search::{route_astar, GridPath};
 
 /// How often the trial routes are shown while a round runs one connection after another.
 const TRIAL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
@@ -428,12 +428,6 @@ fn corners(path: &GridPath) -> Vec<(usize, usize, usize)> {
     out
 }
 
-fn penalties(zones: &Zones, history: &[u32], present: f64, net: u32, weight: f64) -> Vec<u32> {
-    let mut out = Vec::new();
-    penalties_into(zones, history, present, net, weight, &mut out);
-    out
-}
-
 /// Each node's price for `net`: its history plus the present price of every other net covering
 /// it, scaled by `weight`. Filled in place, so a worker reuses one buffer, and counted for all
 /// nets at once before the net's own cells are taken back out, instead of asking the net's map
@@ -441,7 +435,9 @@ fn penalties(zones: &Zones, history: &[u32], present: f64, net: u32, weight: f64
 fn penalties_into(zones: &Zones, history: &[u32], present: f64, net: u32, weight: f64, out: &mut Vec<u32>) {
     out.clear();
     if (weight - 1.0).abs() < 1e-12 {
-        let price = |h: u32, others: u16| h + (present * f64::from(others)).round() as u32;
+        // The present price of a few covering nets, looked up rather than multiplied out.
+        let table: [u32; 32] = std::array::from_fn(|n| (present * n as f64).round() as u32);
+        let price = |h: u32, others: u16| h + table.get(others as usize).copied().unwrap_or_else(|| (present * f64::from(others)).round() as u32);
         out.extend(history.iter().zip(&zones.count).map(|(&h, &n)| price(h, n)));
         if let Some(mine) = zones.per_net.get(&net) {
             for &c in mine.keys() {
@@ -474,23 +470,27 @@ fn route_round_in_batches(
     solver: &mut dyn FieldSolver,
 ) {
     let size = solver.batch_size().max(1);
+    let sample = maps.values().next().expect("one map per class").view(0);
+    let mut grids: Vec<RouteGrid> = (0..size.min(connections.len())).map(|_| sample.clone()).collect();
     for start in (0..connections.len()).step_by(size) {
         let end = (start + size).min(connections.len());
-        let grids: Vec<RouteGrid> = connections[start..end]
-            .iter()
-            .map(|c| {
-                let mut grid = maps[&c.class].view(c.net);
-                let w = options.net_weight.get(&c.net).copied().unwrap_or(1.0);
-                grid.penalty = penalties(zones.seen_by(&c.class), history, present, c.net, w);
-                grid
-            })
-            .collect();
+        let count = end - start;
+        for (c, grid) in connections[start..end].iter().zip(grids[..count].iter_mut()) {
+            maps[&c.class].view_into(c.net, grid);
+            let w = options.net_weight.get(&c.net).copied().unwrap_or(1.0);
+            penalties_into(zones.seen_by(&c.class), history, present, c.net, w, &mut grid.penalty);
+        }
         let sources: Vec<Vec<usize>> = ends[start..end].iter().map(|(s, _)| s.iter().map(|t| t.0).collect()).collect();
-        let jobs: Vec<(&RouteGrid, &[usize])> = grids.iter().zip(&sources).map(|(g, s)| (g, s.as_slice())).collect();
-        let fields = solver.solve_batch(&jobs, options.via_cost);
-        for (k, (grid, cost)) in grids.iter().zip(fields).enumerate() {
-            let targets: Vec<usize> = ends[start + k].1.iter().map(|t| t.0).collect();
-            connections[start + k].path = trace_back(grid, &cost, &targets, options.via_cost);
+        let targets: Vec<Vec<usize>> = ends[start..end].iter().map(|(_, t)| t.iter().map(|t| t.0).collect()).collect();
+        let jobs: Vec<(&RouteGrid, &[usize], &[usize])> = grids[..count]
+            .iter()
+            .zip(&sources)
+            .zip(&targets)
+            .map(|((g, s), t)| (g, s.as_slice(), t.as_slice()))
+            .collect();
+        let routed = solver.route_batch(&jobs, options.via_cost);
+        for (k, path) in routed.into_iter().enumerate() {
+            connections[start + k].path = path;
         }
     }
 }

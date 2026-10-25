@@ -14,22 +14,39 @@ struct Params {
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
-@group(0) @binding(1) var<storage, read> blocked: array<u32>;
+// Bit 0: node is blocked. Bit 1: node is a target. Bit 2: node cost improved (active frontier).
+@group(0) @binding(1) var<storage, read_write> blocked: array<atomic<u32>>;
 @group(0) @binding(2) var<storage, read> via_blocked: array<u32>;
 @group(0) @binding(3) var<storage, read_write> cost: array<atomic<u32>>;
-@group(0) @binding(4) var<storage, read_write> changed: atomic<u32>;
+// state[0] is the changed flag; state[1 + field] is the best target cost reached so far.
+@group(0) @binding(4) var<storage, read_write> state: array<atomic<u32>>;
 @group(0) @binding(5) var<storage, read> penalty: array<u32>;
+// Per field (stride PATH_STRIDE):
+// - [0..4096]: traced path length followed by local node indices (target back to source)
+// - [4096..8192]: target count followed by target local node indices
+@group(0) @binding(6) var<storage, read_write> paths: array<u32>;
 
 const UNREACHED: u32 = 0xffffffffu;
+const PATH_STRIDE: u32 = 8192u;
+const TARGET_OFFSET: u32 = 4096u;
+const MAX_PATH_LEN: u32 = 4095u;
 
-fn offer(n: u32, value: u32) {
-    if (blocked[n] != 0u) {
+fn offer(field: u32, n: u32, value: u32) {
+    let b = atomicLoad(&blocked[n]);
+    if ((b & 1u) != 0u) {
         return;
     }
     let entered = value + penalty[n];
+    if (entered > atomicLoad(&state[1u + field])) {
+        return;
+    }
     let old = atomicMin(&cost[n], entered);
     if (entered < old) {
-        atomicStore(&changed, 1u);
+        atomicOr(&blocked[n], 4u);
+        atomicStore(&state[0], 1u);
+        if ((b & 2u) != 0u) {
+            atomicMin(&state[1u + field], entered);
+        }
     }
 }
 
@@ -41,14 +58,19 @@ fn relax(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups)
     if (node >= per_field * params.fields) {
         return;
     }
-    if (blocked[node] != 0u) {
+    let b = atomicLoad(&blocked[node]);
+    if ((b & 4u) == 0u) {
         return;
     }
+    atomicAnd(&blocked[node], ~4u);
     let c = atomicLoad(&cost[node]);
     if (c == UNREACHED) {
         return;
     }
     let field = node / per_field;
+    if (c >= atomicLoad(&state[1u + field])) {
+        return;
+    }
     let base = field * per_field;
     let local = node % per_field;
     let layer = local / cells;
@@ -64,13 +86,95 @@ fn relax(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups)
         if (ni < 0 || nj < 0 || ni >= i32(params.nx) || nj >= i32(params.ny)) {
             continue;
         }
-        offer(base + layer * cells + u32(nj) * params.nx + u32(ni), c + step[k]);
+        offer(field, base + layer * cells + u32(nj) * params.nx + u32(ni), c + step[k]);
     }
     if (params.via_allowed != 0u && via_blocked[field * cells + cell] == 0u) {
         for (var l = 0u; l < params.layers; l++) {
             if (l != layer) {
-                offer(base + l * cells + cell, c + params.via_cost);
+                offer(field, base + l * cells + cell, c + params.via_cost);
             }
         }
     }
+}
+
+@compute @workgroup_size(64)
+fn trace_paths(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let field = gid.x;
+    if (field >= params.fields) {
+        return;
+    }
+    let cells = params.nx * params.ny;
+    let per_field = cells * params.layers;
+    let base = field * per_field;
+    let pbase = field * PATH_STRIDE;
+    let num_targets = paths[pbase + TARGET_OFFSET];
+    var best_cost = UNREACHED;
+    var at = 0u;
+    for (var k = 0u; k < num_targets; k++) {
+        let t = paths[pbase + TARGET_OFFSET + 1u + k];
+        let ct = atomicLoad(&cost[base + t]);
+        if (ct < best_cost) {
+            best_cost = ct;
+            at = t;
+        }
+    }
+    if (best_cost == UNREACHED) {
+        paths[pbase] = 0u;
+        return;
+    }
+    var len = 1u;
+    paths[pbase + 1u] = at;
+    var c_at = best_cost;
+    let di = array<i32, 8>(1, -1, 0, 0, 1, 1, -1, -1);
+    let dj = array<i32, 8>(0, 0, 1, -1, 1, -1, 1, -1);
+    let step = array<u32, 8>(10u, 10u, 10u, 10u, 14u, 14u, 14u, 14u);
+    while (c_at > 0u) {
+        if (len >= MAX_PATH_LEN) {
+            paths[pbase] = UNREACHED;
+            return;
+        }
+        let layer = at / cells;
+        let cell = at % cells;
+        let i = i32(cell % params.nx);
+        let j = i32(cell / params.nx);
+        let pen_at = penalty[base + at];
+        var found = false;
+        var prev = 0u;
+        for (var k = 0; k < 8; k++) {
+            let ni = i + di[k];
+            let nj = j + dj[k];
+            if (ni < 0 || nj < 0 || ni >= i32(params.nx) || nj >= i32(params.ny)) {
+                continue;
+            }
+            let n = layer * cells + u32(nj) * params.nx + u32(ni);
+            let cn = atomicLoad(&cost[base + n]);
+            if (cn != UNREACHED && cn + step[k] + pen_at == c_at) {
+                prev = n;
+                found = true;
+                break;
+            }
+        }
+        if (!found && via_blocked[field * cells + cell] == 0u) {
+            for (var l = 0u; l < params.layers; l++) {
+                if (l != layer) {
+                    let n = l * cells + cell;
+                    let cn = atomicLoad(&cost[base + n]);
+                    if (cn != UNREACHED && cn + params.via_cost + pen_at == c_at) {
+                        prev = n;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (!found) {
+            paths[pbase] = 0u;
+            return;
+        }
+        at = prev;
+        c_at = atomicLoad(&cost[base + at]);
+        len += 1u;
+        paths[pbase + len] = at;
+    }
+    paths[pbase] = len;
 }

@@ -1013,6 +1013,7 @@ name = "web"
 version = "0.1.0"
 dependencies = [
  "board",
+ "grid",
  "js-sys",
  "kicad-pcb",
  "ultraroute",

@@ -809,8 +809,6 @@ fn resolve_topo_only(board: &Board, specs: &[String], pours_block: bool) -> Hash
 /// grid pass's stats, kept while it is the best so far.
 type Restart = (Board, Vec<ItemId>, Vec<kicad_pcb::Span>, grid::Stats);
 
-/// Routes `board`, read from `text`, as `a` asks, and returns the routed board's text. `live`
-/// receives the run as frames; setting `cancel` stops it at the next connection.
 /// The plough for connections trapped at fine-pitch parts, up to `--shove-passes` times, each in
 /// another order, stopping `until` seconds into the run: the board file's spans of copper it moved
 /// or ripped.
@@ -874,7 +872,21 @@ fn shove_pass(
     removed
 }
 
-pub fn run(a: &Args, mut board: Board, text: &str, mut live: Option<Live>, cancel: Arc<AtomicBool>) -> String {
+/// Routes `board`, read from `text`, as `a` asks, and returns the routed board's text. `live`
+/// receives the run as frames; setting `cancel` stops it at the next connection.
+pub fn run(a: &Args, board: Board, text: &str, live: Option<Live>, cancel: Arc<AtomicBool>) -> String {
+    run_with_solver(a, board, text, live, cancel, None)
+}
+
+/// Routes `board` using `custom_solver` when provided, or the default CPU/GPU solver otherwise.
+pub fn run_with_solver(
+    a: &Args,
+    mut board: Board,
+    text: &str,
+    mut live: Option<Live>,
+    cancel: Arc<AtomicBool>,
+    custom_solver: Option<Box<dyn grid::FieldSolver>>,
+) -> String {
     let mut removed = Vec::new();
     let original_at: Vec<Point> = board.footprints.iter().map(|f| f.at).collect();
     for f in board.footprints.iter_mut().filter(|f| a.lock.contains(&f.reference)) {
@@ -920,17 +932,24 @@ pub fn run(a: &Args, mut board: Board, text: &str, mut live: Option<Live>, cance
         return out;
     }
     let started = Instant::now();
-    let mut solver: Box<dyn grid::FieldSolver> = Box::new(grid::CpuSolver);
-    #[cfg(feature = "gpu")]
-    if a.gpu {
-        match grid::GpuSolver::new() {
-            Some(gpu) => {
-                eprintln!("field solver on {}", gpu.adapter_name);
-                solver = Box::new(gpu);
+    let mut solver: Box<dyn grid::FieldSolver> = match custom_solver {
+        Some(s) => s,
+        None => {
+            #[allow(unused_mut)]
+            let mut s: Box<dyn grid::FieldSolver> = Box::new(grid::CpuSolver);
+            #[cfg(feature = "gpu")]
+            if a.gpu {
+                match grid::GpuSolver::new() {
+                    Some(gpu) => {
+                        eprintln!("field solver on {}", gpu.adapter_name);
+                        s = Box::new(gpu);
+                    }
+                    None => eprintln!("no GPU; solving on the CPU"),
+                }
             }
-            None => eprintln!("no GPU; solving on the CPU"),
+            s
         }
-    }
+    };
     let mut laid = Vec::new();
     if a.adopt {
         let mine: Vec<ItemId> = board.items().filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked).map(|(id, _)| id).collect();

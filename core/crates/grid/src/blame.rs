@@ -15,7 +15,7 @@ use board::{Board, ItemId, Kind, Nm, Point, Shape};
 
 use crate::grid::{ObstacleMap, Profile, RouteGrid};
 use crate::route::terminals;
-use crate::search::{cost_field, trace_back, STRAIGHT};
+use crate::search::{route_astar, STRAIGHT};
 
 /// Cost of entering a cell inside a movable part's clearance, plus a share per cell of intrusion,
 /// so a path brushes past a part rather than cutting through its middle.
@@ -169,8 +169,7 @@ pub fn blame(board: &mut Board, from: ItemId, to: ItemId, options: &BlameOptions
     let sources: Vec<usize> = terminals(board, &grid, from).into_iter().map(|t| t.0).collect();
     let targets: Vec<usize> = terminals(board, &grid, to).into_iter().map(|t| t.0).collect();
     report.end_cells = (sources.len(), targets.len());
-    let cost = cost_field(&grid, &sources, options.via_cost);
-    let Some(path) = trace_back(&grid, &cost, &targets, options.via_cost) else {
+    let Some(path) = route_astar(&grid, &sources, &targets, options.via_cost) else {
         report.walled_off = true;
         return report;
     };
@@ -290,6 +289,9 @@ fn nearest(shape: &Shape, p: Point) -> (f64, (f64, f64)) {
         ((p.x as f64 - q.0).hypot(p.y as f64 - q.1), q)
     };
     match shape {
+        Shape::Capsule { a, b, r } if a == b => {
+            ((p.distance(*a) - *r as f64).max(0.0), (a.x as f64, a.y as f64))
+        }
         Shape::Capsule { a, b, r } => {
             let (d, q) = on_segment(*a, *b);
             ((d - *r as f64).max(0.0), q)
@@ -299,7 +301,7 @@ fn nearest(shape: &Shape, p: Point) -> (f64, (f64, f64)) {
                 .map(|k| on_segment(poly[k], poly[(k + 1) % poly.len()]))
                 .min_by(|x, y| x.0.total_cmp(&y.0))
                 .unwrap_or((f64::INFINITY, (p.x as f64, p.y as f64)));
-            if board::inside(p, poly) {
+            if board::BBox::of(poly.iter().copied()).contains(p) && board::inside(p, poly) {
                 (0.0, best.1)
             } else {
                 best

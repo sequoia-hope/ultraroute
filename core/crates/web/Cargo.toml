@@ -12,6 +12,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 board = { path = "../board" }
+grid = { path = "../grid" }
 kicad-pcb = { path = "../kicad-pcb" }
 ultraroute = { path = "../ultraroute", default-features = false }
 wasm-bindgen = "=0.2.129"

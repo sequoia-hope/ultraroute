@@ -5,7 +5,7 @@
 //! pad moves exactly as the part does and a point on copper that stays does not move at all, so
 //! every contact holds.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use board::{BBox, Board, Item, ItemId, Kind, Point, Shape};
 use kicad_pcb::Span;
@@ -26,6 +26,8 @@ pub struct FlowStats {
     pub pieces: usize,
     /// Copper from the board file that moved, for removing from the file; it is in `soft` now.
     pub removed_spans: Vec<Span>,
+    /// Bounding box covering the old and new positions of all copper items that flowed.
+    pub dirty_bbox: Option<BBox>,
 }
 
 /// Moves each footprint in `moves` by its vector and every unlocked track and via by the warp
@@ -38,9 +40,6 @@ pub fn flow(board: &mut Board, moves: &HashMap<usize, Point>, soft: &mut Vec<Ite
     }
     let field = warp_for(board, moves);
     let free = |it: &Item| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked;
-    let junctions = junctions(board);
-    let pads: HashMap<ItemId, usize> =
-        board.items().filter_map(|(id, it)| if let Kind::Pad { footprint, .. } = it.kind { Some((id, footprint)) } else { None }).collect();
     // Where a point of copper is fastened, judged where everything stands now.
     let fastened = |board: &Board, p: Point, net: u32, layers: u64| -> Option<Point> {
         for layer in (0..board.layers.len()).filter(|l| layers & (1 << l) != 0) {
@@ -49,8 +48,8 @@ pub fn flow(board: &mut Board, moves: &HashMap<usize, Point>, soft: &mut Vec<Ite
                 if o.net != net || !o.on(layer) || !o.shape.contains(p) {
                     continue;
                 }
-                if let Some(f) = pads.get(&other) {
-                    return Some(moves.get(f).copied().unwrap_or(Point::new(0, 0)));
+                if let Kind::Pad { footprint: f, .. } = o.kind {
+                    return Some(moves.get(&f).copied().unwrap_or(Point::new(0, 0)));
                 }
                 if matches!(o.kind, Kind::Track | Kind::Via) && o.locked {
                     return Some(Point::new(0, 0));
@@ -59,8 +58,44 @@ pub fn flow(board: &mut Board, moves: &HashMap<usize, Point>, soft: &mut Vec<Ite
         }
         None
     };
-    let mut ids: Vec<ItemId> = board.items().filter(|(_, it)| free(it)).map(|(id, _)| id).collect();
+    let mut moving_pads_bb: Option<BBox> = None;
+    for (_, it) in board.items() {
+        let f_opt = match it.kind {
+            Kind::Pad { footprint, .. } => Some(footprint),
+            Kind::Keepout { footprint, .. } => footprint,
+            _ => None,
+        };
+        if let Some(footprint) = f_opt {
+            if let Some(&by) = moves.get(&footprint).filter(|v| **v != Point::new(0, 0)) {
+                let mut b = it.shape.bbox();
+                if let Some((c, r)) = it.hole {
+                    b = b.union(BBox::of([c]).grow(r));
+                }
+                let b2 = BBox { min: Point::new(b.min.x + by.x, b.min.y + by.y), max: Point::new(b.max.x + by.x, b.max.y + by.y) };
+                let u = b.union(b2);
+                moving_pads_bb = Some(moving_pads_bb.map_or(u, |acc| acc.union(u)));
+            }
+        }
+    }
+    stats.dirty_bbox = moving_pads_bb;
+    let mut ids: Vec<ItemId> = Vec::new();
+    let mut need_junctions = false;
+    for (id, it) in board.items() {
+        if !free(it) {
+            continue;
+        }
+        let Shape::Capsule { a, b, .. } = it.shape else { continue };
+        let seg_bb = BBox::of([a, b]);
+        if !field.may_move(seg_bb) && !moving_pads_bb.is_some_and(|mb| mb.overlaps(seg_bb)) {
+            continue;
+        }
+        if a != b {
+            need_junctions = true;
+        }
+        ids.push(id);
+    }
     ids.sort_unstable();
+    let junctions = if need_junctions { junctions(board) } else { HashMap::new() };
     let mut plan: Vec<(ItemId, Vec<(Point, Point)>)> = Vec::new();
     for id in ids {
         let Some(it) = board.item(id) else { continue };
@@ -80,30 +115,46 @@ pub fn flow(board: &mut Board, moves: &HashMap<usize, Point>, soft: &mut Vec<Ite
             plan.push((id, moved));
         }
     }
+    let mut removed_ids: HashSet<ItemId> = HashSet::with_capacity(plan.len());
     for (id, moved) in plan {
         let Some(mut item) = board.remove(id) else { continue };
+        let old_bb = item.shape.bbox();
+        stats.dirty_bbox = Some(stats.dirty_bbox.map_or(old_bb, |b| b.union(old_bb)));
         if let Some(span) = item.span.take() {
             stats.removed_spans.push(span);
         }
         stats.flowed += 1;
-        soft.retain(|s| *s != id);
+        removed_ids.insert(id);
         match item.shape {
             Shape::Capsule { r, .. } if moved.len() == 1 => {
                 let to = moved[0].1;
                 item.shape = Shape::Capsule { a: to, b: to, r };
                 item.hole = item.hole.map(|(_, hr)| (to, hr));
+                let new_bb = item.shape.bbox();
+                stats.dirty_bbox = Some(stats.dirty_bbox.map_or(new_bb, |b| b.union(new_bb)));
                 board.restore(id, item);
-                soft.push(id);
+                removed_ids.remove(&id);
+                if !soft.contains(&id) {
+                    soft.push(id);
+                }
             }
             Shape::Capsule { r, .. } => {
                 stats.pieces += moved.len().saturating_sub(2);
                 for w in moved.windows(2) {
                     let piece = Item { shape: Shape::Capsule { a: w[0].1, b: w[1].1, r }, ..item.clone() };
+                    let new_bb = piece.shape.bbox();
+                    stats.dirty_bbox = Some(stats.dirty_bbox.map_or(new_bb, |b| b.union(new_bb)));
                     soft.push(board.insert(piece));
                 }
             }
-            _ => board.restore(id, item),
+            _ => {
+                removed_ids.remove(&id);
+                board.restore(id, item);
+            }
         }
+    }
+    if !removed_ids.is_empty() {
+        soft.retain(|s| !removed_ids.contains(s));
     }
     for (&f, &by) in moves {
         if by != Point::new(0, 0) {
@@ -146,8 +197,8 @@ pub fn warp_for(board: &Board, moves: &HashMap<usize, Point>) -> WarpField {
         })
         .map(|(_, it)| it.shape.clone())
         .collect();
-    for shape in still {
-        field.add_inclusion(&[shape], (0.0, 0.0), false);
+    if !still.is_empty() {
+        field.add_inclusion(&still, (0.0, 0.0), false);
     }
     field.solve();
     field

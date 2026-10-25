@@ -46,16 +46,17 @@ impl Sets {
 }
 
 /// Points of an item a connection may start from: a pad or via centre, a track's ends.
-fn anchors(board: &Board, id: ItemId) -> Vec<Point> {
-    let Some(item) = board.item(id) else { return Vec::new() };
+fn anchors(board: &Board, id: ItemId) -> ([Point; 2], usize) {
+    let z = Point::new(0, 0);
+    let Some(item) = board.item(id) else { return ([z, z], 0) };
     match (&item.kind, &item.shape) {
-        (_, crate::geom::Shape::Capsule { a, b, .. }) if a == b => vec![*a],
-        (Kind::Track, crate::geom::Shape::Capsule { a, b, .. }) => vec![*a, *b],
+        (_, crate::geom::Shape::Capsule { a, b, .. }) if a == b => ([*a, z], 1),
+        (Kind::Track, crate::geom::Shape::Capsule { a, b, .. }) => ([*a, *b], 2),
         (Kind::Pad { .. }, crate::geom::Shape::Polygon(p)) => {
             let n = p.len().max(1) as i64;
-            vec![Point::new(p.iter().map(|q| q.x).sum::<i64>() / n, p.iter().map(|q| q.y).sum::<i64>() / n)]
+            ([Point::new(p.iter().map(|q| q.x).sum::<i64>() / n, p.iter().map(|q| q.y).sum::<i64>() / n), z], 1)
         }
-        _ => Vec::new(),
+        _ => ([z, z], 0),
     }
 }
 
@@ -80,7 +81,8 @@ pub fn joined(board: &Board, a: ItemId, b: ItemId) -> bool {
             Shape::Capsule { r, .. } => *r as f64,
             Shape::Polygon(_) => 0.0,
         };
-        anchors(board, from_id).iter().any(|p| {
+        let (pts, len) = anchors(board, from_id);
+        pts[..len].iter().any(|p| {
             let dot = Shape::Capsule { a: *p, b: *p, r: 0 };
             let gap = into.shape.gap_within(&dot, reach);
             gap == 0.0 || gap < reach - 0.5
@@ -116,28 +118,48 @@ fn joined_copper(board: &Board, with_pours: bool) -> Connectivity {
                     continue;
                 }
                 let Some(o) = board.item(other) else { continue };
-                if o.net == item.net && o.is_copper() && o.on(layer) && cluster_member(o, with_pours) && joined(board, id, other) {
+                if o.net == item.net && o.is_copper() && o.on(layer) && cluster_member(o, with_pours) && sets.find(id) != sets.find(other) && joined(board, id, other) {
                     sets.join(id, other);
                 }
             }
         }
     }
-    let cluster: HashMap<ItemId, usize> = ids.iter().map(|&id| (id, sets.find(id))).collect();
-
-    // Per net, the clusters that must be joined and each cluster's anchor points. As in KiCad, a
-    // loose piece of track or a via still needs connecting; a pour island alone does not.
-    let mut by_net: BTreeMap<u32, BTreeMap<usize, Vec<(Point, ItemId)>>> = BTreeMap::new();
+    let mut cluster: HashMap<ItemId, usize> = HashMap::with_capacity(ids.len());
+    let mut net_first_cluster: HashMap<u32, usize> = HashMap::new();
+    let mut multi_cluster_nets: std::collections::HashSet<u32> = std::collections::HashSet::new();
     for &id in &ids {
+        let c = sets.find(id);
+        cluster.insert(id, c);
         let item = board.item(id).expect("listed above");
         if matches!(item.kind, Kind::Pour { .. }) {
             continue;
         }
-        by_net.entry(item.net).or_default().entry(cluster[&id]).or_default();
+        match net_first_cluster.entry(item.net) {
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(c);
+            }
+            std::collections::hash_map::Entry::Occupied(e) => {
+                if *e.get() != c {
+                    multi_cluster_nets.insert(item.net);
+                }
+            }
+        }
     }
-    for &id in &ids {
-        let item = board.item(id).expect("listed above");
-        if let Some(points) = by_net.get_mut(&item.net).and_then(|c| c.get_mut(&cluster[&id])) {
-            points.extend(anchors(board, id).into_iter().map(|p| (p, id)));
+
+    // Per net, the clusters that must be joined and each cluster's anchor points. As in KiCad, a
+    // loose piece of track or a via still needs connecting; a pour island alone does not.
+    let mut by_net: BTreeMap<u32, BTreeMap<usize, Vec<(Point, ItemId)>>> = BTreeMap::new();
+    if !multi_cluster_nets.is_empty() {
+        for &id in &ids {
+            let item = board.item(id).expect("listed above");
+            if matches!(item.kind, Kind::Pour { .. }) || !multi_cluster_nets.contains(&item.net) {
+                continue;
+            }
+            let (pts, len) = anchors(board, id);
+            let entry = by_net.entry(item.net).or_default().entry(cluster[&id]).or_default();
+            for &p in &pts[..len] {
+                entry.push((p, id));
+            }
         }
     }
 

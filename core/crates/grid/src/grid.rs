@@ -4,7 +4,7 @@
 //! the other way round. One obstacle map serves every net of a class: each cell records whose
 //! copper claims it.
 
-use board::{nm, point_segment, Board, ItemId, Kind, Nm, Point, Shape};
+use board::{nm, Board, ItemId, Kind, Nm, Point, Shape};
 
 /// How far a step between neighbouring centres strays from the nearer one, in cells.
 const STEP_REACH: f64 = std::f64::consts::FRAC_1_SQRT_2;
@@ -236,9 +236,30 @@ impl ObstacleMap {
                         }
                     }
                 } else {
+                    let (ax, ay, bx, by) = (a.x as f64, a.y as f64, b.x as f64, b.y as f64);
+                    let (dx, dy) = (bx - ax, by - ay);
+                    let len2 = dx * dx + dy * dy;
+                    let limit2 = limit * limit;
                     for j in range(bb.min.y, bb.max.y, self.y0, self.ny) {
-                        for i in range(bb.min.x, bb.max.x, self.x0, self.nx) {
-                            if point_segment(self.centre(i, j), *a, *b) < limit {
+                        let y = self.centre(0, j).y as f64;
+                        let (row_min_x, row_max_x) = if dy.abs() > 1.0 {
+                            let t0 = ((y - limit - ay) / dy).clamp(0.0, 1.0);
+                            let t1 = ((y + limit - ay) / dy).clamp(0.0, 1.0);
+                            let x0 = ax + t0 * dx;
+                            let x1 = ax + t1 * dx;
+                            (
+                                ((x0.min(x1) - limit - 2.0).floor() as Nm).max(bb.min.x),
+                                ((x0.max(x1) + limit + 2.0).ceil() as Nm).min(bb.max.x),
+                            )
+                        } else {
+                            (bb.min.x, bb.max.x)
+                        };
+                        for i in range(row_min_x, row_max_x, self.x0, self.nx) {
+                            let x = self.centre(i, j).x as f64;
+                            let t = (((x - ax) * dx + (y - ay) * dy) / len2).clamp(0.0, 1.0);
+                            let (qx, qy) = (ax + t * dx, ay + t * dy);
+                            let d2 = (x - qx) * (x - qx) + (y - qy) * (y - qy);
+                            if d2 < limit2 && (d2 < limit2 * 0.999999 || (x - qx).hypot(y - qy) < limit) {
                                 f(j * self.nx + i);
                             }
                         }
@@ -282,6 +303,39 @@ impl ObstacleMap {
         let rules = &board.rules;
         let edge = nm(rules.min_copper_edge_clearance);
         let Some(outer) = board.outline.first() else { return };
+        let trace_margin = self.profile.half_width + edge + self.reach();
+        let via_margin = self.profile.via_radius + edge;
+        type OutlineKey = (Nm, Nm, Nm, usize, usize, usize, Nm, Nm, usize, Option<Point>, Option<Point>);
+        let key: OutlineKey = (
+            self.x0,
+            self.y0,
+            self.h,
+            self.nx,
+            self.ny,
+            self.layers,
+            trace_margin,
+            via_margin,
+            board.outline.iter().map(Vec::len).sum(),
+            outer.first().copied(),
+            outer.last().copied(),
+        );
+        thread_local! {
+            static CACHE: std::cell::RefCell<Option<(OutlineKey, Vec<i32>, Vec<i32>)>> = const { std::cell::RefCell::new(None) };
+        }
+        let hit = CACHE.with(|cache| {
+            let borrow = cache.borrow();
+            if let Some((k, owner, via_owner)) = borrow.as_ref() {
+                if *k == key {
+                    self.owner.copy_from_slice(owner);
+                    self.via_owner.copy_from_slice(via_owner);
+                    return true;
+                }
+            }
+            false
+        });
+        if hit {
+            return;
+        }
         let cells = self.nx * self.ny;
         let mut inside = vec![false; cells];
         self.cells_near(&Shape::Polygon(outer.clone()), 0, &mut |c| inside[c] = true);
@@ -294,8 +348,6 @@ impl ObstacleMap {
                 self.owner[l * cells + c] = SEVERAL;
             }
         }
-        let trace_margin = self.profile.half_width + edge + self.reach();
-        let via_margin = self.profile.via_radius + edge;
         for poly in &board.outline {
             for k in 0..poly.len() {
                 let edge_shape = Shape::Capsule { a: poly[k], b: poly[(k + 1) % poly.len()], r: 0 };
@@ -313,6 +365,9 @@ impl ObstacleMap {
                 }
             }
         }
+        CACHE.with(|cache| {
+            *cache.borrow_mut() = Some((key, self.owner.clone(), self.via_owner.clone()));
+        });
     }
 
     /// The clearance between this class's copper and an item of `net`.
@@ -357,7 +412,7 @@ impl ObstacleMap {
                     ObstacleMap::claim(&mut self.owner[l * cells + c], item.net);
                 }
             }
-            let mut hit = Vec::new();
+            hit.clear();
             self.cells_near(&item.shape, via_radius + clearance, &mut |c| hit.push(c));
             for c in hit {
                 ObstacleMap::claim(&mut self.via_owner[c], item.net);

@@ -89,9 +89,48 @@ impl WarpField {
                 self.u[cell] = self.vectors[*owner as usize];
             }
         }
-        for component in 0..2 {
-            self.solve_component(component);
+        let (nx, ny) = (self.nx, self.ny);
+        let free: Vec<usize> = (0..nx * ny).filter(|&c| self.free(c % nx, c / nx)).collect();
+        if free.is_empty() {
+            return;
         }
+        let mut slot = vec![usize::MAX; nx * ny];
+        for (k, &c) in free.iter().enumerate() {
+            slot[c] = k;
+        }
+        // Precompute the 4 neighbor slots per free node once for both X and Y components.
+        let mut adj: Vec<[usize; 4]> = Vec::with_capacity(free.len());
+        let mut bx = vec![0.0; free.len()];
+        let mut by = vec![0.0; free.len()];
+        for (k, &c) in free.iter().enumerate() {
+            let ns = [c - 1, c + 1, c - nx, c + nx];
+            for &n in &ns {
+                if slot[n] == usize::MAX {
+                    let u = self.u[n];
+                    bx[k] += u.0;
+                    by[k] += u.1;
+                }
+            }
+            adj.push(ns.map(|n| slot[n]));
+        }
+        self.solve_component(&free, &adj, &bx, 0);
+        self.solve_component(&free, &adj, &by, 1);
+    }
+
+    /// Whether any cell in the 4-cell bilinear neighbourhood of `bb` has a displacement that
+    /// could round to at least 1 nm.
+    pub fn may_move(&self, bb: BBox) -> bool {
+        let (lo, hi) = self.window((bb.min.x as f64, bb.min.y as f64, bb.max.x as f64, bb.max.y as f64), 1);
+        for j in lo.1..=hi.1 {
+            let row = j * self.nx;
+            for i in lo.0..=hi.0 {
+                let u = self.u[row + i];
+                if u.0.abs() >= 0.49 || u.1.abs() >= 0.49 {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// The displacement at `p`, bilinear between the four surrounding cell centres.
@@ -110,28 +149,10 @@ impl WarpField {
         i > 0 && j > 0 && i + 1 < self.nx && j + 1 < self.ny && self.owner[j * self.nx + i] < 0
     }
 
-    fn solve_component(&mut self, component: usize) {
-        let (nx, ny) = (self.nx, self.ny);
-        let value = |u: &(f64, f64)| if component == 0 { u.0 } else { u.1 };
-        let free: Vec<usize> = (0..nx * ny).filter(|&c| self.free(c % nx, c / nx)).collect();
-        if free.is_empty() {
+    fn solve_component(&mut self, free: &[usize], adj: &[[usize; 4]], b: &[f64], component: usize) {
+        let mut rr: f64 = b.iter().map(|v| v * v).sum();
+        if rr == 0.0 {
             return;
-        }
-        let mut slot = vec![usize::MAX; nx * ny];
-        for (k, &c) in free.iter().enumerate() {
-            slot[c] = k;
-        }
-        // Precompute the 4 neighbor slots per free node so CG iterations do not index `slot` over the full grid.
-        let mut adj: Vec<[usize; 4]> = Vec::with_capacity(free.len());
-        let mut b = vec![0.0; free.len()];
-        for (k, &c) in free.iter().enumerate() {
-            let ns = [c - 1, c + 1, c - nx, c + nx];
-            for &n in &ns {
-                if slot[n] == usize::MAX {
-                    b[k] += value(&self.u[n]);
-                }
-            }
-            adj.push(ns.map(|n| slot[n]));
         }
         let apply = |x: &[f64], out: &mut [f64]| {
             for (k, ns) in adj.iter().enumerate() {
@@ -145,11 +166,10 @@ impl WarpField {
             }
         };
         let mut x = vec![0.0; free.len()];
-        let mut r = b.clone();
+        let mut r = b.to_vec();
         let mut p = r.clone();
         let mut ap = vec![0.0; free.len()];
-        let mut rr: f64 = r.iter().map(|v| v * v).sum();
-        let target = CG_TOLERANCE * CG_TOLERANCE * b.iter().map(|v| v * v).sum::<f64>().max(1e-30);
+        let target = CG_TOLERANCE * CG_TOLERANCE * rr.max(1e-30);
         for _ in 0..CG_MAX_ITERATIONS {
             if rr <= target {
                 break;
@@ -192,12 +212,46 @@ impl WarpField {
         let b = shape.bbox();
         let (lo, hi) = self.window((b.min.x as f64, b.min.y as f64, b.max.x as f64, b.max.y as f64), halo + 1);
         let reach = self.h * (halo as f64 + 0.5);
-        for j in lo.1..=hi.1 {
-            for i in lo.0..=hi.0 {
-                let (x, y) = self.cell_center(i, j);
-                let at = Shape::Capsule { a: Point::new(x.round() as i64, y.round() as i64), b: Point::new(x.round() as i64, y.round() as i64), r: 0 };
-                if shape.gap(&at) <= reach {
-                    out.push(j * self.nx + i);
+        match shape {
+            Shape::Capsule { a, b: q, r } if a == q => {
+                let limit = *r as f64 + reach;
+                let limit2 = limit * limit;
+                for j in lo.1..=hi.1 {
+                    let (_, y) = self.cell_center(0, j);
+                    let dy = y.round() - a.y as f64;
+                    if dy * dy > limit2 {
+                        continue;
+                    }
+                    for i in lo.0..=hi.0 {
+                        let (x, _) = self.cell_center(i, j);
+                        let dx = x.round() - a.x as f64;
+                        if dx * dx + dy * dy <= limit2 {
+                            out.push(j * self.nx + i);
+                        }
+                    }
+                }
+            }
+            Shape::Capsule { a, b: q, r } => {
+                let limit = *r as f64 + reach;
+                for j in lo.1..=hi.1 {
+                    for i in lo.0..=hi.0 {
+                        let (x, y) = self.cell_center(i, j);
+                        let pt = Point::new(x.round() as i64, y.round() as i64);
+                        if board::point_segment(pt, *a, *q) <= limit {
+                            out.push(j * self.nx + i);
+                        }
+                    }
+                }
+            }
+            Shape::Polygon(_) => {
+                for j in lo.1..=hi.1 {
+                    for i in lo.0..=hi.0 {
+                        let (x, y) = self.cell_center(i, j);
+                        let at = Shape::Capsule { a: Point::new(x.round() as i64, y.round() as i64), b: Point::new(x.round() as i64, y.round() as i64), r: 0 };
+                        if shape.gap(&at) <= reach {
+                            out.push(j * self.nx + i);
+                        }
+                    }
                 }
             }
         }
