@@ -454,6 +454,7 @@
     const all = await (await fetch('../api/jobs')).json();
     // The studio offers the boards marked for it, when any are.
     jobs = all.some((j) => j.studio) ? all.filter((j) => j.studio) : all;
+    jobs.sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9));
     recordings = await fetch('replays/index.json')
       .then((r) => (r.ok ? r.json() : []))
       .catch(() => []);

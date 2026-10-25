@@ -399,6 +399,7 @@ fn jobs(root: &Path) -> Value {
             "kicad_pcb": input.pcb.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy()),
             "kicad_project": input.project.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy()),
             "studio": job_settings(&dir)["studio"].as_bool().unwrap_or(false),
+            "order": job_settings(&dir)["order"],
             "strip": job_settings(&dir)["strip"],
             "presets": presets,
             "notes": dir.join("README.md").is_file(),

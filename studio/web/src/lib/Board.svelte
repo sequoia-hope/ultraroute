@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import { Renderer } from './renderer.js';
 
   // studio: the WASM scene. version: bumped whenever the scene changed.
@@ -194,10 +194,14 @@
     drag = null;
   }
 
+  // Refit when the view changes, and only then: fitting reads the layers, which are renewed
+  // with every status update.
   $effect(() => {
     mode;
     flipped;
-    if (canvas) fitted = fit();
+    untrack(() => {
+      if (canvas) fitted = fit();
+    });
   });
 
   onMount(() => {
