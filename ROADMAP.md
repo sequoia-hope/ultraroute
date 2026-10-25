@@ -76,8 +76,12 @@ with WebGPU) under MIT. Estimate ~15k lines:
       made in tracks. Judged by KiCad after a refill: the earring 249 → 14 open in 22 s, bluebuzz
       with its unlocked copper stripped 25 → 5 open in 13 s, 0 errors on both.
 - [ ] Holes as slots (oval drills), not only round.
-- [ ] The GPU field solver and negotiated congestion on the core; then topo with rip-up, nudge
-      and diffusion.
+- [x] The GPU field solver (`--features gpu`) and negotiated congestion on the core. With
+      negotiation then single routing for what is left, after a KiCad refill: the earring 10 open,
+      stripped bluebuzz 3 open, 0 errors on both. Slow yet: 30 rounds that do not converge, ~3 min
+      on the earring; one field at a time leaves the GPU idle (58 s vs 22 s CPU, sequential).
+- [ ] Negotiation that stops when it stops improving, and batches fields on the GPU.
+- [ ] Topo with rip-up, nudge and diffusion on the core.
 - [ ] Our own finisher and cleanup in place of freerouting's maze router and optimizer.
 - [ ] copperroute kept as the reference router across the process boundary until the core
       matches it on the leaderboards.

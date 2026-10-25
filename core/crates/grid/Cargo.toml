@@ -7,6 +7,11 @@ license = "MIT"
 # Grid routing on the core board model: a conservative obstacle map per net class, an integer
 # cost field from the sources and a walk back down it, laid as tracks and vias.
 
+[features]
+gpu = ["dep:wgpu", "dep:pollster"]
+
 [dependencies]
 board = { path = "../board" }
 kicad-pcb = { path = "../kicad-pcb" }
+wgpu = { version = "=30.0.1", optional = true }
+pollster = { version = "=0.4.0", optional = true }

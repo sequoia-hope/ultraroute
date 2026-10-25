@@ -54,7 +54,7 @@ pub struct Stats {
 
 /// A place a path may start or end: a free cell, and the point a straight leg must reach from it
 /// when the cell's centre is not on the terminal's copper.
-type Terminal = (usize, Option<Point>);
+pub(crate) type Terminal = (usize, Option<Point>);
 
 /// Routes the board's open connections, shortest first, until a round joins nothing more.
 /// `watch` sees the board after every connection laid.
@@ -152,7 +152,7 @@ fn anchor(item: &Item, near: Point) -> Point {
 
 /// Free cells on the item's copper, and free cells a short straight leg from its anchor reaches
 /// legally: how a path leaves a pad too small or too crowded to hold a free cell of its own.
-fn terminals(board: &mut Board, grid: &RouteGrid, id: ItemId) -> Vec<Terminal> {
+pub(crate) fn terminals(board: &mut Board, grid: &RouteGrid, id: ItemId) -> Vec<Terminal> {
     let Some(item) = board.item(id).cloned() else { return Vec::new() };
     let mut out: Vec<Terminal> = Vec::new();
     let bb = item.shape.bbox();
@@ -220,7 +220,7 @@ fn fits(board: &mut Board, item: Item) -> bool {
 /// Lays the path: straight runs merged, a via at each layer change, legs to the terminals'
 /// anchors where needed. All or nothing: `None`, with the board as it was, if any piece breaks a
 /// rule.
-fn lay(board: &mut Board, grid: &RouteGrid, path: &GridPath, sources: &[Terminal], targets: &[Terminal]) -> Option<Vec<ItemId>> {
+pub(crate) fn lay(board: &mut Board, grid: &RouteGrid, path: &GridPath, sources: &[Terminal], targets: &[Terminal]) -> Option<Vec<ItemId>> {
     let index = |&(l, i, j): &(usize, usize, usize)| grid.index(l, i, j);
     let leg = |terminals: &[Terminal], cell: usize| terminals.iter().find(|t| t.0 == cell && t.1.is_some()).and_then(|t| t.1);
     let first = path.first()?;

@@ -28,9 +28,36 @@ fn main() {
     println!("{} open before", connectivity(&b).airlines.len());
     let t = Instant::now();
     let options = Options { max_seconds: seconds, pours_block: args.iter().any(|a| a == "--pours-block"), ..Options::default() };
-    let stats = route_open(&mut b, &mut CpuSolver, &options, &mut |_| {});
+    let mut solver: Box<dyn grid::FieldSolver> = Box::new(CpuSolver);
+    #[cfg(feature = "gpu")]
+    if args.iter().any(|a| a == "--gpu") {
+        match grid::GpuSolver::new() {
+            Some(gpu) => {
+                println!("field solver on {}", gpu.adapter_name);
+                solver = Box::new(gpu);
+            }
+            None => println!("no GPU; solving on the CPU"),
+        }
+    }
+    let mut laid = Vec::new();
+    if args.iter().any(|a| a == "--negotiate") {
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get() / 2).max(1);
+        let n = grid::route_negotiated(
+            &mut b,
+            solver.as_mut(),
+            &grid::NegotiationOptions { max_seconds: seconds.map(|s: f64| s / 2.0), threads, pours_block: options.pours_block, ..Default::default() },
+            &mut |_| {},
+        );
+        println!(
+            "negotiated {} of {} connections in {} rounds ({} still colliding, {} without a path), {} vias, {:.1?}",
+            n.committed, n.connections, n.rounds, n.conflicted, n.unroutable, n.vias, t.elapsed()
+        );
+        laid.extend(n.laid);
+    }
+    let stats = route_open(&mut b, solver.as_mut(), &options, &mut |_| {});
+    laid.extend(stats.laid.iter().copied());
     println!("routed {} failed {} (no terminal {}, no path {}, refused {}) vias {} in {:.1?}", stats.routed, stats.failed, stats.no_terminal, stats.no_path, stats.refused, stats.vias, t.elapsed());
     println!("{} open after, {} violations", connectivity(&b).airlines.len(), check(&b).len());
-    let (tracks, vias) = edits(&b, &stats.laid);
+    let (tracks, vias) = edits(&b, &laid);
     std::fs::write(output, apply(&text, &Edit { remove: removed, tracks, vias })).expect("write");
 }
