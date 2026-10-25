@@ -45,13 +45,19 @@ pub struct RipStats {
     /// Attempts kept because they left fewer connections open.
     pub kept: usize,
     pub ripped: usize,
+    /// Attempts lost by cause: no route even through soft copper, a route that met copper that
+    /// may not be ripped, and a result no better than before.
+    pub no_path: usize,
+    pub hard_conflict: usize,
+    pub no_better: usize,
 }
 
 fn open_count(board: &Board, pours_block: bool) -> usize {
     if pours_block { connectivity(board) } else { connectivity_without_pours(board) }.airlines.len()
 }
 
-/// Tries every open connection once per round, while rounds keep closing connections. `soft`
+/// Tries every open connection once per round, while rounds keep closing connections; a round
+/// that closes any lets the next try them all again. `soft`
 /// holds the copper the router laid; it is updated as copper is ripped and laid.
 pub fn rip_up(board: &mut Board, solver: &mut dyn FieldSolver, options: &RipOptions, soft: &mut Vec<ItemId>, watch: &mut dyn FnMut(&Board)) -> RipStats {
     let started = std::time::Instant::now();
@@ -95,7 +101,10 @@ pub fn rip_up(board: &mut Board, solver: &mut dyn FieldSolver, options: &RipOpti
             }
             let source_cells: Vec<usize> = sources.iter().map(|t| t.0).collect();
             let target_cells: Vec<usize> = targets.iter().map(|t| t.0).collect();
-            let Some(path) = solver.route(&grid, &source_cells, &target_cells, options.via_cost) else { continue };
+            let Some(path) = solver.route(&grid, &source_cells, &target_cells, options.via_cost) else {
+                stats.no_path += 1;
+                continue;
+            };
             let Some(new) = pieces(&grid, &path, &sources, &targets) else { continue };
 
             let before = open_count(board, options.pours_block);
@@ -112,7 +121,9 @@ pub fn rip_up(board: &mut Board, solver: &mut dyn FieldSolver, options: &RipOpti
                         ok = false;
                         break 'pieces;
                     };
-                    let rippable = soft_set.contains(&other) && board.item(other).is_some_and(|it| it.net != airline.net);
+                    // The router's own copper of any net, this net's too (a via of the net may stand
+                    // too near another of its holes); what comes loose is rerouted below.
+                    let rippable = soft_set.contains(&other) && !laid.contains(&other);
                     if !rippable {
                         ok = false;
                         break 'pieces;
@@ -127,6 +138,7 @@ pub fn rip_up(board: &mut Board, solver: &mut dyn FieldSolver, options: &RipOpti
                 }
             }
             if !ok {
+                stats.hard_conflict += 1;
                 *board = snapshot;
                 continue;
             }
@@ -145,6 +157,7 @@ pub fn rip_up(board: &mut Board, solver: &mut dyn FieldSolver, options: &RipOpti
                 stats.ripped += ripped;
                 watch(board);
             } else {
+                stats.no_better += 1;
                 *board = snapshot;
                 *soft = soft_before;
             }
@@ -152,6 +165,8 @@ pub fn rip_up(board: &mut Board, solver: &mut dyn FieldSolver, options: &RipOpti
         if stats.kept == kept_before {
             break;
         }
+        // What was ripped and rerouted may have opened room for connections tried before.
+        tried.clear();
     }
     soft.retain(|id| board.item(*id).is_some());
     stats

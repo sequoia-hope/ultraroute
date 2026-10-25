@@ -61,11 +61,26 @@ fn main() {
         let r = grid::rip_up(
             &mut b,
             solver.as_mut(),
-            &grid::RipOptions { max_seconds: seconds.map(|s: f64| s / 2.0), pours_block: options.pours_block, ..Default::default() },
+            &grid::RipOptions {
+                max_seconds: seconds.map(|s: f64| s / 2.0),
+                pours_block: options.pours_block,
+                rip_cost: args.iter().position(|a| a == "--rip-cost").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(400),
+                ..Default::default()
+            },
             &mut laid,
             &mut |_| {},
         );
-        println!("rip-up: {} attempts, {} kept, {} ripped, {:.1?}", r.attempts, r.kept, r.ripped, t.elapsed());
+        println!(
+            "rip-up: {} attempts, {} kept, {} ripped (lost: {} no path, {} hard conflict, {} no better), {:.1?}",
+            r.attempts, r.kept, r.ripped, r.no_path, r.hard_conflict, r.no_better, t.elapsed()
+        );
+    }
+    if args.iter().any(|a| a == "--tighten") {
+        let c = grid::pull_tight(&mut b, &mut laid);
+        println!(
+            "pulled {} chains tight: {} -> {} segments, {:.1} -> {:.1} mm, {:.1?}",
+            c.chains, c.segments_before, c.segments_after, c.length_before, c.length_after, t.elapsed()
+        );
     }
     println!("routed {} failed {} (no terminal {}, no path {}, refused {}) vias {} in {:.1?}", stats.routed, stats.failed, stats.no_terminal, stats.no_path, stats.refused, stats.vias, t.elapsed());
     println!("{} open after, {} violations", connectivity(&b).airlines.len(), check(&b).len());

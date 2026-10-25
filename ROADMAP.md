@@ -97,7 +97,12 @@ with WebGPU) under MIT. Estimate ~15k lines:
       ripped and rerouted, kept only if fewer connections stay open. After a KiCad refill: the
       earring 3 open in 54 s (copperroute's best is 3, nudge, 511 s; its grid recipe 4) and
       stripped bluebuzz 4, 0 errors on both.
-- [ ] A cleanup pass (pull tight, fewer corners and vias) in place of freerouting's optimizer.
+- [x] Deterministic runs (ordered connectivity), a finisher that rips any of the router's
+      own copper and retries after progress, and a pull-tight pass that straightens each chain
+      of router copper between fixed points while keeping everything it joins. Earring 5 open,
+      3403 → 1305 segments, 1207 → 1164 mm; stripped bluebuzz 4 (its leftovers are walled in by
+      fixed copper: a job for nudging, not rip-up). 0 errors.
+- [ ] Fewer vias in cleanup; nudge and diffusion on the core for what fixed copper walls in.
 - [ ] copperroute kept as the reference router across the process boundary until the core
       matches it on the leaderboards.
 

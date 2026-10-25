@@ -14,7 +14,7 @@ use board::{connectivity, connectivity_without_pours, Board, Item, ItemId, Kind,
 use kicad_pcb::{apply, mm, Edit};
 use serde_json::{json, Value};
 
-const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--negotiate] [--rip-up] [--gpu] \
+const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--negotiate] [--rip-up] [--tighten] [--gpu] \
 [--timeout SECONDS] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
 [--live PATH|-] [--live-fps N]";
 
@@ -24,6 +24,7 @@ struct Args {
     strip: bool,
     negotiate: bool,
     rip_up: bool,
+    tighten: bool,
     gpu: bool,
     pours_block: bool,
     timeout: Option<f64>,
@@ -44,6 +45,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
         strip: false,
         negotiate: false,
         rip_up: false,
+        tighten: false,
         gpu: false,
         pours_block: false,
         timeout: None,
@@ -65,6 +67,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
             "--strip" => a.strip = true,
             "--negotiate" => a.negotiate = true,
             "--rip-up" => a.rip_up = true,
+            "--tighten" => a.tighten = true,
             "--gpu" => a.gpu = true,
             "--pours-block" => a.pours_block = true,
             "--no-route" => a.no_route = true,
@@ -418,6 +421,17 @@ fn main() {
             &mut watch,
         );
         eprintln!("rip-up: {} tries, {} kept, {} ripped, {:.1} s", r.attempts, r.kept, r.ripped, started.elapsed().as_secs_f64());
+    }
+    if a.tighten {
+        let c = grid::pull_tight(&mut board, &mut laid);
+        eprintln!(
+            "pulled tight: {} -> {} segments, {:.0} -> {:.0} mm, {:.1} s",
+            c.segments_before,
+            c.segments_after,
+            c.length_before,
+            c.length_after,
+            started.elapsed().as_secs_f64()
+        );
     }
     let open = if a.pours_block { connectivity(&board) } else { connectivity_without_pours(&board) }.airlines.len();
     eprintln!("routed {} more, {} failed, {} open, {:.1} s", stats.routed, stats.failed, open, started.elapsed().as_secs_f64());

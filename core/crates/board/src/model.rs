@@ -291,6 +291,20 @@ impl Board {
         id
     }
 
+    /// Puts a removed item back under the id it had.
+    pub fn restore(&mut self, id: ItemId, item: Item) {
+        let b = Board::footprint_of(&item);
+        for slot in self.slots(&item) {
+            for (x, y) in Board::cells_of(b) {
+                self.cells.entry((slot, x, y)).or_default().push(id);
+            }
+        }
+        if id >= self.items.len() {
+            self.items.resize(id + 1, None);
+        }
+        self.items[id] = Some(item);
+    }
+
     pub fn remove(&mut self, id: ItemId) -> Option<Item> {
         let item = self.items.get_mut(id)?.take()?;
         let b = Board::footprint_of(&item);

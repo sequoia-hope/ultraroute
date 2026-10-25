@@ -3,6 +3,7 @@
 
 #[cfg(feature = "gpu")]
 pub mod gpu;
+pub mod cleanup;
 pub mod grid;
 pub mod negotiate;
 pub mod ripup;
@@ -11,6 +12,7 @@ pub mod search;
 #[cfg(feature = "gpu")]
 pub mod sweep;
 
+pub use cleanup::{pull_tight, CleanStats};
 pub use grid::{ObstacleMap, Profile, RouteGrid, ViaSpec};
 pub use negotiate::{route_negotiated, NegotiationOptions, NegotiationStats, Trial};
 pub use ripup::{rip_up, RipOptions, RipStats};

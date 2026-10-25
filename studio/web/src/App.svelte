@@ -93,6 +93,7 @@
   ];
   let strip = $state(true);
   let ripUp = $state(true);
+  let tighten = $state(true);
   const engine = $derived(router === 'core' ? 'core' : 'copperroute');
   // Copperroute reads the job's Specctra board, the core its KiCad board.
   const available = (key, j = job) => (key === 'core' ? !!j?.kicad_pcb : !!j?.dsn);
@@ -108,6 +109,7 @@
     if (router === 'core') {
       if (negotiate) args.push('--negotiate');
       if (ripUp) args.push('--rip-up');
+      if (tighten) args.push('--tighten');
       if (strip) args.push('--strip');
       argsText = args.join(' ');
       envText = '';
@@ -515,6 +517,7 @@
     {/if}
     {#if router === 'core'}
       <label class="check"><input type="checkbox" bind:checked={ripUp} onchange={compose} /> Rip up and retry what is left</label>
+      <label class="check"><input type="checkbox" bind:checked={tighten} onchange={compose} /> Pull the copper tight</label>
       <label class="check"><input type="checkbox" bind:checked={strip} onchange={compose} /> Rip up unlocked copper first</label>
     {:else}
       <label class="check"><input type="checkbox" bind:checked={fanout} onchange={compose} /> Fan out pads first</label>

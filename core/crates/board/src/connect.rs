@@ -1,7 +1,7 @@
 //! Which copper is joined: same-net items that touch on a shared layer are one cluster. A net
 //! with several clusters is open; its airlines join the clusters most cheaply.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::model::{Board, ItemId, Kind};
 use crate::geom::{Point, Shape};
@@ -67,7 +67,7 @@ fn cluster_member(item: &crate::model::Item, with_pours: bool) -> bool {
 /// its whole disc, any other pad at its centre; two items join where an anchor of one meets the
 /// other's copper, so copper that merely overlaps a pad's corner or crosses a track does not
 /// connect. Pours join wherever they touch.
-fn joined(board: &Board, a: ItemId, b: ItemId) -> bool {
+pub fn joined(board: &Board, a: ItemId, b: ItemId) -> bool {
     let (Some(x), Some(y)) = (board.item(a), board.item(b)) else { return false };
     let pour = |it: &crate::model::Item| matches!(it.kind, Kind::Pour { .. });
     if pour(x) || pour(y) {
@@ -121,7 +121,7 @@ fn joined_copper(board: &Board, with_pours: bool) -> Connectivity {
 
     // Per net, the clusters that must be joined and each cluster's anchor points. As in KiCad, a
     // loose piece of track or a via still needs connecting; a pour island alone does not.
-    let mut by_net: HashMap<u32, HashMap<usize, Vec<(Point, ItemId)>>> = HashMap::new();
+    let mut by_net: BTreeMap<u32, BTreeMap<usize, Vec<(Point, ItemId)>>> = BTreeMap::new();
     for &id in &ids {
         let item = board.item(id).expect("listed above");
         if matches!(item.kind, Kind::Pour { .. }) {
