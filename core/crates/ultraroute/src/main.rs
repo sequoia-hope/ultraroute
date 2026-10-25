@@ -14,7 +14,7 @@ use board::{connectivity, connectivity_without_pours, Board, Item, ItemId, Kind,
 use kicad_pcb::{apply, mm, Edit};
 use serde_json::{json, Value};
 
-const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--negotiate] [--gpu] \
+const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--negotiate] [--rip-up] [--gpu] \
 [--timeout SECONDS] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
 [--live PATH|-] [--live-fps N]";
 
@@ -23,6 +23,7 @@ struct Args {
     output: String,
     strip: bool,
     negotiate: bool,
+    rip_up: bool,
     gpu: bool,
     pours_block: bool,
     timeout: Option<f64>,
@@ -42,6 +43,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
         output: String::new(),
         strip: false,
         negotiate: false,
+        rip_up: false,
         gpu: false,
         pours_block: false,
         timeout: None,
@@ -62,6 +64,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
             "-o" | "--output" => a.output = value()?,
             "--strip" => a.strip = true,
             "--negotiate" => a.negotiate = true,
+            "--rip-up" => a.rip_up = true,
             "--gpu" => a.gpu = true,
             "--pours-block" => a.pours_block = true,
             "--no-route" => a.no_route = true,
@@ -401,6 +404,21 @@ fn main() {
     };
     let stats = grid::route_open(&mut board, solver.as_mut(), &options, &mut watch);
     laid.extend(stats.laid.iter().copied());
+    if a.rip_up {
+        let r = grid::rip_up(
+            &mut board,
+            solver.as_mut(),
+            &grid::RipOptions {
+                max_seconds: a.timeout.map(|s| (s - started.elapsed().as_secs_f64()).max(0.0)),
+                pours_block: a.pours_block,
+                cancel: Some(cancel.clone()),
+                ..Default::default()
+            },
+            &mut laid,
+            &mut watch,
+        );
+        eprintln!("rip-up: {} tries, {} kept, {} ripped, {:.1} s", r.attempts, r.kept, r.ripped, started.elapsed().as_secs_f64());
+    }
     let open = if a.pours_block { connectivity(&board) } else { connectivity_without_pours(&board) }.airlines.len();
     eprintln!("routed {} more, {} failed, {} open, {:.1} s", stats.routed, stats.failed, open, started.elapsed().as_secs_f64());
 

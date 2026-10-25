@@ -5,12 +5,14 @@ use std::collections::{BTreeSet, HashMap};
 use board::{check_item, connectivity, connectivity_without_pours, Board, Item, ItemId, Kind, Nm, Point, Shape};
 
 use crate::grid::{ObstacleMap, Profile, RouteGrid};
-use crate::search::{cost_field, trace_back, GridPath};
+use crate::search::{cost_field, route_astar, trace_back, GridPath};
 
 /// How many nearby free cells are tried as the far end of a straight leg out of a terminal.
 const LEG_CANDIDATES: usize = 16;
 /// How far beyond a terminal's own extent a leg may reach, in cells.
 const LEG_CELLS: Nm = 3;
+/// How far a necked-down leg may reach out of a pad too crowded for a full-width one, in cells.
+const NECK_CELLS: Nm = 20;
 
 pub trait FieldSolver {
     fn solve(&mut self, grid: &RouteGrid, sources: &[usize], via_cost: u32) -> Vec<u32>;
@@ -24,6 +26,12 @@ pub trait FieldSolver {
     fn batch_size(&self) -> usize {
         1
     }
+
+    /// The cheapest route from the sources to any target.
+    fn route(&mut self, grid: &RouteGrid, sources: &[usize], targets: &[usize], via_cost: u32) -> Option<GridPath> {
+        let cost = self.solve(grid, sources, via_cost);
+        trace_back(grid, &cost, targets, via_cost)
+    }
 }
 
 pub struct CpuSolver;
@@ -31,6 +39,10 @@ pub struct CpuSolver;
 impl FieldSolver for CpuSolver {
     fn solve(&mut self, grid: &RouteGrid, sources: &[usize], via_cost: u32) -> Vec<u32> {
         cost_field(grid, sources, via_cost)
+    }
+
+    fn route(&mut self, grid: &RouteGrid, sources: &[usize], targets: &[usize], via_cost: u32) -> Option<GridPath> {
+        route_astar(grid, sources, targets, via_cost)
     }
 }
 
@@ -62,11 +74,13 @@ pub struct Stats {
     pub vias: usize,
     /// Every track and via laid, for writing back.
     pub laid: Vec<ItemId>,
+    /// The connections given up, by their two ends, and why.
+    pub failures: Vec<(ItemId, ItemId, &'static str)>,
 }
 
-/// A place a path may start or end: a free cell, and the point a straight leg must reach from it
-/// when the cell's centre is not on the terminal's copper.
-pub(crate) type Terminal = (usize, Option<Point>);
+/// A place a path may start or end: a free cell, and, when the cell's centre is not on the
+/// terminal's copper, the point a straight leg must reach from it and the leg's half-width.
+pub(crate) type Terminal = (usize, Option<(Point, Nm)>);
 
 /// Routes the board's open connections, shortest first, until a round joins nothing more.
 /// `watch` sees the board after every connection laid.
@@ -100,14 +114,15 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
             let targets = terminals(board, &grid, airline.to_item);
             let laid = if sources.is_empty() || targets.is_empty() {
                 stats.no_terminal += 1;
+                stats.failures.push((airline.from_item, airline.to_item, if sources.is_empty() { "no terminal at the start" } else { "no terminal at the end" }));
                 None
             } else {
                 let source_cells: Vec<usize> = sources.iter().map(|t| t.0).collect();
                 let target_cells: Vec<usize> = targets.iter().map(|t| t.0).collect();
-                let cost = solver.solve(&grid, &source_cells, options.via_cost);
-                match trace_back(&grid, &cost, &target_cells, options.via_cost) {
+                match solver.route(&grid, &source_cells, &target_cells, options.via_cost) {
                     None => {
                         stats.no_path += 1;
+                        stats.failures.push((airline.from_item, airline.to_item, "no path"));
                         None
                     }
                     Some(path) => {
@@ -167,7 +182,23 @@ fn anchor(item: &Item, near: Point) -> Point {
 
 /// Free cells on the item's copper, and free cells a short straight leg from its anchor reaches
 /// legally: how a path leaves a pad too small or too crowded to hold a free cell of its own.
+/// Free cells on the item's copper, and free cells a short straight leg from its anchor reaches
+/// legally: how a path leaves a pad too small or too crowded to hold a free cell of its own.
+/// Where no full-width leg fits, a leg necked down to the board's narrowest track may reach
+/// further, as a designer would leave a fine-pitch pad.
 pub(crate) fn terminals(board: &mut Board, grid: &RouteGrid, id: ItemId) -> Vec<Terminal> {
+    let found = terminals_with(board, grid, id, grid.half_width, LEG_CELLS, LEG_CANDIDATES);
+    if !found.is_empty() {
+        return found;
+    }
+    let narrow = (board::nm(board.rules.min_track_width) / 2).max(1);
+    if narrow >= grid.half_width {
+        return found;
+    }
+    terminals_with(board, grid, id, narrow, NECK_CELLS, 2 * LEG_CANDIDATES)
+}
+
+fn terminals_with(board: &mut Board, grid: &RouteGrid, id: ItemId, leg_half_width: Nm, leg_cells: Nm, tries: usize) -> Vec<Terminal> {
     let Some(item) = board.item(id).cloned() else { return Vec::new() };
     let mut out: Vec<Terminal> = Vec::new();
     let bb = item.shape.bbox();
@@ -187,7 +218,7 @@ pub(crate) fn terminals(board: &mut Board, grid: &RouteGrid, id: ItemId) -> Vec<
             }
         }
         let from = anchor(&item, Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2));
-        let reach = ((bb.max.x - bb.min.x).max(bb.max.y - bb.min.y) / 2 + LEG_CELLS * grid.h) as f64;
+        let reach = ((bb.max.x - bb.min.x).max(bb.max.y - bb.min.y) / 2 + leg_cells * grid.h) as f64;
         let Some(c) = grid.cell_at(from) else { continue };
         let span = (reach / grid.h as f64).ceil() as usize;
         let mut candidates: Vec<(f64, usize, Point)> = Vec::new();
@@ -202,10 +233,10 @@ pub(crate) fn terminals(board: &mut Board, grid: &RouteGrid, id: ItemId) -> Vec<
             }
         }
         candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
-        for (_, index, centre) in candidates.into_iter().take(LEG_CANDIDATES) {
-            let leg = track(item.net, grid.layers[layer], from, centre, grid.half_width);
+        for (_, index, centre) in candidates.into_iter().take(tries) {
+            let leg = track(item.net, grid.layers[layer], from, centre, leg_half_width);
             if fits(board, leg) {
-                out.push((index, Some(from)));
+                out.push((index, Some((from, leg_half_width))));
             }
         }
     }
@@ -236,6 +267,24 @@ fn fits(board: &mut Board, item: Item) -> bool {
 /// anchors where needed. All or nothing: `None`, with the board as it was, if any piece breaks a
 /// rule.
 pub(crate) fn lay(board: &mut Board, grid: &RouteGrid, path: &GridPath, sources: &[Terminal], targets: &[Terminal]) -> Option<Vec<ItemId>> {
+    let pieces = pieces(grid, path, sources, targets)?;
+    let mut laid = Vec::new();
+    for piece in pieces {
+        let id = board.insert(piece);
+        laid.push(id);
+        if !check_item(board, id).is_empty() {
+            for id in laid {
+                board.remove(id);
+            }
+            return None;
+        }
+    }
+    Some(laid)
+}
+
+/// The tracks and vias a path becomes: straight runs merged, a via at each layer change, legs to
+/// the terminals' anchors where needed.
+pub(crate) fn pieces(grid: &RouteGrid, path: &GridPath, sources: &[Terminal], targets: &[Terminal]) -> Option<Vec<Item>> {
     let index = |&(l, i, j): &(usize, usize, usize)| grid.index(l, i, j);
     let leg = |terminals: &[Terminal], cell: usize| terminals.iter().find(|t| t.0 == cell && t.1.is_some()).and_then(|t| t.1);
     let first = path.first()?;
@@ -243,12 +292,15 @@ pub(crate) fn lay(board: &mut Board, grid: &RouteGrid, path: &GridPath, sources:
     let start_leg = if sources.iter().any(|t| t.0 == index(first) && t.1.is_none()) { None } else { leg(sources, index(first)) };
     let end_leg = if targets.iter().any(|t| t.0 == index(last) && t.1.is_none()) { None } else { leg(targets, index(last)) };
 
-    // Corners on each layer: where the direction turns or the layer changes.
+    // Corners on each layer: where the direction turns or the layer changes. A full-width leg
+    // joins the run; a necked-down one is a track of its own.
     let mut pieces: Vec<Item> = Vec::new();
     let mut run: Vec<Point> = Vec::new();
     let mut run_layer = first.0;
-    if let Some(p) = start_leg {
-        run.push(p);
+    match start_leg {
+        Some((p, hw)) if hw == grid.half_width => run.push(p),
+        Some((p, hw)) => pieces.push(track(grid.net, grid.layers[first.0], p, grid.centre(first.1, first.2), hw)),
+        None => {}
     }
     for (k, cell) in path.iter().enumerate() {
         let p = grid.centre(cell.1, cell.2);
@@ -276,23 +328,15 @@ pub(crate) fn lay(board: &mut Board, grid: &RouteGrid, path: &GridPath, sources:
         }
         run.push(p);
     }
-    if let Some(p) = end_leg {
-        run.push(p);
+    let mut neck = None;
+    match end_leg {
+        Some((p, hw)) if hw == grid.half_width => run.push(p),
+        Some((p, hw)) => neck = Some(track(grid.net, grid.layers[last.0], grid.centre(last.1, last.2), p, hw)),
+        None => {}
     }
     flush(&mut pieces, &run, grid, run_layer);
-
-    let mut laid = Vec::new();
-    for piece in pieces {
-        let id = board.insert(piece);
-        laid.push(id);
-        if !check_item(board, id).is_empty() {
-            for id in laid {
-                board.remove(id);
-            }
-            return None;
-        }
-    }
-    Some(laid)
+    pieces.extend(neck);
+    Some(pieces)
 }
 
 fn cross(a: Point, b: Point, c: Point) -> i128 {

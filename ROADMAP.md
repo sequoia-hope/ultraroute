@@ -91,7 +91,13 @@ with WebGPU) under MIT. Estimate ~15k lines:
       3.5M-node fields against ~10 s on CPU threads. The relaxation kernel needs a better
       schedule (or a coarser grid) before the GPU pays.
 - [ ] Topo with rip-up, nudge and diffusion on the core.
-- [ ] Our own finisher and cleanup in place of freerouting's maze router and optimizer.
+- [x] A* search on the CPU (routes as cheap as the full field, a fraction of the work), zones
+      sized per pair of net classes, legs necked down to the narrowest track out of crowded pads,
+      and a rip-up finisher: a blocked connection may cross copper the router laid, which is
+      ripped and rerouted, kept only if fewer connections stay open. After a KiCad refill: the
+      earring 3 open in 54 s (copperroute's best is 3, nudge, 511 s; its grid recipe 4) and
+      stripped bluebuzz 4, 0 errors on both.
+- [ ] A cleanup pass (pull tight, fewer corners and vias) in place of freerouting's optimizer.
 - [ ] copperroute kept as the reference router across the process boundary until the core
       matches it on the leaderboards.
 

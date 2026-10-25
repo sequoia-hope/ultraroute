@@ -107,6 +107,11 @@ impl ObstacleMap {
     /// With `pours_block`, poured copper is kept like any other copper; otherwise it claims
     /// nothing, to be refilled around whatever is routed through it.
     pub fn new(board: &Board, profile: Profile, h: Nm, pours_block: bool) -> ObstacleMap {
+        ObstacleMap::without(board, profile, h, pours_block, &|_| false)
+    }
+
+    /// The map with the items `skip` names left out, as if they were not on the board.
+    pub fn without(board: &Board, profile: Profile, h: Nm, pours_block: bool, skip: &dyn Fn(ItemId) -> bool) -> ObstacleMap {
         let b = board.outline.iter().flatten().copied().fold(None, |b: Option<board::BBox>, p| {
             Some(b.map_or(board::BBox::of([p]), |b| b.union(board::BBox::of([p]))))
         });
@@ -128,7 +133,7 @@ impl ObstacleMap {
             via_owner: vec![FREE; nx * ny],
         };
         map.stamp_outline(board);
-        let ids: Vec<ItemId> = board.items().map(|(id, _)| id).collect();
+        let ids: Vec<ItemId> = board.items().map(|(id, _)| id).filter(|id| !skip(*id)).collect();
         for id in ids {
             map.stamp(board, id);
         }

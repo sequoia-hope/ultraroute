@@ -92,6 +92,7 @@
     { key: 'core', label: 'Core', title: 'The MIT core router, on the KiCad board itself: grid routing with negotiated congestion' },
   ];
   let strip = $state(true);
+  let ripUp = $state(true);
   const engine = $derived(router === 'core' ? 'core' : 'copperroute');
   // Copperroute reads the job's Specctra board, the core its KiCad board.
   const available = (key, j = job) => (key === 'core' ? !!j?.kicad_pcb : !!j?.dsn);
@@ -106,6 +107,7 @@
     const env = {};
     if (router === 'core') {
       if (negotiate) args.push('--negotiate');
+      if (ripUp) args.push('--rip-up');
       if (strip) args.push('--strip');
       argsText = args.join(' ');
       envText = '';
@@ -512,6 +514,7 @@
       <label class="check"><input type="checkbox" bind:checked={fineGrid} onchange={compose} /> Fine grid (0.05 mm cells)</label>
     {/if}
     {#if router === 'core'}
+      <label class="check"><input type="checkbox" bind:checked={ripUp} onchange={compose} /> Rip up and retry what is left</label>
       <label class="check"><input type="checkbox" bind:checked={strip} onchange={compose} /> Rip up unlocked copper first</label>
     {:else}
       <label class="check"><input type="checkbox" bind:checked={fanout} onchange={compose} /> Fan out pads first</label>

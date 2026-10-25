@@ -57,8 +57,29 @@ fn main() {
     }
     let stats = route_open(&mut b, solver.as_mut(), &options, &mut |_| {});
     laid.extend(stats.laid.iter().copied());
+    if args.iter().any(|a| a == "--rip-up") {
+        let r = grid::rip_up(
+            &mut b,
+            solver.as_mut(),
+            &grid::RipOptions { max_seconds: seconds.map(|s: f64| s / 2.0), pours_block: options.pours_block, ..Default::default() },
+            &mut laid,
+            &mut |_| {},
+        );
+        println!("rip-up: {} attempts, {} kept, {} ripped, {:.1?}", r.attempts, r.kept, r.ripped, t.elapsed());
+    }
     println!("routed {} failed {} (no terminal {}, no path {}, refused {}) vias {} in {:.1?}", stats.routed, stats.failed, stats.no_terminal, stats.no_path, stats.refused, stats.vias, t.elapsed());
     println!("{} open after, {} violations", connectivity(&b).airlines.len(), check(&b).len());
+    if args.iter().any(|a| a == "--why") {
+        let name = |id| match b.item(id).map(|it| &it.kind) {
+            Some(Kind::Pad { footprint, number, .. }) => format!("{}-{number}", b.footprints[*footprint].reference),
+            Some(k) => format!("{k:?}").split([' ', '{']).next().unwrap_or("").to_string(),
+            None => "gone".to_string(),
+        };
+        for (from, to, why) in &stats.failures {
+            let net = b.item(*from).map_or(0, |it| it.net);
+            println!("  {} {} - {}: {why}", b.net_name(net), name(*from), name(*to));
+        }
+    }
     let (tracks, vias) = edits(&b, &laid);
     std::fs::write(output, apply(&text, &Edit { remove: removed, tracks, vias, ..Edit::default() })).expect("write");
 }

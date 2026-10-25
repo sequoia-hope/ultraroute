@@ -13,7 +13,7 @@ use board::{connectivity, connectivity_without_pours, nm, Board, ItemId, Kind, N
 
 use crate::grid::{ObstacleMap, Profile, RouteGrid};
 use crate::route::{lay, terminals, FieldSolver, Terminal};
-use crate::search::{cost_field, trace_back, GridPath};
+use crate::search::{route_astar, trace_back, GridPath};
 
 /// How often the trial routes are shown while a round runs one connection after another.
 const TRIAL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
@@ -77,7 +77,40 @@ struct Connection {
     from: ItemId,
     to: ItemId,
     path: Option<GridPath>,
-    zone: Vec<usize>,
+    /// The cells its path claims, as each class of route sees them.
+    zone: Vec<(String, Vec<usize>)>,
+}
+
+/// Every route's claims as each class of route sees them: a wide trace keeps further from a
+/// path than a thin one needs to.
+struct Claims {
+    by_viewer: HashMap<String, Zones>,
+}
+
+impl Claims {
+    fn new(classes: impl Iterator<Item = String>, nodes: usize) -> Claims {
+        Claims { by_viewer: classes.map(|c| (c, Zones::new(nodes))).collect() }
+    }
+
+    fn add(&mut self, net: u32, zone: &[(String, Vec<usize>)]) {
+        for (viewer, cells) in zone {
+            if let Some(z) = self.by_viewer.get_mut(viewer) {
+                z.add(net, cells);
+            }
+        }
+    }
+
+    fn remove(&mut self, net: u32, zone: &[(String, Vec<usize>)]) {
+        for (viewer, cells) in zone {
+            if let Some(z) = self.by_viewer.get_mut(viewer) {
+                z.remove(net, cells);
+            }
+        }
+    }
+
+    fn seen_by(&self, viewer: &str) -> &Zones {
+        &self.by_viewer[viewer]
+    }
 }
 
 /// Which nets cover each node, through per-net multiplicities so that two routes of one net
@@ -166,9 +199,23 @@ pub fn route_negotiated(
     let sample = maps.values().next().expect("one map per class").view(0);
     let (nx, ny, layers) = (sample.nx, sample.ny, sample.layers.len());
     let cells = nx * ny;
-    let (trace_disc, via_disc) = zone_discs(board, &maps, options.cell);
-
-    let mut zones = Zones::new(layers * cells);
+    let mut discs: HashMap<(String, String), (Vec<(i32, i32)>, Vec<(i32, i32)>)> = HashMap::new();
+    for (owner, a) in &maps {
+        for (viewer, b) in &maps {
+            discs.insert((owner.clone(), viewer.clone()), zone_discs(board, &a.profile, &b.profile, options.cell));
+        }
+    }
+    let classes: Vec<String> = maps.keys().cloned().collect();
+    let claims_of = |path: &GridPath, owner: &str| -> Vec<(String, Vec<usize>)> {
+        classes
+            .iter()
+            .map(|viewer| {
+                let (trace, via) = &discs[&(owner.to_string(), viewer.clone())];
+                (viewer.clone(), zone_of(path, nx, ny, layers, trace, via))
+            })
+            .collect()
+    };
+    let mut zones = Claims::new(classes.iter().cloned(), layers * cells);
     let mut history = vec![0u32; layers * cells];
     let mut present = options.present;
     let ends: Vec<(Vec<Terminal>, Vec<Terminal>)> = connections
@@ -179,6 +226,10 @@ pub fn route_negotiated(
         })
         .collect();
     let cells_of = |t: &[Terminal]| t.iter().map(|t| t.0).collect::<Vec<usize>>();
+    // A path must start and end on its own pads, however near a neighbour's route runs: those
+    // cells are the footprint's doing and not counted as collisions.
+    let own_ends: Vec<BTreeSet<usize>> =
+        ends.iter().map(|(s, t)| s.iter().chain(t).filter(|t| t.1.is_none()).map(|t| t.0).collect()).collect();
 
     let mut shown = std::time::Instant::now();
     let (mut best_colliding, mut stale) = (usize::MAX, 0);
@@ -189,16 +240,16 @@ pub fn route_negotiated(
         stats.rounds = round + 1;
         if solver.batch_size() > 1 {
             route_round_in_batches(&mut connections, &maps, &ends, &zones, &history, present, options, solver);
-            zones = Zones::new(layers * cells);
+            zones = Claims::new(classes.iter().cloned(), layers * cells);
             for c in connections.iter_mut() {
-                c.zone = c.path.as_ref().map(|p| zone_of(p, nx, ny, layers, &trace_disc, &via_disc)).unwrap_or_default();
+                c.zone = c.path.as_ref().map(|p| claims_of(p, &c.class)).unwrap_or_default();
                 zones.add(c.net, &c.zone);
             }
         } else if options.threads > 1 {
             route_round_in_parallel(&mut connections, &maps, &ends, &zones, &history, present, options);
-            zones = Zones::new(layers * cells);
+            zones = Claims::new(classes.iter().cloned(), layers * cells);
             for c in connections.iter_mut() {
-                c.zone = c.path.as_ref().map(|p| zone_of(p, nx, ny, layers, &trace_disc, &via_disc)).unwrap_or_default();
+                c.zone = c.path.as_ref().map(|p| claims_of(p, &c.class)).unwrap_or_default();
                 zones.add(c.net, &c.zone);
             }
         } else {
@@ -209,11 +260,10 @@ pub fn route_negotiated(
                 let c = &mut connections[k];
                 zones.remove(c.net, &c.zone);
                 let mut grid = maps[&c.class].view(c.net);
-                grid.penalty = penalties(&zones, &history, present, c.net);
+                grid.penalty = penalties(zones.seen_by(&c.class), &history, present, c.net);
                 let (sources, targets) = &ends[k];
-                let cost = solver.solve(&grid, &cells_of(sources), options.via_cost);
-                c.path = trace_back(&grid, &cost, &cells_of(targets), options.via_cost);
-                c.zone = c.path.as_ref().map(|p| zone_of(p, nx, ny, layers, &trace_disc, &via_disc)).unwrap_or_default();
+                c.path = solver.route(&grid, &cells_of(sources), &cells_of(targets), options.via_cost);
+                c.zone = c.path.as_ref().map(|p| claims_of(p, &c.class)).unwrap_or_default();
                 zones.add(c.net, &c.zone);
                 if shown.elapsed() > TRIAL_INTERVAL {
                     trials(round, &trial_list(&connections, &sample));
@@ -224,12 +274,12 @@ pub fn route_negotiated(
         trials(round, &trial_list(&connections, &sample));
         shown = std::time::Instant::now();
         let mut colliding = 0;
-        for c in &connections {
+        for (k, c) in connections.iter().enumerate() {
             let Some(path) = &c.path else { continue };
             let mut collides = false;
             for &(layer, i, j) in path {
                 let n = layer * cells + j * nx + i;
-                if zones.others(c.net, n) > 0 {
+                if !own_ends[k].contains(&n) && zones.seen_by(&c.class).others(c.net, n) > 0 {
                     history[n] += options.history_step;
                     collides = true;
                 }
@@ -254,13 +304,13 @@ pub fn route_negotiated(
 
     // Commit greedily: a route whose cells lie in no committed net's zone is legal against
     // everything committed so far, converged or not; each piece is still checked exactly.
-    let mut committed = Zones::new(layers * cells);
+    let mut committed = Claims::new(classes.iter().cloned(), layers * cells);
     for (k, c) in connections.iter().enumerate() {
         let Some(path) = &c.path else {
             stats.unroutable += 1;
             continue;
         };
-        if path.iter().any(|&(l, i, j)| committed.others(c.net, l * cells + j * nx + i) > 0) {
+        if path.iter().map(|&(l, i, j)| l * cells + j * nx + i).any(|n| !own_ends[k].contains(&n) && committed.seen_by(&c.class).others(c.net, n) > 0) {
             continue;
         }
         let grid = maps[&c.class].view(c.net);
@@ -311,7 +361,7 @@ fn route_round_in_batches(
     connections: &mut [Connection],
     maps: &HashMap<String, ObstacleMap>,
     ends: &[(Vec<Terminal>, Vec<Terminal>)],
-    zones: &Zones,
+    zones: &Claims,
     history: &[u32],
     present: f64,
     options: &NegotiationOptions,
@@ -324,7 +374,7 @@ fn route_round_in_batches(
             .iter()
             .map(|c| {
                 let mut grid = maps[&c.class].view(c.net);
-                grid.penalty = penalties(zones, history, present, c.net);
+                grid.penalty = penalties(zones.seen_by(&c.class), history, present, c.net);
                 grid
             })
             .collect();
@@ -343,7 +393,7 @@ fn route_round_in_parallel(
     connections: &mut [Connection],
     maps: &HashMap<String, ObstacleMap>,
     ends: &[(Vec<Terminal>, Vec<Terminal>)],
-    zones: &Zones,
+    zones: &Claims,
     history: &[u32],
     present: f64,
     options: &NegotiationOptions,
@@ -360,12 +410,11 @@ fn route_round_in_parallel(
                 }
                 let (net, class) = jobs[k];
                 let mut grid: RouteGrid = maps[class].view(net);
-                grid.penalty = penalties(zones, history, present, net);
+                grid.penalty = penalties(zones.seen_by(class), history, present, net);
                 let (sources, targets) = &ends[k];
                 let s: Vec<usize> = sources.iter().map(|t| t.0).collect();
                 let t: Vec<usize> = targets.iter().map(|t| t.0).collect();
-                let cost = cost_field(&grid, &s, options.via_cost);
-                *paths[k].lock().expect("no worker panics") = trace_back(&grid, &cost, &t, options.via_cost);
+                *paths[k].lock().expect("no worker panics") = route_astar(&grid, &s, &t, options.via_cost);
             });
         }
     });
@@ -374,16 +423,15 @@ fn route_round_in_parallel(
     }
 }
 
-/// Cell offsets within the zone radius of a trace cell and of a via cell: the widest trace and
-/// via on the board against the widest trace, at the largest clearance, plus each side's step
-/// reach.
-fn zone_discs(board: &Board, maps: &HashMap<String, ObstacleMap>, h: Nm) -> (Vec<(i32, i32)>, Vec<(i32, i32)>) {
-    let widest = maps.values().map(|m| m.profile.half_width).max().unwrap_or(0) as f64;
-    let via = maps.values().map(|m| m.profile.via_radius).max().unwrap_or(0) as f64;
-    let clearance = board.rules.classes.iter().map(|c| nm(c.clearance)).chain([nm(board.rules.min_clearance)]).max().unwrap_or(0) as f64;
+/// Cell offsets within the zone radius of an owner's trace cell and via cell, as a viewer class
+/// sees them: the owner's trace or via against the viewer's trace, at the clearance between the
+/// two classes, plus each side's step reach.
+fn zone_discs(board: &Board, owner: &Profile, viewer: &Profile, h: Nm) -> (Vec<(i32, i32)>, Vec<(i32, i32)>) {
+    let (half_width, via, widest) = (owner.half_width as f64, owner.via_radius as f64, viewer.half_width as f64);
+    let clearance = owner.clearance.max(viewer.clearance).max(nm(board.rules.min_clearance)) as f64;
     let h = h as f64;
-    let trace_reach = 2.0 * widest + clearance + 2.0 * STEP_REACH * h;
-    let via_reach = via + widest.max(via) + clearance + 2.0 * STEP_REACH * h;
+    let trace_reach = half_width + widest + clearance + 2.0 * STEP_REACH * h;
+    let via_reach = via + widest + clearance + 2.0 * STEP_REACH * h;
     let disc = |reach: f64| {
         let r = (reach / h).ceil() as i32;
         (-r..=r)

@@ -1,0 +1,158 @@
+//! Rip-up and reroute for the connections the other passes left open.
+//!
+//! Copper the router laid itself is soft: a blocked connection may route through it at a price.
+//! Whatever soft copper its new route actually conflicts with is ripped, the connection laid, and
+//! the ripped connections routed again. The board is kept only if fewer connections are open
+//! than before; otherwise it is put back as it was.
+
+use std::collections::{HashMap, HashSet};
+
+use board::{check_item, connectivity, connectivity_without_pours, Board, ItemId};
+
+use crate::grid::{ObstacleMap, Profile};
+use crate::route::{pieces, route_open, terminals, FieldSolver, Options};
+
+#[derive(Debug, Clone)]
+pub struct RipOptions {
+    pub cell: board::Nm,
+    pub via_cost: u32,
+    /// Price of entering a cell that soft copper of another net claims.
+    pub rip_cost: u32,
+    pub max_seconds: Option<f64>,
+    /// Time allowed for rerouting what one attempt ripped.
+    pub reroute_seconds: f64,
+    pub pours_block: bool,
+    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+}
+
+impl Default for RipOptions {
+    fn default() -> RipOptions {
+        RipOptions {
+            cell: 50_000,
+            via_cost: 80,
+            rip_cost: 400,
+            max_seconds: None,
+            reroute_seconds: 10.0,
+            pours_block: false,
+            cancel: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RipStats {
+    pub attempts: usize,
+    /// Attempts kept because they left fewer connections open.
+    pub kept: usize,
+    pub ripped: usize,
+}
+
+fn open_count(board: &Board, pours_block: bool) -> usize {
+    if pours_block { connectivity(board) } else { connectivity_without_pours(board) }.airlines.len()
+}
+
+/// Tries every open connection once per round, while rounds keep closing connections. `soft`
+/// holds the copper the router laid; it is updated as copper is ripped and laid.
+pub fn rip_up(board: &mut Board, solver: &mut dyn FieldSolver, options: &RipOptions, soft: &mut Vec<ItemId>, watch: &mut dyn FnMut(&Board)) -> RipStats {
+    let started = std::time::Instant::now();
+    let out_of_time = || {
+        options.max_seconds.is_some_and(|limit| started.elapsed().as_secs_f64() > limit)
+            || options.cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+    };
+    let mut stats = RipStats::default();
+    let mut hard: HashMap<String, ObstacleMap> = HashMap::new();
+    let mut tried: HashSet<(ItemId, ItemId)> = HashSet::new();
+    loop {
+        let mut open = if options.pours_block { connectivity(board) } else { connectivity_without_pours(board) }.airlines;
+        open.sort_by(|a, b| a.from.distance(a.to).total_cmp(&b.from.distance(b.to)));
+        open.retain(|a| !tried.contains(&(a.from_item, a.to_item)));
+        if open.is_empty() || out_of_time() {
+            break;
+        }
+        let kept_before = stats.kept;
+        for airline in open {
+            if out_of_time() {
+                break;
+            }
+            tried.insert((airline.from_item, airline.to_item));
+            if board.item(airline.from_item).is_none() || board.item(airline.to_item).is_none() {
+                continue;
+            }
+            stats.attempts += 1;
+            let soft_set: HashSet<ItemId> = soft.iter().copied().filter(|id| board.item(*id).is_some()).collect();
+            let profile = Profile::for_net(board, airline.net);
+            let hard_map = hard.entry(profile.class.clone()).or_insert_with(|| {
+                ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| soft_set.contains(&id))
+            });
+            let mut grid = hard_map.view(airline.net);
+            let soft_map = ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| !soft_set.contains(&id));
+            let soft_view = soft_map.view(airline.net);
+            grid.penalty = soft_view.blocked.iter().map(|&b| if b { options.rip_cost } else { 0 }).collect();
+            let sources = terminals(board, &grid, airline.from_item);
+            let targets = terminals(board, &grid, airline.to_item);
+            if sources.is_empty() || targets.is_empty() {
+                continue;
+            }
+            let source_cells: Vec<usize> = sources.iter().map(|t| t.0).collect();
+            let target_cells: Vec<usize> = targets.iter().map(|t| t.0).collect();
+            let Some(path) = solver.route(&grid, &source_cells, &target_cells, options.via_cost) else { continue };
+            let Some(new) = pieces(&grid, &path, &sources, &targets) else { continue };
+
+            let before = open_count(board, options.pours_block);
+            let snapshot = board.clone();
+            let soft_before = soft.clone();
+            let mut ripped = 0;
+            let mut laid = Vec::new();
+            let mut ok = true;
+            'pieces: for piece in new {
+                let id = board.insert(piece);
+                laid.push(id);
+                for violation in check_item(board, id) {
+                    let Some(other) = violation.b else {
+                        ok = false;
+                        break 'pieces;
+                    };
+                    let rippable = soft_set.contains(&other) && board.item(other).is_some_and(|it| it.net != airline.net);
+                    if !rippable {
+                        ok = false;
+                        break 'pieces;
+                    }
+                    if board.remove(other).is_some() {
+                        ripped += 1;
+                    }
+                }
+                if !check_item(board, id).is_empty() {
+                    ok = false;
+                    break;
+                }
+            }
+            if !ok {
+                *board = snapshot;
+                continue;
+            }
+            soft.extend(laid);
+            let reroute = Options {
+                cell: options.cell,
+                via_cost: options.via_cost,
+                max_seconds: Some(options.reroute_seconds),
+                pours_block: options.pours_block,
+                cancel: options.cancel.clone(),
+            };
+            let again = route_open(board, solver, &reroute, &mut |_| {});
+            soft.extend(again.laid);
+            if open_count(board, options.pours_block) < before {
+                stats.kept += 1;
+                stats.ripped += ripped;
+                watch(board);
+            } else {
+                *board = snapshot;
+                *soft = soft_before;
+            }
+        }
+        if stats.kept == kept_before {
+            break;
+        }
+    }
+    soft.retain(|id| board.item(*id).is_some());
+    stats
+}

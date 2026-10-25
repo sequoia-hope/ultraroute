@@ -118,3 +118,135 @@ pub fn trace_back(
             .collect(),
     )
 }
+
+/// The cheapest route from any source to any target by A*, stopping at the first target
+/// reached: the octile distance to the targets' box (never more than the true cost) steers it,
+/// so a short connection explores a small patch instead of the whole board.
+pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_cost: u32) -> Option<GridPath> {
+    let cells = grid.cell_count();
+    let mut is_target = vec![false; grid.blocked.len()];
+    let (mut lo_i, mut lo_j, mut hi_i, mut hi_j) = (usize::MAX, usize::MAX, 0, 0);
+    for &t in targets {
+        if grid.blocked[t] {
+            continue;
+        }
+        is_target[t] = true;
+        let c = t % cells;
+        let (i, j) = (c % grid.nx, c / grid.nx);
+        lo_i = lo_i.min(i);
+        lo_j = lo_j.min(j);
+        hi_i = hi_i.max(i);
+        hi_j = hi_j.max(j);
+    }
+    if lo_i == usize::MAX {
+        return None;
+    }
+    let estimate = |index: usize| -> u32 {
+        let c = index % cells;
+        let (i, j) = (c % grid.nx, c / grid.nx);
+        let dx = lo_i.saturating_sub(i).max(i.saturating_sub(hi_i)) as u32;
+        let dy = lo_j.saturating_sub(j).max(j.saturating_sub(hi_j)) as u32;
+        STRAIGHT * dx.max(dy) + (DIAGONAL - STRAIGHT) * dx.min(dy)
+    };
+    let mut cost = vec![UNREACHED; grid.blocked.len()];
+    let mut heap = BinaryHeap::new();
+    for &s in sources {
+        if !grid.blocked[s] {
+            cost[s] = 0;
+            heap.push(Reverse((estimate(s), s)));
+        }
+    }
+    let mut reached = None;
+    while let Some(Reverse((f, index))) = heap.pop() {
+        let c = cost[index];
+        if f > c.saturating_add(estimate(index)) {
+            continue;
+        }
+        if is_target[index] {
+            reached = Some(index);
+            break;
+        }
+        let layer = index / cells;
+        let cell = index % cells;
+        let (i, j) = ((cell % grid.nx) as i32, (cell / grid.nx) as i32);
+        let mut relax = |next: usize, step: u32| {
+            let candidate = c + step + grid.penalty_at(next);
+            if candidate < cost[next] && !grid.blocked[next] {
+                cost[next] = candidate;
+                heap.push(Reverse((candidate + estimate(next), next)));
+            }
+        };
+        for (di, dj, step) in NEIGHBOURS {
+            let (ni, nj) = (i + di, j + dj);
+            if ni < 0 || nj < 0 || ni >= grid.nx as i32 || nj >= grid.ny as i32 {
+                continue;
+            }
+            relax(grid.index(layer, ni as usize, nj as usize), step);
+        }
+        if grid.via.is_some() && !grid.via_blocked[cell] {
+            for other in 0..grid.layers.len() {
+                if other != layer {
+                    relax(other * cells + cell, via_cost);
+                }
+            }
+        }
+    }
+    trace_back(grid, &cost, &[reached?], via_cost)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::grid::ViaSpec;
+
+    fn random_grid(seed: u64) -> RouteGrid {
+        let (nx, ny, layers) = (40, 30, 2);
+        let mut state = seed;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let nodes = nx * ny * layers;
+        RouteGrid {
+            net: 1,
+            x0: 0,
+            y0: 0,
+            h: 100,
+            nx,
+            ny,
+            layers: (0..layers).collect(),
+            half_width: 10,
+            via: Some(ViaSpec { radius: 20, drill_radius: 10 }),
+            blocked: (0..nodes).map(|_| next() % 4 == 0).collect(),
+            via_blocked: (0..nx * ny).map(|_| next() % 3 == 0).collect(),
+            penalty: (0..nodes).map(|_| (next() % 5) as u32).collect(),
+        }
+    }
+
+    fn path_cost(grid: &RouteGrid, path: &GridPath, via_cost: u32) -> u32 {
+        path.windows(2)
+            .map(|w| {
+                let (a, b) = (w[0], w[1]);
+                let step = if a.0 != b.0 { via_cost } else if a.1 != b.1 && a.2 != b.2 { DIAGONAL } else { STRAIGHT };
+                step + grid.penalty_at(grid.index(b.0, b.1, b.2))
+            })
+            .sum()
+    }
+
+    #[test]
+    fn a_star_finds_routes_as_cheap_as_the_full_field() {
+        for seed in 1..60u64 {
+            let grid = random_grid(seed * 7919);
+            let sources = vec![grid.index(0, 1, 1), grid.index(1, 2, 1)];
+            let targets = vec![grid.index(0, 37, 27), grid.index(1, 30, 5)];
+            let full = trace_back(&grid, &cost_field(&grid, &sources, 50), &targets, 50);
+            let quick = route_astar(&grid, &sources, &targets, 50);
+            assert_eq!(full.is_some(), quick.is_some(), "seed {seed}");
+            if let (Some(f), Some(q)) = (full, quick) {
+                assert_eq!(path_cost(&grid, &f, 50), path_cost(&grid, &q, 50), "seed {seed}");
+            }
+        }
+    }
+}
