@@ -27,16 +27,20 @@ jobs:
           node-version: 22
       - name: Install wasm-pack
         run: cargo install wasm-pack --version 0.14.0 --locked
+      # The studio built to route in the tab: the MIT core compiled to WebAssembly and run in a
+      # worker, so the static site routes live with no server behind it.
       - name: Build the studio for a static host
         run: |
+          (cd core && wasm-pack build crates/web --release --target web --out-dir ../../../studio/web/src/router --out-name router --no-pack)
           cd studio
           cargo build --release -p studio-server
           wasm-pack build core --release --target web --out-dir ../web/src/core --out-name studio_core --no-pack -- --features wasm
           cd web
           npm ci --no-audit --no-fund
-          VITE_STATIC=1 npx vite build
+          VITE_LOCAL=1 npx vite build
       # The site is the repository as it is, with the built studio in place of its sources and
-      # the board list the studio server would serve written out as a file.
+      # the board list the studio server would serve written out as a file, less the copperroute
+      # recipes, which only the server can run.
       - name: Assemble the site
         run: |
           mkdir -p _site
@@ -45,6 +49,7 @@ jobs:
           mkdir -p _site/studio _site/api
           cp -r studio/web/dist/. _site/studio/
           studio/target/release/studio-server --root . --dump-jobs _site/api/jobs
+          python3 -c 'import json, sys; p = sys.argv[1]; j = json.load(open(p)); [x.update(presets=[]) for x in j]; json.dump(j, open(p, "w"))' _site/api/jobs
           touch _site/.nojekyll
       - uses: actions/upload-pages-artifact@v3
         with:
