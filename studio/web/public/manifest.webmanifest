@@ -1,0 +1,13 @@
+{
+  "name": "Ultraroute Studio",
+  "short_name": "Studio",
+  "description": "Watch and steer PCB autorouting.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "any",
+  "background_color": "#0b141b",
+  "theme_color": "#0b141b",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

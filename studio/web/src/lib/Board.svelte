@@ -25,6 +25,10 @@
   const BACKGROUND = [0, 16 / 255, 35 / 255];
   let pointer = null;
   const ALL = 0xffffffff;
+  // Fingers on the canvas, by pointer id; two of them pinch to zoom and pan together.
+  const touches = new Map();
+  let pinch = null;
+  let lastTap = 0;
 
   const top = () => 1;
   const bottom = () => (layers.length > 1 ? 1 << (layers.length - 1) : 1);
@@ -139,8 +143,36 @@
     }
   }
 
+  const middle = () => {
+    const [a, b] = [...touches.values()];
+    return { clientX: (a.clientX + b.clientX) / 2, clientY: (a.clientY + b.clientY) / 2, apart: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) };
+  };
+
+  function startPinch() {
+    const m = middle();
+    pinch = { at: toBoard(m), apart: Math.max(m.apart, 1), zoom: view.zoom };
+    if (drag?.part) studio.set_offset(drag.part, 0, 0);
+    drag = null;
+    drawn = -1;
+  }
+
+  // The board point first under the fingers' midpoint stays under it as they spread and move.
+  function movePinch() {
+    const m = middle();
+    view.zoom = Math.min(2000, Math.max(0.2, (pinch.zoom * m.apart) / pinch.apart));
+    const now = toBoard(m);
+    view.cx += pinch.at[0] - now[0];
+    view.cy += pinch.at[1] - now[1];
+    viewChanged = true;
+  }
+
   function down(event) {
     canvas.setPointerCapture(event.pointerId);
+    if (event.pointerType === 'touch') {
+      touches.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY });
+      if (touches.size === 2) return startPinch();
+      if (touches.size > 2) return;
+    }
     const at = toBoard(event);
     // Middle and right buttons pan, as in KiCad; the left picks a part or pans empty board.
     const part = event.button === 0 && !event.shiftKey ? studio.part_at(at[0], at[1]) : 0;
@@ -152,6 +184,11 @@
   }
 
   function move(event) {
+    if (touches.has(event.pointerId)) {
+      touches.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY });
+      if (pinch) return movePinch();
+    }
+    if (event.pointerType === 'touch' && !drag) return;
     pointer = { clientX: event.clientX, clientY: event.clientY };
     const at = toBoard(event);
     if (drag) {
@@ -183,8 +220,24 @@
   }
 
   function up(event) {
+    touches.delete(event.pointerId);
+    if (pinch) {
+      if (touches.size < 2) pinch = null;
+      return;
+    }
     const at = toBoard(event);
     const dragged = drag && Math.hypot(at[0] - drag.start[0], at[1] - drag.start[1]) * view.zoom > 3;
+    // A double tap on empty board fits it, as a double click does.
+    if (event.pointerType === 'touch' && drag && !dragged && !drag.part) {
+      const now = performance.now();
+      if (now - lastTap < 320) {
+        refit();
+        lastTap = 0;
+        drag = null;
+        return;
+      }
+      lastTap = now;
+    }
     if (drag?.part && dragged && editable) {
       const info = JSON.parse(studio.part(drag.part));
       ondrop?.(info, [at[0] - drag.start[0], at[1] - drag.start[1]]);
@@ -229,6 +282,7 @@
     onpointerdown={down}
     onpointermove={move}
     onpointerup={up}
+    onpointercancel={up}
     ondblclick={refit}
   ></canvas>
   {#if mode === 'split'}

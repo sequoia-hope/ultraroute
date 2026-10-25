@@ -98,7 +98,17 @@
   let highContrast = $state(false);
   let showPours = $state(false);
   let showHelp = $state(false);
-  let consoleOpen = $state(true);
+  // On a phone the board fills the screen and the panel is a sheet over its lower part.
+  let sheetOpen = $state(typeof location !== 'undefined' && location.hash === '#controls');
+  let fullscreen = $state(false);
+  const canFullscreen = typeof document !== 'undefined' && !!document.documentElement.requestFullscreen;
+
+  function toggleFullscreen() {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+  }
+  // Collapsed on a phone, where the board needs the room.
+  let consoleOpen = $state(typeof matchMedia === 'undefined' || !matchMedia('(max-width: 720px)').matches);
   let consoleBox;
   $effect(() => {
     consoleLines;
@@ -323,6 +333,7 @@
 
   function select(part) {
     selected = part ? { id: part.id, name: part.name } : null;
+    if (part) sheetOpen = true;
     studio.set_selected(part ? part.id : 0);
     version++;
   }
@@ -538,7 +549,9 @@
 {/snippet}
 
 
-<main>
+<svelte:document onfullscreenchange={() => (fullscreen = !!document.fullscreenElement)} />
+
+<main class:sheet-open={sheetOpen}>
   <aside>
     <header>
       <h1><a href="../">Ultraroute</a> Studio</h1>
@@ -847,5 +860,9 @@
         {/if}
       </div>
     {/if}
+    <div class="phone-bar">
+      <button class="sheet-toggle" onclick={() => (sheetOpen = !sheetOpen)} aria-expanded={sheetOpen}>{sheetOpen ? 'Hide controls' : 'Controls'}{#if status?.open != null} · {status.open} open{/if}</button>
+      {#if canFullscreen}<button onclick={toggleFullscreen} title="Full screen">{fullscreen ? 'Exit full screen' : 'Full screen'}</button>{/if}
+    </div>
   </div>
 </main>

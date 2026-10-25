@@ -247,18 +247,6 @@ pre {
   pointer-events: none;
 }
 
-@media (max-width: 720px) {
-  main {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto 70vh;
-    height: auto;
-  }
-  aside {
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-    padding: 12px 16px;
-  }
-}
 
 h1 a {
   color: inherit;
@@ -660,4 +648,140 @@ aside h1 a {
 .help dl {
   grid-template-columns: auto 1fr;
   font-size: 12px;
+}
+
+/* The phone bar is for phones only. */
+.phone-bar {
+  display: none;
+}
+
+/* Phones: an app filling the screen. The board takes all of it; the panel is a sheet over its
+   lower part, opened from the bar at the foot of the board; controls big enough for a thumb;
+   overlays that fit a narrow screen and keep clear of notches. */
+@media (max-width: 720px) {
+  html,
+  body,
+  #app {
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+  main {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    height: 100dvh;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
+  }
+  .stage {
+    flex: 1;
+    min-height: 0;
+    order: -1;
+  }
+  aside {
+    display: none;
+    flex: none;
+    max-height: 52dvh;
+    border-right: 0;
+    border-top: 1px solid var(--line);
+    border-radius: 12px 12px 0 0;
+    padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
+    gap: 12px;
+    overscroll-behavior: contain;
+  }
+  main.sheet-open aside {
+    display: flex;
+  }
+  .phone-bar {
+    display: flex;
+    gap: 8px;
+    padding: 6px 8px;
+    padding-bottom: calc(6px + env(safe-area-inset-bottom));
+    background: var(--panel);
+    border-top: 1px solid var(--line);
+  }
+  main.sheet-open .phone-bar {
+    padding-bottom: 6px;
+  }
+  .phone-bar .sheet-toggle {
+    flex: 1;
+    font-weight: 600;
+  }
+  button {
+    min-height: 38px;
+  }
+  button.link,
+  button.quiet {
+    min-height: 32px;
+  }
+  .chip button.link {
+    min-height: 28px;
+  }
+  label.check {
+    min-height: 32px;
+  }
+  input[type='checkbox'] {
+    width: 18px;
+    height: 18px;
+  }
+  /* Below 16px a phone zooms the page when a field takes focus. */
+  select,
+  textarea,
+  input[type='number'] {
+    font-size: 16px;
+  }
+  .hint {
+    display: none;
+  }
+  .stage .views {
+    left: 8px;
+    right: 8px;
+    top: 8px;
+    grid-template-columns: repeat(5, 1fr);
+  }
+  .stage .views button {
+    padding: 4px 0;
+    min-height: 34px;
+  }
+  .doing {
+    top: 50px;
+    left: 8px;
+    right: 8px;
+    max-width: none;
+  }
+  .help {
+    top: 50px;
+    left: 8px;
+    right: 8px;
+    width: auto;
+    max-height: calc(100% - 60px);
+    overflow-y: auto;
+  }
+  .stage .hover {
+    top: auto;
+    bottom: 8px;
+    left: 8px;
+    max-width: calc(100% - 16px);
+    overflow: hidden;
+  }
+  .legend {
+    right: 8px;
+    bottom: 8px;
+  }
+  .console {
+    margin: 0 8px 8px;
+  }
+  .console pre {
+    height: 72px;
+  }
+  .player {
+    grid-template-columns: auto 1fr;
+  }
+  .player select {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+  .recordings li {
+    flex-wrap: wrap;
+  }
 }
