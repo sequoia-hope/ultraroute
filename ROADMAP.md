@@ -84,7 +84,12 @@ with WebGPU) under MIT. Estimate ~15k lines:
       `--place`, `--strip`, `--negotiate`, `--gpu`, `--timeout`, a `stop` line, and `--live` in
       the studio's frame format, negotiation's trial routes included. The studio runs it as the
       Core router on the `bluebuzz-kicad` and `earring-kicad` jobs.
-- [ ] Negotiation that stops when it stops improving, and batches fields on the GPU.
+- [x] Negotiation stops after 4 rounds without fewer collisions; pad outlines drawn outside
+      their arcs so clearance to them is never overstated. Earring 8–14 open (runs vary),
+      bluebuzz 3, 0 errors.
+- [ ] GPU batches for negotiation rounds work but are slow: ~110 s a round on the earring's
+      3.5M-node fields against ~10 s on CPU threads. The relaxation kernel needs a better
+      schedule (or a coarser grid) before the GPU pays.
 - [ ] Topo with rip-up, nudge and diffusion on the core.
 - [ ] Our own finisher and cleanup in place of freerouting's maze router and optimizer.
 - [ ] copperroute kept as the reference router across the process boundary until the core

@@ -14,6 +14,16 @@ const LEG_CELLS: Nm = 3;
 
 pub trait FieldSolver {
     fn solve(&mut self, grid: &RouteGrid, sources: &[usize], via_cost: u32) -> Vec<u32>;
+
+    /// Fields for several grids of one shape; a GPU solves them together.
+    fn solve_batch(&mut self, jobs: &[(&RouteGrid, &[usize])], via_cost: u32) -> Vec<Vec<u32>> {
+        jobs.iter().map(|(grid, sources)| self.solve(grid, sources, via_cost)).collect()
+    }
+
+    /// How many fields to hand `solve_batch` at once; one means no batching.
+    fn batch_size(&self) -> usize {
+        1
+    }
 }
 
 pub struct CpuSolver;

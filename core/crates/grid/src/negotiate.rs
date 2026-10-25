@@ -35,6 +35,8 @@ pub struct NegotiationOptions {
     /// Above one, every connection routes against the previous round's congestion at once on
     /// this many CPU threads (Jacobi PathFinder) instead of one after another (Gauss-Seidel).
     pub threads: usize,
+    /// Rounds without fewer collisions than the best so far before negotiation gives up.
+    pub patience: usize,
     pub pours_block: bool,
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
@@ -50,6 +52,7 @@ impl Default for NegotiationOptions {
             history_step: 10,
             max_seconds: None,
             threads: 1,
+            patience: 4,
             pours_block: false,
             cancel: None,
         }
@@ -178,12 +181,20 @@ pub fn route_negotiated(
     let cells_of = |t: &[Terminal]| t.iter().map(|t| t.0).collect::<Vec<usize>>();
 
     let mut shown = std::time::Instant::now();
+    let (mut best_colliding, mut stale) = (usize::MAX, 0);
     for round in 0..options.max_rounds {
         if out_of_time() {
             break;
         }
         stats.rounds = round + 1;
-        if options.threads > 1 {
+        if solver.batch_size() > 1 {
+            route_round_in_batches(&mut connections, &maps, &ends, &zones, &history, present, options, solver);
+            zones = Zones::new(layers * cells);
+            for c in connections.iter_mut() {
+                c.zone = c.path.as_ref().map(|p| zone_of(p, nx, ny, layers, &trace_disc, &via_disc)).unwrap_or_default();
+                zones.add(c.net, &c.zone);
+            }
+        } else if options.threads > 1 {
             route_round_in_parallel(&mut connections, &maps, &ends, &zones, &history, present, options);
             zones = Zones::new(layers * cells);
             for c in connections.iter_mut() {
@@ -228,6 +239,15 @@ pub fn route_negotiated(
         stats.conflicted = colliding;
         if colliding == 0 {
             break;
+        }
+        if colliding < best_colliding {
+            best_colliding = colliding;
+            stale = 0;
+        } else {
+            stale += 1;
+            if stale >= options.patience {
+                break;
+            }
         }
         present *= options.present_growth;
     }
@@ -283,6 +303,39 @@ fn corners(path: &GridPath) -> Vec<(usize, usize, usize)> {
 
 fn penalties(zones: &Zones, history: &[u32], present: f64, net: u32) -> Vec<u32> {
     (0..history.len()).map(|n| history[n] + (present * f64::from(zones.others(net, n))).round() as u32).collect()
+}
+
+/// One Jacobi round with the fields solved together, a batch at a time, on the solver's device.
+#[allow(clippy::too_many_arguments)]
+fn route_round_in_batches(
+    connections: &mut [Connection],
+    maps: &HashMap<String, ObstacleMap>,
+    ends: &[(Vec<Terminal>, Vec<Terminal>)],
+    zones: &Zones,
+    history: &[u32],
+    present: f64,
+    options: &NegotiationOptions,
+    solver: &mut dyn FieldSolver,
+) {
+    let size = solver.batch_size().max(1);
+    for start in (0..connections.len()).step_by(size) {
+        let end = (start + size).min(connections.len());
+        let grids: Vec<RouteGrid> = connections[start..end]
+            .iter()
+            .map(|c| {
+                let mut grid = maps[&c.class].view(c.net);
+                grid.penalty = penalties(zones, history, present, c.net);
+                grid
+            })
+            .collect();
+        let sources: Vec<Vec<usize>> = ends[start..end].iter().map(|(s, _)| s.iter().map(|t| t.0).collect()).collect();
+        let jobs: Vec<(&RouteGrid, &[usize])> = grids.iter().zip(&sources).map(|(g, s)| (g, s.as_slice())).collect();
+        let fields = solver.solve_batch(&jobs, options.via_cost);
+        for (k, (grid, cost)) in grids.iter().zip(fields).enumerate() {
+            let targets: Vec<usize> = ends[start + k].1.iter().map(|t| t.0).collect();
+            connections[start + k].path = trace_back(grid, &cost, &targets, options.via_cost);
+        }
+    }
 }
 
 /// One Jacobi round: every connection routes on the CPU against the same congestion snapshot.

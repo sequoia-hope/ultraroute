@@ -100,9 +100,20 @@ impl GpuSolver {
     }
 }
 
+/// Fields solved together; each holds a few tens of megabytes on the device.
+const BATCH: usize = 16;
+
 impl FieldSolver for GpuSolver {
     fn solve(&mut self, grid: &RouteGrid, sources: &[usize], via_cost: u32) -> Vec<u32> {
         self.solve_batch(&[(grid, sources)], via_cost).remove(0)
+    }
+
+    fn solve_batch(&mut self, jobs: &[(&RouteGrid, &[usize])], via_cost: u32) -> Vec<Vec<u32>> {
+        GpuSolver::solve_batch(self, jobs, via_cost)
+    }
+
+    fn batch_size(&self) -> usize {
+        BATCH
     }
 }
 

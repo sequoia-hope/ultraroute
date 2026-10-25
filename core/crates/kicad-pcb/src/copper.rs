@@ -11,8 +11,8 @@ use crate::sexpr::{Node, Pos};
 use crate::KicadParse;
 
 const MM: f64 = 1e-3;
-/// Chord length for arcs in zone outlines and pad primitives.
-const ARC_STEP_M: f64 = 0.05 * MM;
+/// Chord length for arcs in zone outlines and pad shapes.
+const ARC_STEP_M: f64 = 0.01 * MM;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Copper {
@@ -419,6 +419,7 @@ fn rect(size: [f64; 2]) -> Vec<[f64; 2]> {
 
 fn circle(c: [f64; 2], r: f64) -> Vec<[f64; 2]> {
     let n = arc_steps(r, std::f64::consts::TAU).max(8);
+    let r = outside(r, std::f64::consts::TAU / n as f64);
     (0..n)
         .map(|k| {
             let a = std::f64::consts::TAU * k as f64 / n as f64;
@@ -431,6 +432,12 @@ fn arc_steps(r: f64, sweep: f64) -> usize {
     ((r * sweep.abs() / ARC_STEP_M).ceil() as usize).max(2)
 }
 
+/// The radius whose chords, `step` radians apart, pass outside a circle of radius `r`: a pad's
+/// outline may be a hair too big, never too small, so clearance to it is never overstated.
+fn outside(r: f64, step: f64) -> f64 {
+    r / (step / 2.0).cos()
+}
+
 /// A rectangle with its corners rounded by `r`.
 fn rounded(size: [f64; 2], r: f64) -> Vec<[f64; 2]> {
     let [w, h] = [size[0] / 2.0, size[1] / 2.0];
@@ -440,11 +447,12 @@ fn rounded(size: [f64; 2], r: f64) -> Vec<[f64; 2]> {
     }
     let corners = [[w - r, h - r, 0.0], [-(w - r), h - r, 90.0], [-(w - r), -(h - r), 180.0], [w - r, -(h - r), 270.0]];
     let n = arc_steps(r, std::f64::consts::FRAC_PI_2);
+    let ro = outside(r, std::f64::consts::FRAC_PI_2 / n as f64);
     let mut out = Vec::new();
     for [cx, cy, a0] in corners {
         for k in 0..=n {
             let a = (a0 + 90.0 * k as f64 / n as f64).to_radians();
-            out.push([cx + r * a.cos(), cy + r * a.sin()]);
+            out.push([cx + ro * a.cos(), cy + ro * a.sin()]);
         }
     }
     out
@@ -462,11 +470,12 @@ fn capsule(a: [f64; 2], b: [f64; 2], r: f64) -> Vec<[f64; 2]> {
     }
     let base = dy.atan2(dx);
     let n = arc_steps(r, std::f64::consts::PI);
+    let ro = outside(r, std::f64::consts::PI / n as f64);
     let mut out = Vec::new();
     for (c, from) in [(b, base - std::f64::consts::FRAC_PI_2), (a, base + std::f64::consts::FRAC_PI_2)] {
         for k in 0..=n {
             let t = from + std::f64::consts::PI * k as f64 / n as f64;
-            out.push([c[0] + r * t.cos(), c[1] + r * t.sin()]);
+            out.push([c[0] + ro * t.cos(), c[1] + ro * t.sin()]);
         }
     }
     out
