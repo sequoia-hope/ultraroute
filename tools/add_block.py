@@ -2,6 +2,10 @@
 """add_block.py — add a functional block to a KiCad board, as a group the router keeps whole.
 
     tools/add_block.py BOARD.kicad_pcb NAME ZONE[,ZONE...] [--parts REF,...]
+    tools/add_block.py --job jobs/NAME
+
+A job declares its blocks in job.json, so they come back when its input is pulled again:
+    "blocks": {"rp2350_power": {"zones": ["vreg_vdd_core_3", ...], "parts": ["U1"]}}
 
 The group holds the named zones and every part with a pad on one of their nets whose centre lies
 inside one of them, plus any parts named with --parts. The router keeps a group's pours as planes
@@ -9,10 +13,12 @@ other nets stay clear of and holds its parts still. A group of that name already
 replaced. The same group can be drawn in KiCad instead: select the items and press Ctrl+G.
 """
 import argparse
+import json
 import math
 import re
 import sys
 import uuid as uuidlib
+from pathlib import Path
 
 
 def forms(text, head):
@@ -61,16 +67,10 @@ def inside(p, poly):
     return hit
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("board")
-    ap.add_argument("name")
-    ap.add_argument("zones")
-    ap.add_argument("--parts", default="")
-    a = ap.parse_args()
-    text = open(a.board).read()
-
-    wanted = [z for z in a.zones.split(",") if z]
+def add_block(path, block, zone_names, part_names=()):
+    """Groups the zones and the parts on them (and any named) into `block` on the board at `path`."""
+    text = open(path).read()
+    wanted = list(zone_names)
     zones = []
     for _, _, z in forms(text, "zone"):
         name = first(r'\(name "([^"]*)"', z)
@@ -80,9 +80,9 @@ def main():
             zones.append((name, first(r'\(uuid "([^"]*)"', z), first(r'\(net_name "([^"]*)"', z), poly))
     missing = set(wanted) - {z[0] for z in zones}
     if missing:
-        sys.exit(f"no zone named {', '.join(sorted(missing))} on {a.board}")
+        sys.exit(f"no zone named {', '.join(sorted(missing))} on {path}")
 
-    named = {r for r in a.parts.split(",") if r}
+    named = set(part_names)
     members, parts = [z[1] for z in zones], []
     for _, _, fp in forms(text, "footprint"):
         ref = first(r'\(property "Reference" "([^"]*)"', fp)
@@ -100,17 +100,41 @@ def main():
             members.append(first(r'\(uuid "([^"]*)"', fp))
     missing = named - set(parts)
     if missing:
-        sys.exit(f"no part {', '.join(sorted(missing))} on {a.board}")
+        sys.exit(f"no part {', '.join(sorted(missing))} on {path}")
 
     for start, end, g in reversed(forms(text, "group")):
-        if first(r'\(group "([^"]*)"', g) == a.name:
+        if first(r'\(group "([^"]*)"', g) == block:
             text = text[:start].rstrip("\t") + text[end:].lstrip("\n")
     listed = " ".join(f'"{m}"' for m in members)
-    group = f'\t(group "{a.name}"\n\t\t(uuid "{uuidlib.uuid4()}")\n\t\t(members {listed})\n\t)\n'
+    # Named, not random, so applying a block again leaves the file as it was.
+    uuid = uuidlib.uuid5(uuidlib.NAMESPACE_URL, f"ultraroute-block:{block}")
+    group = f'\t(group "{block}"\n\t\t(uuid "{uuid}")\n\t\t(members {listed})\n\t)\n'
     close = text.rstrip().rfind(")")
     text = text[:close].rstrip("\n") + "\n" + group + text[close:]
-    open(a.board, "w").write(text)
-    print(f"{a.name}: zones {', '.join(z[0] for z in zones)}; parts {', '.join(sorted(parts))}")
+    open(path, "w").write(text)
+    print(f"{path}: {block}: zones {', '.join(z[0] for z in zones)}; parts {', '.join(sorted(parts))}")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("board", nargs="?")
+    ap.add_argument("name", nargs="?")
+    ap.add_argument("zones", nargs="?")
+    ap.add_argument("--parts", default="")
+    ap.add_argument("--job", help="apply the blocks a job's job.json declares to its input board")
+    a = ap.parse_args()
+    if a.job:
+        job = Path(a.job)
+        blocks = json.loads((job / "job.json").read_text()).get("blocks", {})
+        if not blocks:
+            sys.exit(f"{job}/job.json declares no blocks")
+        for board in sorted((job / "input").glob("*.kicad_pcb")):
+            for name, b in blocks.items():
+                add_block(board, name, b["zones"], b.get("parts", []))
+        return
+    if not (a.board and a.name and a.zones):
+        ap.error("give BOARD NAME ZONES, or --job DIR")
+    add_block(a.board, a.name, [z for z in a.zones.split(",") if z], [r for r in a.parts.split(",") if r])
 
 
 if __name__ == "__main__":

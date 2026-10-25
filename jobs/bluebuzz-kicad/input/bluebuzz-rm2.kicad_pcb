@@ -61601,4 +61601,8 @@
 		)
 	)
 	(embedded_fonts no)
+	(group "rp2350_power"
+		(uuid "5af34c50-8137-5359-b2b7-d77599a5c428")
+		(members "1241a900-0db3-4fc2-884d-5fe4aa14aac5" "67c7fe3b-6308-4efe-a71c-54f828a189fa" "ea1cb43c-5336-4626-802e-007d5909a635" "f5ed999b-155d-4b09-9e2c-cc16c634455e" "11e38f39-3ba3-427e-a950-840ae4d19698" "3d0f5676-d189-48d9-a782-ecda7b71378b" "b03d95a4-8c84-4628-93a8-b7ccecb1bb1c" "d6eda320-a777-43c2-9bc7-c70030dd8859" "2ad347b7-47e4-4ff8-9f2a-9b3fa191cdbb")
+	)
 )
