@@ -549,7 +549,10 @@
     if (presets.some((p) => p.name === asked.get('recipe'))) {
       choosePreset(asked.get('recipe'));
     }
-    if (STATIC) {
+    const linked = recordings.find((r) => r.file === asked.get('replay'));
+    if (linked) {
+      openRecording(linked);
+    } else if (STATIC) {
       const rec = recordings.find((r) => r.job === jobName) ?? recordings[0];
       if (rec) openRecording(rec);
     } else if (LOCAL) {

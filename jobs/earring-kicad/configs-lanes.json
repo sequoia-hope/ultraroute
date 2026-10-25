@@ -1,0 +1,32 @@
+[
+ {
+  "name": "core-c0025-clear-lanes",
+  "router": "ultraroute",
+  "args": [
+   "--negotiate",
+   "--rip-up",
+   "--tighten",
+   "--timeout",
+   "900",
+   "--cell",
+   "0.025",
+   "--clear-lanes"
+  ]
+ },
+ {
+  "name": "core-c0025-clear-lanes-z15",
+  "router": "ultraroute",
+  "args": [
+   "--negotiate",
+   "--rip-up",
+   "--tighten",
+   "--timeout",
+   "900",
+   "--cell",
+   "0.025",
+   "--clear-lanes",
+   "--escape-zone",
+   "1.5"
+  ]
+ }
+]

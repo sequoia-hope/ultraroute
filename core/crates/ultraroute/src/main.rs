@@ -49,7 +49,7 @@ fn main() {
         } else {
             Box::new(std::io::BufWriter::new(std::fs::File::create(path).expect("create the live file")))
         };
-        Live::new(out, a.fps, a.pours_block)
+        Live::new(out, a.fps, a.pours_block).with_step(a.live_step)
     });
     let routed = run(&a, board, &text, live, cancel);
     if let Err(e) = std::fs::write(&a.output, routed) {

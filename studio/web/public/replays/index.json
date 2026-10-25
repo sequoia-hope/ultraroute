@@ -1,5 +1,13 @@
 [
  {
+  "file": "earring-kicad--fanout-debug.jsonl.gz",
+  "job": "earring-kicad",
+  "recipe": "fanout debug: chase, escape U1, clear lanes",
+  "open": 7,
+  "seconds": 247.6,
+  "bytes": 382952
+ },
+ {
   "file": "bluebuzz-1024--cr-gridneg005-nofan.jsonl.gz",
   "job": "bluebuzz-1024",
   "recipe": "cr-gridneg005-nofan",

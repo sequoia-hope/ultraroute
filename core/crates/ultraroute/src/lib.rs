@@ -25,8 +25,8 @@ use kicad_pcb::{apply, mm, Edit};
 use serde_json::{json, Value};
 
 pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--gpu] \
-[--timeout SECONDS] [--cell MM] [--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
-[--live PATH|-] [--live-fps N] [--blame]";
+[--timeout SECONDS] [--cell MM] [--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
+[--live PATH|-] [--live-fps N] [--live-step MS] [--blame]";
 
 pub struct Args {
     pub input: String,
@@ -60,6 +60,17 @@ pub struct Args {
     pub escape_zone: Option<f64>,
     /// Clear the lane of every fine-pitch pad an open connection ends on, keeping what helps.
     pub clear_lanes: bool,
+    /// Treat the board's unlocked tracks and vias as the router's own: free to rip, move and
+    /// rewrite, as if this run had laid them.
+    pub adopt: bool,
+    /// Chained rip-up after rip-up: what a blocked connection rips may rip in turn.
+    pub chase: bool,
+    /// Everything the router says it is doing, on standard error.
+    pub verbose: bool,
+    /// Least time between the live stream's step frames, in its clock: see [`Live::with_step`].
+    pub live_step: u64,
+    /// The chase's prices for ripping the router's copper and copper its chain laid, per cell.
+    pub chase_costs: Option<(u32, u32, Option<usize>)>,
     pub blame: bool,
 }
 
@@ -93,6 +104,11 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         escape: Vec::new(),
         escape_zone: None,
         clear_lanes: false,
+        adopt: false,
+        chase: false,
+        verbose: false,
+        live_step: 0,
+        chase_costs: None,
         blame: false,
     };
     let mut it = args[1..].iter();
@@ -124,6 +140,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             "--timeout" => a.timeout = Some(value()?.parse().map_err(|e| format!("--timeout: {e}"))?),
             "--live" => a.live = Some(value()?),
             "--live-fps" => a.fps = value()?.parse().map_err(|e| format!("--live-fps: {e}"))?,
+            "--live-step" => a.live_step = value()?.parse().map_err(|e| format!("--live-step: {e}"))?,
             "--lock" => a.lock.extend(value()?.split(',').filter(|r| !r.is_empty()).map(str::to_string)),
             "--nudge" => a.nudge = true,
             "--nudge-guided" => {
@@ -140,6 +157,18 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             }
             "--escape" => a.escape.extend(value()?.split(',').filter(|r| !r.is_empty()).map(str::to_string)),
             "--clear-lanes" => a.clear_lanes = true,
+            "--adopt" => a.adopt = true,
+            "--chase" => a.chase = true,
+            "--verbose" | "-v" => a.verbose = true,
+            "--chase-costs" => {
+                let v = value()?;
+                let n: Vec<u32> = v.split(',').map(|x| x.trim().parse().map_err(|_| format!("--chase-costs: {v} is not RIP,CHAIN[,LINKS]"))).collect::<Result<_, _>>()?;
+                a.chase_costs = match n[..] {
+                    [rip, chain] => Some((rip, chain, None)),
+                    [rip, chain, links] => Some((rip, chain, Some(links as usize))),
+                    _ => return Err(format!("--chase-costs: {v} is not RIP,CHAIN[,LINKS]")),
+                };
+            }
             "--escape-zone" => a.escape_zone = Some(value()?.parse().map_err(|e| format!("--escape-zone: {e}"))?),
             "--push-steps" => a.push_steps = value()?.parse().map_err(|e| format!("--push-steps: {e}"))?,
             "--blame" => a.blame = true,
@@ -247,12 +276,35 @@ pub struct Live {
     last: Option<Instant>,
     interval: Duration,
     pours_join: bool,
+    /// Least time between forced frames in the stream's clock, and how far that clock has been
+    /// pushed ahead of the wall's to keep them apart.
+    hold: u64,
+    ahead: u64,
+    last_ms: u64,
 }
 
 impl Live {
     /// Frames written to `out`, at most `fps` a second.
     pub fn new(out: Box<dyn Write + Send>, fps: f64, pours_join: bool) -> Live {
-        Live { out, activity: Vec::new(), focus: Value::Null, sent: HashMap::new(), seq: 0, started: Instant::now(), last: None, interval: Duration::from_secs_f64(1.0 / fps.max(1.0)), pours_join }
+        Live { out, activity: Vec::new(), focus: Value::Null, sent: HashMap::new(), seq: 0, started: Instant::now(), last: None, interval: Duration::from_secs_f64(1.0 / fps.max(1.0)), pours_join, hold: 0, ahead: 0, last_ms: 0 }
+    }
+
+    /// Spaces the stream's forced frames, each a step of the work, at least `ms` apart in its
+    /// clock, so a recording shows every step for a moment however fast it ran.
+    pub fn with_step(mut self, ms: u64) -> Live {
+        self.hold = ms;
+        self
+    }
+
+    /// The stream's clock for the next frame; a forced frame is held apart from the last.
+    fn stamp(&mut self, force: bool) -> u64 {
+        let mut ms = self.started.elapsed().as_millis() as u64 + self.ahead;
+        if force && self.hold > 0 && self.seq > 0 && ms < self.last_ms + self.hold {
+            self.ahead += self.last_ms + self.hold - ms;
+            ms = self.last_ms + self.hold;
+        }
+        self.last_ms = self.last_ms.max(ms);
+        ms
     }
 
     /// Takes the router's activity; when the board has not changed for a frame, sends it alone.
@@ -278,8 +330,9 @@ impl Live {
         }
         self.last = Some(Instant::now());
         self.seq += 1;
+        let ms = self.stamp(false);
         let v = json!({
-            "t": "frame", "seq": self.seq, "ms": self.started.elapsed().as_millis() as u64,
+            "t": "frame", "seq": self.seq, "ms": ms,
             "add": [], "del": [], "parts": [], "probes": [],
             "events": std::mem::take(&mut self.activity), "focus": self.focus,
         });
@@ -335,8 +388,9 @@ impl Live {
             }
         }
         self.seq += 1;
+        let ms = self.stamp(false);
         let v = json!({
-            "t": "frame", "seq": self.seq, "ms": self.started.elapsed().as_millis() as u64,
+            "t": "frame", "seq": self.seq, "ms": ms,
             "add": [], "del": [], "parts": [], "probes": [],
             "events": std::mem::take(&mut self.activity), "focus": self.focus,
             "trial": runs, "trial_vias": vias,
@@ -358,6 +412,7 @@ impl Live {
             add.push(json!({"id": u32::MAX, "k": "outline", "polys": polys}));
         }
         self.sent = now;
+        let ms = self.stamp(force);
         self.seq += 1;
         let parts: Vec<Value> = board
             .footprints
@@ -374,7 +429,7 @@ impl Live {
             })
             .collect();
         let v = json!({
-            "t": "frame", "seq": self.seq, "ms": self.started.elapsed().as_millis() as u64,
+            "t": "frame", "seq": self.seq, "ms": ms,
             "add": add, "del": del, "parts": parts, "probes": [],
             "events": events.into_iter().chain(std::mem::take(&mut self.activity)).collect::<Vec<_>>(), "focus": self.focus,
             "open": air.len(), "air": air, "trial": [], "trial_vias": [],
@@ -506,11 +561,25 @@ pub fn run(a: &Args, mut board: Board, text: &str, mut live: Option<Live>, cance
         }
     }
     let mut laid = Vec::new();
+    if a.adopt {
+        let mine: Vec<ItemId> = board.items().filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked).map(|(id, _)| id).collect();
+        for id in mine {
+            if let Some(mut it) = board.remove(id) {
+                removed.extend(it.span.take());
+                board.restore(id, it);
+                laid.push(id);
+            }
+        }
+    }
     let streaming = live.is_some();
     let live = Arc::new(std::sync::Mutex::new(live));
     let shared = live.clone();
-    let log = streaming.then(|| {
+    let verbose = a.verbose;
+    let log = (streaming || verbose).then(|| {
         grid::Log(Arc::new(move |act| {
+            if verbose {
+                eprintln!("  {}: {}", act.phase, act.text);
+            }
             if let Some(l) = shared.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
                 l.note(act);
             }
@@ -524,6 +593,12 @@ pub fn run(a: &Args, mut board: Board, text: &str, mut live: Option<Live>, cance
     let mut watch = |b: &Board| {
         if let Some(l) = live.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
             l.frame(b, false, Vec::new());
+        }
+    };
+    // A step of the work worth seeing on its own, sent whatever the frame rate.
+    let step = |b: &Board| {
+        if let Some(l) = live.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            l.frame(b, true, Vec::new());
         }
     };
     say("start", format!("{} connections to make", connectivity_without_pours(&board).airlines.len()));
@@ -609,7 +684,46 @@ pub fn run(a: &Args, mut board: Board, text: &str, mut live: Option<Live>, cance
             &mut laid,
             &mut watch,
         );
-        eprintln!("rip-up: {} tries, {} kept, {} ripped, {:.1} s", r.attempts, r.kept, r.ripped, started.elapsed().as_secs_f64());
+        eprintln!(
+            "rip-up: {} tries, {} kept, {} ripped; lost {} with no way through, {} to copper it may not rip, {} no better; {:.1} s",
+            r.attempts,
+            r.kept,
+            r.ripped,
+            r.no_path,
+            r.hard_conflict,
+            r.no_better,
+            started.elapsed().as_secs_f64()
+        );
+    }
+    if a.chase {
+        let c = grid::chase(
+            &mut board,
+            solver.as_mut(),
+            &grid::ChaseOptions {
+                cell: a.cell.unwrap_or(grid::ChaseOptions::default().cell),
+                rip_cost: a.chase_costs.map_or(grid::ChaseOptions::default().rip_cost, |c| c.0),
+                chain_cost: a.chase_costs.map_or(grid::ChaseOptions::default().chain_cost, |c| c.1),
+                links: a.chase_costs.and_then(|c| c.2).unwrap_or(grid::ChaseOptions::default().links),
+                max_seconds: a.timeout.map(|s| (s - started.elapsed().as_secs_f64()).max(0.0)),
+                pours_block: a.pours_block,
+                cancel: Some(cancel.clone()),
+                log: log.clone(),
+                ..Default::default()
+            },
+            &mut laid,
+            &mut |b: &Board| step(b),
+        );
+        eprintln!(
+            "chase: {} chains, {} kept ({} links); lost {} with no way through, {} to copper it may not rip, {} too long, {} no better; {:.1} s",
+            c.attempts,
+            c.kept,
+            c.links,
+            c.no_path,
+            c.hard_conflict,
+            c.too_long,
+            c.no_better,
+            started.elapsed().as_secs_f64()
+        );
     }
     if let Some([x, y, radius, outward, dx, dy]) = a.push {
         // Same coordinates as --place: the board's y runs the other way.
@@ -662,7 +776,7 @@ pub fn run(a: &Args, mut board: Board, text: &str, mut live: Option<Live>, cance
             removed.extend(spans);
             say("escaping", format!("{}: {} lanes, {} combed, {} pushed out, {ripped} ripped", board.footprints[f].reference, e.lanes, e.combed, e.pushed_out));
             eprintln!("escape {}: {} lanes, {} combed onto them, {} pushed out of the zone, {ripped} ripped", board.footprints[f].reference, e.lanes, e.combed, e.pushed_out);
-            watch(&board);
+            step(&board);
         }
         let reroute = grid::Options { max_seconds: a.timeout.map(|s| (s - started.elapsed().as_secs_f64()).max(0.0)), ..options.clone() };
         let again = grid::route_open(&mut board, solver.as_mut(), &reroute, &mut watch);
@@ -688,7 +802,8 @@ pub fn run(a: &Args, mut board: Board, text: &str, mut live: Option<Live>, cance
         if after >= before {
             (board, laid) = (kept.0, kept.1);
             removed.truncate(kept.2);
-            watch(&board);
+            say("escaping", format!("{after} open, no fewer than {before}: undone"));
+            step(&board);
         }
     }
     if a.clear_lanes {
@@ -712,23 +827,46 @@ pub fn run(a: &Args, mut board: Board, text: &str, mut live: Option<Live>, cance
             tried += 1;
             let before = open.len();
             let snapshot = (board.clone(), laid.clone(), removed.len());
+            let reference = board.footprints[footprint].reference.clone();
+            if let Some(grid::Log(log)) = &log {
+                let at = board.item(pad).map_or(Point::new(0, 0), |it| { let b = it.shape.bbox(); Point::new((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2) });
+                log(grid::Activity { phase: "clearing lanes", text: format!("{reference}-{number}: sliding other nets out of its lane"), focus: Some(grid::Focus::Connection { net: board.item(pad).map_or(0, |it| it.net), from: at, to: at }) });
+            }
             let (moved, spans) = morph::clear_lane(&mut board, footprint, pad, &opts, &mut laid);
             removed.extend(spans);
+            step(&board);
             let (ripped, spans) = grid::rip_broken(&mut board, &mut laid, a.pours_block);
             removed.extend(spans);
+            say("clearing lanes", format!("{reference}-{number}: {moved} pieces slid, {ripped} ripped for breaking a rule"));
+            step(&board);
+            let open_after_rip = open_now(&board).len();
             let reroute = grid::Options { max_seconds: Some(20.0), ..options.clone() };
             let again = grid::route_open(&mut board, solver.as_mut(), &reroute, &mut |_| {});
             laid.extend(again.laid.iter().copied());
-            let after = open_now(&board).len();
-            let reference = board.footprints[footprint].reference.clone();
+            let left = open_now(&board);
+            let after = left.len();
+            let own = board.item(pad).map_or(0, |it| it.net);
+            let net_name = |n: u32| board.nets.get(n as usize).cloned().unwrap_or_default();
+            let still: Vec<String> = left.iter().filter(|c| !open.iter().any(|o| o.from_item == c.from_item && o.to_item == c.to_item)).map(|c| net_name(c.net)).collect();
+            eprintln!(
+                "clear lane {reference}-{number} ({}): {moved} pieces slid, {ripped} ripped, {} open after ripping, {} rerouted {} failed, {before} -> {after} open, own {}, newly open {still:?}",
+                net_name(own),
+                open_after_rip,
+                again.routed,
+                again.failed,
+                if left.iter().any(|c| c.from_item == pad || c.to_item == pad) { "still open" } else { "routed" },
+            );
             if after < before {
                 kept_count += 1;
-                say("clearing lanes", format!("{reference}-{number}: {moved} pieces slid aside, {ripped} ripped, {after} open"));
-                watch(&board);
+                say("clearing lanes", format!("{reference}-{number}: rerouted, {after} open, kept"));
+                step(&board);
             } else {
+                say("clearing lanes", format!("{reference}-{number}: rerouted, {after} open, no better"));
+                step(&board);
                 (board, laid) = (snapshot.0, snapshot.1);
                 removed.truncate(snapshot.2);
-                say("clearing lanes", format!("{reference}-{number}: no better, undone"));
+                say("clearing lanes", format!("{reference}-{number}: undone"));
+                step(&board);
             }
         }
         eprintln!("clear lanes: {tried} tried, {kept_count} kept, {} open, {:.1} s", open_now(&board).len(), started.elapsed().as_secs_f64());
