@@ -81,9 +81,15 @@ pub fn check(board: &Board) -> Vec<Violation> {
 /// What one item breaks against everything else: how a router tests copper before keeping it.
 /// Pours are left out, as they are refilled around new copper.
 pub fn check_item(board: &Board, id: ItemId) -> Vec<Violation> {
+    let mut found = check_item_with_pours(board, id);
+    found.retain(|v| v.b.and_then(|b| board.item(b)).is_none_or(|o| !matches!(o.kind, Kind::Pour { .. })));
+    found
+}
+
+/// What one item breaks, pours included: for routing that keeps pours as planes.
+pub fn check_item_with_pours(board: &Board, id: ItemId) -> Vec<Violation> {
     let mut found = Vec::new();
     item_checks(board, id, true, &Limits::of(board), &mut HashSet::new(), &mut found);
-    found.retain(|v| v.b.and_then(|b| board.item(b)).is_none_or(|o| !matches!(o.kind, Kind::Pour { .. })));
     found
 }
 

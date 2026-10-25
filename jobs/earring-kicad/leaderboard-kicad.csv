@@ -1,0 +1,2 @@
+name,router,unconnected,new_errors,vias,length_mm,wall_s,exit,args,env,finished_at
+core-full,ultraroute,11,0,334,1247.0,34.4,0,--negotiate --rip-up --tighten --timeout 600,{},2026-10-24T19:36:39

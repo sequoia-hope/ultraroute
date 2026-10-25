@@ -9,6 +9,10 @@ use serde_json::Value;
 pub mod wasm;
 
 const FOCUS: Rgba = [1.0, 1.0, 1.0, 1.0];
+const COLLIDING: Rgba = [1.0, 0.55, 0.12, 0.95];
+const TRIAL_VIA: Rgba = [1.0, 1.0, 1.0, 0.75];
+/// Drawn size of a via a negotiated route would need, in millimetres.
+const TRIAL_VIA_MM: f32 = 0.2;
 /// Congestion below this is not drawn; a change smaller than `HEAT_CHANGE` does not pop.
 const HEAT_FLOOR: f32 = 0.15;
 const HEAT_CHANGE: f32 = 0.05;
@@ -41,6 +45,9 @@ const SELECTED: Rgba = [0.51, 0.77, 0.69, 1.0];
 const LOCKED: Rgba = [1.0, 0.95, 0.6, 0.95];
 /// Side of a congestion cell, in millimetres.
 pub const CELL_MM: f32 = 1.0;
+/// The congestion map is at most this many cells a side, however large or broken the board's
+/// bounds, so a stray coordinate cannot ask for gigabytes every frame.
+pub const CELLS_MAX: usize = 1000;
 /// Share of a cell's area on one layer that copper can fill once clearances are kept.
 const ROUTABLE_SHARE: f32 = 0.5;
 /// Width an open connection will take once routed, track and clearance, in millimetres.
@@ -95,6 +102,15 @@ pub struct Part {
     pub fixed: bool,
 }
 
+/// A route the router is trying on one layer, and whether it collided with another net's.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Trial {
+    pub layer: usize,
+    pub net: i32,
+    pub points: Vec<f32>,
+    pub collides: bool,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Focus {
     Connection { phase: String, net: i32, a: [f32; 2], b: [f32; 2] },
@@ -125,8 +141,10 @@ pub struct Scene {
     pub parts: BTreeMap<i32, Part>,
     pub airlines: Vec<[f32; 5]>,
     pub probes: Vec<Probe>,
-    /// Routes a router is trying, by layer, until it sends the next ones.
-    pub trials: Vec<(usize, i32, Vec<f32>)>,
+    /// Routes a router is trying, until it sends the next ones.
+    pub trials: Vec<Trial>,
+    /// Where those routes change layer.
+    pub trial_vias: Vec<[f32; 2]>,
     pub open: Option<usize>,
     pub seq: u64,
     pub ms: u64,
@@ -318,7 +336,21 @@ impl Scene {
                 if let Some(trial) = v["trial"].as_array() {
                     self.trials = trial
                         .iter()
-                        .map(|t| (layer(&t["layer"]), t["net"].as_i64().unwrap_or(0) as i32, floats(&t["p"])))
+                        .map(|t| Trial {
+                            layer: layer(&t["layer"]),
+                            net: t["net"].as_i64().unwrap_or(0) as i32,
+                            points: floats(&t["p"]),
+                            collides: t["collides"].as_bool().unwrap_or(false),
+                        })
+                        .collect();
+                    self.trial_vias = v["trial_vias"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|p| {
+                            let p = floats(p);
+                            (p.len() == 2).then(|| [p[0], p[1]])
+                        })
                         .collect();
                 }
                 if let Some(air) = v["air"].as_array() {
@@ -335,6 +367,7 @@ impl Scene {
             }
             Some("done") => {
                 self.trials.clear();
+                self.trial_vias.clear();
                 self.focus = None;
                 self.open = v["open"].as_u64().map(|n| n as usize).or(self.open);
                 self.done = Some(v);
@@ -519,10 +552,22 @@ impl Scene {
                 m.fill(&[x, y, x + side, y, x + side, y + side, x, y + side], [0.0, 0.0], with_alpha(color, (color[3] + 0.3).min(0.9) * fade));
             }
         }
-        for (layer, net, points) in &self.trials {
-            if shown(*layer) {
-                m.polyline(points, px * 0.9, self.tint(with_alpha(self.drawn_color(*layer), 0.75), *net));
+        // Routes still being negotiated: dashed in a pale version of their layer's colour, or
+        // solid orange where they still fight another net for room; their vias as hollow rings.
+        for t in &self.trials {
+            if !shown(t.layer) {
+                continue;
             }
+            if t.collides {
+                m.polyline(&t.points, px * 1.3, self.tint(COLLIDING, t.net));
+            } else {
+                let c = self.drawn_color(t.layer);
+                let pale = [(c[0] + 0.6) / 1.6, (c[1] + 0.6) / 1.6, (c[2] + 0.6) / 1.6, 0.85];
+                m.dashed_polyline(&t.points, px * 0.9, px * 5.0, self.tint(pale, t.net));
+            }
+        }
+        for v in &self.trial_vias {
+            m.ring(&circle_points(*v, TRIAL_VIA_MM), px * 0.8, TRIAL_VIA);
         }
         for a in &self.airlines {
             m.segment([a[0], a[1]], [a[2], a[3]], px * 0.6, self.tint(AIRLINE, a[4] as i32));
@@ -654,9 +699,9 @@ impl Scene {
     /// How full each cell of the board is: copper and pads on the signal layers, plus what
     /// the open connections will need once routed, over what the cell can hold.
     pub fn congestion(&self) -> Congestion {
-        let [x0, y0, x1, y1] = self.bbox;
-        let cols = (((x1 - x0) / CELL_MM).ceil() as usize).max(1);
-        let rows = (((y1 - y0) / CELL_MM).ceil() as usize).max(1);
+        let [x0, y0, x1, y1] = if self.bbox.iter().all(|v| v.is_finite()) { self.bbox } else { [0.0; 4] };
+        let cells = |span: f32| ((span / CELL_MM).ceil() as usize).clamp(1, CELLS_MAX);
+        let (cols, rows) = (cells(x1 - x0), cells(y1 - y0));
         let mut demand = vec![0.0f32; cols * rows];
         let mut add = |x: f32, y: f32, area: f32| {
             let (c, r) = (((x - x0) / CELL_MM).floor(), ((y - y0) / CELL_MM).floor());
@@ -666,7 +711,7 @@ impl Scene {
         };
         let line = |a: [f32; 2], b: [f32; 2], width: f32, add: &mut dyn FnMut(f32, f32, f32)| {
             let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
-            let steps = ((len / (CELL_MM / 2.0)).ceil() as usize).max(1);
+            let steps = ((len / (CELL_MM / 2.0)).ceil() as usize).clamp(1, 4 * CELLS_MAX);
             let step = len / steps as f32;
             for k in 0..steps {
                 let t = (k as f32 + 0.5) / steps as f32;
@@ -696,8 +741,8 @@ impl Scene {
             line([a[0], a[1]], [a[2], a[3]], AIRLINE_WIDTH_MM, &mut add);
         }
         // The routes a router is trying count too, so the map shows where it is working.
-        for (_, _, points) in &self.trials {
-            for w in points.windows(4).step_by(2) {
+        for t in &self.trials {
+            for w in t.points.windows(4).step_by(2) {
                 line([w[0], w[1]], [w[2], w[3]], TRIAL_WIDTH_MM, &mut add);
             }
         }
@@ -860,6 +905,41 @@ impl Mesh {
         }
     }
 
+    /// Dashes `dash` long with gaps as long, the pattern running on across corners.
+    /// Each step ends either the current dash or gap (`left` drops to exactly zero) or the
+    /// segment (`rest` does), so it always finishes; dashes too fine to see are drawn solid.
+    fn dashed_polyline(&mut self, points: &[f32], r: f32, dash: f32, c: Rgba) {
+        let total: f32 = points
+            .windows(4)
+            .step_by(2)
+            .map(|w| ((w[2] - w[0]).powi(2) + (w[3] - w[1]).powi(2)).sqrt())
+            .sum();
+        if !(dash > 0.0 && dash.is_finite() && total.is_finite()) || total / dash > 10_000.0 {
+            self.polyline(points, r, c);
+            return;
+        }
+        let (mut on, mut left) = (true, dash);
+        for w in points.windows(4).step_by(2) {
+            let (a, b) = ([w[0], w[1]], [w[2], w[3]]);
+            let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
+            let at = |s: f32| [a[0] + (b[0] - a[0]) * s / len, a[1] + (b[1] - a[1]) * s / len];
+            let (mut t, mut rest) = (0.0f32, len);
+            while rest > 0.0 {
+                let take = left.min(rest);
+                if on {
+                    self.segment(at(t), at(t + take), r, c);
+                }
+                t += take;
+                rest -= take;
+                left -= take;
+                if left <= 0.0 {
+                    on = !on;
+                    left = dash;
+                }
+            }
+        }
+    }
+
     fn ring(&mut self, points: &[f32], r: f32, c: Rgba) {
         let n = points.len() / 2;
         for i in 0..n {
@@ -984,11 +1064,106 @@ mod tests {
         s.apply(BOARD);
         s.apply(r#"{"t":"frame","seq":2,"ms":9,"add":[],"del":[],"parts":[],"probes":[],"events":[],"trial":[{"net":3,"layer":1,"p":[0,0,1,1,2,1]}]}"#);
         assert_eq!(s.trials.len(), 1);
-        assert_eq!(s.mesh(0.01).len(), 2 * 6 * STRIDE);
+        assert!(!s.trials[0].collides);
+        assert!(!s.mesh(0.01).is_empty());
         s.apply(&frame("", ""));
         assert_eq!(s.trials.len(), 1);
         s.apply(r#"{"t":"done","open":0}"#);
         assert!(s.trials.is_empty());
+    }
+
+    /// Quads in a mesh, each segment being one.
+    fn quads(m: &Mesh) -> usize {
+        m.v.len() / (6 * STRIDE)
+    }
+
+    fn mesh() -> Mesh {
+        Mesh { v: Vec::new(), aa: 0.0 }
+    }
+
+    #[test]
+    fn dashes_run_on_across_corners() {
+        // 2 mm then 1 mm at a 0.5 mm dash: on, off, on, off | on, off.
+        let mut m = mesh();
+        m.dashed_polyline(&[0.0, 0.0, 2.0, 0.0, 2.0, 1.0], 0.1, 0.5, FOCUS);
+        assert_eq!(quads(&m), 3);
+        // 0.25 mm then 0.75 mm: the first dash breaks over the corner and carries on 0.25 mm,
+        // where restarting the pattern would draw 0.5 mm.
+        let mut m = mesh();
+        m.dashed_polyline(&[0.0, 0.0, 0.25, 0.0, 0.25, 0.75], 0.1, 0.5, FOCUS);
+        assert_eq!(quads(&m), 2);
+        assert_eq!(&m.v[6 * STRIDE + 4..6 * STRIDE + 6], &[0.25, 0.25], "second piece ends 0.25 mm up");
+    }
+
+    #[test]
+    fn dashing_always_finishes() {
+        // The first version recomputed its place in the pattern from a running total with `%`;
+        // a rounding step too small to move `t` spun forever, growing the mesh until killed.
+        let awkward = [0.1f32, 0.3, 1.0 / 3.0, 1e-3, 0.007, 12.345];
+        for &dash in &awkward {
+            let mut points = vec![0.0f32, 0.0];
+            let mut x = 0.0f32;
+            for k in 0..300 {
+                x += 0.1 + k as f32 * 0.0137;
+                points.extend([x, (k % 7) as f32 * 0.31]);
+            }
+            let mut m = mesh();
+            m.dashed_polyline(&points, 0.05, dash, FOCUS);
+            let total: f32 = points.windows(4).step_by(2).map(|w| ((w[2] - w[0]).powi(2) + (w[3] - w[1]).powi(2)).sqrt()).sum();
+            // Each dash is at most one piece per segment it crosses.
+            assert!(quads(&m) <= (total / dash) as usize + 300 + 2, "dash {dash}: {} quads", quads(&m));
+        }
+    }
+
+    #[test]
+    fn dashes_too_fine_or_broken_are_drawn_solid() {
+        let line = [0.0f32, 0.0, 1000.0, 0.0, 1000.0, 5.0];
+        for dash in [0.0, -1.0, f32::NAN, f32::INFINITY, 1e-6] {
+            let mut m = mesh();
+            m.dashed_polyline(&line, 0.1, dash, FOCUS);
+            assert_eq!(quads(&m), 2, "dash {dash}");
+        }
+        let mut m = mesh();
+        m.dashed_polyline(&[0.0, 0.0, f32::INFINITY, 0.0], 0.1, 0.5, FOCUS);
+        assert_eq!(quads(&m), 1);
+    }
+
+    #[test]
+    fn colliding_trials_are_solid_and_planned_vias_are_rings() {
+        let trial = |collides: bool, vias: &str| {
+            let mut s = Scene::default();
+            s.apply(BOARD);
+            s.apply(&format!(
+                r#"{{"t":"frame","seq":2,"ms":9,"add":[],"del":[],"parts":[],"probes":[],"events":[],"trial":[{{"net":3,"layer":0,"p":[0,0,4,0],"collides":{collides}}}],"trial_vias":{vias}}}"#
+            ));
+            s
+        };
+        let calm = trial(false, "[]");
+        let fighting = trial(true, "[]");
+        assert!(fighting.trials[0].collides);
+        // Solid is one quad; 4 mm dashed at 0.05 mm is many.
+        assert!(calm.mesh(0.01).len() > 10 * fighting.mesh(0.01).len());
+        let with_via = trial(true, "[[4,0],[1],\"x\"]");
+        assert_eq!(with_via.trial_vias, vec![[4.0, 0.0]], "malformed points are dropped");
+        assert!(with_via.mesh(0.01).len() > fighting.mesh(0.01).len());
+        let mut done = with_via;
+        done.apply(r#"{"t":"done","open":0}"#);
+        assert!(done.trials.is_empty() && done.trial_vias.is_empty());
+    }
+
+    #[test]
+    fn a_wild_bounding_box_cannot_blow_up_the_congestion_map() {
+        for bbox in ["[0,0,1e12,1e12]", "[-1e30,0,1e30,5]", "[0,0,10,10]"] {
+            let mut s = Scene::default();
+            s.apply(&BOARD.replace("[0,0,10,10]", bbox));
+            s.airlines = vec![[0.0, 0.0, 1e9, 1e9, 3.0]];
+            let c = s.congestion();
+            assert!(c.cols <= CELLS_MAX && c.rows <= CELLS_MAX, "{bbox}: {}x{}", c.cols, c.rows);
+        }
+        let mut s = Scene::default();
+        s.apply(BOARD);
+        s.bbox = [f32::NAN, 0.0, f32::INFINITY, 1.0];
+        assert_eq!((s.congestion().cols, s.congestion().rows), (1, 1));
     }
 
     #[test]

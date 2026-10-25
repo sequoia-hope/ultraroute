@@ -7,7 +7,7 @@
 //! Rounds repeat, the present price rising and history accumulating where nets still collide,
 //! until no path lies in another net's zone; then routes are committed, each checked exactly.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 
 use board::{connectivity, connectivity_without_pours, nm, Board, ItemId, Kind, Nm};
 
@@ -80,8 +80,10 @@ struct Connection {
     from: ItemId,
     to: ItemId,
     path: Option<GridPath>,
-    /// The cells its path claims, as each class of route sees them.
-    zone: Vec<(String, Vec<usize>)>,
+    /// The nodes its path claims, as each class of route sees them.
+    zone: Vec<(String, Vec<u32>)>,
+    /// Whether its path ran into another net's claim in the last round.
+    colliding: bool,
 }
 
 /// Every route's claims as each class of route sees them: a wide trace keeps further from a
@@ -95,7 +97,7 @@ impl Claims {
         Claims { by_viewer: classes.map(|c| (c, Zones::new(nodes))).collect() }
     }
 
-    fn add(&mut self, net: u32, zone: &[(String, Vec<usize>)]) {
+    fn add(&mut self, net: u32, zone: &[(String, Vec<u32>)]) {
         for (viewer, cells) in zone {
             if let Some(z) = self.by_viewer.get_mut(viewer) {
                 z.add(net, cells);
@@ -103,11 +105,20 @@ impl Claims {
         }
     }
 
-    fn remove(&mut self, net: u32, zone: &[(String, Vec<usize>)]) {
+    fn remove(&mut self, net: u32, zone: &[(String, Vec<u32>)]) {
         for (viewer, cells) in zone {
             if let Some(z) = self.by_viewer.get_mut(viewer) {
                 z.remove(net, cells);
             }
+        }
+    }
+
+    /// Every claim dropped, in place: building fresh claims beside the old ones held both at
+    /// once, which on a large board is a hundred megabytes for nothing.
+    fn clear(&mut self) {
+        for z in self.by_viewer.values_mut() {
+            z.count.fill(0);
+            z.per_net.clear();
         }
     }
 
@@ -117,51 +128,56 @@ impl Claims {
 }
 
 /// Which nets cover each node, through per-net multiplicities so that two routes of one net
-/// may overlap freely.
+/// may overlap freely. On a large board these maps hold millions of entries, so nodes are kept
+/// as `u32` in hash maps, about a third of the memory of the ordered maps they replaced.
 struct Zones {
     count: Vec<u16>,
-    per_net: BTreeMap<u32, BTreeMap<usize, u32>>,
+    per_net: HashMap<u32, HashMap<u32, u16>>,
 }
 
 impl Zones {
     fn new(nodes: usize) -> Zones {
-        Zones { count: vec![0; nodes], per_net: BTreeMap::new() }
+        assert!(u32::try_from(nodes).is_ok(), "{nodes} grid nodes do not fit a u32 index");
+        Zones { count: vec![0; nodes], per_net: HashMap::new() }
     }
 
-    fn add(&mut self, net: u32, cells: &[usize]) {
+    fn add(&mut self, net: u32, cells: &[u32]) {
         let mine = self.per_net.entry(net).or_default();
         for &c in cells {
             let m = mine.entry(c).or_insert(0);
             if *m == 0 {
-                self.count[c] = self.count[c].saturating_add(1);
+                self.count[c as usize] = self.count[c as usize].saturating_add(1);
             }
-            *m += 1;
+            *m = m.saturating_add(1);
         }
     }
 
-    fn remove(&mut self, net: u32, cells: &[usize]) {
+    fn remove(&mut self, net: u32, cells: &[u32]) {
         let Some(mine) = self.per_net.get_mut(&net) else { return };
         for &c in cells {
             if let Some(m) = mine.get_mut(&c) {
                 *m -= 1;
                 if *m == 0 {
                     mine.remove(&c);
-                    self.count[c] = self.count[c].saturating_sub(1);
+                    self.count[c as usize] = self.count[c as usize].saturating_sub(1);
                 }
             }
+        }
+        if mine.is_empty() {
+            self.per_net.remove(&net);
         }
     }
 
     /// Nets other than `net` covering node `c`.
     fn others(&self, net: u32, c: usize) -> u16 {
-        let own = self.per_net.get(&net).is_some_and(|m| m.contains_key(&c));
+        let own = self.per_net.get(&net).is_some_and(|m| m.contains_key(&(c as u32)));
         self.count[c] - u16::from(own)
     }
 }
 
 /// A connection's current trial route, as (board layer, point) corners, for showing negotiation
-/// as it goes.
-pub type Trial = (u32, Vec<(usize, board::Point)>);
+/// as it goes, and whether it collided with another net's route in the last round.
+pub type Trial = (u32, Vec<(usize, board::Point)>, bool);
 
 pub fn route_negotiated(
     board: &mut Board,
@@ -186,6 +202,7 @@ pub fn route_negotiated(
             to: a.to_item,
             path: None,
             zone: Vec::new(),
+            colliding: false,
         })
         .collect();
     stats.connections = connections.len();
@@ -209,7 +226,7 @@ pub fn route_negotiated(
         }
     }
     let classes: Vec<String> = maps.keys().cloned().collect();
-    let claims_of = |path: &GridPath, owner: &str| -> Vec<(String, Vec<usize>)> {
+    let claims_of = |path: &GridPath, owner: &str| -> Vec<(String, Vec<u32>)> {
         classes
             .iter()
             .map(|viewer| {
@@ -243,14 +260,14 @@ pub fn route_negotiated(
         stats.rounds = round + 1;
         if solver.batch_size() > 1 {
             route_round_in_batches(&mut connections, &maps, &ends, &zones, &history, present, options, solver);
-            zones = Claims::new(classes.iter().cloned(), layers * cells);
+            zones.clear();
             for c in connections.iter_mut() {
                 c.zone = c.path.as_ref().map(|p| claims_of(p, &c.class)).unwrap_or_default();
                 zones.add(c.net, &c.zone);
             }
         } else if options.threads > 1 {
             route_round_in_parallel(&mut connections, &maps, &ends, &zones, &history, present, options, round, &sample, trials);
-            zones = Claims::new(classes.iter().cloned(), layers * cells);
+            zones.clear();
             for c in connections.iter_mut() {
                 c.zone = c.path.as_ref().map(|p| claims_of(p, &c.class)).unwrap_or_default();
                 zones.add(c.net, &c.zone);
@@ -275,10 +292,8 @@ pub fn route_negotiated(
                 }
             }
         }
-        trials(round, &trial_list(&connections, &sample));
-        shown = std::time::Instant::now();
         let mut colliding = 0;
-        for (k, c) in connections.iter().enumerate() {
+        for (k, c) in connections.iter_mut().enumerate() {
             let Some(path) = &c.path else { continue };
             let mut collides = false;
             for &(layer, i, j) in path {
@@ -289,7 +304,10 @@ pub fn route_negotiated(
                 }
             }
             colliding += usize::from(collides);
+            c.colliding = collides;
         }
+        trials(round, &trial_list(&connections, &sample));
+        shown = std::time::Instant::now();
         stats.conflicted = colliding;
         tell(&options.log, "negotiating", || format!("round {}: {colliding} of {} routes still collide", round + 1, connections.len()), None);
         if colliding == 0 {
@@ -336,7 +354,7 @@ fn trial_list(connections: &[Connection], grid: &RouteGrid) -> Vec<Trial> {
         .iter()
         .filter_map(|c| {
             let path = c.path.as_ref()?;
-            Some((c.net, corners(path).into_iter().map(|(l, i, j)| (grid.layers[l], grid.centre(i, j))).collect()))
+            Some((c.net, corners(path).into_iter().map(|(l, i, j)| (grid.layers[l], grid.centre(i, j))).collect(), c.colliding))
         })
         .collect()
 }
@@ -358,7 +376,24 @@ fn corners(path: &GridPath) -> Vec<(usize, usize, usize)> {
 }
 
 fn penalties(zones: &Zones, history: &[u32], present: f64, net: u32) -> Vec<u32> {
-    (0..history.len()).map(|n| history[n] + (present * f64::from(zones.others(net, n))).round() as u32).collect()
+    let mut out = Vec::new();
+    penalties_into(zones, history, present, net, &mut out);
+    out
+}
+
+/// Each node's price for `net`: its history plus the present price of every other net covering
+/// it. Filled in place, so a worker reuses one buffer, and counted for all nets at once before
+/// the net's own cells are taken back out, instead of asking the net's map about every node.
+fn penalties_into(zones: &Zones, history: &[u32], present: f64, net: u32, out: &mut Vec<u32>) {
+    let price = |h: u32, others: u16| h + (present * f64::from(others)).round() as u32;
+    out.clear();
+    out.extend(history.iter().zip(&zones.count).map(|(&h, &n)| price(h, n)));
+    if let Some(mine) = zones.per_net.get(&net) {
+        for &c in mine.keys() {
+            let c = c as usize;
+            out[c] = price(history[c], zones.count[c] - 1);
+        }
+    }
 }
 
 /// One Jacobi round with the fields solved together, a batch at a time, on the solver's device.
@@ -415,19 +450,30 @@ fn route_round_in_parallel(
     let paths: Vec<std::sync::Mutex<Option<Option<GridPath>>>> = (0..connections.len()).map(|_| std::sync::Mutex::new(None)).collect();
     std::thread::scope(|scope| {
         for _ in 0..options.threads {
-            scope.spawn(|| loop {
-                let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                if k >= jobs.len() {
-                    break;
+            scope.spawn(|| {
+                // One grid per worker, refilled for each connection: a large board's views run
+                // to tens of megabytes, too much to allocate and free hundreds of times a round.
+                let mut grid: Option<RouteGrid> = None;
+                loop {
+                    let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if k >= jobs.len() {
+                        break;
+                    }
+                    let (net, class) = jobs[k];
+                    let grid = match &mut grid {
+                        Some(g) => {
+                            maps[class].view_into(net, g);
+                            g
+                        }
+                        None => grid.insert(maps[class].view(net)),
+                    };
+                    penalties_into(zones.seen_by(class), history, present, net, &mut grid.penalty);
+                    let (sources, targets) = &ends[k];
+                    let s: Vec<usize> = sources.iter().map(|t| t.0).collect();
+                    let t: Vec<usize> = targets.iter().map(|t| t.0).collect();
+                    *paths[k].lock().expect("no worker panics") = Some(route_astar(grid, &s, &t, options.via_cost));
+                    done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
-                let (net, class) = jobs[k];
-                let mut grid: RouteGrid = maps[class].view(net);
-                grid.penalty = penalties(zones.seen_by(class), history, present, net);
-                let (sources, targets) = &ends[k];
-                let s: Vec<usize> = sources.iter().map(|t| t.0).collect();
-                let t: Vec<usize> = targets.iter().map(|t| t.0).collect();
-                *paths[k].lock().expect("no worker panics") = Some(route_astar(&grid, &s, &t, options.via_cost));
-                done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             });
         }
         while done.load(std::sync::atomic::Ordering::Relaxed) < jobs.len() {
@@ -438,7 +484,7 @@ fn route_round_in_parallel(
                 .filter_map(|(c, fresh)| {
                     let fresh = fresh.lock().expect("no worker panics").clone();
                     let path = fresh.unwrap_or_else(|| c.path.clone())?;
-                    Some((c.net, corners(&path).into_iter().map(|(l, i, j)| (sample.layers[l], sample.centre(i, j))).collect()))
+                    Some((c.net, corners(&path).into_iter().map(|(l, i, j)| (sample.layers[l], sample.centre(i, j))).collect(), c.colliding))
                 })
                 .collect();
             trials(round, &shown);
@@ -477,14 +523,14 @@ fn zone_discs(board: &Board, owner: &Profile, viewer: &Profile, h: Nm) -> Discs 
 
 /// The nodes a path claims: a disc around each cell on its layer, and a via disc on every layer
 /// where it changes layer. Deduplicated.
-fn zone_of(path: &GridPath, nx: usize, ny: usize, layers: usize, trace_disc: &[(i32, i32)], via_disc: &[(i32, i32)]) -> Vec<usize> {
+fn zone_of(path: &GridPath, nx: usize, ny: usize, layers: usize, trace_disc: &[(i32, i32)], via_disc: &[(i32, i32)]) -> Vec<u32> {
     let cells = nx * ny;
-    let mut out = BTreeSet::new();
+    let mut out = Vec::new();
     let mut stamp = |layer: usize, i: usize, j: usize, disc: &[(i32, i32)]| {
         for &(di, dj) in disc {
             let (a, b) = (i as i32 + di, j as i32 + dj);
             if a >= 0 && b >= 0 && (a as usize) < nx && (b as usize) < ny {
-                out.insert(layer * cells + b as usize * nx + a as usize);
+                out.push((layer * cells + b as usize * nx + a as usize) as u32);
             }
         }
     };
@@ -496,5 +542,80 @@ fn zone_of(path: &GridPath, nx: usize, ny: usize, layers: usize, trace_disc: &[(
             }
         }
     }
-    out.into_iter().collect()
+    out.sort_unstable();
+    out.dedup();
+    out.shrink_to_fit();
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn xorshift(mut state: u64) -> impl FnMut() -> u64 {
+        move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        }
+    }
+
+    #[test]
+    fn zones_count_each_net_once_however_often_its_routes_overlap() {
+        let mut z = Zones::new(10);
+        z.add(1, &[2, 3]);
+        z.add(1, &[3, 4]);
+        z.add(2, &[3]);
+        assert_eq!(z.count[3], 2);
+        assert_eq!((z.others(1, 3), z.others(2, 3), z.others(3, 3)), (1, 1, 2));
+        z.remove(1, &[2, 3]);
+        assert_eq!(z.count[3], 2, "net 1's other route still covers 3");
+        assert_eq!(z.count[2], 0);
+        z.remove(1, &[3, 4]);
+        assert_eq!((z.count[3], z.count[4]), (1, 0));
+        assert!(!z.per_net.contains_key(&1), "an emptied net leaves no map behind");
+        z.remove(9, &[3]);
+        assert_eq!(z.count[3], 1, "removing what was never added changes nothing");
+    }
+
+    #[test]
+    fn penalties_match_asking_every_node() {
+        let mut next = xorshift(0x5eed);
+        let nodes = 500;
+        let mut z = Zones::new(nodes);
+        let mut added: Vec<(u32, Vec<u32>)> = Vec::new();
+        for _ in 0..300 {
+            if added.len() > 5 && next() % 3 == 0 {
+                let (net, cells) = added.swap_remove((next() % added.len() as u64) as usize);
+                z.remove(net, &cells);
+            } else {
+                let net = (next() % 6) as u32;
+                let mut cells: Vec<u32> = (0..next() % 40).map(|_| (next() % nodes as u64) as u32).collect();
+                cells.sort_unstable();
+                cells.dedup();
+                z.add(net, &cells);
+                added.push((net, cells));
+            }
+            let history: Vec<u32> = (0..nodes).map(|_| (next() % 50) as u32).collect();
+            let net = (next() % 7) as u32;
+            let mut fast = vec![7; 3];
+            penalties_into(&z, &history, 23.7, net, &mut fast);
+            let slow: Vec<u32> = (0..nodes).map(|n| history[n] + (23.7 * f64::from(z.others(net, n))).round() as u32).collect();
+            assert_eq!(fast, slow);
+        }
+    }
+
+    #[test]
+    fn a_zone_is_sorted_unique_and_on_the_grid() {
+        let (nx, ny, layers) = (8, 6, 2);
+        let disc: Vec<(i32, i32)> = (-1..=1).flat_map(|dj| (-1..=1).map(move |di| (di, dj))).collect();
+        let path: GridPath = vec![(0, 0, 0), (0, 1, 0), (1, 1, 0), (1, 7, 5)];
+        let z = zone_of(&path, nx, ny, layers, &disc, &disc);
+        assert!(z.windows(2).all(|w| w[0] < w[1]));
+        assert!(z.iter().all(|&n| (n as usize) < nx * ny * layers));
+        // The via at (1, 0) claims its disc on both layers, the corner cell clipped to the grid.
+        assert!(z.contains(&0) && z.contains(&((nx * ny) as u32)));
+        assert!(z.contains(&((nx * ny + 5 * nx + 7) as u32)));
+    }
 }

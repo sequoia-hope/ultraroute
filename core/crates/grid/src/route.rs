@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use board::{check_item, connectivity, connectivity_without_pours, Board, Item, ItemId, Kind, Nm, Point, Shape};
+use board::{connectivity, connectivity_without_pours, Board, Item, ItemId, Kind, Nm, Point, Shape};
 
 use crate::grid::{ObstacleMap, Profile, RouteGrid};
 use crate::report::{item_name, tell, Focus, Log};
@@ -251,7 +251,7 @@ fn terminals_with(board: &mut Board, grid: &RouteGrid, id: ItemId, leg_half_widt
         candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
         for (_, index, centre) in candidates.into_iter().take(tries) {
             let leg = track(item.net, grid.layers[layer], from, centre, leg_half_width);
-            if fits(board, leg) {
+            if fits(board, grid, leg) {
                 out.push((index, Some((from, leg_half_width))));
             }
         }
@@ -272,9 +272,9 @@ fn track(net: u32, layer: usize, a: Point, b: Point, half_width: Nm) -> Item {
 }
 
 /// Whether the item could be laid without breaking a rule; the board is left as it was.
-fn fits(board: &mut Board, item: Item) -> bool {
+fn fits(board: &mut Board, grid: &RouteGrid, item: Item) -> bool {
     let id = board.insert(item);
-    let ok = check_item(board, id).is_empty();
+    let ok = grid.violations(board, id).is_empty();
     board.remove(id);
     ok
 }
@@ -288,7 +288,7 @@ pub(crate) fn lay(board: &mut Board, grid: &RouteGrid, path: &GridPath, sources:
     for piece in pieces {
         let id = board.insert(piece);
         laid.push(id);
-        if !check_item(board, id).is_empty() {
+        if !grid.violations(board, id).is_empty() {
             for id in laid {
                 board.remove(id);
             }

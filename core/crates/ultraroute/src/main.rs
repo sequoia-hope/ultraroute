@@ -10,12 +10,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use board::{connectivity, connectivity_without_pours, Board, Item, ItemId, Kind, Point, Shape};
+use board::{connectivity, connectivity_without_pours, Board, Item, ItemId, Kind, Nm, Point, Shape};
 use kicad_pcb::{apply, mm, Edit};
 use serde_json::{json, Value};
 
 const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--negotiate] [--rip-up] [--nudge] [--tighten] [--gpu] \
-[--timeout SECONDS] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
+[--timeout SECONDS] [--cell MM] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
 [--live PATH|-] [--live-fps N]";
 
 struct Args {
@@ -36,6 +36,8 @@ struct Args {
     fps: f64,
     no_route: bool,
     threads: Option<usize>,
+    /// Grid cell for every stage, in nanometres.
+    cell: Option<Nm>,
 }
 
 fn parse(args: &[String]) -> Result<Args, String> {
@@ -60,6 +62,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
         fps: 30.0,
         no_route: false,
         threads: None,
+        cell: None,
     };
     let mut it = args[1..].iter();
     while let Some(arg) = it.next() {
@@ -79,6 +82,13 @@ fn parse(args: &[String]) -> Result<Args, String> {
             "--pours-block" => a.pours_block = true,
             "--no-route" => a.no_route = true,
             "--threads" => a.threads = Some(value()?.parse().map_err(|e| format!("--threads: {e}"))?),
+            "--cell" => {
+                let mm: f64 = value()?.parse().map_err(|e| format!("--cell: {e}"))?;
+                if !(0.005..=1.0).contains(&mm) {
+                    return Err(format!("--cell: {mm} mm is outside 0.005 to 1 mm"));
+                }
+                a.cell = Some((mm * 1e6).round() as Nm);
+            }
             "--timeout" => a.timeout = Some(value()?.parse().map_err(|e| format!("--timeout: {e}"))?),
             "--live" => a.live = Some(value()?),
             "--live-fps" => a.fps = value()?.parse().map_err(|e| format!("--live-fps: {e}"))?,
@@ -245,7 +255,8 @@ impl Live {
         }
         self.last = Some(Instant::now());
         let mut runs: Vec<Value> = Vec::new();
-        for (net, corners) in trials {
+        let mut vias: Vec<Value> = Vec::new();
+        for (net, corners, collides) in trials {
             let mut k = 0;
             while k < corners.len() {
                 let layer = corners[k].0;
@@ -256,7 +267,11 @@ impl Live {
                     k += 1;
                 }
                 if points.len() >= 2 {
-                    runs.push(json!({"net": net, "layer": layer, "p": flat(&points)}));
+                    runs.push(json!({"net": net, "layer": layer, "p": flat(&points), "collides": collides}));
+                }
+                // The route changes layer where this run ends: a via, if it is laid.
+                if k < corners.len() {
+                    vias.push(json!(mm_xy(corners[k - 1].1)));
                 }
             }
         }
@@ -265,7 +280,7 @@ impl Live {
             "t": "frame", "seq": self.seq, "ms": self.started.elapsed().as_millis() as u64,
             "add": [], "del": [], "parts": [], "probes": [],
             "events": std::mem::take(&mut self.activity), "focus": self.focus,
-            "trial": runs,
+            "trial": runs, "trial_vias": vias,
         });
         self.write(&v);
     }
@@ -302,7 +317,7 @@ impl Live {
             "t": "frame", "seq": self.seq, "ms": self.started.elapsed().as_millis() as u64,
             "add": add, "del": del, "parts": parts, "probes": [],
             "events": events.into_iter().chain(std::mem::take(&mut self.activity)).collect::<Vec<_>>(), "focus": self.focus,
-            "open": air.len(), "air": air, "trial": [],
+            "open": air.len(), "air": air, "trial": [], "trial_vias": [],
         });
         self.write(&v);
     }
@@ -444,6 +459,7 @@ fn main() {
             &grid::NegotiationOptions {
                 max_seconds: a.timeout.map(|s| s / 2.0),
                 threads,
+                cell: a.cell.unwrap_or(grid::NegotiationOptions::default().cell),
                 pours_block: a.pours_block,
                 cancel: Some(cancel.clone()),
                 log: log.clone(),
@@ -467,6 +483,7 @@ fn main() {
         laid.extend(n.laid);
     }
     let options = grid::Options {
+        cell: a.cell.unwrap_or(grid::Options::default().cell),
         max_seconds: a.timeout.map(|s| (s - started.elapsed().as_secs_f64()).max(0.0)),
         pours_block: a.pours_block,
         cancel: Some(cancel.clone()),
@@ -481,6 +498,7 @@ fn main() {
             &mut board,
             solver.as_mut(),
             &grid::RipOptions {
+                cell: a.cell.unwrap_or(grid::RipOptions::default().cell),
                 max_seconds: a.timeout.map(|s| (s - started.elapsed().as_secs_f64()).max(0.0)),
                 pours_block: a.pours_block,
                 cancel: Some(cancel.clone()),
@@ -498,6 +516,7 @@ fn main() {
             &mut board,
             solver.as_mut(),
             &grid::NudgeOptions {
+                cell: a.cell.unwrap_or(grid::NudgeOptions::default().cell),
                 max_seconds: a.timeout.map(|s| (s - started.elapsed().as_secs_f64()).max(0.0)),
                 locked,
                 pours_block: a.pours_block,

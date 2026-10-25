@@ -62,6 +62,15 @@ pub struct RouteGrid {
     pub via_blocked: Vec<bool>,
     /// Per routing layer and cell: extra cost of entering it; empty for none.
     pub penalty: Vec<u32>,
+    /// Pours are planes to keep clear of, not copper refilled around the route.
+    pub pours_block: bool,
+}
+
+impl RouteGrid {
+    /// What the item breaks, as this grid's routes are judged.
+    pub fn violations(&self, board: &Board, id: ItemId) -> Vec<board::Violation> {
+        if self.pours_block { board::check_item_with_pours(board, id) } else { board::check_item(board, id) }
+    }
 }
 
 impl RouteGrid {
@@ -313,6 +322,23 @@ impl ObstacleMap {
     }
 
     /// The grid a net sees: a cell is blocked unless nothing claims it or only this net does.
+    /// `grid` made over as this map's view for `net`, keeping its buffers.
+    pub fn view_into(&self, net: u32, grid: &mut RouteGrid) {
+        let free = |o: i32| o == FREE || o == net as i32;
+        grid.net = net;
+        (grid.x0, grid.y0, grid.h, grid.nx, grid.ny) = (self.x0, self.y0, self.h, self.nx, self.ny);
+        grid.layers.clear();
+        grid.layers.extend(0..self.layers);
+        grid.half_width = self.profile.half_width;
+        grid.via = Some(ViaSpec { radius: self.profile.via_radius, drill_radius: self.profile.drill_radius });
+        grid.blocked.clear();
+        grid.blocked.extend(self.owner.iter().map(|&o| !free(o)));
+        grid.via_blocked.clear();
+        grid.via_blocked.extend(self.via_owner.iter().map(|&o| !free(o)));
+        grid.penalty.clear();
+        grid.pours_block = self.pours_block;
+    }
+
     pub fn view(&self, net: u32) -> RouteGrid {
         let free = |o: i32| o == FREE || o == net as i32;
         RouteGrid {
@@ -328,6 +354,7 @@ impl ObstacleMap {
             blocked: self.owner.iter().map(|&o| !free(o)).collect(),
             via_blocked: self.via_owner.iter().map(|&o| !free(o)).collect(),
             penalty: Vec::new(),
+            pours_block: self.pours_block,
         }
     }
 }
