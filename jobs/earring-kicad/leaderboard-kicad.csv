@@ -1,10 +1,12 @@
 name,router,unconnected,new_errors,vias,length_mm,wall_s,exit,args,env,finished_at
 core-full-cell0025,ultraroute,6,0,334,1154.7,110.7,0,--negotiate --rip-up --tighten --timeout 600 --cell 0.025,{},2026-10-24T19:51:52
+core-c0025-nudge-guided,ultraroute,6,0,334,1154.7,120.4,0,--negotiate --rip-up --tighten --timeout 900 --cell 0.025 --nudge-guided,{},2026-10-24T22:59:11
 core-c0025-nudge-flow,ultraroute,6,0,335,1158.6,900.8,0,--negotiate --rip-up --tighten --timeout 900 --cell 0.025 --nudge,{},2026-10-24T21:23:11
 core-full-cell003,ultraroute,7,0,318,1123.6,64.1,0,--negotiate --rip-up --tighten --timeout 600 --cell 0.03,{},2026-10-24T19:49:59
 core-full-cell004,ultraroute,7,0,324,1220.8,36.9,0,--negotiate --rip-up --tighten --timeout 600 --cell 0.04,{},2026-10-24T19:48:53
-core-c0025-escape-U1,ultraroute,7,0,359,1410.9,139.7,0,--negotiate --rip-up --tighten --timeout 900 --cell 0.025 --escape U1,{},2026-10-24T21:40:35
 core-c0025-warp-pushU1-r3-o01,ultraroute,8,0,332,1169.4,114.8,0,"--negotiate --rip-up --tighten --timeout 900 --cell 0.025 --push 100,-99.5,3,0.1",{},2026-10-24T21:25:08
+core-c0025-escape-U1,ultraroute,9,0,348,1348.6,144.0,0,--negotiate --rip-up --tighten --timeout 900 --cell 0.025 --escape U1,{},2026-10-24T22:52:58
 core-full,ultraroute,11,0,334,1247.0,34.4,0,--negotiate --rip-up --tighten --timeout 600,{},2026-10-24T19:36:39
 core-c0025-warp-pushU1-r4-o02,ultraroute,11,0,335,1217.8,117.7,0,"--negotiate --rip-up --tighten --timeout 900 --cell 0.025 --push 100,-99.5,4,0.2",{},2026-10-24T21:27:07
-core-c0025-escape-auto,ultraroute,14,0,353,1454.6,205.0,0,--negotiate --rip-up --tighten --timeout 900 --cell 0.025 --escape auto,{},2026-10-24T21:44:02
+core-c0025-escape-auto,ultraroute,14,0,361,1519.1,248.6,0,--negotiate --rip-up --tighten --timeout 900 --cell 0.025 --escape auto,{},2026-10-24T22:57:09
+core-c0025-escape-auto-nudge-guided,ultraroute,14,0,361,1519.1,251.9,0,--negotiate --rip-up --tighten --timeout 900 --cell 0.025 --escape auto --nudge-guided,{},2026-10-24T23:03:25

@@ -182,7 +182,7 @@ fn try_step(
     let snapshot = board.clone();
     let soft_before = soft.clone();
     let reference = board.footprints[footprint].reference.clone();
-    tell(&options.log, "nudging", || format!("{reference}: trying {:+.2}, {:+.2} mm for {why}", by.x as f64 * 1e-6, -by.y as f64 * 1e-6), Some(Focus::Part(footprint)));
+    tell(&options.log, "nudging", || format!("{reference}: trying {:+.2}, {:+.2} mm for {why}", by.x as f64 * 1e-6, -by.y as f64 * 1e-6), Some(Focus::Trial { part: footprint, by }));
     let field = Field { center: centre(board, footprint), outward: 0.0, vector: (by.x as f64, by.y as f64), radius: reach_of(board, footprint), decay: 2.0 };
     let only = Some(HashSet::from([footprint]));
     let pushed = push(board, &field, &PushOptions { steps: 1, locked: options.locked.clone(), only, pours_block: options.pours_block, log: None }, soft, &mut |_| {});
@@ -210,7 +210,7 @@ fn try_step(
     soft.retain(|id| board.item(*id).is_some());
     soft.extend(again.laid);
     stats.kept += 1;
-    tell(&options.log, "nudging", || format!("{reference}: moved, {} connections open", open_count(board, options.pours_block)), None);
+    tell(&options.log, "nudging", || format!("{reference}: moved, {} connections open", open_count(board, options.pours_block)), Some(Focus::Part(footprint)));
     stats.ripped_spans.extend(pushed.removed_spans);
     match stats.moved.iter_mut().find(|(f, _)| *f == footprint) {
         Some((_, total)) => *total = Point::new(total.x + by.x, total.y + by.y),

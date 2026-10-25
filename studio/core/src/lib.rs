@@ -10,6 +10,8 @@ pub mod wasm;
 
 const FOCUS: Rgba = [1.0, 1.0, 1.0, 1.0];
 const COLLIDING: Rgba = [1.0, 0.55, 0.12, 0.95];
+/// A part being tried somewhere by the nudger, before the move is judged.
+const GHOST: Rgba = [0.55, 0.85, 1.0, 0.9];
 const TRIAL_VIA: Rgba = [1.0, 1.0, 1.0, 0.75];
 /// Drawn size of a via a negotiated route would need, in millimetres.
 const TRIAL_VIA_MM: f32 = 0.2;
@@ -114,7 +116,8 @@ pub struct Trial {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Focus {
     Connection { phase: String, net: i32, a: [f32; 2], b: [f32; 2] },
-    Part { phase: String, part: i32 },
+    /// A part in hand; `ghost`, where it is being tried, as an offset from where it stands.
+    Part { phase: String, part: i32, ghost: Option<[f32; 2]> },
 }
 
 impl Focus {
@@ -322,7 +325,8 @@ impl Scene {
                 if let Some(f) = v.get("focus").filter(|f| f.is_object()) {
                     let phase = f["phase"].as_str().unwrap_or("").to_string();
                     self.focus = if let Some(part) = f["part"].as_i64() {
-                        Some(Focus::Part { phase, part: part as i32 })
+                        let ghost = floats(&f["ghost"]);
+                        Some(Focus::Part { phase, part: part as i32, ghost: (ghost.len() == 2).then(|| [ghost[0], ghost[1]]) })
                     } else {
                         let (a, b) = (floats(&f["a"]), floats(&f["b"]));
                         (a.len() == 2 && b.len() == 2).then(|| Focus::Connection {
@@ -611,15 +615,42 @@ impl Scene {
                     m.ring(&circle_points(*end, px * (7.0 + 4.0 * pulse)), px * 1.4, with_alpha(FOCUS, pulse));
                 }
             }
-            Some(Focus::Part { part, .. }) => {
+            Some(Focus::Part { part, ghost, .. }) => {
                 if let Some(b) = self.part_box(*part) {
                     let e = px * (4.0 + 4.0 * pulse);
                     m.ring(&[b[0] - e, b[1] - e, b[2] + e, b[1] - e, b[2] + e, b[3] + e, b[0] - e, b[3] + e], px * 2.0, with_alpha(FOCUS, pulse));
+                    if let Some(g) = ghost {
+                        self.draw_ghost(&mut m, *part, *g, b, px);
+                    }
                 }
             }
             None => {}
         }
         m.v
+    }
+
+    /// A part where it is being tried: its pads outlined `by` from where it stands, a dashed box
+    /// round them, and a dashed line from where it stands to there.
+    fn draw_ghost(&self, m: &mut Mesh, part: i32, by: [f32; 2], from: [f32; 4], px: f32) {
+        let o = self.offset(part);
+        let (dx, dy) = (o[0] + by[0], o[1] + by[1]);
+        for item in self.items.values().filter(|i| i.part() == part) {
+            let Geom::Pin { pads, .. } = &item.geom else { continue };
+            for (_, p) in pads {
+                match p {
+                    Prim::Circle([x, y, r]) => m.ring(&circle_points([x + dx, y + dy], *r), px * 1.2, GHOST),
+                    Prim::Poly(g) => {
+                        let moved: Vec<f32> = g.chunks_exact(2).flat_map(|c| [c[0] + dx, c[1] + dy]).collect();
+                        m.ring(&moved, px * 1.2, GHOST);
+                    }
+                }
+            }
+        }
+        let e = px * 4.0;
+        let b = [from[0] + by[0] - e, from[1] + by[1] - e, from[2] + by[0] + e, from[3] + by[1] + e];
+        m.dashed_polyline(&[b[0], b[1], b[2], b[1], b[2], b[3], b[0], b[3], b[0], b[1]], px * 1.0, px * 4.0, GHOST);
+        let c = [(from[0] + from[2]) / 2.0, (from[1] + from[3]) / 2.0];
+        m.dashed_polyline(&[c[0], c[1], c[0] + by[0], c[1] + by[1]], px * 1.0, px * 3.0, GHOST);
     }
 
     /// The part's extent with its drag offset, as x0, y0, x1, y1.
@@ -1164,6 +1195,23 @@ mod tests {
         s.apply(BOARD);
         s.bbox = [f32::NAN, 0.0, f32::INFINITY, 1.0];
         assert_eq!((s.congestion().cols, s.congestion().rows), (1, 1));
+    }
+
+    #[test]
+    fn a_part_being_tried_is_drawn_as_a_ghost_where_it_would_go() {
+        let focus = |ghost: &str| {
+            let mut s = Scene::default();
+            s.apply(BOARD);
+            s.apply(&frame(PIN, ""));
+            s.apply(&format!(r#"{{"t":"frame","seq":2,"ms":9,"add":[],"del":[],"parts":[],"probes":[],"events":[],"focus":{{"phase":"nudging","part":7{ghost}}}}}"#));
+            s
+        };
+        let tried = focus(r#","ghost":[0.5,-0.25]"#);
+        assert_eq!(tried.focus, Some(Focus::Part { phase: "nudging".into(), part: 7, ghost: Some([0.5, -0.25]) }));
+        let held = focus("");
+        assert!(tried.mesh(0.01).len() > held.mesh(0.01).len(), "the ghost adds outlines");
+        // Once the move is decided the part is in hand without a ghost.
+        assert_eq!(held.focus, Some(Focus::Part { phase: "nudging".into(), part: 7, ghost: None }));
     }
 
     #[test]

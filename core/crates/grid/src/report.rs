@@ -9,6 +9,8 @@ use board::{Board, ItemId, Kind, Point};
 pub enum Focus {
     Connection { net: u32, from: Point, to: Point },
     Part(usize),
+    /// A part being tried `by` this far from where it stands, before the move is judged.
+    Trial { part: usize, by: Point },
 }
 
 #[derive(Debug, Clone, PartialEq)]

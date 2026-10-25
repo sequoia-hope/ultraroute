@@ -125,8 +125,8 @@ leans on copperroute's push-and-shove (a freerouting port) and is rewritten fres
       `--push`). Nudge steps push instead of ripping.
 - [ ] copper-morph: warp field (CG), relax, reshape, move oracle and settle driver, diffusion
       placement, morph frames.
-- [ ] copper-topo: the topological router (world, funnel).
-- [ ] copper-gpu's blame (who blocks an open connection); the rest is already in the core.
+- [x] copper-topo: the topological router (world, funnel), as `topo` (`--topo`).
+- [x] copper-gpu's blame (who blocks an open connection), as `grid::blame` (`--blame`); the rest was already in the core.
 - [ ] ultraroute commands for settle, reshape, band, blame and frames.
 - [ ] Our crates removed from the fork once each port matches it on the tests.
 

@@ -4,6 +4,6 @@ pub mod escape;
 pub mod flow;
 pub mod warp;
 
-pub use escape::{comb, fine_pitch, EscapeOptions, EscapeStats};
+pub use escape::{clear_lane, comb, fine_pitch, EscapeOptions, EscapeStats};
 pub use flow::{flow, FlowStats};
 pub use warp::WarpField;

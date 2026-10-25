@@ -116,37 +116,9 @@ pub fn comb(board: &mut Board, footprint: usize, options: &EscapeOptions, soft: 
     }
     let zone = options.zone as f64;
     let full = zone * options.full.clamp(0.0, 1.0);
-    // A point stays put when copper there could touch a pad, on any layer: every piece meeting
-    // at a point must get the same answer, whatever its own width or layers.
-    let reach = board.items().filter_map(|(_, it)| match (&it.kind, &it.shape) {
-        (Kind::Track | Kind::Via, Shape::Capsule { r, .. }) => Some(*r),
-        _ => None,
-    }).max().unwrap_or(0);
-    let pads: Vec<Shape> = board.items().filter(|(_, it)| matches!(it.kind, Kind::Pad { .. })).map(|(_, it)| it.shape.clone()).collect();
-    let locked: Vec<(Shape, u32)> =
-        board.items().filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via) && it.locked).map(|(_, it)| (it.shape.clone(), it.net)).collect();
-    let touches = |s: &Shape, p: Point| {
-        let dot = Shape::Capsule { a: p, b: p, r: reach };
-        s.bbox().grow(reach).overlaps(BBox::of([p])) && s.gap(&dot) == 0.0
-    };
-    // Points fastened to something that stays: any pad, or locked copper of their own net.
-    let held = |p: Point, net: u32| pads.iter().any(|s| touches(s, p)) || locked.iter().any(|(s, n)| *n == net && touches(s, p));
-    // A free via moves as one piece: copper ending anywhere inside it follows its centre.
-    let vias: Vec<(Point, Nm, u32)> = board
-        .items()
-        .filter_map(|(_, it)| match (&it.kind, &it.shape) {
-            (Kind::Via, Shape::Capsule { a, r, .. }) if !it.locked => Some((*a, *r, it.net)),
-            _ => None,
-        })
-        .collect();
-    let via_at = |p: Point, net: u32| vias.iter().find(|(c, r, n)| *n == net && c.distance(p) <= *r as f64).map(|(c, _, _)| *c);
     // The move of a point of `net`'s copper: onto its nearest lane on an edge whose zone holds
     // it, or out of a zone where it has no lane. The nearest edge wins where zones overlap.
-    let shift = |p: Point, net: u32| -> Option<(Point, bool)> {
-        let p = via_at(p, net).unwrap_or(p);
-        if held(p, net) {
-            return None;
-        }
+    let rule = |p: Point, net: u32| -> Option<(Point, bool)> {
         let e = edges
             .iter()
             .filter(|e| {
@@ -169,6 +141,79 @@ pub fn comb(board: &mut Board, footprint: usize, options: &EscapeOptions, soft: 
             }
         }
     };
+    let (own, foreign, spans) = move_copper(board, soft, &rule);
+    (stats.combed, stats.pushed_out, stats.removed_spans) = (own, foreign, spans);
+    stats
+}
+
+/// Clears the lane of one pad of a fine-pitch part: other nets' copper within half a pitch of
+/// the line straight out from the pad, across the fanout zone, slides sideways to the nearer
+/// side of that corridor, fully near the package and fading to nothing at the zone's edge. The
+/// pad's own net and everything outside the corridor stay where they are. How many pieces moved.
+pub fn clear_lane(board: &mut Board, footprint: usize, pad: ItemId, options: &EscapeOptions, soft: &mut Vec<ItemId>) -> (usize, Vec<Span>) {
+    let Some(p) = board.item(pad) else { return (0, Vec::new()) };
+    let net = p.net;
+    let bb = p.shape.bbox();
+    let c = Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2);
+    let edges = edges(board, footprint);
+    let Some(e) = edges.iter().filter(|e| e.lanes.get(&net).is_some_and(|l| l.iter().any(|t| (t - e.lateral(c)).abs() < 1.0))).min_by(|a, b| (-a.depth(c)).total_cmp(&-b.depth(c))) else {
+        return (0, Vec::new());
+    };
+    let lane = e.lateral(c);
+    // Half the distance to the nearest other lane on the edge, so neighbouring escapes stay put.
+    let pitch = e.lanes.values().flatten().filter(|t| (*t - lane).abs() > 1.0).map(|t| (t - lane).abs()).fold(f64::INFINITY, f64::min);
+    let half = if pitch.is_finite() { pitch / 2.0 } else { 200_000.0 };
+    let (zone, full) = (options.zone as f64, options.zone as f64 * options.full.clamp(0.0, 1.0));
+    let rule = |p: Point, n: u32| -> Option<(Point, bool)> {
+        let (d, t) = (e.depth(p), e.lateral(p) - lane);
+        if n == net || d < 0.0 || d > zone || t.abs() >= half {
+            return None;
+        }
+        let w = if d <= full { 1.0 } else { ((zone - d) / (zone - full).max(1.0)).clamp(0.0, 1.0) };
+        let side = if t >= 0.0 { 1.0 } else { -1.0 };
+        let by = side * (half - t.abs()) * w;
+        Some((Point::new((e.along.0 * by).round() as i64, (e.along.1 * by).round() as i64), false))
+    };
+    let (_, moved, spans) = move_copper(board, soft, &rule);
+    (moved, spans)
+}
+
+/// Moves every unlocked track and via by `rule`, a point at a time, without breaking it: a point
+/// touching a pad or locked copper of its net stays put, and copper ending inside a free via
+/// moves as the via's centre does, so every piece meeting at a point gets the same move. Pieces
+/// are cut short so copper bends. Counts the pieces moved by the rule's two kinds of move, and
+/// returns the board file's spans of what moved.
+fn move_copper(board: &mut Board, soft: &mut Vec<ItemId>, rule: &dyn Fn(Point, u32) -> Option<(Point, bool)>) -> (usize, usize, Vec<Span>) {
+    // A point stays put when copper there could touch a pad, on any layer: every piece meeting
+    // at a point must get the same answer, whatever its own width or layers.
+    let reach = board
+        .items()
+        .filter_map(|(_, it)| match (&it.kind, &it.shape) {
+            (Kind::Track | Kind::Via, Shape::Capsule { r, .. }) => Some(*r),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0);
+    let pads: Vec<Shape> = board.items().filter(|(_, it)| matches!(it.kind, Kind::Pad { .. })).map(|(_, it)| it.shape.clone()).collect();
+    let locked: Vec<(Shape, u32)> =
+        board.items().filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via) && it.locked).map(|(_, it)| (it.shape.clone(), it.net)).collect();
+    let touches = |s: &Shape, p: Point| {
+        let dot = Shape::Capsule { a: p, b: p, r: reach };
+        s.bbox().grow(reach).overlaps(BBox::of([p])) && s.gap(&dot) == 0.0
+    };
+    let held = |p: Point, net: u32| pads.iter().any(|s| touches(s, p)) || locked.iter().any(|(s, n)| *n == net && touches(s, p));
+    let vias: Vec<(Point, Nm, u32)> = board
+        .items()
+        .filter_map(|(_, it)| match (&it.kind, &it.shape) {
+            (Kind::Via, Shape::Capsule { a, r, .. }) if !it.locked => Some((*a, *r, it.net)),
+            _ => None,
+        })
+        .collect();
+    let via_at = |p: Point, net: u32| vias.iter().find(|(c, r, n)| *n == net && c.distance(p) <= *r as f64).map(|(c, _, _)| *c);
+    let shift = |p: Point, net: u32| {
+        let p = via_at(p, net).unwrap_or(p);
+        if held(p, net) { None } else { rule(p, net) }
+    };
     let junctions = junctions(board);
     let mut ids: Vec<ItemId> = board.items().filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked).map(|(id, _)| id).collect();
     ids.sort_unstable();
@@ -177,32 +222,33 @@ pub fn comb(board: &mut Board, footprint: usize, options: &EscapeOptions, soft: 
         let Some(it) = board.item(id) else { continue };
         let Shape::Capsule { a, b, .. } = it.shape else { continue };
         let points = if a == b { vec![a] } else { cut(a, b, junctions.get(&layer_of(it)).map_or(&[][..], Vec::as_slice), PIECE) };
-        let mut own = false;
+        let mut first_kind = false;
         let mut moved = false;
         let to: Vec<Point> = points
             .iter()
             .map(|&p| match shift(p, it.net) {
-                Some((by, lane)) if by != Point::new(0, 0) => {
+                Some((by, kind)) if by != Point::new(0, 0) => {
                     moved = true;
-                    own |= lane;
+                    first_kind |= kind;
                     Point::new(p.x + by.x, p.y + by.y)
                 }
                 _ => p,
             })
             .collect();
         if moved {
-            plan.push((id, to, own));
+            plan.push((id, to, first_kind));
         }
     }
-    for (id, to, own) in plan {
+    let (mut first, mut second, mut spans) = (0, 0, Vec::new());
+    for (id, to, kind) in plan {
         let Some(mut item) = board.remove(id) else { continue };
         if let Some(span) = item.span.take() {
-            stats.removed_spans.push(span);
+            spans.push(span);
         }
-        if own {
-            stats.combed += 1;
+        if kind {
+            first += 1;
         } else {
-            stats.pushed_out += 1;
+            second += 1;
         }
         soft.retain(|s| *s != id);
         let Shape::Capsule { r, .. } = item.shape else { continue };
@@ -217,7 +263,7 @@ pub fn comb(board: &mut Board, footprint: usize, options: &EscapeOptions, soft: 
             }
         }
     }
-    stats
+    (first, second, spans)
 }
 
 /// Footprints whose closest pads of different nets sit no further apart than `pitch`, centre to
@@ -232,7 +278,8 @@ pub fn fine_pitch(board: &Board, pitch: Nm) -> Vec<usize> {
     }
     let mut out: Vec<usize> = centres
         .into_iter()
-        .filter(|(_, pads)| pads.len() >= 8)
+        // Chip-scale parts count too: a four-ball load switch at 0.4 mm escapes as hard as a QFN.
+        .filter(|(_, pads)| pads.len() >= 4)
         .filter(|(_, pads)| {
             pads.iter().enumerate().any(|(i, (p, n))| pads[i + 1..].iter().any(|(q, m)| m != n && p.distance(*q) <= pitch as f64))
         })

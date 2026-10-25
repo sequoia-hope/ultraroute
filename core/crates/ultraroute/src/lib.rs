@@ -9,7 +9,7 @@
 //! newline-delimited JSON frames, and a line `stop` on standard input stops the run. With
 //! `--blame`, every connection still open at the end is listed with what stands in its way.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -24,8 +24,8 @@ use board::{connectivity, connectivity_without_pours, Board, Item, ItemId, Kind,
 use kicad_pcb::{apply, mm, Edit};
 use serde_json::{json, Value};
 
-pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--topo] [--negotiate] [--rip-up] [--nudge] [--tighten] [--gpu] \
-[--timeout SECONDS] [--cell MM] [--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--escape REF,...|auto] [--escape-zone MM] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
+pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--gpu] \
+[--timeout SECONDS] [--cell MM] [--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
 [--live PATH|-] [--live-fps N] [--blame]";
 
 pub struct Args {
@@ -38,6 +38,8 @@ pub struct Args {
     pub rip_up: bool,
     pub tighten: bool,
     pub nudge: bool,
+    /// Nudge only by blame's moves, without trying small steps in every direction.
+    pub nudge_guided: bool,
     pub lock: Vec<String>,
     pub gpu: bool,
     pub pours_block: bool,
@@ -56,6 +58,8 @@ pub struct Args {
     /// Parts whose escapes are combed into lanes after routing, or "auto" for fine-pitch ones.
     pub escape: Vec<String>,
     pub escape_zone: Option<f64>,
+    /// Clear the lane of every fine-pitch pad an open connection ends on, keeping what helps.
+    pub clear_lanes: bool,
     pub blame: bool,
 }
 
@@ -73,6 +77,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         rip_up: false,
         tighten: false,
         nudge: false,
+        nudge_guided: false,
         lock: Vec::new(),
         gpu: false,
         pours_block: false,
@@ -87,6 +92,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         push_steps: 20,
         escape: Vec::new(),
         escape_zone: None,
+        clear_lanes: false,
         blame: false,
     };
     let mut it = args[1..].iter();
@@ -120,6 +126,10 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             "--live-fps" => a.fps = value()?.parse().map_err(|e| format!("--live-fps: {e}"))?,
             "--lock" => a.lock.extend(value()?.split(',').filter(|r| !r.is_empty()).map(str::to_string)),
             "--nudge" => a.nudge = true,
+            "--nudge-guided" => {
+                a.nudge = true;
+                a.nudge_guided = true;
+            }
             "--push" => {
                 let v = value()?;
                 let n: Vec<f64> = v.split(',').map(|s| s.trim().parse::<f64>()).collect::<Result<_, _>>().map_err(|e| format!("--push {v}: {e}"))?;
@@ -129,6 +139,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                 a.push = Some([n[0], n[1], n[2], n[3], n.get(4).copied().unwrap_or(0.0), n.get(5).copied().unwrap_or(0.0)]);
             }
             "--escape" => a.escape.extend(value()?.split(',').filter(|r| !r.is_empty()).map(str::to_string)),
+            "--clear-lanes" => a.clear_lanes = true,
             "--escape-zone" => a.escape_zone = Some(value()?.parse().map_err(|e| format!("--escape-zone: {e}"))?),
             "--push-steps" => a.push_steps = value()?.parse().map_err(|e| format!("--push-steps: {e}"))?,
             "--blame" => a.blame = true,
@@ -252,6 +263,10 @@ impl Live {
                 self.focus = json!({"phase": act.phase, "net": net, "a": mm_xy(from), "b": mm_xy(to)});
             }
             Some(grid::Focus::Part(f)) => self.focus = json!({"phase": act.phase, "part": f + 1}),
+            // Board Y runs down, the studio's up.
+            Some(grid::Focus::Trial { part, by }) => {
+                self.focus = json!({"phase": act.phase, "part": part + 1, "ghost": [round(by.x as f64 * 1e-6), round(-by.y as f64 * 1e-6)]});
+            }
             None => {
                 if let Some(focus) = self.focus.as_object_mut() {
                     focus.insert("phase".into(), json!(act.phase));
@@ -639,6 +654,7 @@ pub fn run(a: &Args, mut board: Board, text: &str, mut live: Option<Live>, cance
         };
         let opts = morph::EscapeOptions { zone: a.escape_zone.map_or(morph::EscapeOptions::default().zone, |mm| (mm * 1e6).round() as Nm), ..Default::default() };
         let before = if a.pours_block { connectivity(&board) } else { connectivity_without_pours(&board) }.airlines.len();
+        let kept = (board.clone(), laid.clone(), removed.len());
         for &f in &parts {
             let e = morph::comb(&mut board, f, &opts, &mut laid);
             removed.extend(e.removed_spans.iter().copied());
@@ -668,7 +684,54 @@ pub fn run(a: &Args, mut board: Board, text: &str, mut live: Option<Live>, cance
             );
         }
         let after = if a.pours_block { connectivity(&board) } else { connectivity_without_pours(&board) }.airlines.len();
-        eprintln!("escape: {before} open before combing, {after} after rerouting, {:.1} s", started.elapsed().as_secs_f64());
+        eprintln!("escape: {before} open before combing, {after} after rerouting{}, {:.1} s", if after < before { "" } else { ", undone" }, started.elapsed().as_secs_f64());
+        if after >= before {
+            (board, laid) = (kept.0, kept.1);
+            removed.truncate(kept.2);
+            watch(&board);
+        }
+    }
+    if a.clear_lanes {
+        let open_now = |b: &Board| if a.pours_block { connectivity(b) } else { connectivity_without_pours(b) }.airlines;
+        let fine = morph::fine_pitch(&board, 500_000);
+        let opts = morph::EscapeOptions { zone: a.escape_zone.map_or(morph::EscapeOptions::default().zone, |mm| (mm * 1e6).round() as Nm), ..Default::default() };
+        let (mut tried, mut kept_count) = (0, 0);
+        let mut done: HashSet<ItemId> = HashSet::new();
+        loop {
+            let open = open_now(&board);
+            // Pads on fine-pitch parts that an open connection ends on, not yet tried.
+            let pad = open.iter().flat_map(|c| [c.from_item, c.to_item]).find(|id| {
+                !done.contains(id) && board.item(*id).is_some_and(|it| matches!(it.kind, Kind::Pad { footprint, .. } if fine.contains(&footprint)))
+            });
+            let Some(pad) = pad else { break };
+            if cancel.load(Ordering::Relaxed) || a.timeout.is_some_and(|t| started.elapsed().as_secs_f64() > t) {
+                break;
+            }
+            done.insert(pad);
+            let Some(Kind::Pad { footprint, number, .. }) = board.item(pad).map(|it| it.kind.clone()) else { continue };
+            tried += 1;
+            let before = open.len();
+            let snapshot = (board.clone(), laid.clone(), removed.len());
+            let (moved, spans) = morph::clear_lane(&mut board, footprint, pad, &opts, &mut laid);
+            removed.extend(spans);
+            let (ripped, spans) = grid::rip_broken(&mut board, &mut laid, a.pours_block);
+            removed.extend(spans);
+            let reroute = grid::Options { max_seconds: Some(20.0), ..options.clone() };
+            let again = grid::route_open(&mut board, solver.as_mut(), &reroute, &mut |_| {});
+            laid.extend(again.laid.iter().copied());
+            let after = open_now(&board).len();
+            let reference = board.footprints[footprint].reference.clone();
+            if after < before {
+                kept_count += 1;
+                say("clearing lanes", format!("{reference}-{number}: {moved} pieces slid aside, {ripped} ripped, {after} open"));
+                watch(&board);
+            } else {
+                (board, laid) = (snapshot.0, snapshot.1);
+                removed.truncate(snapshot.2);
+                say("clearing lanes", format!("{reference}-{number}: no better, undone"));
+            }
+        }
+        eprintln!("clear lanes: {tried} tried, {kept_count} kept, {} open, {:.1} s", open_now(&board).len(), started.elapsed().as_secs_f64());
     }
     if a.nudge {
         let locked = board.footprints.iter().enumerate().filter(|(_, f)| f.locked).map(|(i, _)| i).collect();
@@ -677,6 +740,7 @@ pub fn run(a: &Args, mut board: Board, text: &str, mut live: Option<Live>, cance
             solver.as_mut(),
             &grid::NudgeOptions {
                 cell: a.cell.unwrap_or(grid::NudgeOptions::default().cell),
+                blind: !a.nudge_guided,
                 max_seconds: a.timeout.map(|s| (s - started.elapsed().as_secs_f64()).max(0.0)),
                 locked,
                 pours_block: a.pours_block,

@@ -30,7 +30,21 @@
   ]
  },
  {
-  "name": "core-c0025-escape-U1-z15",
+  "name": "core-c0025-nudge-guided",
+  "router": "ultraroute",
+  "args": [
+   "--negotiate",
+   "--rip-up",
+   "--tighten",
+   "--timeout",
+   "900",
+   "--cell",
+   "0.025",
+   "--nudge-guided"
+  ]
+ },
+ {
+  "name": "core-c0025-escape-auto-nudge-guided",
   "router": "ultraroute",
   "args": [
    "--negotiate",
@@ -41,9 +55,8 @@
    "--cell",
    "0.025",
    "--escape",
-   "U1",
-   "--escape-zone",
-   "1.5"
+   "auto",
+   "--nudge-guided"
   ]
  }
 ]
