@@ -99,7 +99,7 @@
     { key: 'core', label: 'Core', title: 'The MIT core router, on the KiCad board itself: grid routing with negotiated congestion' },
   ];
   let ripUp = $state(true);
-  let moveParts = $state(false);
+  let moveParts = $state(true);
   let viewMode = $state('all');
   let flipped = $state(false);
   let highContrast = $state(false);
@@ -952,7 +952,14 @@
       </div>
     {/if}
     <div class="phone-bar">
-      <button class="sheet-toggle" onclick={() => (sheetOpen = !sheetOpen)} aria-expanded={sheetOpen}>{sheetOpen ? 'Hide controls' : 'Controls'}{#if status?.open != null} · {status.open} open{/if}</button>
+      {#if !STATIC}
+        {#if running}
+          <button onclick={stop}>Stop</button>
+        {:else}
+          <button class="primary" onclick={() => route({ continue: keepGoing })} disabled={!connected}>Route</button>
+        {/if}
+      {/if}
+      <button class="sheet-toggle" onclick={() => (sheetOpen = !sheetOpen)} aria-expanded={sheetOpen}>{sheetOpen ? 'Hide controls' : 'Controls'}{#if status?.open != null}{' · '}{status.open} open{/if}</button>
       {#if canFullscreen}<button onclick={toggleFullscreen} title="Full screen">{fullscreen ? 'Exit full screen' : 'Full screen'}</button>{/if}
     </div>
   </div>
