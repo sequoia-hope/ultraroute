@@ -1,2 +1,5 @@
 name,router,unconnected,new_errors,vias,length_mm,wall_s,exit,args,env,finished_at
+core-full-cell0025,ultraroute,6,0,334,1154.7,110.7,0,--negotiate --rip-up --tighten --timeout 600 --cell 0.025,{},2026-10-24T19:51:52
+core-full-cell003,ultraroute,7,0,318,1123.6,64.1,0,--negotiate --rip-up --tighten --timeout 600 --cell 0.03,{},2026-10-24T19:49:59
+core-full-cell004,ultraroute,7,0,324,1220.8,36.9,0,--negotiate --rip-up --tighten --timeout 600 --cell 0.04,{},2026-10-24T19:48:53
 core-full,ultraroute,11,0,334,1247.0,34.4,0,--negotiate --rip-up --tighten --timeout 600,{},2026-10-24T19:36:39

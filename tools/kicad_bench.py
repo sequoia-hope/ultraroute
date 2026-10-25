@@ -24,7 +24,8 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-ULTRAROUTE = ROOT / "core" / "target" / "release" / "ultraroute"
+# ULTRAROUTE_BIN points at another build, so experiments need not rebuild the one a job is using.
+ULTRAROUTE = Path(os.environ.get("ULTRAROUTE_BIN", ROOT / "core" / "target" / "release" / "ultraroute"))
 COPPERROUTE = ROOT / "target-topo" / "release" / "copperroute"
 FIELDS = ["name", "router", "unconnected", "new_errors", "vias", "length_mm", "wall_s", "exit", "args", "env", "finished_at"]
 # Violations that are not about routing, or that KiCad rates as warnings on these boards.

@@ -112,6 +112,24 @@ with WebGPU) under MIT. Estimate ~15k lines:
 - [ ] copperroute kept as the reference router across the process boundary until the core
       matches it on the leaderboards.
 
+## Phase 2d — Our code out of the copperroute fork
+
+Everything we wrote lives in ultraroute under MIT; the `governance` fork keeps only patches to
+copperroute's own files, as the reference router across the process boundary. Our crates there
+(`copper-morph`, `copper-gpu`, `copper-topo`, ~7.7k lines) are built on copperroute's GPL data
+model, so they move by being re-targeted onto the core's `board` crate, not copied. `shove.rs`
+leans on copperroute's push-and-shove (a freerouting port) and is rewritten fresh.
+
+- [x] Push field (the dipole, done our way): parts and copper flow together, only locked things
+      stay, copper ripped only where pushed into something that cannot move (`grid::push`,
+      `--push`). Nudge steps push instead of ripping.
+- [ ] copper-morph: warp field (CG), relax, reshape, move oracle and settle driver, diffusion
+      placement, morph frames.
+- [ ] copper-topo: the topological router (world, funnel).
+- [ ] copper-gpu's blame (who blocks an open connection); the rest is already in the core.
+- [ ] ultraroute commands for settle, reshape, band, blame and frames.
+- [ ] Our crates removed from the fork once each port matches it on the tests.
+
 ## Phase 3 — The test suite as a library
 
 The route-job bench becomes a package other projects import: boards, configs, governed runs,

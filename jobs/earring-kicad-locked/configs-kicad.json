@@ -23,17 +23,5 @@
    "--timeout",
    "600"
   ]
- },
- {
-  "name": "core-full-pours-block",
-  "router": "ultraroute",
-  "args": [
-   "--negotiate",
-   "--rip-up",
-   "--tighten",
-   "--pours-block",
-   "--timeout",
-   "600"
-  ]
  }
 ]

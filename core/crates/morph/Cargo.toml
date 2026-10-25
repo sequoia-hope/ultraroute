@@ -1,0 +1,12 @@
+[package]
+name = "morph"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+# Moving parts on a routed board and letting the copper flow with them: a harmonic warp field
+# with rigid inclusions, and the passes built on it.
+
+[dependencies]
+board = { path = "../board" }
+kicad-pcb = { path = "../kicad-pcb" }

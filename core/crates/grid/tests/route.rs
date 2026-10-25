@@ -174,3 +174,80 @@ fn a_board_with_nothing_open_routes_nothing() {
     assert_eq!(b.items().count(), items);
 }
 
+
+/// The earring routed on the coarse grid, pours left to be refilled, and what the router laid.
+fn routed() -> (Board, Vec<ItemId>) {
+    let (mut b, _) = stripped(0);
+    let stats = route_open(&mut b, &mut CpuSolver, &Options { cell: CELL, ..Default::default() }, &mut |_| {});
+    assert!(stats.laid.len() > 100, "{} pieces laid", stats.laid.len());
+    (b, stats.laid)
+}
+
+/// Violations not against pours, which are refilled around whatever moved.
+fn violations_but_pours(b: &Board) -> BTreeSet<(String, ItemId, Option<ItemId>)> {
+    let pour = |id: ItemId| b.item(id).is_some_and(|it| matches!(it.kind, Kind::Pour { .. }));
+    check(b).into_iter().filter(|v| !pour(v.a) && !v.b.is_some_and(pour)).map(|v| (format!("{:?}", v.rule), v.a, v.b)).collect()
+}
+
+fn board_centre(b: &Board) -> Point {
+    let bb = BBox::of(b.outline.iter().flatten().copied());
+    Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2)
+}
+
+#[test]
+fn a_push_flows_everything_free_away_from_its_centre_and_leaves_locked_things_alone() {
+    let (mut b, mut laid) = routed();
+    let before = b.clone();
+    let centre = board_centre(&b);
+    let field = Field { center: centre, outward: 300_000.0, vector: (0.0, 0.0), radius: 6_000_000.0, decay: 2.0 };
+    let mut frames = 0;
+    let p = push(&mut b, &field, &PushOptions { steps: 6, ..Default::default() }, &mut laid, &mut |_| frames += 1);
+    assert_eq!(frames, 6, "every step is shown");
+    assert!(!p.moved.is_empty(), "{p:?}");
+    for (f, by) in &p.moved {
+        let fp = &before.footprints[*f];
+        assert!(!fp.locked, "{} is locked and moved", fp.reference);
+        let out = Point::new(fp.at.x - centre.x, fp.at.y - centre.y);
+        assert!((by.x as i128) * (out.x as i128) + (by.y as i128) * (out.y as i128) >= 0, "{} moved toward the centre", fp.reference);
+    }
+    for (i, fp) in before.footprints.iter().enumerate().filter(|(_, f)| f.locked) {
+        assert_eq!(b.footprints[i].at, fp.at, "{} is locked", fp.reference);
+    }
+    for (id, it) in before.items().filter(|(_, it)| it.locked && matches!(it.kind, Kind::Track | Kind::Via)) {
+        assert_eq!(b.item(id).map(|i| &i.shape), Some(&it.shape), "locked copper {id} moved");
+    }
+    // Copper that flowed is copper the router laid or file copper now to be written back.
+    assert!(p.flowed > 0);
+    assert!(laid.iter().all(|id| b.item(*id).is_some()));
+    // Nothing the push left breaks a rule it did not already break.
+    let (was, now) = (violations_but_pours(&before), violations_but_pours(&b));
+    let new: Vec<_> = now.difference(&was).collect();
+    assert!(new.is_empty(), "the push added violations: {new:?}");
+}
+
+#[test]
+fn copper_that_only_flows_stays_joined() {
+    // A gentle push rips nothing; then every connection the board had is still made.
+    let (mut b, mut laid) = routed();
+    let open_now = |b: &Board| connectivity_without_pours(b).airlines.len();
+    let open_before = open_now(&b);
+    let field = Field { center: board_centre(&b), outward: 20_000.0, vector: (0.0, 0.0), radius: 8_000_000.0, decay: 2.0 };
+    let p = push(&mut b, &field, &PushOptions { steps: 2, ..Default::default() }, &mut laid, &mut |_| {});
+    assert!(p.flowed > 0);
+    assert!(p.ripped * 20 < p.flowed, "a gentle push rips little: {} ripped of {} moved", p.ripped, p.flowed);
+    if p.ripped == 0 {
+        assert_eq!(open_now(&b), open_before);
+    }
+}
+
+#[test]
+fn a_zero_field_moves_nothing() {
+    let (mut b, mut laid) = routed();
+    let before = b.clone();
+    let field = Field { center: board_centre(&b), outward: 0.0, vector: (0.0, 0.0), radius: 5_000_000.0, decay: 2.0 };
+    let p = push(&mut b, &field, &PushOptions::default(), &mut laid, &mut |_| {});
+    assert_eq!((p.moved.len(), p.flowed, p.ripped), (0, 0, 0));
+    assert_eq!(violations(&b), violations(&before));
+    assert!(before.items().all(|(id, it)| b.item(id).map(|i| &i.shape) == Some(&it.shape)));
+}
+

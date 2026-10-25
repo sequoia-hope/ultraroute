@@ -1,15 +1,18 @@
 //! Moving parts aside for the connections nothing else could route.
 //!
 //! For each open connection, the unlocked parts near its airline (and the parts at its ends) are
-//! tried a small step in each direction. A step is legal when the part's pads keep every rule and
-//! its courtyard meets no other on its side of the board; the copper the step tore off is routed
-//! again, and the step is kept only if fewer connections are left open.
+//! tried a small step in each direction. The copper around the part flows aside with it (its own
+//! traces dragged along), and only copper pushed into something that cannot move is ripped. A
+//! step is legal when the part's pads keep every rule and its courtyard meets no other on its
+//! side of the board; what was ripped is routed again, and the step is kept only if fewer
+//! connections are left open.
 
 use std::collections::HashSet;
 
 use board::{check_item, connectivity, connectivity_without_pours, point_segment, Board, ItemId, Kind, Nm, Point, Shape};
 use kicad_pcb::Span;
 
+use crate::push::{push, Field, PushOptions};
 use crate::report::{tell, Focus, Log};
 use crate::route::{route_open, FieldSolver, Options};
 
@@ -97,6 +100,30 @@ fn legal(board: &Board, footprint: usize) -> bool {
     })
 }
 
+/// Where the part's pads centre.
+fn centre(board: &Board, footprint: usize) -> Point {
+    let (mut x, mut y, mut n) = (0i128, 0i128, 0i128);
+    for (_, it) in board.items().filter(|(_, it)| matches!(it.kind, Kind::Pad { footprint: f, .. } if f == footprint)) {
+        let b = it.shape.bbox();
+        x += ((b.min.x + b.max.x) / 2) as i128;
+        y += ((b.min.y + b.max.y) / 2) as i128;
+        n += 1;
+    }
+    if n == 0 {
+        return board.footprints[footprint].at;
+    }
+    Point::new((x / n) as i64, (y / n) as i64)
+}
+
+/// How far around a part the copper flows with it: its courtyard's half-diagonal and a margin.
+fn reach_of(board: &Board, footprint: usize) -> f64 {
+    let half = board.footprints[footprint].courtyard.as_ref().map_or(500_000.0, |yard| {
+        let b = Shape::Polygon(yard.clone()).bbox();
+        ((b.max.x - b.min.x) as f64).hypot((b.max.y - b.min.y) as f64) / 2.0
+    });
+    half + 500_000.0
+}
+
 /// Unlocked footprints whose courtyard comes within `reach` of the segment, nearest first, and
 /// the footprints at its two ends.
 fn near_airline(board: &Board, a: Point, b: Point, ends: [Option<usize>; 2], options: &NudgeOptions) -> Vec<usize> {
@@ -164,10 +191,23 @@ pub fn nudge(board: &mut Board, solver: &mut dyn FieldSolver, options: &NudgeOpt
                             || format!("{reference}: trying {:+.2}, {:+.2} mm for {}", (dx * step) as f64 * 1e-6, -(dy * step) as f64 * 1e-6, board.net_name(airline.net)),
                             Some(Focus::Part(footprint)),
                         );
-                        let ripped = board.move_footprint(footprint, by);
+                        // The part steps and the copper around it flows aside with it, its own
+                        // traces dragged along; copper is ripped only where it would be pushed into
+                        // something that cannot move.
+                        let field = Field { center: centre(board, footprint), outward: 0.0, vector: (by.x as f64, by.y as f64), radius: reach_of(board, footprint), decay: 2.0 };
+                        let only = Some(HashSet::from([footprint]));
+                        let pushed = push(board, &field, &PushOptions { steps: 1, locked: options.locked.clone(), only, pours_block: options.pours_block, log: None }, soft, &mut |_| {});
+                        let Some(&(_, by)) = pushed.moved.first() else {
+                            stats.illegal += 1;
+                            *board = snapshot;
+                            *soft = soft_before;
+                            continue;
+                        };
+                        let ripped = pushed.removed_spans;
                         if !legal(board, footprint) {
                             stats.illegal += 1;
                             *board = snapshot;
+                            *soft = soft_before;
                             continue;
                         }
                         let reroute = Options {
@@ -180,10 +220,11 @@ pub fn nudge(board: &mut Board, solver: &mut dyn FieldSolver, options: &NudgeOpt
                         };
                         let again = route_open(board, solver, &reroute, &mut |_| {});
                         if open_count(board, options.pours_block) < before {
+                            soft.retain(|id| board.item(*id).is_some());
                             soft.extend(again.laid);
                             stats.kept += 1;
                             tell(&options.log, "nudging", || format!("{reference}: moved, {} connections open", open_count(board, options.pours_block)), None);
-                            stats.ripped_spans.extend(ripped.iter().filter_map(|it| it.span));
+                            stats.ripped_spans.extend(ripped);
                             match stats.moved.iter_mut().find(|(f, _)| *f == footprint) {
                                 Some((_, total)) => *total = Point::new(total.x + by.x, total.y + by.y),
                                 None => stats.moved.push((footprint, by)),

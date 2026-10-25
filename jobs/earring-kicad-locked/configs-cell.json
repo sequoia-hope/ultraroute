@@ -1,0 +1,41 @@
+[
+ {
+  "name": "core-full-cell004",
+  "router": "ultraroute",
+  "args": [
+   "--negotiate",
+   "--rip-up",
+   "--tighten",
+   "--timeout",
+   "600",
+   "--cell",
+   "0.04"
+  ]
+ },
+ {
+  "name": "core-full-cell003",
+  "router": "ultraroute",
+  "args": [
+   "--negotiate",
+   "--rip-up",
+   "--tighten",
+   "--timeout",
+   "600",
+   "--cell",
+   "0.03"
+  ]
+ },
+ {
+  "name": "core-full-cell0025",
+  "router": "ultraroute",
+  "args": [
+   "--negotiate",
+   "--rip-up",
+   "--tighten",
+   "--timeout",
+   "600",
+   "--cell",
+   "0.025"
+  ]
+ }
+]

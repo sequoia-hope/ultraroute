@@ -366,11 +366,26 @@ impl Board {
         attached.sort_unstable();
         attached.dedup();
         let ripped: Vec<Item> = attached.into_iter().filter_map(|id| self.remove(id)).collect();
+        self.shift_footprint(footprint, by);
+        ripped
+    }
+
+    /// Moves a footprint's pads, rule areas and courtyard by `by`, leaving all copper where it is.
+    pub fn shift_footprint(&mut self, footprint: usize, by: Point) {
+        let members: Vec<ItemId> = self
+            .items()
+            .filter(|(_, it)| match &it.kind {
+                Kind::Pad { footprint: f, .. } => *f == footprint,
+                Kind::Keepout { footprint: f, .. } => *f == Some(footprint),
+                _ => false,
+            })
+            .map(|(id, _)| id)
+            .collect();
         for m in members {
             if let Some(mut item) = self.remove(m) {
                 item.shape = item.shape.translated(by);
                 item.hole = item.hole.map(|(c, r)| (Point::new(c.x + by.x, c.y + by.y), r));
-                self.insert(item);
+                self.restore(m, item);
             }
         }
         if let Some(f) = self.footprints.get_mut(footprint) {
@@ -381,7 +396,6 @@ impl Board {
                 }
             }
         }
-        ripped
     }
 
     pub fn net_name(&self, net: u32) -> &str {

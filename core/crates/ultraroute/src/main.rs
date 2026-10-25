@@ -4,7 +4,7 @@
 //! for KiCad to refill. With `--live -` the board streams to standard output as the studio's
 //! newline-delimited JSON frames, and a line `stop` on standard input stops the run.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -15,7 +15,7 @@ use kicad_pcb::{apply, mm, Edit};
 use serde_json::{json, Value};
 
 const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--negotiate] [--rip-up] [--nudge] [--tighten] [--gpu] \
-[--timeout SECONDS] [--cell MM] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
+[--timeout SECONDS] [--cell MM] [--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
 [--live PATH|-] [--live-fps N]";
 
 struct Args {
@@ -38,6 +38,10 @@ struct Args {
     threads: Option<usize>,
     /// Grid cell for every stage, in nanometres.
     cell: Option<Nm>,
+    /// A push field applied after routing, in millimetres: centre, radius, outward flow and an
+    /// optional flow along a direction.
+    push: Option<[f64; 6]>,
+    push_steps: usize,
 }
 
 fn parse(args: &[String]) -> Result<Args, String> {
@@ -63,6 +67,8 @@ fn parse(args: &[String]) -> Result<Args, String> {
         no_route: false,
         threads: None,
         cell: None,
+        push: None,
+        push_steps: 20,
     };
     let mut it = args[1..].iter();
     while let Some(arg) = it.next() {
@@ -94,6 +100,15 @@ fn parse(args: &[String]) -> Result<Args, String> {
             "--live-fps" => a.fps = value()?.parse().map_err(|e| format!("--live-fps: {e}"))?,
             "--lock" => a.lock.extend(value()?.split(',').filter(|r| !r.is_empty()).map(str::to_string)),
             "--nudge" => a.nudge = true,
+            "--push" => {
+                let v = value()?;
+                let n: Vec<f64> = v.split(',').map(|s| s.trim().parse::<f64>()).collect::<Result<_, _>>().map_err(|e| format!("--push {v}: {e}"))?;
+                if n.len() != 4 && n.len() != 6 {
+                    return Err(format!("--push {v}: give X,Y,RADIUS,OUTWARD or X,Y,RADIUS,OUTWARD,DX,DY in mm"));
+                }
+                a.push = Some([n[0], n[1], n[2], n[3], n.get(4).copied().unwrap_or(0.0), n.get(5).copied().unwrap_or(0.0)]);
+            }
+            "--push-steps" => a.push_steps = value()?.parse().map_err(|e| format!("--push-steps: {e}"))?,
             "--place" => {
                 let v = value()?;
                 let (name, at) = v.split_once('=').ok_or("--place REF=X,Y")?;
@@ -191,7 +206,8 @@ struct Live {
     /// Activity since the last frame, and where the router last looked.
     activity: Vec<Value>,
     focus: Value,
-    sent: HashSet<ItemId>,
+    /// What the viewer has, by id, as it was sent: an item moved in place is sent again.
+    sent: HashMap<ItemId, Shape>,
     seq: u64,
     started: Instant,
     last: Option<Instant>,
@@ -290,9 +306,10 @@ impl Live {
             return;
         }
         self.last = Some(Instant::now());
-        let now: HashSet<ItemId> = board.items().map(|(id, _)| id).collect();
-        let mut add: Vec<Value> = board.items().filter(|(id, _)| !self.sent.contains(id)).map(|(id, it)| item_json(board, id, it)).collect();
-        let del: Vec<ItemId> = self.sent.difference(&now).copied().collect();
+        let now: HashMap<ItemId, Shape> = board.items().map(|(id, it)| (id, it.shape.clone())).collect();
+        let mut add: Vec<Value> =
+            board.items().filter(|(id, it)| self.sent.get(id) != Some(&it.shape)).map(|(id, it)| item_json(board, id, it)).collect();
+        let del: Vec<ItemId> = self.sent.keys().filter(|id| !now.contains_key(id)).copied().collect();
         if self.seq == 0 {
             let polys: Vec<Vec<f64>> = board.outline.iter().map(|p| flat(p)).collect();
             add.push(json!({"id": u32::MAX, "k": "outline", "polys": polys}));
@@ -374,7 +391,7 @@ fn main() {
         } else {
             Box::new(std::io::BufWriter::new(std::fs::File::create(path).expect("create the live file")))
         };
-        Live { out, activity: Vec::new(), focus: Value::Null, sent: HashSet::new(), seq: 0, started: Instant::now(), last: None, interval: Duration::from_secs_f64(1.0 / a.fps.max(1.0)), pours_join: a.pours_block }
+        Live { out, activity: Vec::new(), focus: Value::Null, sent: HashMap::new(), seq: 0, started: Instant::now(), last: None, interval: Duration::from_secs_f64(1.0 / a.fps.max(1.0)), pours_join: a.pours_block }
     });
 
     let mut removed = Vec::new();
@@ -509,6 +526,41 @@ fn main() {
             &mut watch,
         );
         eprintln!("rip-up: {} tries, {} kept, {} ripped, {:.1} s", r.attempts, r.kept, r.ripped, started.elapsed().as_secs_f64());
+    }
+    if let Some([x, y, radius, outward, dx, dy]) = a.push {
+        // Same coordinates as --place: the board's y runs the other way.
+        let field = grid::Field {
+            center: Point::new((x * 1e6).round() as i64, (-y * 1e6).round() as i64),
+            outward: outward * 1e6,
+            vector: (dx * 1e6, -dy * 1e6),
+            radius: radius * 1e6,
+            decay: 2.0,
+        };
+        say("pushing", format!("flowing everything free to move away from ({x}, {y}) mm"));
+        let locked = board.footprints.iter().enumerate().filter(|(_, f)| f.locked).map(|(i, _)| i).collect();
+        let p = grid::push(
+            &mut board,
+            &field,
+            &grid::PushOptions { steps: a.push_steps, locked, pours_block: a.pours_block, log: log.clone(), ..Default::default() },
+            &mut laid,
+            &mut |b: &Board| {
+                if let Some(l) = live.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+                    l.frame(b, true, Vec::new());
+                }
+            },
+        );
+        removed.extend(p.removed_spans.iter().copied());
+        let again = grid::route_open(&mut board, solver.as_mut(), &grid::Options { max_seconds: a.timeout.map(|s| (s - started.elapsed().as_secs_f64()).max(0.0)), ..options.clone() }, &mut watch);
+        laid.extend(again.laid.iter().copied());
+        eprintln!(
+            "push: {} parts moved, {} held back, {} copper moves, {} ripped, {} rerouted, {:.1} s",
+            p.moved.len(),
+            p.held_back,
+            p.flowed,
+            p.ripped,
+            again.routed,
+            started.elapsed().as_secs_f64()
+        );
     }
     if a.nudge {
         let locked = board.footprints.iter().enumerate().filter(|(_, f)| f.locked).map(|(i, _)| i).collect();

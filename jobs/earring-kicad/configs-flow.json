@@ -1,0 +1,46 @@
+[
+ {
+  "name": "core-c0025-nudge-flow",
+  "router": "ultraroute",
+  "args": [
+   "--negotiate",
+   "--rip-up",
+   "--tighten",
+   "--timeout",
+   "900",
+   "--cell",
+   "0.025",
+   "--nudge"
+  ]
+ },
+ {
+  "name": "core-c0025-warp-pushU1-r3-o01",
+  "router": "ultraroute",
+  "args": [
+   "--negotiate",
+   "--rip-up",
+   "--tighten",
+   "--timeout",
+   "900",
+   "--cell",
+   "0.025",
+   "--push",
+   "100,-99.5,3,0.1"
+  ]
+ },
+ {
+  "name": "core-c0025-warp-pushU1-r4-o02",
+  "router": "ultraroute",
+  "args": [
+   "--negotiate",
+   "--rip-up",
+   "--tighten",
+   "--timeout",
+   "900",
+   "--cell",
+   "0.025",
+   "--push",
+   "100,-99.5,4,0.2"
+  ]
+ }
+]

@@ -1,0 +1,62 @@
+[
+ {
+  "name": "core-c0025-pushU1-r3-o02",
+  "router": "ultraroute",
+  "args": [
+   "--negotiate",
+   "--rip-up",
+   "--tighten",
+   "--timeout",
+   "600",
+   "--cell",
+   "0.025",
+   "--push",
+   "100,-99.5,3,0.2"
+  ]
+ },
+ {
+  "name": "core-c0025-pushU1-r3-o04",
+  "router": "ultraroute",
+  "args": [
+   "--negotiate",
+   "--rip-up",
+   "--tighten",
+   "--timeout",
+   "600",
+   "--cell",
+   "0.025",
+   "--push",
+   "100,-99.5,3,0.4"
+  ]
+ },
+ {
+  "name": "core-c0025-pushU1-r5-o03",
+  "router": "ultraroute",
+  "args": [
+   "--negotiate",
+   "--rip-up",
+   "--tighten",
+   "--timeout",
+   "600",
+   "--cell",
+   "0.025",
+   "--push",
+   "100,-99.5,5,0.3"
+  ]
+ },
+ {
+  "name": "core-c0025-pushU1-r5-o06",
+  "router": "ultraroute",
+  "args": [
+   "--negotiate",
+   "--rip-up",
+   "--tighten",
+   "--timeout",
+   "600",
+   "--cell",
+   "0.025",
+   "--push",
+   "100,-99.5,5,0.6"
+  ]
+ }
+]
