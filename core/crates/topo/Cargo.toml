@@ -1,0 +1,13 @@
+[package]
+name = "topo"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+# Topological routing on the core board model: a Delaunay triangulation of the copper per layer,
+# a search for a channel wide enough, and the taut wire through it.
+
+[dependencies]
+board = { path = "../board" }
+grid = { path = "../grid" }
+spade = "=2.15.1"

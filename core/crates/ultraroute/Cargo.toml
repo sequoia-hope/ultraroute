@@ -15,6 +15,7 @@ gpu = ["grid/gpu"]
 board = { path = "../board" }
 morph = { path = "../morph" }
 grid = { path = "../grid" }
+topo = { path = "../topo" }
 kicad-pcb = { path = "../kicad-pcb" }
 serde_json = "1"
 

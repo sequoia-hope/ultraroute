@@ -24,7 +24,7 @@ use board::{connectivity, connectivity_without_pours, Board, Item, ItemId, Kind,
 use kicad_pcb::{apply, mm, Edit};
 use serde_json::{json, Value};
 
-pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--negotiate] [--rip-up] [--nudge] [--tighten] [--gpu] \
+pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--topo] [--negotiate] [--rip-up] [--nudge] [--tighten] [--gpu] \
 [--timeout SECONDS] [--cell MM] [--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--escape REF,...|auto] [--escape-zone MM] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
 [--live PATH|-] [--live-fps N] [--blame]";
 
@@ -33,6 +33,7 @@ pub struct Args {
     pub output: String,
     pub strip: bool,
     pub strip_all: bool,
+    pub topo: bool,
     pub negotiate: bool,
     pub rip_up: bool,
     pub tighten: bool,
@@ -67,6 +68,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         output: String::new(),
         strip: false,
         strip_all: false,
+        topo: false,
         negotiate: false,
         rip_up: false,
         tighten: false,
@@ -98,6 +100,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             "-o" | "--output" => a.output = value()?,
             "--strip" => a.strip = true,
             "--strip-all" => a.strip_all = true,
+            "--topo" => a.topo = true,
             "--negotiate" => a.negotiate = true,
             "--rip-up" => a.rip_up = true,
             "--tighten" => a.tighten = true,
@@ -509,6 +512,30 @@ pub fn run(a: &Args, mut board: Board, text: &str, mut live: Option<Live>, cance
         }
     };
     say("start", format!("{} connections to make", connectivity_without_pours(&board).airlines.len()));
+    if a.topo {
+        // Rubber bands first, through a triangulation of the copper; the grid finishes what they
+        // leave open.
+        let t = topo::route_topological(
+            &mut board,
+            &topo::Options {
+                max_seconds: a.timeout.map(|s| s * 0.4),
+                pours_block: a.pours_block,
+                cancel: Some(cancel.clone()),
+                log: log.clone(),
+                ..Default::default()
+            },
+            &mut watch,
+        );
+        eprintln!(
+            "topo: {} of {} connections, {} rip-ups, {} vias, {:.1} s",
+            t.routed,
+            t.connections,
+            t.rip_ups,
+            t.vias,
+            started.elapsed().as_secs_f64()
+        );
+        laid.extend(t.laid);
+    }
     if a.negotiate {
         let cores = std::thread::available_parallelism().map_or(1, |n| n.get() / 2).max(1);
         let threads = a.threads.unwrap_or(cores);

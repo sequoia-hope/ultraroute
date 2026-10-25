@@ -9,6 +9,7 @@ freerouting.
 | `kicad-pcb` | `.kicad_pcb` reader (from waffle-iron's, same author) and writer: copper layers, tracks, vias, zones, keepouts, pads with their exact shapes, courtyards, and `.kicad_pro` rules and net classes. The writer replaces routed copper and moved parts and keeps every other byte. |
 | `board` | The board in integer nanometres: shapes per layer in a grid index, connectivity as KiCad joins copper, and the clearance, edge, hole and keepout checks, pinned by tests to KiCad 9's DRC. |
 | `grid` | Routing: a conservative grid per net class, A* (CPU) or a GPU field solver, negotiated congestion, a rip-up finisher, part nudging, and pulling copper tight. |
+| `topo` | Topological routing: a Delaunay triangulation of the copper per layer, a search for a channel wide enough, and the taut rubber band through it, with rip-up of its own copper. Written by us first on copperroute's model and re-targeted onto `board`; none of copperroute's code comes with it. |
 | `ultraroute` | The command. |
 
 ## Route a board
@@ -25,6 +26,7 @@ refill: `python3 ../tools/refill_zones.py routed.kicad_pcb filled.kicad_pcb`, th
 | Option | |
 |---|---|
 | `--strip` | take out every unlocked track and via first |
+| `--topo` | route as rubber bands through a triangulation of the copper first; the grid finishes what is left |
 | `--negotiate` | negotiated congestion before routing one connection at a time |
 | `--rip-up` | let blocked connections cross the router's own copper, rerouting what they rip |
 | `--nudge` | move unlocked parts aside for connections nothing else could route |
