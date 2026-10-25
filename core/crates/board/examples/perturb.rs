@@ -25,6 +25,7 @@ fn main() {
                 remove: copper.tracks.iter().step_by(40).map(|t| t.span).collect(),
                 tracks: copper.tracks.iter().step_by(40).map(|t| track(t, [0.1e-3, 0.0])).collect(),
                 vias: Vec::new(),
+                ..Edit::default()
             },
         ),
     ];

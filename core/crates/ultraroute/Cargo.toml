@@ -1,0 +1,18 @@
+[package]
+name = "ultraroute"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+# The command-line router on the MIT core: routes a .kicad_pcb, writes the result, and can stream
+# its progress live in the studio's frame format.
+
+[features]
+default = ["gpu"]
+gpu = ["grid/gpu"]
+
+[dependencies]
+board = { path = "../board" }
+grid = { path = "../grid" }
+kicad-pcb = { path = "../kicad-pcb" }
+serde_json = "1"

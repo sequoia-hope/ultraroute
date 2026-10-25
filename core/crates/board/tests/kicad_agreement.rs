@@ -42,6 +42,7 @@ fn variants(text: &str) -> [(&'static str, String); 4] {
                     remove: copper.tracks.iter().step_by(40).map(|t| t.span).collect(),
                     tracks: copper.tracks.iter().step_by(40).map(shifted).collect(),
                     vias: Vec::new(),
+                    ..Edit::default()
                 },
             ),
         ),

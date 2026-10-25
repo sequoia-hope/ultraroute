@@ -28,17 +28,26 @@ pub struct NewVia {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Edit {
     pub remove: Vec<Span>,
+    /// Text put in place of a span, such as a moved footprint's `(at …)`.
+    pub replace: Vec<(Span, String)>,
     pub tracks: Vec<NewTrack>,
     pub vias: Vec<NewVia>,
 }
 
 pub fn apply(text: &str, edit: &Edit) -> String {
-    let mut remove = edit.remove.clone();
-    remove.sort_by_key(|s| s.start);
+    let mut changes: Vec<(Span, Option<&str>)> =
+        edit.remove.iter().map(|s| (*s, None)).chain(edit.replace.iter().map(|(s, t)| (*s, Some(t.as_str())))).collect();
+    changes.sort_by_key(|c| c.0.start);
     let mut out = String::with_capacity(text.len());
     let mut kept = 0;
-    for span in remove {
+    for (span, replacement) in changes {
         if span.start < kept {
+            continue;
+        }
+        if let Some(replacement) = replacement {
+            out.push_str(&text[kept..span.start]);
+            out.push_str(replacement);
+            kept = span.end;
             continue;
         }
         // The whole line goes when the item is alone on it, as KiCad writes them.
@@ -84,7 +93,7 @@ pub fn apply(text: &str, edit: &Edit) -> String {
 }
 
 /// Metres as KiCad writes millimetres: up to six decimals (whole nanometres), no trailing zeros.
-fn mm(m: f64) -> String {
+pub fn mm(m: f64) -> String {
     let s = format!("{:.6}", m * 1e3);
     let s = s.trim_end_matches('0').trim_end_matches('.');
     if s == "-0" { "0".to_string() } else { s.to_string() }
@@ -146,7 +155,7 @@ mod tests {
         let edit = Edit {
             remove: vec![Span { start, end }],
             tracks: vec![NewTrack { start: [1e-3, 2e-3], end: [3e-3, 2e-3], width: 0.2e-3, layer: "F.Cu".into(), net: 4 }],
-            vias: vec![],
+            ..Edit::default()
         };
         let out = apply(text, &edit);
         assert!(out.starts_with("(kicad_pcb\n\t(a 1)\n\t(b 2)\n\t(segment\n\t\t(start 1 2)\n\t\t(end 3 2)\n\t\t(width 0.2)\n"));

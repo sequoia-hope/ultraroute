@@ -31,11 +31,13 @@ pub struct Options {
     pub max_seconds: Option<f64>,
     /// Keep other nets out of poured copper instead of routing through it to be refilled.
     pub pours_block: bool,
+    /// Set from elsewhere to stop at the next connection.
+    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl Default for Options {
     fn default() -> Options {
-        Options { cell: 50_000, via_cost: 80, max_seconds: None, pours_block: false }
+        Options { cell: 50_000, via_cost: 80, max_seconds: None, pours_block: false, cancel: None }
     }
 }
 
@@ -60,7 +62,10 @@ pub(crate) type Terminal = (usize, Option<Point>);
 /// `watch` sees the board after every connection laid.
 pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Options, watch: &mut dyn FnMut(&Board)) -> Stats {
     let started = std::time::Instant::now();
-    let out_of_time = || options.max_seconds.is_some_and(|limit| started.elapsed().as_secs_f64() > limit);
+    let out_of_time = || {
+        options.max_seconds.is_some_and(|limit| started.elapsed().as_secs_f64() > limit)
+            || options.cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+    };
     let mut stats = Stats::default();
     let mut maps: HashMap<String, ObstacleMap> = HashMap::new();
     let mut given_up: BTreeSet<(ItemId, ItemId)> = BTreeSet::new();

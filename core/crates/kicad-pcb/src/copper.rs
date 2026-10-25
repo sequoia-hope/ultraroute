@@ -26,6 +26,8 @@ pub struct Copper {
     pub pads: Vec<PadCopper>,
     /// Whether each footprint is locked, in the order of `Pcb::footprints`.
     pub locked_footprints: Vec<bool>,
+    /// Where each footprint's `(at x y angle)` is in the text, in the order of `Pcb::footprints`.
+    pub footprint_at: Vec<Option<Span>>,
     pub warnings: Vec<String>,
 }
 
@@ -195,6 +197,7 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
         zones: Vec::new(),
         pads: Vec::new(),
         locked_footprints: Vec::new(),
+        footprint_at: Vec::new(),
         warnings: Vec::new(),
     };
     let mut copper_graphics = 0;
@@ -253,6 +256,7 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
                     return Err(syntax(child, "footprint the model read"));
                 };
                 copper.locked_footprints.push(locked(child));
+                copper.footprint_at.push(child.find("at").map(|a| a.pos().into()));
                 for (index, pad) in child.find_all("pad").enumerate() {
                     copper.pads.push(read_pad(pad, footprint, index, fp)?);
                 }

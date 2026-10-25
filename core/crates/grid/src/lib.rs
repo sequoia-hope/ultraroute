@@ -11,7 +11,7 @@ pub mod search;
 pub mod sweep;
 
 pub use grid::{ObstacleMap, Profile, RouteGrid, ViaSpec};
-pub use negotiate::{route_negotiated, NegotiationOptions, NegotiationStats};
+pub use negotiate::{route_negotiated, NegotiationOptions, NegotiationStats, Trial};
 pub use route::{edits, route_open, CpuSolver, FieldSolver, Options, Stats};
 #[cfg(feature = "gpu")]
 pub use gpu::GpuSolver;

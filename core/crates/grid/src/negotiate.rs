@@ -15,10 +15,13 @@ use crate::grid::{ObstacleMap, Profile, RouteGrid};
 use crate::route::{lay, terminals, FieldSolver, Terminal};
 use crate::search::{cost_field, trace_back, GridPath};
 
+/// How often the trial routes are shown while a round runs one connection after another.
+const TRIAL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// Half a cell diagonal, as a fraction of the cell: how far a step strays from its centre.
 const STEP_REACH: f64 = std::f64::consts::FRAC_1_SQRT_2;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct NegotiationOptions {
     pub cell: Nm,
     pub via_cost: u32,
@@ -33,6 +36,7 @@ pub struct NegotiationOptions {
     /// this many CPU threads (Jacobi PathFinder) instead of one after another (Gauss-Seidel).
     pub threads: usize,
     pub pours_block: bool,
+    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl Default for NegotiationOptions {
@@ -47,6 +51,7 @@ impl Default for NegotiationOptions {
             max_seconds: None,
             threads: 1,
             pours_block: false,
+            cancel: None,
         }
     }
 }
@@ -115,14 +120,22 @@ impl Zones {
     }
 }
 
+/// A connection's current trial route, as (board layer, point) corners, for showing negotiation
+/// as it goes.
+pub type Trial = (u32, Vec<(usize, board::Point)>);
+
 pub fn route_negotiated(
     board: &mut Board,
     solver: &mut dyn FieldSolver,
     options: &NegotiationOptions,
     watch: &mut dyn FnMut(&Board),
+    trials: &mut dyn FnMut(usize, &[Trial]),
 ) -> NegotiationStats {
     let started = std::time::Instant::now();
-    let out_of_time = || options.max_seconds.is_some_and(|limit| started.elapsed().as_secs_f64() > limit);
+    let out_of_time = || {
+        options.max_seconds.is_some_and(|limit| started.elapsed().as_secs_f64() > limit)
+            || options.cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+    };
     let mut stats = NegotiationStats::default();
     let open = if options.pours_block { connectivity(board) } else { connectivity_without_pours(board) }.airlines;
     let mut connections: Vec<Connection> = open
@@ -164,6 +177,7 @@ pub fn route_negotiated(
         .collect();
     let cells_of = |t: &[Terminal]| t.iter().map(|t| t.0).collect::<Vec<usize>>();
 
+    let mut shown = std::time::Instant::now();
     for round in 0..options.max_rounds {
         if out_of_time() {
             break;
@@ -177,10 +191,11 @@ pub fn route_negotiated(
                 zones.add(c.net, &c.zone);
             }
         } else {
-            for (k, c) in connections.iter_mut().enumerate() {
+            for k in 0..connections.len() {
                 if out_of_time() {
                     break;
                 }
+                let c = &mut connections[k];
                 zones.remove(c.net, &c.zone);
                 let mut grid = maps[&c.class].view(c.net);
                 grid.penalty = penalties(&zones, &history, present, c.net);
@@ -189,8 +204,14 @@ pub fn route_negotiated(
                 c.path = trace_back(&grid, &cost, &cells_of(targets), options.via_cost);
                 c.zone = c.path.as_ref().map(|p| zone_of(p, nx, ny, layers, &trace_disc, &via_disc)).unwrap_or_default();
                 zones.add(c.net, &c.zone);
+                if shown.elapsed() > TRIAL_INTERVAL {
+                    trials(round, &trial_list(&connections, &sample));
+                    shown = std::time::Instant::now();
+                }
             }
         }
+        trials(round, &trial_list(&connections, &sample));
+        shown = std::time::Instant::now();
         let mut colliding = 0;
         for c in &connections {
             let Some(path) = &c.path else { continue };
@@ -232,6 +253,32 @@ pub fn route_negotiated(
         watch(board);
     }
     stats
+}
+
+fn trial_list(connections: &[Connection], grid: &RouteGrid) -> Vec<Trial> {
+    connections
+        .iter()
+        .filter_map(|c| {
+            let path = c.path.as_ref()?;
+            Some((c.net, corners(path).into_iter().map(|(l, i, j)| (grid.layers[l], grid.centre(i, j))).collect()))
+        })
+        .collect()
+}
+
+/// The path's cells where it turns or changes layer, and its ends.
+fn corners(path: &GridPath) -> Vec<(usize, usize, usize)> {
+    let mut out: Vec<(usize, usize, usize)> = Vec::new();
+    for (k, &cell) in path.iter().enumerate() {
+        if k > 0 && k + 1 < path.len() {
+            let (a, b) = (path[k - 1], path[k + 1]);
+            let straight = a.0 == cell.0 && b.0 == cell.0 && (cell.1 as i64 - a.1 as i64, cell.2 as i64 - a.2 as i64) == (b.1 as i64 - cell.1 as i64, b.2 as i64 - cell.2 as i64);
+            if straight {
+                continue;
+            }
+        }
+        out.push(cell);
+    }
+    out
 }
 
 fn penalties(zones: &Zones, history: &[u32], present: f64, net: u32) -> Vec<u32> {

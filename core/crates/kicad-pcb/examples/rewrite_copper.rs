@@ -19,6 +19,7 @@ fn main() {
             .iter()
             .map(|v| NewVia { at: v.at, size: v.size, drill: v.drill, layers: v.layers.clone(), net: v.net })
             .collect(),
+        replace: Vec::new(),
     };
     std::fs::write(&args[2], apply(&text, &edit)).expect("write the board");
     println!("{} tracks and {} vias rewritten", edit.tracks.len(), edit.vias.len());

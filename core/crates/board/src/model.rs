@@ -60,8 +60,11 @@ pub type ItemId = usize;
 pub struct FootprintInfo {
     pub reference: String,
     pub at: Point,
+    pub rotation_deg: f64,
     pub back: bool,
     pub locked: bool,
+    /// Where its `(at …)` is in the board file.
+    pub at_span: Option<Span>,
 }
 
 #[derive(Debug, Clone)]
@@ -115,11 +118,14 @@ impl Board {
                 .footprints
                 .iter()
                 .zip(&copper.locked_footprints)
-                .map(|(f, locked)| FootprintInfo {
+                .zip(&copper.footprint_at)
+                .map(|((f, locked), at_span)| FootprintInfo {
                     reference: f.reference.clone(),
                     at: Point::from_m(f.at),
+                    rotation_deg: f.rotation_deg,
                     back: matches!(f.side, kicad_pcb::Side::Back),
                     locked: *locked,
+                    at_span: *at_span,
                 })
                 .collect(),
             outline: Vec::new(),
@@ -310,6 +316,49 @@ impl Board {
         out.sort_unstable();
         out.dedup();
         out
+    }
+
+    /// Moves a footprint's pads and rule areas by `by`. Unlocked tracks and vias that touched its
+    /// pads are taken out, to be routed again, and returned.
+    pub fn move_footprint(&mut self, footprint: usize, by: Point) -> Vec<Item> {
+        let members: Vec<ItemId> = self
+            .items()
+            .filter(|(_, it)| match &it.kind {
+                Kind::Pad { footprint: f, .. } => *f == footprint,
+                Kind::Keepout { footprint: f, .. } => *f == Some(footprint),
+                _ => false,
+            })
+            .map(|(id, _)| id)
+            .collect();
+        let mut attached = Vec::new();
+        for &m in &members {
+            let Some(pad) = self.item(m) else { continue };
+            if !matches!(pad.kind, Kind::Pad { .. }) {
+                continue;
+            }
+            for layer in (0..self.layers.len()).filter(|l| pad.on(*l)) {
+                for other in self.near(layer, pad.shape.bbox()) {
+                    let Some(o) = self.item(other) else { continue };
+                    if matches!(o.kind, Kind::Track | Kind::Via) && !o.locked && o.on(layer) && o.shape.gap_within(&pad.shape, 0.0) == 0.0 {
+                        attached.push(other);
+                    }
+                }
+            }
+        }
+        attached.sort_unstable();
+        attached.dedup();
+        let ripped: Vec<Item> = attached.into_iter().filter_map(|id| self.remove(id)).collect();
+        for m in members {
+            if let Some(mut item) = self.remove(m) {
+                item.shape = item.shape.translated(by);
+                item.hole = item.hole.map(|(c, r)| (Point::new(c.x + by.x, c.y + by.y), r));
+                self.insert(item);
+            }
+        }
+        if let Some(f) = self.footprints.get_mut(footprint) {
+            f.at = Point::new(f.at.x + by.x, f.at.y + by.y);
+        }
+        ripped
     }
 
     pub fn net_name(&self, net: u32) -> &str {

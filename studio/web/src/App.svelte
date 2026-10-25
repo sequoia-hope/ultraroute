@@ -89,7 +89,12 @@
     { key: 'maze', label: 'Maze', title: 'The maze router alone' },
     { key: 'topo', label: 'Topo', title: 'Topological rubber-band routing with rip-up, then the maze router' },
     { key: 'nudge', label: 'Nudge', title: 'Grid routing, then moves unlocked parts that block open connections (slow)' },
+    { key: 'core', label: 'Core', title: 'The MIT core router, on the KiCad board itself: grid routing with negotiated congestion' },
   ];
+  let strip = $state(true);
+  const engine = $derived(router === 'core' ? 'core' : 'copperroute');
+  // Copperroute reads the job's Specctra board, the core its KiCad board.
+  const available = (key, j = job) => (key === 'core' ? !!j?.kicad_pcb : !!j?.dsn);
   let router = $state('grid');
   let negotiate = $state(true);
   let fineGrid = $state(true);
@@ -99,6 +104,13 @@
   function compose() {
     const args = [];
     const env = {};
+    if (router === 'core') {
+      if (negotiate) args.push('--negotiate');
+      if (strip) args.push('--strip');
+      argsText = args.join(' ');
+      envText = '';
+      return;
+    }
     if (router !== 'maze') args.push('--backend', router);
     if (!fanout) args.push('--set', 'router.fanout.enabled=false');
     const grid = router === 'grid' || router === 'nudge';
@@ -116,8 +128,10 @@
     placements = {};
     selected = null;
     refitNext = true;
-    const withLocks = jobs.find((j) => j.name === name)?.presets?.find((p) => splitLocks(p.args ?? []).found.length);
+    const chosen = jobs.find((j) => j.name === name);
+    const withLocks = chosen?.presets?.find((p) => splitLocks(p.args ?? []).found.length);
     locks = withLocks ? splitLocks(withLocks.args).found : [];
+    if (!available(router, chosen)) router = available('grid', chosen) ? 'grid' : 'core';
     compose();
   }
 
@@ -152,6 +166,7 @@
         env: cmd === 'load' ? {} : environment(),
         timeout: cmd === 'load' ? undefined : Number(timeout) || undefined,
         fps: Number(fps) || undefined,
+        engine,
         place: placements,
         continue: options.continue ?? false,
       }),
@@ -225,7 +240,7 @@
   function load() {
     leaveReplay();
     clearTimeout(rerouteTimer);
-    send('load', ['--backend', 'none'], locks);
+    send('load', engine === 'core' ? [] : ['--backend', 'none'], engine === 'core' ? [] : locks);
   }
 
   function route(options = {}) {
@@ -482,15 +497,25 @@
       <span class="label">Router</span>
       <div class="segmented">
         {#each ROUTERS as r}
-          <button class:on={router === r.key} title={r.title} onclick={() => { router = r.key; compose(); }}>{r.label}</button>
+          <button
+            class:on={router === r.key}
+            title={available(r.key) ? r.title : `${r.title} (needs a ${r.key === 'core' ? '.kicad_pcb' : '.dsn'} board in this job)`}
+            disabled={!available(r.key)}
+            onclick={() => { router = r.key; compose(); load(); }}>{r.label}</button>
         {/each}
       </div>
     </div>
-    {#if router === 'grid' || router === 'nudge'}
+    {#if router === 'grid' || router === 'nudge' || router === 'core'}
       <label class="check"><input type="checkbox" bind:checked={negotiate} onchange={compose} /> Negotiate congestion</label>
+    {/if}
+    {#if router === 'grid' || router === 'nudge'}
       <label class="check"><input type="checkbox" bind:checked={fineGrid} onchange={compose} /> Fine grid (0.05 mm cells)</label>
     {/if}
-    <label class="check"><input type="checkbox" bind:checked={fanout} onchange={compose} /> Fan out pads first</label>
+    {#if router === 'core'}
+      <label class="check"><input type="checkbox" bind:checked={strip} onchange={compose} /> Rip up unlocked copper first</label>
+    {:else}
+      <label class="check"><input type="checkbox" bind:checked={fanout} onchange={compose} /> Fan out pads first</label>
+    {/if}
     {#if presets[0]?.open != null}
       <p class="muted small">Best scored on this board: {presets[0].open} open ({presets[0].name})</p>
     {/if}
@@ -519,7 +544,7 @@
       <button class="primary" onclick={() => route({ continue: keepGoing })} disabled={!connected}>
         {mode === 'routing' ? 'Restart' : 'Route'}
       </button>
-      <button onclick={nudgeAll} disabled={!connected} title="Route, then move unlocked parts that block open connections">Nudge</button>
+      <button onclick={nudgeAll} disabled={!connected || engine === 'core'} title="Route, then move unlocked parts that block open connections">Nudge</button>
       <button onclick={stop} disabled={!running}>Stop</button>
     </div>
     <button class="quiet" onclick={load} disabled={!connected}>Show the board as designed</button>
@@ -550,7 +575,7 @@
           <button onclick={() => toggleLock(selectedPart.name)}>
             {locks.includes(selectedPart.name) ? 'Unlock' : 'Lock'}
           </button>
-          <button onclick={nudgeThis} title="Route, then let the nudger move only this part">Nudge it for me</button>
+          <button onclick={nudgeThis} disabled={engine === 'core'} title="Route, then let the nudger move only this part">Nudge it for me</button>
         </div>
         {/if}
         {#if selectedPart.fixed && !locks.includes(selectedPart.name) && !sentLocks.includes(selectedPart.name)}

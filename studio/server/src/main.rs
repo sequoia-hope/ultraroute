@@ -22,6 +22,8 @@ const RELAY_DEPTH: usize = 1024;
 struct Config {
     root: PathBuf,
     router: PathBuf,
+    /// The MIT core's router, which reads `.kicad_pcb` boards.
+    core: PathBuf,
     runs: PathBuf,
 }
 
@@ -176,7 +178,11 @@ fn main() {
         .or_else(|| std::env::var("PORT").ok())
         .or_else(|| registry_port(&root))
         .unwrap_or_else(|| fail("no port: pass --port, set $PORT, or register the project with `proj add`"));
-    let config = Arc::new(Config { runs: root.join("studio/runs"), root, router });
+    let core = flag("--core").map_or_else(|| root.join("core/target/release/ultraroute"), PathBuf::from);
+    if !core.is_file() {
+        eprintln!("studio-server: no core router at {} (build it, or pass --core); only copperroute will run", core.display());
+    }
+    let config = Arc::new(Config { runs: root.join("studio/runs"), root, router, core });
     let runner = Arc::new(Runner::new());
     let listener = TcpListener::bind(format!("0.0.0.0:{port}")).unwrap_or_else(|e| fail(&format!("port {port}: {e}")));
     eprintln!("studio on http://localhost:{port}/studio/ serving {}", config.root.display());
@@ -341,7 +347,7 @@ fn jobs(root: &Path) -> Value {
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(root.join("jobs")).into_iter().flatten().flatten().map(|e| e.path()).collect();
     dirs.sort();
     for dir in dirs {
-        let Some((dsn, project)) = job_input(&dir) else { continue };
+        let Some(input) = job_input(&dir) else { continue };
         let mut presets = BTreeMap::new();
         for row in leaderboard(&dir.join("leaderboard.csv")) {
             if row.get("router").map(String::as_str) != Some("copperroute") {
@@ -389,8 +395,9 @@ fn jobs(root: &Path) -> Value {
         });
         out.push(json!({
             "name": dir.file_name().map(|n| n.to_string_lossy()),
-            "dsn": dsn.file_name().map(|n| n.to_string_lossy()),
-            "kicad_project": project.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy()),
+            "dsn": input.dsn.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy()),
+            "kicad_pcb": input.pcb.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy()),
+            "kicad_project": input.project.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy()),
             "presets": presets,
             "notes": dir.join("README.md").is_file(),
         }));
@@ -398,12 +405,21 @@ fn jobs(root: &Path) -> Value {
     Value::Array(out)
 }
 
-fn job_input(dir: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
+/// A job's boards: a Specctra `.dsn` for copperroute, a `.kicad_pcb` for the core, and the
+/// project's rules.
+struct Input {
+    dsn: Option<PathBuf>,
+    pcb: Option<PathBuf>,
+    project: Option<PathBuf>,
+}
+
+fn job_input(dir: &Path) -> Option<Input> {
     let input = dir.join("input");
     let mut files: Vec<PathBuf> = std::fs::read_dir(&input).ok()?.flatten().map(|e| e.path()).collect();
     files.sort();
     let with = |ext: &str| files.iter().find(|p| p.extension().is_some_and(|e| e == ext)).cloned();
-    Some((with("dsn")?, with("kicad_pro")))
+    let found = Input { dsn: with("dsn"), pcb: with("kicad_pcb"), project: with("kicad_pro") };
+    (found.dsn.is_some() || found.pcb.is_some()).then_some(found)
 }
 
 fn leaderboard(path: &Path) -> Vec<BTreeMap<String, String>> {
@@ -515,29 +531,50 @@ fn start(request: &Value, config: &Config, runner: &Arc<Runner>, owner: u64) -> 
         return Err(format!("bad job name {job}"));
     }
     let dir = config.root.join("jobs").join(job);
-    let (dsn, project) = job_input(&dir).ok_or(format!("job {job} has no input board"))?;
+    let input = job_input(&dir).ok_or(format!("job {job} has no input board"))?;
     let runs = config.runs.join(job);
     std::fs::create_dir_all(&runs).map_err(|e| e.to_string())?;
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     let load = request["cmd"].as_str() == Some("load");
+    let core = request["engine"].as_str() == Some("core");
+    let extension = if core { "kicad_pcb" } else { "ses" };
     let output = if load {
         std::fs::create_dir_all(runs.join("loaded")).map_err(|e| e.to_string())?;
-        runs.join("loaded").join(format!("{stamp}.ses"))
+        runs.join("loaded").join(format!("{stamp}.{extension}"))
     } else {
-        runs.join(format!("{stamp}.ses"))
+        runs.join(format!("{stamp}.{extension}"))
     };
 
-    let mut args: Vec<String> = vec!["-n".into(), "15".into(), config.router.display().to_string(), "route".into()];
-    args.push(dsn.display().to_string());
-    args.extend(["-o".into(), output.display().to_string()]);
-    if let Some(project) = project {
-        args.extend(["--kicad-project".into(), project.display().to_string()]);
-    }
-    if !load
-        && request["continue"].as_bool() == Some(true)
-        && let Some(last) = latest_session(&runs, &output)
-    {
-        args.extend(["--ses".into(), last.display().to_string()]);
+    let mut args: Vec<String> = vec!["-n".into(), "15".into()];
+    if core {
+        let pcb = input.pcb.as_ref().ok_or(format!("job {job} has no .kicad_pcb for the core router"))?;
+        // The core reads the rules from the project beside its board, so every result gets one.
+        if let Some(project) = &input.project {
+            std::fs::copy(project, output.with_extension("kicad_pro")).map_err(|e| e.to_string())?;
+        }
+        let from = if !load && request["continue"].as_bool() == Some(true) {
+            latest_session(&runs, &output, "kicad_pcb").unwrap_or_else(|| pcb.clone())
+        } else {
+            pcb.clone()
+        };
+        args.extend([config.core.display().to_string(), "route".into(), from.display().to_string()]);
+        args.extend(["-o".into(), output.display().to_string()]);
+        if load {
+            args.push("--no-route".into());
+        }
+    } else {
+        let dsn = input.dsn.as_ref().ok_or(format!("job {job} has no .dsn for copperroute"))?;
+        args.extend([config.router.display().to_string(), "route".into(), dsn.display().to_string()]);
+        args.extend(["-o".into(), output.display().to_string()]);
+        if let Some(project) = &input.project {
+            args.extend(["--kicad-project".into(), project.display().to_string()]);
+        }
+        if !load
+            && request["continue"].as_bool() == Some(true)
+            && let Some(last) = latest_session(&runs, &output, "ses")
+        {
+            args.extend(["--ses".into(), last.display().to_string()]);
+        }
     }
     if let Some(timeout) = request["timeout"].as_u64() {
         args.extend(["--timeout".into(), timeout.to_string()]);
@@ -593,11 +630,11 @@ fn relay_lines(source: impl Read + Send + 'static, tx: SyncSender<String>, wrap:
     });
 }
 
-fn latest_session(runs: &Path, except: &Path) -> Option<PathBuf> {
+fn latest_session(runs: &Path, except: &Path, extension: &str) -> Option<PathBuf> {
     std::fs::read_dir(runs)
         .ok()?
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p != except && p.extension().is_some_and(|e| e == "ses") && p.metadata().is_ok_and(|m| m.len() > 0))
+        .filter(|p| p != except && p.extension().is_some_and(|e| e == extension) && p.metadata().is_ok_and(|m| m.len() > 0))
         .max_by_key(|p| p.metadata().and_then(|m| m.modified()).ok())
 }

@@ -47,6 +47,7 @@ fn main() {
             solver.as_mut(),
             &grid::NegotiationOptions { max_seconds: seconds.map(|s: f64| s / 2.0), threads, pours_block: options.pours_block, ..Default::default() },
             &mut |_| {},
+            &mut |_, _| {},
         );
         println!(
             "negotiated {} of {} connections in {} rounds ({} still colliding, {} without a path), {} vias, {:.1?}",
@@ -59,5 +60,5 @@ fn main() {
     println!("routed {} failed {} (no terminal {}, no path {}, refused {}) vias {} in {:.1?}", stats.routed, stats.failed, stats.no_terminal, stats.no_path, stats.refused, stats.vias, t.elapsed());
     println!("{} open after, {} violations", connectivity(&b).airlines.len(), check(&b).len());
     let (tracks, vias) = edits(&b, &laid);
-    std::fs::write(output, apply(&text, &Edit { remove: removed, tracks, vias })).expect("write");
+    std::fs::write(output, apply(&text, &Edit { remove: removed, tracks, vias, ..Edit::default() })).expect("write");
 }

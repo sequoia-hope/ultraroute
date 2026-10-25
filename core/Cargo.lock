@@ -873,6 +873,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ultraroute"
+version = "0.1.0"
+dependencies = [
+ "board",
+ "grid",
+ "kicad-pcb",
+ "serde_json",
+]
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -8,6 +8,9 @@ use serde_json::Value;
 #[cfg(feature = "wasm")]
 pub mod wasm;
 
+/// Polygons with more corners than this are drawn as outlines rather than fans.
+const LARGE_POLYGON: usize = 24;
+
 /// Floats per vertex: position, segment ends, radius, colour.
 pub const STRIDE: usize = 11;
 const EVENTS_KEPT: usize = 200;
@@ -94,6 +97,8 @@ pub struct Scene {
     pub parts: BTreeMap<i32, Part>,
     pub airlines: Vec<[f32; 5]>,
     pub probes: Vec<Probe>,
+    /// Routes a router is trying, by layer, until it sends the next ones.
+    pub trials: Vec<(usize, i32, Vec<f32>)>,
     pub open: Option<usize>,
     pub seq: u64,
     pub ms: u64,
@@ -245,6 +250,12 @@ impl Scene {
                     }
                     self.events.push_back(e.as_str().map_or_else(|| e.to_string(), str::to_string));
                 }
+                if let Some(trial) = v["trial"].as_array() {
+                    self.trials = trial
+                        .iter()
+                        .map(|t| (layer(&t["layer"]), t["net"].as_i64().unwrap_or(0) as i32, floats(&t["p"])))
+                        .collect();
+                }
                 if let Some(air) = v["air"].as_array() {
                     self.airlines = air
                         .iter()
@@ -258,6 +269,7 @@ impl Scene {
                 true
             }
             Some("done") => {
+                self.trials.clear();
                 self.open = v["open"].as_u64().map(|n| n as usize).or(self.open);
                 self.done = Some(v);
                 true
@@ -315,7 +327,15 @@ impl Scene {
                         AreaKind::Pour => with_alpha(self.layer_color(*layer), 0.22),
                         AreaKind::Keepout | AreaKind::ViaKeepout => with_alpha(self.layer_color(*layer), 0.05),
                     };
-                    m.fill(g, o, color);
+                    // A fan fills only convex shapes; a large outline (a whole pour or rule area)
+                    // is drawn as its edge.
+                    if g.len() / 2 > LARGE_POLYGON {
+                        let edge = if *kind == AreaKind::Pour { 0.45 } else { 0.3 };
+                        let shifted: Vec<f32> = g.chunks_exact(2).flat_map(|c| [c[0] + o[0], c[1] + o[1]]).collect();
+                        m.ring(&shifted, px * 0.7, with_alpha(color, edge));
+                    } else {
+                        m.fill(g, o, color);
+                    }
                 }
             }
         }
@@ -375,6 +395,11 @@ impl Scene {
                 }
                 let (x, y) = (c.x0 + (i % c.cols) as f32 * CELL_MM, c.y0 + (i / c.cols) as f32 * CELL_MM);
                 m.fill(&[x, y, x + CELL_MM, y, x + CELL_MM, y + CELL_MM, x, y + CELL_MM], [0.0, 0.0], heat(*v));
+            }
+        }
+        for (layer, net, points) in &self.trials {
+            if self.shown(*layer) {
+                m.polyline(points, px * 0.9, self.tint(with_alpha(self.layer_color(*layer), 0.75), *net));
             }
         }
         for a in &self.airlines {
@@ -776,6 +801,19 @@ mod tests {
         assert!(!s.is_locked(7));
         s.lock_overrides.insert(7, true);
         assert!(s.is_locked(7));
+    }
+
+    #[test]
+    fn trial_routes_show_until_the_next_ones_and_go_when_the_run_ends() {
+        let mut s = Scene::default();
+        s.apply(BOARD);
+        s.apply(r#"{"t":"frame","seq":2,"ms":9,"add":[],"del":[],"parts":[],"probes":[],"events":[],"trial":[{"net":3,"layer":1,"p":[0,0,1,1,2,1]}]}"#);
+        assert_eq!(s.trials.len(), 1);
+        assert_eq!(s.mesh(0.01).len(), 2 * 6 * STRIDE);
+        s.apply(&frame("", ""));
+        assert_eq!(s.trials.len(), 1);
+        s.apply(r#"{"t":"done","open":0}"#);
+        assert!(s.trials.is_empty());
     }
 
     #[test]
