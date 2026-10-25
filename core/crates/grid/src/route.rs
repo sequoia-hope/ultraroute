@@ -5,6 +5,7 @@ use std::collections::{BTreeSet, HashMap};
 use board::{check_item, connectivity, connectivity_without_pours, Board, Item, ItemId, Kind, Nm, Point, Shape};
 
 use crate::grid::{ObstacleMap, Profile, RouteGrid};
+use crate::report::{item_name, tell, Focus, Log};
 use crate::search::{cost_field, route_astar, trace_back, GridPath};
 
 /// How many nearby free cells are tried as the far end of a straight leg out of a terminal.
@@ -55,11 +56,12 @@ pub struct Options {
     pub pours_block: bool,
     /// Set from elsewhere to stop at the next connection.
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    pub log: Option<Log>,
 }
 
 impl Default for Options {
     fn default() -> Options {
-        Options { cell: 50_000, via_cost: 80, max_seconds: None, pours_block: false, cancel: None }
+        Options { cell: 50_000, via_cost: 80, max_seconds: None, pours_block: false, cancel: None, log: None }
     }
 }
 
@@ -107,6 +109,13 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
             if out_of_time() {
                 return stats;
             }
+            let net_name = board.net_name(airline.net).to_string();
+            tell(
+                &options.log,
+                "routing",
+                || format!("{net_name}: {} to {}", item_name(board, airline.from_item), item_name(board, airline.to_item)),
+                Some(Focus::Connection { net: airline.net, from: airline.from, to: airline.to }),
+            );
             let profile = Profile::for_net(board, airline.net);
             let map = maps.entry(profile.class.clone()).or_insert_with(|| ObstacleMap::new(board, profile, options.cell, options.pours_block));
             let grid = map.view(airline.net);
@@ -132,6 +141,13 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
                     }
                 }
             };
+            match &laid {
+                Some(items) => tell(&options.log, "routed", || {
+                    let vias = items.iter().filter(|id| board.item(**id).is_some_and(|it| it.kind == Kind::Via)).count();
+                    format!("{net_name}: laid {} pieces, {vias} vias", items.len())
+                }, None),
+                None => tell(&options.log, "gave up", || format!("{net_name}: {}", stats.failures.last().map_or("refused", |f| f.2)), None),
+            }
             match laid {
                 Some(items) => {
                     stats.routed += 1;

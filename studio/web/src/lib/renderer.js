@@ -58,47 +58,65 @@ export class Renderer {
       offset: gl.getUniformLocation(program, 'offset'),
       px: gl.getUniformLocation(program, 'px'),
     };
-    this.vao = gl.createVertexArray();
-    this.buffer = gl.createBuffer();
-    gl.bindVertexArray(this.vao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
-    const attributes = [['p', 2, 0], ['a', 2, 2], ['b', 2, 4], ['r', 1, 6], ['c', 4, 7]];
-    for (const [name, size, at] of attributes) {
-      const location = gl.getAttribLocation(program, name);
-      gl.enableVertexAttribArray(location);
-      gl.vertexAttribPointer(location, size, gl.FLOAT, false, STRIDE * 4, at * 4);
-    }
-    this.count = 0;
-    this.capacity = 0;
+    // One mesh per pane: side by side, the top and the bottom are drawn from different meshes.
+    this.slots = [];
   }
 
-  upload(mesh) {
+  slot(index) {
     const gl = this.gl;
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
-    if (mesh.length > this.capacity) {
-      this.capacity = Math.ceil(mesh.length * 1.5);
-      gl.bufferData(gl.ARRAY_BUFFER, this.capacity * 4, gl.DYNAMIC_DRAW);
+    while (this.slots.length <= index) {
+      const vao = gl.createVertexArray();
+      const buffer = gl.createBuffer();
+      gl.bindVertexArray(vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+      const attributes = [['p', 2, 0], ['a', 2, 2], ['b', 2, 4], ['r', 1, 6], ['c', 4, 7]];
+      for (const [name, size, at] of attributes) {
+        const location = gl.getAttribLocation(this.program, name);
+        gl.enableVertexAttribArray(location);
+        gl.vertexAttribPointer(location, size, gl.FLOAT, false, STRIDE * 4, at * 4);
+      }
+      this.slots.push({ vao, buffer, count: 0, capacity: 0 });
+    }
+    return this.slots[index];
+  }
+
+  upload(index, mesh) {
+    const gl = this.gl;
+    const slot = this.slot(index);
+    gl.bindBuffer(gl.ARRAY_BUFFER, slot.buffer);
+    if (mesh.length > slot.capacity) {
+      slot.capacity = Math.ceil(mesh.length * 1.5);
+      gl.bufferData(gl.ARRAY_BUFFER, slot.capacity * 4, gl.DYNAMIC_DRAW);
     }
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, mesh);
-    this.count = mesh.length / STRIDE;
+    slot.count = mesh.length / STRIDE;
   }
 
-  // view: centre in mm and pixels per mm; the canvas is in device pixels.
-  draw(view, background) {
+  clear(background) {
     const gl = this.gl;
-    const { width, height } = gl.canvas;
-    gl.viewport(0, 0, width, height);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
     gl.clearColor(...background, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
+  }
+
+  // view: centre in mm and pixels per mm; rect: the pane in device pixels, from the bottom left;
+  // mirror: draw it as seen from the other side of the board.
+  draw(index, view, rect, mirror = false) {
+    const gl = this.gl;
+    const slot = this.slot(index);
+    gl.enable(gl.SCISSOR_TEST);
+    gl.scissor(rect.x, rect.y, rect.w, rect.h);
+    gl.viewport(rect.x, rect.y, rect.w, rect.h);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.useProgram(this.program);
-    const sx = (2 * view.zoom) / width;
-    const sy = (2 * view.zoom) / height;
+    const sx = ((mirror ? -2 : 2) * view.zoom) / rect.w;
+    const sy = (2 * view.zoom) / rect.h;
     gl.uniform2f(this.uniforms.scale, sx, sy);
     gl.uniform2f(this.uniforms.offset, -view.cx * sx, -view.cy * sy);
     gl.uniform1f(this.uniforms.px, 1 / view.zoom);
-    gl.bindVertexArray(this.vao);
-    gl.drawArrays(gl.TRIANGLES, 0, this.count);
+    gl.bindVertexArray(slot.vao);
+    gl.drawArrays(gl.TRIANGLES, 0, slot.count);
   }
 }

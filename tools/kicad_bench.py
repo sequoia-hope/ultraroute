@@ -5,7 +5,8 @@
 
 A job directory holds input/<board>.kicad_pcb and its .kicad_pro, and a configs file:
   [{"name": ..., "router": "ultraroute"|"copperroute", "args": [...], "env": {...}}]
-plus optionally {"strip": true} in job.json, to take out every unlocked track and via first.
+plus optionally {"strip": true} in job.json, to take out every unlocked track and via first
+({"strip": "all"}: every track and via, locked or not).
 
 Every router starts from the same board (runs/start.kicad_pcb). The core routes it directly;
 copperroute routes the DSN KiCad exports from it, and its session is imported back with
@@ -79,7 +80,7 @@ def start_board(job, input_pcb, project, strip):
     start = runs / "start.kicad_pcb"
     if not start.exists():
         project_beside(start, project)
-        cmd = [str(ULTRAROUTE), "route", str(input_pcb), "-o", str(start), "--no-route"] + (["--strip"] if strip else [])
+        cmd = [str(ULTRAROUTE), "route", str(input_pcb), "-o", str(start), "--no-route"] + (["--strip-all"] if strip == "all" else ["--strip"] if strip else [])
         subprocess.run(cmd, check=True)
     return start
 

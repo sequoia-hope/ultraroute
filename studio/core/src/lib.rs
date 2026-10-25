@@ -8,6 +8,12 @@ use serde_json::Value;
 #[cfg(feature = "wasm")]
 pub mod wasm;
 
+const FOCUS: Rgba = [1.0, 1.0, 1.0, 1.0];
+/// Congestion below this is not drawn; a change smaller than `HEAT_CHANGE` does not pop.
+const HEAT_FLOOR: f32 = 0.15;
+const HEAT_CHANGE: f32 = 0.05;
+const HEAT_FADE_MS: f64 = 1500.0;
+
 /// Polygons with more corners than this are drawn as outlines rather than fans.
 const LARGE_POLYGON: usize = 24;
 
@@ -17,10 +23,16 @@ const EVENTS_KEPT: usize = 200;
 
 type Rgba = [f32; 4];
 
-const PAD: Rgba = [0.93, 0.81, 0.53, 1.0];
-const DRILL: Rgba = [0.06, 0.11, 0.15, 1.0];
-const OUTLINE: Rgba = [0.51, 0.77, 0.69, 1.0];
-const AIRLINE: Rgba = [0.95, 0.95, 0.95, 0.55];
+// KiCad's default colour theme.
+/// Through-hole pads, whatever the layer.
+const PAD: Rgba = [0.89, 0.72, 0.18, 1.0];
+const VIA: Rgba = [0.86, 0.86, 0.86, 1.0];
+const DRILL: Rgba = [0.0, 0.03, 0.07, 1.0];
+const UNPLATED_HOLE: Rgba = [0.1, 0.77, 0.82, 1.0];
+const OUTLINE: Rgba = [0.82, 0.82, 0.8, 1.0];
+const AIRLINE: Rgba = [0.96, 1.0, 0.84, 0.6];
+/// How bright the layers other than the active one stay in high-contrast mode.
+const DIMMED: f32 = 0.22;
 const PROBE: Rgba = [1.0, 0.85, 0.2, 0.16];
 const DOOR: Rgba = [1.0, 0.85, 0.2, 0.9];
 const BODY: Rgba = [1.0, 1.0, 1.0, 0.05];
@@ -33,6 +45,8 @@ pub const CELL_MM: f32 = 1.0;
 const ROUTABLE_SHARE: f32 = 0.5;
 /// Width an open connection will take once routed, track and clearance, in millimetres.
 const AIRLINE_WIDTH_MM: f32 = 0.35;
+/// Width a trial route is counted at, track and clearance, in millimetres.
+const TRIAL_WIDTH_MM: f32 = 0.3;
 
 #[derive(Clone, Debug)]
 pub enum Prim {
@@ -81,6 +95,20 @@ pub struct Part {
     pub fixed: bool,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum Focus {
+    Connection { phase: String, net: i32, a: [f32; 2], b: [f32; 2] },
+    Part { phase: String, part: i32 },
+}
+
+impl Focus {
+    pub fn phase(&self) -> &str {
+        match self {
+            Focus::Connection { phase, .. } | Focus::Part { phase, .. } => phase,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Probe {
     pub layer: Option<usize>,
@@ -103,6 +131,8 @@ pub struct Scene {
     pub seq: u64,
     pub ms: u64,
     pub events: VecDeque<String>,
+    /// How many events have ever arrived; the oldest kept is number `event_total - events.len()`.
+    pub event_total: u64,
     pub done: Option<Value>,
     pub hidden: Vec<bool>,
     pub offsets: HashMap<i32, [f32; 2]>,
@@ -110,6 +140,17 @@ pub struct Scene {
     pub hot_net: Option<i32>,
     pub selected: Option<i32>,
     pub show_congestion: bool,
+    /// Zone fills as the board file has them; the router leaves them for KiCad to refill.
+    pub show_pours: bool,
+    /// The layer drawn on top, and in high-contrast mode the only one drawn bright.
+    pub active_layer: usize,
+    pub high_contrast: bool,
+    /// Each congestion cell's last value and when it changed, for popping in and fading out.
+    pub heat_memory: std::cell::RefCell<HashMap<usize, (f32, f64)>>,
+    /// Where the router says it is working.
+    pub focus: Option<Focus>,
+    /// Parts to light up, such as the locked ones while their list is hovered.
+    pub highlight: Vec<i32>,
     /// Lock states set in the client but not yet seen by the router.
     pub lock_overrides: HashMap<i32, bool>,
 }
@@ -186,8 +227,17 @@ impl Scene {
             Some("board") => {
                 let hidden = std::mem::take(&mut self.hidden);
                 let show_congestion = self.show_congestion;
+                let (show_pours, active_layer, high_contrast) = (self.show_pours, self.active_layer, self.high_contrast);
+                let highlight = std::mem::take(&mut self.highlight);
+                let event_total = self.event_total;
+                let events = std::mem::take(&mut self.events);
                 *self = Scene::default();
                 self.show_congestion = show_congestion;
+                (self.show_pours, self.active_layer, self.high_contrast) = (show_pours, active_layer, high_contrast);
+                self.highlight = highlight;
+                // The event count runs on across boards, so a watcher never sees one twice.
+                self.event_total = event_total;
+                self.events = events;
                 self.layers = v["layers"]
                     .as_array()
                     .map(|l| l.iter().map(|l| l["name"].as_str().unwrap_or("").to_string()).collect())
@@ -249,6 +299,21 @@ impl Scene {
                         self.events.pop_front();
                     }
                     self.events.push_back(e.as_str().map_or_else(|| e.to_string(), str::to_string));
+                    self.event_total += 1;
+                }
+                if let Some(f) = v.get("focus").filter(|f| f.is_object()) {
+                    let phase = f["phase"].as_str().unwrap_or("").to_string();
+                    self.focus = if let Some(part) = f["part"].as_i64() {
+                        Some(Focus::Part { phase, part: part as i32 })
+                    } else {
+                        let (a, b) = (floats(&f["a"]), floats(&f["b"]));
+                        (a.len() == 2 && b.len() == 2).then(|| Focus::Connection {
+                            phase,
+                            net: f["net"].as_i64().unwrap_or(0) as i32,
+                            a: [a[0], a[1]],
+                            b: [b[0], b[1]],
+                        })
+                    };
                 }
                 if let Some(trial) = v["trial"].as_array() {
                     self.trials = trial
@@ -270,6 +335,7 @@ impl Scene {
             }
             Some("done") => {
                 self.trials.clear();
+                self.focus = None;
                 self.open = v["open"].as_u64().map(|n| n as usize).or(self.open);
                 self.done = Some(v);
                 true
@@ -278,15 +344,34 @@ impl Scene {
         }
     }
 
+    /// KiCad's default copper colours: F.Cu red, B.Cu blue, the inner layers in its order.
     pub fn layer_color(&self, layer: usize) -> Rgba {
         let last = self.layers.len().saturating_sub(1);
         let name = self.layers.get(layer).map(String::as_str).unwrap_or("");
+        let rgb = |r: f32, g: f32, b: f32| [r / 255.0, g / 255.0, b / 255.0, 0.9];
         if name == "F.Cu" || layer == 0 {
-            [0.95, 0.43, 0.47, 0.85]
+            rgb(200.0, 52.0, 52.0)
         } else if name == "B.Cu" || layer == last {
-            [0.41, 0.72, 1.0, 0.85]
+            rgb(77.0, 127.0, 196.0)
         } else {
-            [[0.81, 0.62, 1.0, 0.85], [1.0, 0.65, 0.34, 0.85], [0.51, 0.77, 0.69, 0.85], [1.0, 0.56, 0.78, 0.85]][(layer - 1) % 4]
+            [
+                rgb(127.0, 200.0, 127.0),
+                rgb(206.0, 125.0, 44.0),
+                rgb(79.0, 203.0, 203.0),
+                rgb(219.0, 98.0, 139.0),
+                rgb(167.0, 165.0, 198.0),
+                rgb(40.0, 204.0, 217.0),
+            ][(layer - 1) % 6]
+        }
+    }
+
+    /// A layer's colour as drawn now: dimmed in high-contrast mode unless it is the active one.
+    fn drawn_color(&self, layer: usize) -> Rgba {
+        let c = self.layer_color(layer);
+        if self.high_contrast && layer != self.active_layer {
+            [c[0] * DIMMED, c[1] * DIMMED, c[2] * DIMMED, c[3]]
+        } else {
+            c
         }
     }
 
@@ -312,20 +397,34 @@ impl Scene {
     /// Triangles for everything shown, back to front, `STRIDE` floats per vertex. `px` is the
     /// size of one screen pixel in millimetres, for lines drawn a fixed number of pixels wide.
     pub fn mesh(&self, px: f32) -> Vec<f32> {
+        self.mesh_with(px, u64::MAX, 0.0)
+    }
+
+    /// The mesh for the layers in `mask` only, at time `now` (milliseconds, for what animates).
+    pub fn mesh_with(&self, px: f32, mask: u64, now: f64) -> Vec<f32> {
         let mut m = Mesh { v: Vec::with_capacity(self.items.len() * 64 * STRIDE), aa: px };
-        let back_to_front: Vec<usize> = (0..self.layers.len().max(1)).rev().collect();
+        // Back to front, the active layer last so it is drawn on top.
+        let mut back_to_front: Vec<usize> = (0..self.layers.len().max(1)).rev().filter(|l| *l != self.active_layer).collect();
+        back_to_front.push(self.active_layer);
+        let shown = |layer: usize| self.shown(layer) && layer < 64 && mask & (1 << layer) != 0;
+        let part_shown = |part: i32| {
+            self.items.values().any(|it| matches!(&it.geom, Geom::Pin { part: p, pads, .. } if *p == part && pads.iter().any(|(l, _)| shown(*l))))
+        };
 
         for item in self.items.values() {
             if let Geom::Area { kind, part, tiles } = &item.geom {
+                if *kind == AreaKind::Pour && !self.show_pours {
+                    continue;
+                }
                 let o = self.offset(*part);
                 for (layer, g) in tiles {
-                    if !self.shown(*layer) {
+                    if !shown(*layer) {
                         continue;
                     }
                     let color = match kind {
                         AreaKind::Body => BODY,
-                        AreaKind::Pour => with_alpha(self.layer_color(*layer), 0.22),
-                        AreaKind::Keepout | AreaKind::ViaKeepout => with_alpha(self.layer_color(*layer), 0.05),
+                        AreaKind::Pour => with_alpha(self.drawn_color(*layer), 0.22),
+                        AreaKind::Keepout | AreaKind::ViaKeepout => with_alpha(self.drawn_color(*layer), 0.05),
                     };
                     // A fan fills only convex shapes; a large outline (a whole pour or rule area)
                     // is drawn as its edge.
@@ -340,10 +439,10 @@ impl Scene {
             }
         }
         for &layer in &back_to_front {
-            if !self.shown(layer) {
+            if !shown(layer) {
                 continue;
             }
-            let color = self.layer_color(layer);
+            let color = self.drawn_color(layer);
             for item in self.items.values() {
                 if let Geom::Trace { layer: l, width, points } = &item.geom
                     && *l == layer
@@ -353,15 +452,22 @@ impl Scene {
             }
         }
         for &layer in &back_to_front {
-            if !self.shown(layer) {
+            if !shown(layer) {
                 continue;
             }
             for item in self.items.values() {
-                if let Geom::Pin { part, pads, .. } = &item.geom {
+                if let Geom::Pin { part, pads, drill, .. } = &item.geom {
                     let o = self.offset(*part);
+                    // As KiCad draws them: a through-hole pad in gold, a surface pad in its layer's colour.
+                    let through = drill.is_some() && pads.len() > 1;
+                    let color = if through {
+                        if self.high_contrast && layer != self.active_layer { [PAD[0] * DIMMED, PAD[1] * DIMMED, PAD[2] * DIMMED, 1.0] } else { PAD }
+                    } else {
+                        with_alpha(self.drawn_color(layer), 1.0)
+                    };
                     for (l, p) in pads {
                         if *l == layer {
-                            m.prim(p, o, self.tint(PAD, item.net));
+                            m.prim(p, o, self.tint(color, item.net));
                         }
                     }
                 }
@@ -370,14 +476,14 @@ impl Scene {
         for item in self.items.values() {
             match &item.geom {
                 Geom::Via { shape: Some(shape), at, drill } => {
-                    m.prim(shape, [0.0, 0.0], self.tint(PAD, item.net));
+                    m.prim(shape, [0.0, 0.0], self.tint(VIA, item.net));
                     if let Some(d) = drill {
                         m.disc(*at, *d, DRILL);
                     }
                 }
-                Geom::Pin { part, at, drill: Some(d), .. } => {
+                Geom::Pin { part, at, drill: Some(d), pads } if pads.is_empty() || pads.iter().any(|(l, _)| shown(*l)) => {
                     let o = self.offset(*part);
-                    m.disc([at[0] + o[0], at[1] + o[1]], *d, DRILL);
+                    m.disc([at[0] + o[0], at[1] + o[1]], *d, if pads.is_empty() { UNPLATED_HOLE } else { DRILL });
                 }
                 Geom::Outline { polys } => {
                     for p in polys {
@@ -388,25 +494,41 @@ impl Scene {
             }
         }
         if self.show_congestion {
+            // A cell pops in when its value changes and fades out while it stays, so only what
+            // the router is changing stands out.
             let c = self.congestion();
+            let mut memory = self.heat_memory.borrow_mut();
             for (i, v) in c.values.iter().enumerate() {
-                if *v < 0.15 {
+                let changed = match memory.get(&i) {
+                    Some((old, _)) => (old - v).abs() > HEAT_CHANGE,
+                    None => *v >= HEAT_FLOOR,
+                };
+                if changed {
+                    memory.insert(i, (*v, now));
+                }
+                let Some(&(_, at)) = memory.get(&i) else { continue };
+                let age = ((now - at) / HEAT_FADE_MS).clamp(0.0, 1.0) as f32;
+                if *v < HEAT_FLOOR || age >= 1.0 {
                     continue;
                 }
-                let (x, y) = (c.x0 + (i % c.cols) as f32 * CELL_MM, c.y0 + (i / c.cols) as f32 * CELL_MM);
-                m.fill(&[x, y, x + CELL_MM, y, x + CELL_MM, y + CELL_MM, x, y + CELL_MM], [0.0, 0.0], heat(*v));
+                let fade = (1.0 - age) * (1.0 - age);
+                let grow = CELL_MM * 0.25 * fade;
+                let (x, y) = (c.x0 + (i % c.cols) as f32 * CELL_MM - grow, c.y0 + (i / c.cols) as f32 * CELL_MM - grow);
+                let side = CELL_MM + 2.0 * grow;
+                let color = heat(*v);
+                m.fill(&[x, y, x + side, y, x + side, y + side, x, y + side], [0.0, 0.0], with_alpha(color, (color[3] + 0.3).min(0.9) * fade));
             }
         }
         for (layer, net, points) in &self.trials {
-            if self.shown(*layer) {
-                m.polyline(points, px * 0.9, self.tint(with_alpha(self.layer_color(*layer), 0.75), *net));
+            if shown(*layer) {
+                m.polyline(points, px * 0.9, self.tint(with_alpha(self.drawn_color(*layer), 0.75), *net));
             }
         }
         for a in &self.airlines {
             m.segment([a[0], a[1]], [a[2], a[3]], px * 0.6, self.tint(AIRLINE, a[4] as i32));
         }
         for probe in &self.probes {
-            if probe.layer.is_some_and(|l| !self.shown(l)) {
+            if probe.layer.is_some_and(|l| !shown(l)) {
                 continue;
             }
             m.fill(&probe.room, [0.0, 0.0], PROBE);
@@ -416,6 +538,7 @@ impl Scene {
         }
         for part in self.parts.values() {
             if self.is_locked(part.id)
+                && part_shown(part.id)
                 && let Some(b) = self.part_box(part.id)
             {
                 m.dashed_ring(&[b[0], b[1], b[2], b[1], b[2], b[3], b[0], b[3]], px * 0.9, px * 6.0, LOCKED);
@@ -428,6 +551,28 @@ impl Scene {
         }
         if let Some(b) = self.picked.and_then(|p| self.part_box(p)) {
             m.ring(&[b[0], b[1], b[2], b[1], b[2], b[3], b[0], b[3]], px, PICKED);
+        }
+        let pulse = 0.55 + 0.45 * ((now / 180.0).sin() as f32);
+        for &part in &self.highlight {
+            if let Some(b) = self.part_box(part) {
+                let e = px * 5.0;
+                m.ring(&[b[0] - e, b[1] - e, b[2] + e, b[1] - e, b[2] + e, b[3] + e, b[0] - e, b[3] + e], px * 2.0, with_alpha(LOCKED, pulse));
+            }
+        }
+        match &self.focus {
+            Some(Focus::Connection { a, b, .. }) => {
+                m.segment(*a, *b, px * 2.2, with_alpha(FOCUS, 0.35 + 0.5 * pulse));
+                for end in [a, b] {
+                    m.ring(&circle_points(*end, px * (7.0 + 4.0 * pulse)), px * 1.4, with_alpha(FOCUS, pulse));
+                }
+            }
+            Some(Focus::Part { part, .. }) => {
+                if let Some(b) = self.part_box(*part) {
+                    let e = px * (4.0 + 4.0 * pulse);
+                    m.ring(&[b[0] - e, b[1] - e, b[2] + e, b[1] - e, b[2] + e, b[3] + e, b[0] - e, b[3] + e], px * 2.0, with_alpha(FOCUS, pulse));
+                }
+            }
+            None => {}
         }
         m.v
     }
@@ -550,6 +695,12 @@ impl Scene {
         for a in &self.airlines {
             line([a[0], a[1]], [a[2], a[3]], AIRLINE_WIDTH_MM, &mut add);
         }
+        // The routes a router is trying count too, so the map shows where it is working.
+        for (_, _, points) in &self.trials {
+            for w in points.windows(4).step_by(2) {
+                line([w[0], w[1]], [w[2], w[3]], TRIAL_WIDTH_MM, &mut add);
+            }
+        }
         let capacity = CELL_MM * CELL_MM * ROUTABLE_SHARE * self.layers.len().max(1) as f32;
         Congestion { cols, rows, x0, y0, values: demand.into_iter().map(|d| d / capacity).collect() }
     }
@@ -561,6 +712,21 @@ impl Scene {
             .filter_map(|p| self.part_box(p.id).map(|b| (p, ((b[0] + b[2]) / 2.0 - x).powi(2) + ((b[1] + b[3]) / 2.0 - y).powi(2))))
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(p, _)| p)
+    }
+
+    /// The events after the first `seen` ever, as many as are still kept.
+    pub fn events_since(&self, seen: u64) -> Vec<&str> {
+        let first = self.event_total - self.events.len() as u64;
+        let skip = seen.saturating_sub(first) as usize;
+        self.events.iter().skip(skip).map(String::as_str).collect()
+    }
+
+    /// Whether anything drawn is still moving at time `now`.
+    pub fn animating(&self, now: f64) -> bool {
+        self.focus.is_some()
+            || !self.highlight.is_empty()
+            || !self.trials.is_empty()
+            || (self.show_congestion && self.heat_memory.borrow().values().any(|(_, at)| now - at < HEAT_FADE_MS))
     }
 
     pub fn counts(&self) -> (usize, usize) {
@@ -627,6 +793,15 @@ fn spread(p: &Prim, o: [f32; 2], area: f32, add: &mut dyn FnMut(f32, f32, f32)) 
             add(x, y, share);
         }
     }
+}
+
+fn circle_points(c: [f32; 2], r: f32) -> Vec<f32> {
+    (0..16)
+        .flat_map(|k| {
+            let t = std::f32::consts::TAU * k as f32 / 16.0;
+            [c[0] + r * t.cos(), c[1] + r * t.sin()]
+        })
+        .collect()
 }
 
 fn area(b: &[f32; 4]) -> f32 {
@@ -814,6 +989,32 @@ mod tests {
         assert_eq!(s.trials.len(), 1);
         s.apply(r#"{"t":"done","open":0}"#);
         assert!(s.trials.is_empty());
+    }
+
+    #[test]
+    fn a_layer_mask_draws_only_its_layers() {
+        let mut s = Scene::default();
+        s.apply(BOARD);
+        s.apply(&frame(TRACE, ""));
+        assert!(!s.mesh_with(0.01, 0b01, 0.0).is_empty());
+        assert!(s.mesh_with(0.01, 0b10, 0.0).is_empty());
+    }
+
+    #[test]
+    fn congestion_pops_in_and_fades_while_it_stays() {
+        let mut s = Scene::default();
+        s.apply(BOARD);
+        let pads: Vec<String> = (0..6)
+            .map(|k| format!(r#"{{"id":{},"k":"pin","net":3,"part":7,"at":[2,2],"pads":[{{"layer":0,"shape":{{"g":[1.6,1.6,2.4,1.6,2.4,2.4,1.6,2.4]}}}}]}}"#, 10 + k))
+            .collect();
+        s.apply(&frame(&pads.join(","), ""));
+        let quiet = s.mesh_with(0.01, u64::MAX, 0.0).len();
+        s.show_congestion = true;
+        let popped = s.mesh_with(0.01, u64::MAX, 0.0).len();
+        assert!(popped > quiet);
+        assert!(s.animating(500.0));
+        assert_eq!(s.mesh_with(0.01, u64::MAX, 5000.0).len(), quiet);
+        assert!(!s.animating(5000.0));
     }
 
     #[test]

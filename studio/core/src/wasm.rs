@@ -23,6 +23,36 @@ impl Studio {
         self.scene.mesh(px)
     }
 
+    /// The mesh for the layers whose bits are set in `mask`, at time `now` in milliseconds.
+    pub fn mesh_view(&self, px: f32, mask: u32, now: f64) -> Vec<f32> {
+        self.scene.mesh_with(px, u64::from(mask), now)
+    }
+
+    /// Events after the first `seen` ever, as JSON: `{"total": n, "events": [...]}`.
+    pub fn events_since(&self, seen: f64) -> String {
+        json!({"total": self.scene.event_total, "events": self.scene.events_since(seen as u64)}).to_string()
+    }
+
+    pub fn animating(&self, now: f64) -> bool {
+        self.scene.animating(now)
+    }
+
+    pub fn set_active_layer(&mut self, layer: usize) {
+        self.scene.active_layer = layer.min(self.scene.layers.len().saturating_sub(1));
+    }
+
+    pub fn set_high_contrast(&mut self, on: bool) {
+        self.scene.high_contrast = on;
+    }
+
+    pub fn set_show_pours(&mut self, on: bool) {
+        self.scene.show_pours = on;
+    }
+
+    pub fn set_highlight(&mut self, parts: Vec<i32>) {
+        self.scene.highlight = parts;
+    }
+
     pub fn bbox(&self) -> Vec<f32> {
         self.scene.bbox.to_vec()
     }
@@ -130,7 +160,7 @@ impl Studio {
             .enumerate()
             .map(|(i, name)| {
                 let c = s.layer_color(i);
-                json!({"name": name, "hidden": s.hidden.get(i).copied().unwrap_or(false), "color": [c[0], c[1], c[2]]})
+                json!({"name": name, "hidden": s.hidden.get(i).copied().unwrap_or(false), "color": [c[0], c[1], c[2]], "active": i == s.active_layer})
             })
             .collect();
         json!({
@@ -142,6 +172,9 @@ impl Studio {
             "probes": s.probes.len(),
             "layers": layers,
             "done": s.done,
+            "focus": s.focus.as_ref().map(|f| f.phase().to_string()),
+            "high_contrast": s.high_contrast,
+            "pours": s.show_pours,
             "events": s.events.iter().rev().take(12).collect::<Vec<_>>(),
         })
         .to_string()

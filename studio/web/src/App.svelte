@@ -91,8 +91,27 @@
     { key: 'nudge', label: 'Nudge', title: 'Grid routing, then moves unlocked parts that block open connections (slow)' },
     { key: 'core', label: 'Core', title: 'The MIT core router, on the KiCad board itself: grid routing with negotiated congestion' },
   ];
-  let strip = $state(true);
   let ripUp = $state(true);
+  let moveParts = $state(false);
+  let viewMode = $state('all');
+  let flipped = $state(false);
+  let highContrast = $state(false);
+  let showPours = $state(false);
+  let showHelp = $state(false);
+  let consoleOpen = $state(true);
+  let consoleBox;
+  $effect(() => {
+    consoleLines;
+    if (consoleBox) consoleBox.scrollTop = consoleBox.scrollHeight;
+  });
+  let consoleLines = $state([]);
+  let eventsSeen = 0;
+  const VIEWS = [
+    { key: 'all', label: 'All layers' },
+    { key: 'top', label: 'Top' },
+    { key: 'bottom', label: 'Bottom' },
+    { key: 'split', label: 'Side by side' },
+  ];
   let tighten = $state(true);
   const engine = $derived(router === 'core' ? 'core' : 'copperroute');
   // Copperroute reads the job's Specctra board, the core its KiCad board.
@@ -109,18 +128,20 @@
     if (router === 'core') {
       if (negotiate) args.push('--negotiate');
       if (ripUp) args.push('--rip-up');
+      if (moveParts) args.push('--nudge');
       if (tighten) args.push('--tighten');
-      if (strip) args.push('--strip');
       argsText = args.join(' ');
       envText = '';
       return;
     }
-    if (router !== 'maze') args.push('--backend', router);
+    // Copperroute moves parts as a router of its own: grid routing, then nudging.
+    const backend = moveParts ? 'nudge' : router;
+    if (backend !== 'maze') args.push('--backend', backend);
     if (!fanout) args.push('--set', 'router.fanout.enabled=false');
-    const grid = router === 'grid' || router === 'nudge';
+    const grid = backend === 'grid' || backend === 'nudge';
     if (grid && negotiate) env.COPPERROUTE_GRID_NEGOTIATE = '1';
     if (grid && fineGrid) env.COPPERROUTE_GRID_CELL_MM = '0.05';
-    if (router === 'nudge') env.COPPERROUTE_NUDGE_BASE = 'grid';
+    if (backend === 'nudge') env.COPPERROUTE_NUDGE_BASE = 'grid';
     argsText = args.join(' ');
     envText = Object.entries(env)
       .map(([k, v]) => `${k}=${v}`)
@@ -259,11 +280,6 @@
     return engine === 'core' ? [...args.filter((a) => a !== '--nudge'), '--nudge'] : withBackend(args, 'nudge');
   }
 
-  function nudgeAll() {
-    leaveReplay();
-    send('run', nudgeArgs(), locks, { continue: keepGoing });
-  }
-
   // Lets the nudger move only this part: every other part is locked for the run.
   function nudgeThis() {
     if (!selected) return;
@@ -321,6 +337,11 @@
     const locked = locks.includes(name);
     locks = locked ? locks.filter((n) => n !== name) : [...locks, name];
     if (part) studio.set_locked(part.id, !locked || part.fixed && !sentLocks.includes(name));
+    version++;
+  }
+
+  function highlight(ids) {
+    studio.set_highlight(ids.filter((id) => id != null));
     version++;
   }
 
@@ -385,7 +406,36 @@
     version++;
   }
 
+  function setActive(layer) {
+    const count = status?.layers?.length ?? 1;
+    studio.set_active_layer(Math.max(0, Math.min(count - 1, layer)));
+    status = JSON.parse(studio.status());
+    version++;
+  }
+
+  // KiCad's layer and display keys: PgUp and PgDn pick F.Cu and B.Cu, + and - step through the
+  // copper, Ctrl+H toggles high contrast, Ctrl+Shift+F flips the board.
+  function viewKey(event) {
+    if (/INPUT|TEXTAREA|SELECT/.test(event.target.tagName)) return false;
+    const count = status?.layers?.length ?? 1;
+    const active = status?.layers?.findIndex((l) => l.active) ?? 0;
+    if (event.key === 'PageUp') setActive(0);
+    else if (event.key === 'PageDown') setActive(count - 1);
+    else if (event.key === '+' || event.key === '=') setActive(active + 1);
+    else if (event.key === '-') setActive(active - 1);
+    else if (event.ctrlKey && event.key.toLowerCase() === 'h') {
+      highContrast = !highContrast;
+      studio.set_high_contrast(highContrast);
+      version++;
+    } else if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'f') flipped = !flipped;
+    else if (event.key === '?') showHelp = !showHelp;
+    else return false;
+    event.preventDefault();
+    return true;
+  }
+
   function key(event) {
+    if (viewKey(event)) return;
     if (!selected || /INPUT|TEXTAREA|SELECT/.test(event.target.tagName)) return;
     if (STATIC && event.key !== 'Escape') return;
     const k = event.shiftKey ? 5 : 1;
@@ -401,12 +451,14 @@
   }
 
   onMount(async () => {
-    jobs = await (await fetch('../api/jobs')).json();
+    const all = await (await fetch('../api/jobs')).json();
+    // The studio offers the boards marked for it, when any are.
+    jobs = all.some((j) => j.studio) ? all.filter((j) => j.studio) : all;
     recordings = await fetch('replays/index.json')
       .then((r) => (r.ok ? r.json() : []))
       .catch(() => []);
     const asked = new URLSearchParams(location.search);
-    const first = jobs.find((j) => j.name === asked.get('job')) ?? jobs.find((j) => j.name === 'bluebuzz-1024') ?? jobs[0];
+    const first = jobs.find((j) => j.name === asked.get('job')) ?? jobs[0];
     if (first) chooseJob(first.name);
     if (presets.some((p) => p.name === asked.get('recipe'))) {
       choosePreset(asked.get('recipe'));
@@ -422,6 +474,18 @@
       frameTimes = frameTimes.filter((t) => now - t < 1000);
       frameRate = frameTimes.length;
       status = JSON.parse(studio.status());
+      const fresh = JSON.parse(studio.events_since(eventsSeen));
+      if (fresh.events.length) {
+        const lines = [...consoleLines];
+        for (const line of fresh.events) {
+          // A progress line replaces the one before it from the same step.
+          const step = line.match(/^(.*?: round \d+: )\d+ of \d+ rerouted$/)?.[1];
+          if (step && lines.length && lines[lines.length - 1].startsWith(step)) lines[lines.length - 1] = line;
+          else lines.push(line);
+        }
+        consoleLines = lines.slice(-400);
+        eventsSeen = fresh.total;
+      }
       parts = JSON.parse(studio.parts());
       congestion = JSON.parse(studio.congestion());
     }, 250);
@@ -503,6 +567,7 @@
       </select>
     </label>
 
+    {#if job?.dsn}
     <div class="field">
       <span class="label">Router</span>
       <div class="segmented">
@@ -515,6 +580,9 @@
         {/each}
       </div>
     </div>
+    {:else}
+      <p class="muted small">Router: the MIT core, on the board's own KiCad file{job?.strip === 'all' ? ', starting from bare pads' : ''}.</p>
+    {/if}
     {#if router === 'grid' || router === 'nudge' || router === 'core'}
       <label class="check"><input type="checkbox" bind:checked={negotiate} onchange={compose} /> Negotiate congestion</label>
     {/if}
@@ -524,7 +592,6 @@
     {#if router === 'core'}
       <label class="check"><input type="checkbox" bind:checked={ripUp} onchange={compose} /> Rip up and retry what is left</label>
       <label class="check"><input type="checkbox" bind:checked={tighten} onchange={compose} /> Pull the copper tight</label>
-      <label class="check"><input type="checkbox" bind:checked={strip} onchange={compose} /> Rip up unlocked copper first</label>
     {:else}
       <label class="check"><input type="checkbox" bind:checked={fanout} onchange={compose} /> Fan out pads first</label>
     {/if}
@@ -548,17 +615,25 @@
       </div>
     </details>
 
+    <label class="check" title="After routing, the router may move unlocked parts a little to make room for what it could not route">
+      <input type="checkbox" bind:checked={moveParts} onchange={compose} /> Let the router move parts
+    </label>
     <label class="check"><input type="checkbox" bind:checked={keepGoing} /> Continue from the last result</label>
     <label class="check"><input type="checkbox" bind:checked={rerouteOnDrop} /> Reroute after a part is moved</label>
-    <label class="check"><input type="checkbox" bind:checked={retireDesign} /> Let it rip the design's own wiring</label>
+    {#if engine !== 'core'}
+      <label class="check"><input type="checkbox" bind:checked={retireDesign} /> Let it rip the design's own wiring</label>
+    {/if}
 
     <div class="buttons">
       <button class="primary" onclick={() => route({ continue: keepGoing })} disabled={!connected}>
         {mode === 'routing' ? 'Restart' : 'Route'}
       </button>
-      <button onclick={nudgeAll} disabled={!connected} title="Route, then move unlocked parts that block open connections">Nudge</button>
       <button onclick={stop} disabled={!running}>Stop</button>
     </div>
+    <p class="muted small explain">
+      Route lays the whole board{keepGoing ? ', keeping the last result’s copper' : ' from the start'}{moveParts ? ', then moves unlocked parts for what is left' : ''}.
+      Each press is one complete run.
+    </p>
     <button class="quiet" onclick={load} disabled={!connected}>Show the board as designed</button>
     {#if message}<p class="warn">{message}</p>{/if}
     {/if}
@@ -587,7 +662,7 @@
           <button onclick={() => toggleLock(selectedPart.name)}>
             {locks.includes(selectedPart.name) ? 'Unlock' : 'Lock'}
           </button>
-          <button onclick={nudgeThis} title="Route, then let the nudger move only this part">Nudge it for me</button>
+          <button onclick={nudgeThis} title="One complete run in which the router may move only this part, a little, for connections it cannot otherwise make">Route, moving only this</button>
         </div>
         {/if}
         {#if selectedPart.fixed && !locks.includes(selectedPart.name) && !sentLocks.includes(selectedPart.name)}
@@ -601,19 +676,22 @@
     {/if}
 
     <section>
-      <h2>Locked <span class="muted">{locks.length + designFixed.length}</span></h2>
+      <h2
+        onmouseenter={() => highlight([...locks.map((n) => parts.find((p) => p.name === n)?.id), ...designFixed.map((p) => p.id)])}
+        onmouseleave={() => highlight([])}
+      >Locked <span class="muted">{locks.length + designFixed.length}</span></h2>
       {#if locks.length + designFixed.length === 0}
         <p class="muted">Nothing is locked.{STATIC ? '' : ' Select a part and press L, or Lock.'}</p>
       {:else}
         <div class="chips">
           {#each locks as name}
-            <span class="chip lock">
+            <span class="chip lock" role="listitem" onmouseenter={() => highlight([parts.find((p) => p.name === name)?.id])} onmouseleave={() => highlight([])}>
               <button class="link" onclick={() => selectByName(name)}>{name}</button>
               <button class="link x" onclick={() => toggleLock(name)} title="Unlock">×</button>
             </span>
           {/each}
           {#each designFixed as p}
-            <span class="chip fixed" title="Fixed in the design">
+            <span class="chip fixed" title="Fixed in the design" role="listitem" onmouseenter={() => highlight([p.id])} onmouseleave={() => highlight([])}>
               <button class="link" onclick={() => selectByName(p.name)}>{p.name}</button>
             </span>
           {/each}
@@ -672,12 +750,19 @@
         </dl>
         <div class="layers">
           {#each status.layers as layer, i}
-            <label class="check">
-              <input type="checkbox" checked={!layer.hidden} onchange={(e) => toggleLayer(i, !e.currentTarget.checked)} />
-              <span class="swatch" style="background: rgb({layer.color.map((c) => c * 255).join(',')})"></span>
-              {layer.name}
-            </label>
+            <div class="layer-row" class:active={layer.active}>
+              <input type="checkbox" checked={!layer.hidden} title="Show or hide" onchange={(e) => toggleLayer(i, !e.currentTarget.checked)} />
+              <button class="link layer-name" title="Make this the active layer" onclick={() => setActive(i)}>
+                <span class="swatch" style="background: rgb({layer.color.map((c) => c * 255).join(',')})"></span>
+                {layer.name}
+              </button>
+            </div>
           {/each}
+          <label class="check small-gap"><input type="checkbox" bind:checked={highContrast} onchange={() => { studio.set_high_contrast(highContrast); version++; }} /> High contrast (Ctrl+H)</label>
+          <label class="check small-gap"><input type="checkbox" bind:checked={flipped} /> Flip board view (Ctrl+Shift+F)</label>
+          <label class="check small-gap" title="The zone fills in the board file; KiCad refills them after routing">
+            <input type="checkbox" bind:checked={showPours} onchange={() => { studio.set_show_pours(showPours); version++; }} /> Old zone fills
+          </label>
         </div>
       </section>
       <details>
@@ -694,7 +779,50 @@
   </aside>
 
   <div class="stage">
-    <Board bind:this={board} {studio} {version} editable={!STATIC} ondrop={dropped} onselect={select} onhover={(h) => (hover = h)} />
+    <div class="canvas-area">
+    <Board
+      bind:this={board}
+      {studio}
+      {version}
+      mode={viewMode}
+      {flipped}
+      layers={status?.layers?.map((l) => l.name) ?? []}
+      editable={!STATIC}
+      ondrop={dropped}
+      onselect={select}
+      onhover={(h) => (hover = h)}
+    />
+    <div class="views segmented" role="group" aria-label="Which side to show">
+      {#each VIEWS as v}
+        <button class:on={viewMode === v.key} onclick={() => (viewMode = v.key)}>{v.label}</button>
+      {/each}
+      <button class="help-button" onclick={() => (showHelp = !showHelp)} title="View controls (?)">?</button>
+    </div>
+    {#if showHelp}
+      <div class="help">
+        <h2>View controls <button class="link" onclick={() => (showHelp = false)}>close</button></h2>
+        <dl>
+          <dt>Wheel</dt><dd>zoom about the pointer</dd>
+          <dt>Middle or right drag</dt><dd>pan (left drag on empty board too)</dd>
+          <dt>Home</dt><dd>zoom to fit (or double-click)</dd>
+          <dt>F1 / F2</dt><dd>zoom in / out</dd>
+          <dt>F4</dt><dd>centre on the pointer</dd>
+          <dt>PgUp / PgDn</dt><dd>front / back copper active</dd>
+          <dt>+ / −</dt><dd>next / previous copper layer</dd>
+          <dt>Ctrl+H</dt><dd>high contrast</dd>
+          <dt>Ctrl+Shift+F</dt><dd>flip board view</dd>
+          <dt>Click / drag a part</dt><dd>select / move it</dd>
+          <dt>Arrows, L, Esc</dt><dd>nudge, lock, deselect the selected part</dd>
+        </dl>
+      </div>
+    {/if}
+    {#if running && consoleLines.length}
+      <div class="doing">
+        <span class="pulse"></span>
+        <b>{status?.focus ?? (mode === 'loading' ? 'loading' : 'routing')}</b>
+        <span>{consoleLines[consoleLines.length - 1]?.replace(/^[^:]*: /, '')}</span>
+      </div>
+    {/if}
     {#if hover.part || hover.net}
       <div class="hover">
         {#if hover.part}<b>{hover.part.name}</b>{#if hover.part.fixed}<span class="muted">locked</span>{/if}{/if}
@@ -704,6 +832,18 @@
     {#if showCongestion}
       <div class="legend">
         <span>free</span><span class="ramp"></span><span>full</span>
+      </div>
+    {/if}
+    </div>
+    {#if !STATIC}
+      <div class="console" class:open={consoleOpen}>
+        <button class="console-head" onclick={() => (consoleOpen = !consoleOpen)}>
+          Router {consoleOpen ? '▾' : '▸'} <span class="muted">{consoleLines.length ? consoleLines[consoleLines.length - 1] : 'quiet'}</span>
+        </button>
+        {#if consoleOpen}
+          <pre bind:this={consoleBox}>{#each consoleLines.slice(-120) as line}<span class="phase-{line.split(':')[0].replace(/\s+/g, '-')}">{line}</span>
+{/each}</pre>
+        {/if}
       </div>
     {/if}
   </div>

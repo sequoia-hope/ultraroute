@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use board::{connectivity, connectivity_without_pours, nm, Board, ItemId, Kind, Nm};
 
 use crate::grid::{ObstacleMap, Profile, RouteGrid};
+use crate::report::{tell, Log};
 use crate::route::{lay, terminals, FieldSolver, Terminal};
 use crate::search::{route_astar, trace_back, GridPath};
 
@@ -39,6 +40,7 @@ pub struct NegotiationOptions {
     pub patience: usize,
     pub pours_block: bool,
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    pub log: Option<Log>,
 }
 
 impl Default for NegotiationOptions {
@@ -55,6 +57,7 @@ impl Default for NegotiationOptions {
             patience: 4,
             pours_block: false,
             cancel: None,
+            log: None,
         }
     }
 }
@@ -246,7 +249,7 @@ pub fn route_negotiated(
                 zones.add(c.net, &c.zone);
             }
         } else if options.threads > 1 {
-            route_round_in_parallel(&mut connections, &maps, &ends, &zones, &history, present, options);
+            route_round_in_parallel(&mut connections, &maps, &ends, &zones, &history, present, options, round, &sample, trials);
             zones = Claims::new(classes.iter().cloned(), layers * cells);
             for c in connections.iter_mut() {
                 c.zone = c.path.as_ref().map(|p| claims_of(p, &c.class)).unwrap_or_default();
@@ -258,6 +261,7 @@ pub fn route_negotiated(
                     break;
                 }
                 let c = &mut connections[k];
+                tell(&options.log, "negotiating", || format!("round {}: rerouting {}", round + 1, board.net_name(c.net)), None);
                 zones.remove(c.net, &c.zone);
                 let mut grid = maps[&c.class].view(c.net);
                 grid.penalty = penalties(zones.seen_by(&c.class), &history, present, c.net);
@@ -287,6 +291,7 @@ pub fn route_negotiated(
             colliding += usize::from(collides);
         }
         stats.conflicted = colliding;
+        tell(&options.log, "negotiating", || format!("round {}: {colliding} of {} routes still collide", round + 1, connections.len()), None);
         if colliding == 0 {
             break;
         }
@@ -318,6 +323,7 @@ pub fn route_negotiated(
         let Some(items) = lay(board, &grid, path, sources, targets) else { continue };
         committed.add(c.net, &c.zone);
         stats.committed += 1;
+        tell(&options.log, "committing", || format!("{}: laid its negotiated route", board.net_name(c.net)), None);
         stats.vias += items.iter().filter(|id| board.item(**id).is_some_and(|it| it.kind == Kind::Via)).count();
         stats.laid.extend(items);
         watch(board);
@@ -389,6 +395,8 @@ fn route_round_in_batches(
 }
 
 /// One Jacobi round: every connection routes on the CPU against the same congestion snapshot.
+/// While the workers route, this thread shows what they have found so far.
+#[allow(clippy::too_many_arguments)]
 fn route_round_in_parallel(
     connections: &mut [Connection],
     maps: &HashMap<String, ObstacleMap>,
@@ -397,10 +405,14 @@ fn route_round_in_parallel(
     history: &[u32],
     present: f64,
     options: &NegotiationOptions,
+    round: usize,
+    sample: &RouteGrid,
+    trials: &mut dyn FnMut(usize, &[Trial]),
 ) {
     let next = std::sync::atomic::AtomicUsize::new(0);
+    let done = std::sync::atomic::AtomicUsize::new(0);
     let jobs: Vec<(u32, &str)> = connections.iter().map(|c| (c.net, c.class.as_str())).collect();
-    let paths: Vec<std::sync::Mutex<Option<GridPath>>> = (0..connections.len()).map(|_| std::sync::Mutex::new(None)).collect();
+    let paths: Vec<std::sync::Mutex<Option<Option<GridPath>>>> = (0..connections.len()).map(|_| std::sync::Mutex::new(None)).collect();
     std::thread::scope(|scope| {
         for _ in 0..options.threads {
             scope.spawn(|| loop {
@@ -414,12 +426,30 @@ fn route_round_in_parallel(
                 let (sources, targets) = &ends[k];
                 let s: Vec<usize> = sources.iter().map(|t| t.0).collect();
                 let t: Vec<usize> = targets.iter().map(|t| t.0).collect();
-                *paths[k].lock().expect("no worker panics") = route_astar(&grid, &s, &t, options.via_cost);
+                *paths[k].lock().expect("no worker panics") = Some(route_astar(&grid, &s, &t, options.via_cost));
+                done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             });
+        }
+        while done.load(std::sync::atomic::Ordering::Relaxed) < jobs.len() {
+            std::thread::sleep(TRIAL_INTERVAL);
+            let shown: Vec<Trial> = connections
+                .iter()
+                .zip(&paths)
+                .filter_map(|(c, fresh)| {
+                    let fresh = fresh.lock().expect("no worker panics").clone();
+                    let path = fresh.unwrap_or_else(|| c.path.clone())?;
+                    Some((c.net, corners(&path).into_iter().map(|(l, i, j)| (sample.layers[l], sample.centre(i, j))).collect()))
+                })
+                .collect();
+            trials(round, &shown);
+            let n = done.load(std::sync::atomic::Ordering::Relaxed);
+            tell(&options.log, "negotiating", || format!("round {}: {n} of {} rerouted", round + 1, jobs.len()), None);
         }
     });
     for (c, path) in connections.iter_mut().zip(paths) {
-        c.path = path.into_inner().expect("no worker panics");
+        if let Some(path) = path.into_inner().expect("no worker panics") {
+            c.path = path;
+        }
     }
 }
 

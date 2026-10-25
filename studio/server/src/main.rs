@@ -398,11 +398,19 @@ fn jobs(root: &Path) -> Value {
             "dsn": input.dsn.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy()),
             "kicad_pcb": input.pcb.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy()),
             "kicad_project": input.project.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy()),
+            "studio": job_settings(&dir)["studio"].as_bool().unwrap_or(false),
+            "strip": job_settings(&dir)["strip"],
             "presets": presets,
             "notes": dir.join("README.md").is_file(),
         }));
     }
     Value::Array(out)
+}
+
+/// A job's `job.json`: whether the studio offers it (`studio`) and what copper to take out before
+/// routing (`strip`: true for unlocked tracks and vias, "all" for every one).
+fn job_settings(dir: &Path) -> Value {
+    std::fs::read_to_string(dir.join("job.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null)
 }
 
 /// A job's boards: a Specctra `.dsn` for copperroute, a `.kicad_pcb` for the core, and the
@@ -559,6 +567,14 @@ fn start(request: &Value, config: &Config, runner: &Arc<Runner>, owner: u64) -> 
         };
         args.extend([config.core.display().to_string(), "route".into(), from.display().to_string()]);
         args.extend(["-o".into(), output.display().to_string()]);
+        // A run continuing from an earlier result keeps that result's copper.
+        if from == *pcb {
+            match &job_settings(&dir)["strip"] {
+                Value::String(s) if s == "all" => args.push("--strip-all".into()),
+                Value::Bool(true) => args.push("--strip".into()),
+                _ => {}
+            }
+        }
         if load {
             args.push("--no-route".into());
         }

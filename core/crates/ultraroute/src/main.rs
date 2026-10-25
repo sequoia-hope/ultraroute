@@ -14,7 +14,7 @@ use board::{connectivity, connectivity_without_pours, Board, Item, ItemId, Kind,
 use kicad_pcb::{apply, mm, Edit};
 use serde_json::{json, Value};
 
-const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--negotiate] [--rip-up] [--nudge] [--tighten] [--gpu] \
+const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--negotiate] [--rip-up] [--nudge] [--tighten] [--gpu] \
 [--timeout SECONDS] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
 [--live PATH|-] [--live-fps N]";
 
@@ -22,6 +22,7 @@ struct Args {
     input: String,
     output: String,
     strip: bool,
+    strip_all: bool,
     negotiate: bool,
     rip_up: bool,
     tighten: bool,
@@ -45,6 +46,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
         input: String::new(),
         output: String::new(),
         strip: false,
+        strip_all: false,
         negotiate: false,
         rip_up: false,
         tighten: false,
@@ -69,6 +71,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
         match flag {
             "-o" | "--output" => a.output = value()?,
             "--strip" => a.strip = true,
+            "--strip-all" => a.strip_all = true,
             "--negotiate" => a.negotiate = true,
             "--rip-up" => a.rip_up = true,
             "--tighten" => a.tighten = true,
@@ -174,7 +177,10 @@ fn item_json(board: &Board, id: ItemId, item: &Item) -> Value {
 
 /// The board as the studio's frames: everything once, then what was added or removed.
 struct Live {
-    out: Box<dyn Write>,
+    out: Box<dyn Write + Send>,
+    /// Activity since the last frame, and where the router last looked.
+    activity: Vec<Value>,
+    focus: Value,
     sent: HashSet<ItemId>,
     seq: u64,
     started: Instant,
@@ -184,6 +190,33 @@ struct Live {
 }
 
 impl Live {
+    /// Takes the router's activity; when the board has not changed for a frame, sends it alone.
+    fn note(&mut self, act: grid::Activity) {
+        self.activity.push(json!(format!("{}: {}", act.phase, act.text)));
+        match act.focus {
+            Some(grid::Focus::Connection { net, from, to }) => {
+                self.focus = json!({"phase": act.phase, "net": net, "a": mm_xy(from), "b": mm_xy(to)});
+            }
+            Some(grid::Focus::Part(f)) => self.focus = json!({"phase": act.phase, "part": f + 1}),
+            None => {
+                if let Some(focus) = self.focus.as_object_mut() {
+                    focus.insert("phase".into(), json!(act.phase));
+                }
+            }
+        }
+        if self.last.is_some_and(|t| t.elapsed() < self.interval) {
+            return;
+        }
+        self.last = Some(Instant::now());
+        self.seq += 1;
+        let v = json!({
+            "t": "frame", "seq": self.seq, "ms": self.started.elapsed().as_millis() as u64,
+            "add": [], "del": [], "parts": [], "probes": [],
+            "events": std::mem::take(&mut self.activity), "focus": self.focus,
+        });
+        self.write(&v);
+    }
+
     fn write(&mut self, v: &Value) {
         let _ = serde_json::to_writer(&mut self.out, v);
         let _ = self.out.write_all(b"\n");
@@ -206,7 +239,7 @@ impl Live {
     }
 
     /// Negotiation's current trial routes, drawn over the board until the next ones.
-    fn trials(&mut self, round: usize, trials: &[grid::Trial]) {
+    fn trials(&mut self, _round: usize, trials: &[grid::Trial]) {
         if self.last.is_some_and(|t| t.elapsed() < self.interval) {
             return;
         }
@@ -231,7 +264,7 @@ impl Live {
         let v = json!({
             "t": "frame", "seq": self.seq, "ms": self.started.elapsed().as_millis() as u64,
             "add": [], "del": [], "parts": [], "probes": [],
-            "events": [format!("negotiation round {}: {} trial routes", round + 1, trials.len())],
+            "events": std::mem::take(&mut self.activity), "focus": self.focus,
             "trial": runs,
         });
         self.write(&v);
@@ -267,7 +300,8 @@ impl Live {
             .collect();
         let v = json!({
             "t": "frame", "seq": self.seq, "ms": self.started.elapsed().as_millis() as u64,
-            "add": add, "del": del, "parts": parts, "probes": [], "events": events,
+            "add": add, "del": del, "parts": parts, "probes": [],
+            "events": events.into_iter().chain(std::mem::take(&mut self.activity)).collect::<Vec<_>>(), "focus": self.focus,
             "open": air.len(), "air": air, "trial": [],
         });
         self.write(&v);
@@ -310,7 +344,7 @@ fn main() {
 
     let cancel = Arc::new(AtomicBool::new(false));
     let mut live = a.live.as_ref().map(|path| {
-        let out: Box<dyn Write> = if path == "-" {
+        let out: Box<dyn Write + Send> = if path == "-" {
             let cancel = cancel.clone();
             std::thread::spawn(move || {
                 for line in std::io::stdin().lines() {
@@ -325,7 +359,7 @@ fn main() {
         } else {
             Box::new(std::io::BufWriter::new(std::fs::File::create(path).expect("create the live file")))
         };
-        Live { out, sent: HashSet::new(), seq: 0, started: Instant::now(), last: None, interval: Duration::from_secs_f64(1.0 / a.fps.max(1.0)), pours_join: a.pours_block }
+        Live { out, activity: Vec::new(), focus: Value::Null, sent: HashSet::new(), seq: 0, started: Instant::now(), last: None, interval: Duration::from_secs_f64(1.0 / a.fps.max(1.0)), pours_join: a.pours_block }
     });
 
     let mut removed = Vec::new();
@@ -343,8 +377,12 @@ fn main() {
         let ripped = board.move_footprint(fp, Point::new(target.x - at.x, target.y - at.y));
         removed.extend(ripped.iter().filter_map(|it| it.span));
     }
-    if a.strip {
-        let loose: Vec<ItemId> = board.items().filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked).map(|(id, _)| id).collect();
+    if a.strip || a.strip_all {
+        let loose: Vec<ItemId> = board
+            .items()
+            .filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via) && (a.strip_all || !it.locked))
+            .map(|(id, _)| id)
+            .collect();
         for id in loose {
             if let Some(it) = board.remove(id) {
                 removed.extend(it.span);
@@ -377,17 +415,29 @@ fn main() {
         }
     }
     let mut laid = Vec::new();
-    let live = std::cell::RefCell::new(live);
+    let live = Arc::new(std::sync::Mutex::new(live));
+    let shared = live.clone();
+    let log = a.live.is_some().then(|| {
+        grid::Log(Arc::new(move |act| {
+            if let Some(l) = shared.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+                l.note(act);
+            }
+        }))
+    });
+    let say = |phase: &'static str, text: String| {
+        if let Some(grid::Log(log)) = &log {
+            log(grid::Activity { phase, text, focus: None });
+        }
+    };
     let mut watch = |b: &Board| {
-        if let Some(l) = live.borrow_mut().as_mut() {
+        if let Some(l) = live.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
             l.frame(b, false, Vec::new());
         }
     };
+    say("start", format!("{} connections to make", connectivity_without_pours(&board).airlines.len()));
     if a.negotiate {
-        // Streaming live, connections reroute one after another so their trials show as they
-        // change; otherwise every core takes a share of each round.
         let cores = std::thread::available_parallelism().map_or(1, |n| n.get() / 2).max(1);
-        let threads = a.threads.unwrap_or(if a.live.is_some() { 1 } else { cores });
+        let threads = a.threads.unwrap_or(cores);
         let n = grid::route_negotiated(
             &mut board,
             solver.as_mut(),
@@ -396,11 +446,12 @@ fn main() {
                 threads,
                 pours_block: a.pours_block,
                 cancel: Some(cancel.clone()),
+                log: log.clone(),
                 ..Default::default()
             },
             &mut watch,
             &mut |round, trials| {
-                if let Some(l) = live.borrow_mut().as_mut() {
+                if let Some(l) = live.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
                     l.trials(round, trials);
                 }
             },
@@ -419,8 +470,10 @@ fn main() {
         max_seconds: a.timeout.map(|s| (s - started.elapsed().as_secs_f64()).max(0.0)),
         pours_block: a.pours_block,
         cancel: Some(cancel.clone()),
+        log: log.clone(),
         ..Default::default()
     };
+    say("finishing", "routing what negotiation left, one connection at a time".to_string());
     let stats = grid::route_open(&mut board, solver.as_mut(), &options, &mut watch);
     laid.extend(stats.laid.iter().copied());
     if a.rip_up {
@@ -431,6 +484,7 @@ fn main() {
                 max_seconds: a.timeout.map(|s| (s - started.elapsed().as_secs_f64()).max(0.0)),
                 pours_block: a.pours_block,
                 cancel: Some(cancel.clone()),
+                log: log.clone(),
                 ..Default::default()
             },
             &mut laid,
@@ -448,6 +502,7 @@ fn main() {
                 locked,
                 pours_block: a.pours_block,
                 cancel: Some(cancel.clone()),
+                log: log.clone(),
                 ..Default::default()
             },
             &mut laid,
@@ -458,7 +513,9 @@ fn main() {
         eprintln!("nudge: {} steps tried, {} illegal, {} kept, moved {names:?}, {:.1} s", n.tried, n.illegal, n.kept, started.elapsed().as_secs_f64());
     }
     if a.tighten {
+        say("tightening", "straightening the routed copper".to_string());
         let c = grid::pull_tight(&mut board, &mut laid);
+        say("tightening", format!("{} segments became {}, {:.0} mm became {:.0} mm", c.segments_before, c.segments_after, c.length_before, c.length_after));
         eprintln!(
             "pulled tight: {} -> {} segments, {:.0} -> {:.0} mm, {:.1} s",
             c.segments_before,
@@ -477,7 +534,7 @@ fn main() {
         eprintln!("{}: {e}", a.output);
         std::process::exit(1);
     }
-    let mut live = live.into_inner();
+    let mut live = live.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(l) = live.as_mut() {
         l.frame(&board, true, Vec::new());
         let stopped = if cancel.load(Ordering::Relaxed) {

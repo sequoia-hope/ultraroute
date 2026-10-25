@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use board::{check_item, connectivity, connectivity_without_pours, point_segment, Board, ItemId, Kind, Nm, Point, Shape};
 use kicad_pcb::Span;
 
+use crate::report::{tell, Focus, Log};
 use crate::route::{route_open, FieldSolver, Options};
 
 #[derive(Debug, Clone)]
@@ -29,6 +30,7 @@ pub struct NudgeOptions {
     pub locked: HashSet<usize>,
     pub pours_block: bool,
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    pub log: Option<Log>,
 }
 
 impl Default for NudgeOptions {
@@ -44,6 +46,7 @@ impl Default for NudgeOptions {
             locked: HashSet::new(),
             pours_block: false,
             cancel: None,
+            log: None,
         }
     }
 }
@@ -154,6 +157,13 @@ pub fn nudge(board: &mut Board, solver: &mut dyn FieldSolver, options: &NudgeOpt
                         let snapshot = board.clone();
                         let soft_before = soft.clone();
                         let by = Point::new(dx * step, dy * step);
+                        let reference = board.footprints[footprint].reference.clone();
+                        tell(
+                            &options.log,
+                            "nudging",
+                            || format!("{reference}: trying {:+.2}, {:+.2} mm for {}", (dx * step) as f64 * 1e-6, -(dy * step) as f64 * 1e-6, board.net_name(airline.net)),
+                            Some(Focus::Part(footprint)),
+                        );
                         let ripped = board.move_footprint(footprint, by);
                         if !legal(board, footprint) {
                             stats.illegal += 1;
@@ -166,11 +176,13 @@ pub fn nudge(board: &mut Board, solver: &mut dyn FieldSolver, options: &NudgeOpt
                             max_seconds: Some(options.reroute_seconds),
                             pours_block: options.pours_block,
                             cancel: options.cancel.clone(),
+                            log: None,
                         };
                         let again = route_open(board, solver, &reroute, &mut |_| {});
                         if open_count(board, options.pours_block) < before {
                             soft.extend(again.laid);
                             stats.kept += 1;
+                            tell(&options.log, "nudging", || format!("{reference}: moved, {} connections open", open_count(board, options.pours_block)), None);
                             stats.ripped_spans.extend(ripped.iter().filter_map(|it| it.span));
                             match stats.moved.iter_mut().find(|(f, _)| *f == footprint) {
                                 Some((_, total)) => *total = Point::new(total.x + by.x, total.y + by.y),

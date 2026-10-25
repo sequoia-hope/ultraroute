@@ -3,7 +3,10 @@
   import { Renderer } from './renderer.js';
 
   // studio: the WASM scene. version: bumped whenever the scene changed.
-  let { studio, version, editable = true, ondrop, onselect, onhover } = $props();
+  // mode: 'all', 'top', 'bottom' or 'split' (top and bottom side by side, the bottom seen
+  // from below). layers: the layer names, front to back.
+  // flipped: the whole board seen from below, as KiCad's Flip Board View.
+  let { studio, version, mode = 'all', flipped = false, layers = [], editable = true, ondrop, onselect, onhover } = $props();
 
   let canvas;
   let renderer;
@@ -12,20 +15,41 @@
   let fitted = false;
   let drawn = -1;
   let drawnZoom = 0;
+  let drawnMode = '';
   let viewChanged = true;
   let drag = null;
   let hoverPart = 0;
   let hoverNet = 0;
 
-  const BACKGROUND = [0.063, 0.11, 0.145];
+  // KiCad's default background.
+  const BACKGROUND = [0, 16 / 255, 35 / 255];
+  let pointer = null;
+  const ALL = 0xffffffff;
+
+  const top = () => 1;
+  const bottom = () => (layers.length > 1 ? 1 << (layers.length - 1) : 1);
+
+  // The panes the canvas is split into, each with its layers and whether it is mirrored.
+  function panes() {
+    const w = canvas.width, h = canvas.height;
+    if (mode === 'split') {
+      const half = Math.floor(w / 2);
+      return [
+        { rect: { x: 0, y: 0, w: half, h }, mask: top(), mirror: false },
+        { rect: { x: half, y: 0, w: w - half, h }, mask: bottom(), mirror: true },
+      ];
+    }
+    const mask = mode === 'top' ? top() : mode === 'bottom' ? bottom() : ALL;
+    return [{ rect: { x: 0, y: 0, w, h }, mask, mirror: mode === 'bottom' || (mode === 'all' && flipped) }];
+  }
 
   function fit() {
     const b = studio.bbox();
-    if (!(b[2] > b[0])) return false;
-    const w = canvas.width, h = canvas.height;
+    if (!(b[2] > b[0]) || !canvas) return false;
+    const pane = panes()[0].rect;
     view.cx = (b[0] + b[2]) / 2;
     view.cy = (b[1] + b[3]) / 2;
-    view.zoom = 0.92 * Math.min(w / (b[2] - b[0]), h / (b[3] - b[1]));
+    view.zoom = 0.92 * Math.min(pane.w / (b[2] - b[0]), pane.h / (b[3] - b[1]));
     viewChanged = true;
     return true;
   }
@@ -34,26 +58,35 @@
     fitted = fit();
   }
 
-  function toBoard(event) {
+  // The board point under the pointer, in the pane the pointer is over, with `using` as the view.
+  function toBoard(event, using = view) {
     const rect = canvas.getBoundingClientRect();
     const dpr = canvas.width / rect.width;
-    const x = (event.clientX - rect.left) * dpr - canvas.width / 2;
-    const y = canvas.height / 2 - (event.clientY - rect.top) * dpr;
-    return [view.cx + x / view.zoom, view.cy + y / view.zoom];
+    const px = (event.clientX - rect.left) * dpr;
+    const py = canvas.height - (event.clientY - rect.top) * dpr;
+    const pane = panes().find((p) => px >= p.rect.x && px < p.rect.x + p.rect.w) ?? panes()[0];
+    let x = px - (pane.rect.x + pane.rect.w / 2);
+    const y = py - (pane.rect.y + pane.rect.h / 2);
+    if (pane.mirror) x = -x;
+    return [using.cx + x / using.zoom, using.cy + y / using.zoom];
   }
 
   function frame() {
-    if (renderer) {
+    if (renderer && canvas) {
+      const now = performance.now();
       if (!fitted && version > 0) fitted = fit();
       const pxChanged = Math.abs(drawnZoom - view.zoom) / view.zoom > 0.15;
-      if (version !== drawn || pxChanged) {
-        renderer.upload(studio.mesh(1 / view.zoom));
+      const moving = studio.animating(now);
+      if (version !== drawn || pxChanged || mode + flipped !== drawnMode || moving) {
+        panes().forEach((p, i) => renderer.upload(i, studio.mesh_view(1 / view.zoom, p.mask, now)));
         drawn = version;
         drawnZoom = view.zoom;
+        drawnMode = mode + flipped;
         viewChanged = true;
       }
       if (viewChanged) {
-        renderer.draw(view, BACKGROUND);
+        renderer.clear(BACKGROUND);
+        panes().forEach((p, i) => renderer.draw(i, view, p.rect, p.mirror));
         viewChanged = false;
       }
     }
@@ -79,11 +112,39 @@
     viewChanged = true;
   }
 
+  // KiCad's zoom keys: Home fits, F1 and F2 zoom in and out about the pointer, F4 centres on it.
+  function zoomAbout(factor, event) {
+    const at = event ? toBoard(event) : [view.cx, view.cy];
+    view.zoom = Math.min(2000, Math.max(0.2, view.zoom * factor));
+    if (event) {
+      const after = toBoard(event);
+      view.cx += at[0] - after[0];
+      view.cy += at[1] - after[1];
+    }
+    viewChanged = true;
+  }
+
+  function key(event) {
+    if (/INPUT|TEXTAREA|SELECT/.test(event.target.tagName)) return;
+    const handled = { Home: () => refit(), F1: () => zoomAbout(1.4, pointer), F2: () => zoomAbout(1 / 1.4, pointer) };
+    if (event.key === 'F4' && pointer) {
+      const at = toBoard(pointer);
+      view.cx = at[0];
+      view.cy = at[1];
+      viewChanged = true;
+      event.preventDefault();
+    } else if (handled[event.key]) {
+      handled[event.key]();
+      event.preventDefault();
+    }
+  }
+
   function down(event) {
     canvas.setPointerCapture(event.pointerId);
     const at = toBoard(event);
+    // Middle and right buttons pan, as in KiCad; the left picks a part or pans empty board.
     const part = event.button === 0 && !event.shiftKey ? studio.part_at(at[0], at[1]) : 0;
-    drag = { part, start: at, client: [event.clientX, event.clientY], view: { ...view }, moved: false };
+    drag = { part, start: at, view: { ...view }, moved: false };
     if (part) {
       studio.set_picked(part);
       drawn = -1;
@@ -91,6 +152,7 @@
   }
 
   function move(event) {
+    pointer = { clientX: event.clientX, clientY: event.clientY };
     const at = toBoard(event);
     if (drag) {
       drag.moved = true;
@@ -100,10 +162,10 @@
         studio.set_offset(drag.part, at[0] - drag.start[0], at[1] - drag.start[1]);
         drawn = -1;
       } else {
-        const rect = canvas.getBoundingClientRect();
-        const dpr = canvas.width / rect.width;
-        view.cx = drag.view.cx - ((event.clientX - drag.client[0]) * dpr) / view.zoom;
-        view.cy = drag.view.cy + ((event.clientY - drag.client[1]) * dpr) / view.zoom;
+        // Keep the point grabbed under the pointer, in either pane, mirrored or not.
+        const held = toBoard(event, drag.view);
+        view.cx = drag.view.cx - (held[0] - drag.start[0]);
+        view.cy = drag.view.cy - (held[1] - drag.start[1]);
         viewChanged = true;
       }
       return;
@@ -132,6 +194,12 @@
     drag = null;
   }
 
+  $effect(() => {
+    mode;
+    flipped;
+    if (canvas) fitted = fit();
+  });
+
   onMount(() => {
     try {
       renderer = new Renderer(canvas);
@@ -146,8 +214,12 @@
   });
 </script>
 
+<svelte:window onkeydown={key} />
+
 <div class="board">
   <canvas
+    oncontextmenu={(e) => e.preventDefault()}
+    onpointerleave={() => (pointer = null)}
     bind:this={canvas}
     onwheel={wheel}
     onpointerdown={down}
@@ -155,6 +227,17 @@
     onpointerup={up}
     ondblclick={refit}
   ></canvas>
+  {#if mode === 'split'}
+    <span class="side left">Top</span>
+    <span class="side right">Bottom, seen from below</span>
+    <span class="divider"></span>
+  {:else if mode === 'bottom'}
+    <span class="side left">Bottom, seen from below</span>
+  {:else if mode === 'top'}
+    <span class="side left">Top</span>
+  {:else if flipped}
+    <span class="side left">Flipped: seen from below</span>
+  {/if}
   {#if error}<p class="error">{error}</p>{/if}
 </div>
 
@@ -170,6 +253,29 @@
     display: block;
     touch-action: none;
     cursor: crosshair;
+  }
+  .side {
+    position: absolute;
+    top: 10px;
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    pointer-events: none;
+  }
+  .left {
+    left: 14px;
+  }
+  .right {
+    left: calc(50% + 14px);
+  }
+  .divider {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    border-left: 1px solid var(--line);
+    pointer-events: none;
   }
   .error {
     position: absolute;

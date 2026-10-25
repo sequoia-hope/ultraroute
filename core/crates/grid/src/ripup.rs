@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 use board::{check_item, connectivity, connectivity_without_pours, Board, ItemId};
 
 use crate::grid::{ObstacleMap, Profile};
+use crate::report::{tell, Focus, Log};
 use crate::route::{pieces, route_open, terminals, FieldSolver, Options};
 
 #[derive(Debug, Clone)]
@@ -23,6 +24,7 @@ pub struct RipOptions {
     pub reroute_seconds: f64,
     pub pours_block: bool,
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    pub log: Option<Log>,
 }
 
 impl Default for RipOptions {
@@ -35,6 +37,7 @@ impl Default for RipOptions {
             reroute_seconds: 10.0,
             pours_block: false,
             cancel: None,
+            log: None,
         }
     }
 }
@@ -85,6 +88,13 @@ pub fn rip_up(board: &mut Board, solver: &mut dyn FieldSolver, options: &RipOpti
                 continue;
             }
             stats.attempts += 1;
+            let net_name = board.net_name(airline.net).to_string();
+            tell(
+                &options.log,
+                "ripping up",
+                || format!("{net_name}: looking for a way through the router's own copper"),
+                Some(Focus::Connection { net: airline.net, from: airline.from, to: airline.to }),
+            );
             let soft_set: HashSet<ItemId> = soft.iter().copied().filter(|id| board.item(*id).is_some()).collect();
             let profile = Profile::for_net(board, airline.net);
             let hard_map = hard.entry(profile.class.clone()).or_insert_with(|| {
@@ -103,6 +113,7 @@ pub fn rip_up(board: &mut Board, solver: &mut dyn FieldSolver, options: &RipOpti
             let target_cells: Vec<usize> = targets.iter().map(|t| t.0).collect();
             let Some(path) = solver.route(&grid, &source_cells, &target_cells, options.via_cost) else {
                 stats.no_path += 1;
+                tell(&options.log, "ripping up", || format!("{net_name}: no way through, even ripping"), None);
                 continue;
             };
             let Some(new) = pieces(&grid, &path, &sources, &targets) else { continue };
@@ -139,6 +150,7 @@ pub fn rip_up(board: &mut Board, solver: &mut dyn FieldSolver, options: &RipOpti
             }
             if !ok {
                 stats.hard_conflict += 1;
+                tell(&options.log, "ripping up", || format!("{net_name}: blocked by copper that may not be ripped"), None);
                 *board = snapshot;
                 continue;
             }
@@ -149,15 +161,19 @@ pub fn rip_up(board: &mut Board, solver: &mut dyn FieldSolver, options: &RipOpti
                 max_seconds: Some(options.reroute_seconds),
                 pours_block: options.pours_block,
                 cancel: options.cancel.clone(),
+                log: options.log.clone(),
             };
+            tell(&options.log, "ripping up", || format!("{net_name}: ripped {ripped} pieces, rerouting them"), None);
             let again = route_open(board, solver, &reroute, &mut |_| {});
             soft.extend(again.laid);
             if open_count(board, options.pours_block) < before {
                 stats.kept += 1;
                 stats.ripped += ripped;
+                tell(&options.log, "ripping up", || format!("{net_name}: kept, {} connections open", open_count(board, options.pours_block)), None);
                 watch(board);
             } else {
                 stats.no_better += 1;
+                tell(&options.log, "ripping up", || format!("{net_name}: no better, put back"), None);
                 *board = snapshot;
                 *soft = soft_before;
             }
