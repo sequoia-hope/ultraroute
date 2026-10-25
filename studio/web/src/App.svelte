@@ -253,9 +253,15 @@
     send('run', argsText.split(/\s+/).filter(Boolean), locks, options);
   }
 
+  // Copperroute nudges as a backend of its own; the core as a pass after routing.
+  function nudgeArgs() {
+    const args = argsText.split(/\s+/).filter(Boolean);
+    return engine === 'core' ? [...args.filter((a) => a !== '--nudge'), '--nudge'] : withBackend(args, 'nudge');
+  }
+
   function nudgeAll() {
     leaveReplay();
-    send('run', withBackend(argsText.split(/\s+/).filter(Boolean), 'nudge'), locks, { continue: keepGoing });
+    send('run', nudgeArgs(), locks, { continue: keepGoing });
   }
 
   // Lets the nudger move only this part: every other part is locked for the run.
@@ -263,7 +269,7 @@
     if (!selected) return;
     const others = parts.map((p) => p.name).filter((n) => n !== selected.name);
     leaveReplay();
-    send('run', withBackend(argsText.split(/\s+/).filter(Boolean), 'nudge'), others, { continue: keepGoing });
+    send('run', nudgeArgs(), others, { continue: keepGoing });
   }
 
   function stop() {
@@ -550,7 +556,7 @@
       <button class="primary" onclick={() => route({ continue: keepGoing })} disabled={!connected}>
         {mode === 'routing' ? 'Restart' : 'Route'}
       </button>
-      <button onclick={nudgeAll} disabled={!connected || engine === 'core'} title="Route, then move unlocked parts that block open connections">Nudge</button>
+      <button onclick={nudgeAll} disabled={!connected} title="Route, then move unlocked parts that block open connections">Nudge</button>
       <button onclick={stop} disabled={!running}>Stop</button>
     </div>
     <button class="quiet" onclick={load} disabled={!connected}>Show the board as designed</button>
@@ -581,7 +587,7 @@
           <button onclick={() => toggleLock(selectedPart.name)}>
             {locks.includes(selectedPart.name) ? 'Unlock' : 'Lock'}
           </button>
-          <button onclick={nudgeThis} disabled={engine === 'core'} title="Route, then let the nudger move only this part">Nudge it for me</button>
+          <button onclick={nudgeThis} title="Route, then let the nudger move only this part">Nudge it for me</button>
         </div>
         {/if}
         {#if selectedPart.fixed && !locks.includes(selectedPart.name) && !sentLocks.includes(selectedPart.name)}

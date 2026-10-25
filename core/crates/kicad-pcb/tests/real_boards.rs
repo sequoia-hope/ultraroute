@@ -169,3 +169,32 @@ fn copper_written_back_reads_the_same() {
     assert!(written.ends_with(&removed[close..]));
     assert_eq!(removed.matches("\n\t(segment\n").count() + removed.matches("\n\t(via\n").count(), 0);
 }
+
+/// Courtyards as read hold the pads they surround; a few library footprints draw theirs a
+/// hair inside their own pads (the earring's USON-8), so 95%, not all, are asked for.
+#[test]
+fn most_footprints_have_a_courtyard_around_their_pads() {
+    for name in ["bluebuzz-rm2.kicad_pcb", "earring.kicad_pcb"] {
+        let (pcb, copper, _) = board(name);
+        let with: Vec<usize> = (0..pcb.footprints.len()).filter(|&i| copper.courtyards[i].is_some()).collect();
+        assert!(with.len() * 10 >= pcb.footprints.len() * 8, "{name}: {} of {}", with.len(), pcb.footprints.len());
+        let (mut pads, mut inside) = (0, 0);
+        for i in with {
+            let yard = copper.courtyards[i].as_ref().unwrap();
+            for pad in &pcb.footprints[i].pads {
+                let p = pad.position;
+                let mut odd = false;
+                for k in 0..yard.len() {
+                    let (a, b) = (yard[k], yard[(k + 1) % yard.len()]);
+                    if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < a[0] + (p[1] - a[1]) / (b[1] - a[1]) * (b[0] - a[0]) {
+                        odd = !odd;
+                    }
+                }
+                let on_edge = (0..yard.len()).any(|k| segment_distance(p, yard[k], yard[(k + 1) % yard.len()]) < 1e-9);
+                pads += 1;
+                inside += (odd || on_edge) as usize;
+            }
+        }
+        assert!(inside * 100 >= pads * 95, "{name}: {inside} of {pads} pads inside their courtyards");
+    }
+}

@@ -102,7 +102,13 @@ with WebGPU) under MIT. Estimate ~15k lines:
       of router copper between fixed points while keeping everything it joins. Earring 5 open,
       3403 → 1305 segments, 1207 → 1164 mm; stripped bluebuzz 4 (its leftovers are walled in by
       fixed copper: a job for nudging, not rip-up). 0 errors.
-- [ ] Fewer vias in cleanup; nudge and diffusion on the core for what fixed copper walls in.
+- [x] Courtyards read; a core nudger (`--nudge`): parts near a blocked airline stepped 0.25–1 mm
+      in eight directions, kept only when legal (pads clear, no courtyard overlap) and fewer
+      connections stay open. On the packed earring nearly every step is illegal and none helps.
+- [x] `tools/kicad_bench.py`: both routers on the same KiCad board, judged by KiCad after a
+      refill. Earring: core 5 open / 0 new errors / 304 vias / 48 s; copperroute grid 18 / 0 /
+      196 / 427 s; copperroute maze 37 / 2 / 140 / 150 s. (Nudge and bluebuzz still to run.)
+- [ ] Fewer vias (the core uses ~1.5× copperroute's); diffusion on the core.
 - [ ] copperroute kept as the reference router across the process boundary until the core
       matches it on the leaderboards.
 

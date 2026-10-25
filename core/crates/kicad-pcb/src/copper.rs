@@ -28,6 +28,9 @@ pub struct Copper {
     pub locked_footprints: Vec<bool>,
     /// Where each footprint's `(at x y angle)` is in the text, in the order of `Pcb::footprints`.
     pub footprint_at: Vec<Option<Span>>,
+    /// Each footprint's courtyard as the convex hull of its courtyard drawing, in board
+    /// coordinates; `None` for a footprint without one. In the order of `Pcb::footprints`.
+    pub courtyards: Vec<Option<Vec<[f64; 2]>>>,
     pub warnings: Vec<String>,
 }
 
@@ -198,6 +201,7 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
         pads: Vec::new(),
         locked_footprints: Vec::new(),
         footprint_at: Vec::new(),
+        courtyards: Vec::new(),
         warnings: Vec::new(),
     };
     let mut copper_graphics = 0;
@@ -257,6 +261,7 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
                 };
                 copper.locked_footprints.push(locked(child));
                 copper.footprint_at.push(child.find("at").map(|a| a.pos().into()));
+                copper.courtyards.push(courtyard(child, fp)?);
                 for (index, pad) in child.find_all("pad").enumerate() {
                     copper.pads.push(read_pad(pad, footprint, index, fp)?);
                 }
@@ -274,6 +279,71 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
         ));
     }
     Ok(copper)
+}
+
+/// The convex hull of a footprint's courtyard drawing, placed on the board.
+fn courtyard(fp_node: &Node, fp: &Footprint) -> Result<Option<Vec<[f64; 2]>>, KicadParse> {
+    let mut local: Vec<[f64; 2]> = Vec::new();
+    for g in fp_node.args() {
+        let on_courtyard = g.find("layer").and_then(|l| l.args().first()).and_then(Node::text).is_some_and(|l| l.ends_with(".CrtYd"));
+        if !on_courtyard {
+            continue;
+        }
+        match g.head() {
+            Some("fp_line") | Some("fp_rect") => {
+                let (a, b) = (point(g, "start")?, point(g, "end")?);
+                if g.head() == Some("fp_rect") {
+                    local.extend([a, [b[0], a[1]], b, [a[0], b[1]]]);
+                } else {
+                    local.extend([a, b]);
+                }
+            }
+            Some("fp_poly") => {
+                if let Some(p) = g.find("pts") {
+                    local.extend(pts(p)?);
+                }
+            }
+            Some("fp_circle") => {
+                let (c, e) = (point(g, "center")?, point(g, "end")?);
+                local.extend(circle(c, (e[0] - c[0]).hypot(e[1] - c[1])));
+            }
+            Some("fp_arc") => local.extend(arc_points(point(g, "start")?, point(g, "mid")?, point(g, "end")?)),
+            _ => {}
+        }
+    }
+    if local.len() < 3 {
+        return Ok(None);
+    }
+    let placed: Vec<[f64; 2]> = local.into_iter().map(|p| fp.place(p)).collect();
+    Ok(Some(hull(placed)))
+}
+
+/// Andrew's monotone chain.
+fn hull(mut points: Vec<[f64; 2]>) -> Vec<[f64; 2]> {
+    points.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
+    points.dedup();
+    if points.len() < 3 {
+        return points;
+    }
+    let cross = |o: [f64; 2], a: [f64; 2], b: [f64; 2]| (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    let mut lower: Vec<[f64; 2]> = Vec::new();
+    for &p in &points {
+        while lower.len() >= 2 && cross(lower[lower.len() - 2], lower[lower.len() - 1], p) <= 0.0 {
+            lower.pop();
+        }
+        lower.push(p);
+    }
+    let mut upper: Vec<[f64; 2]> = Vec::new();
+    for &p in points.iter().rev() {
+        while upper.len() >= 2 && cross(upper[upper.len() - 2], upper[upper.len() - 1], p) <= 0.0 {
+            upper.pop();
+        }
+        upper.push(p);
+    }
+    lower.pop();
+    upper.pop();
+    lower.extend(upper);
+    lower
 }
 
 fn read_zone(z: &Node, footprint: Option<usize>) -> Result<Zone, KicadParse> {

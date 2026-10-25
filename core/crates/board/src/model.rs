@@ -65,6 +65,8 @@ pub struct FootprintInfo {
     pub locked: bool,
     /// Where its `(at …)` is in the board file.
     pub at_span: Option<Span>,
+    /// Its courtyard outline, if it has one.
+    pub courtyard: Option<Vec<Point>>,
 }
 
 #[derive(Debug, Clone)]
@@ -119,13 +121,15 @@ impl Board {
                 .iter()
                 .zip(&copper.locked_footprints)
                 .zip(&copper.footprint_at)
-                .map(|((f, locked), at_span)| FootprintInfo {
+                .zip(&copper.courtyards)
+                .map(|(((f, locked), at_span), yard)| FootprintInfo {
                     reference: f.reference.clone(),
                     at: Point::from_m(f.at),
                     rotation_deg: f.rotation_deg,
                     back: matches!(f.side, kicad_pcb::Side::Back),
                     locked: *locked,
                     at_span: *at_span,
+                    courtyard: yard.as_ref().map(|y| y.iter().copied().map(Point::from_m).collect()),
                 })
                 .collect(),
             outline: Vec::new(),
@@ -371,6 +375,11 @@ impl Board {
         }
         if let Some(f) = self.footprints.get_mut(footprint) {
             f.at = Point::new(f.at.x + by.x, f.at.y + by.y);
+            if let Some(yard) = f.courtyard.as_mut() {
+                for p in yard.iter_mut() {
+                    *p = Point::new(p.x + by.x, p.y + by.y);
+                }
+            }
         }
         ripped
     }

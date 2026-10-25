@@ -199,7 +199,7 @@ pub fn route_negotiated(
     let sample = maps.values().next().expect("one map per class").view(0);
     let (nx, ny, layers) = (sample.nx, sample.ny, sample.layers.len());
     let cells = nx * ny;
-    let mut discs: HashMap<(String, String), (Vec<(i32, i32)>, Vec<(i32, i32)>)> = HashMap::new();
+    let mut discs: HashMap<(String, String), Discs> = HashMap::new();
     for (owner, a) in &maps {
         for (viewer, b) in &maps {
             discs.insert((owner.clone(), viewer.clone()), zone_discs(board, &a.profile, &b.profile, options.cell));
@@ -423,10 +423,13 @@ fn route_round_in_parallel(
     }
 }
 
+/// Cell offsets claimed around a trace cell and around a via cell.
+type Discs = (Vec<(i32, i32)>, Vec<(i32, i32)>);
+
 /// Cell offsets within the zone radius of an owner's trace cell and via cell, as a viewer class
 /// sees them: the owner's trace or via against the viewer's trace, at the clearance between the
 /// two classes, plus each side's step reach.
-fn zone_discs(board: &Board, owner: &Profile, viewer: &Profile, h: Nm) -> (Vec<(i32, i32)>, Vec<(i32, i32)>) {
+fn zone_discs(board: &Board, owner: &Profile, viewer: &Profile, h: Nm) -> Discs {
     let (half_width, via, widest) = (owner.half_width as f64, owner.via_radius as f64, viewer.half_width as f64);
     let clearance = owner.clearance.max(viewer.clearance).max(nm(board.rules.min_clearance)) as f64;
     let h = h as f64;

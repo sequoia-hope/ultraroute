@@ -14,7 +14,7 @@ use board::{connectivity, connectivity_without_pours, Board, Item, ItemId, Kind,
 use kicad_pcb::{apply, mm, Edit};
 use serde_json::{json, Value};
 
-const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--negotiate] [--rip-up] [--tighten] [--gpu] \
+const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--negotiate] [--rip-up] [--nudge] [--tighten] [--gpu] \
 [--timeout SECONDS] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
 [--live PATH|-] [--live-fps N]";
 
@@ -25,6 +25,8 @@ struct Args {
     negotiate: bool,
     rip_up: bool,
     tighten: bool,
+    nudge: bool,
+    lock: Vec<String>,
     gpu: bool,
     pours_block: bool,
     timeout: Option<f64>,
@@ -46,6 +48,8 @@ fn parse(args: &[String]) -> Result<Args, String> {
         negotiate: false,
         rip_up: false,
         tighten: false,
+        nudge: false,
+        lock: Vec::new(),
         gpu: false,
         pours_block: false,
         timeout: None,
@@ -75,9 +79,8 @@ fn parse(args: &[String]) -> Result<Args, String> {
             "--timeout" => a.timeout = Some(value()?.parse().map_err(|e| format!("--timeout: {e}"))?),
             "--live" => a.live = Some(value()?),
             "--live-fps" => a.fps = value()?.parse().map_err(|e| format!("--live-fps: {e}"))?,
-            "--lock" => {
-                value()?;
-            }
+            "--lock" => a.lock.extend(value()?.split(',').filter(|r| !r.is_empty()).map(str::to_string)),
+            "--nudge" => a.nudge = true,
             "--place" => {
                 let v = value()?;
                 let (name, at) = v.split_once('=').ok_or("--place REF=X,Y")?;
@@ -271,6 +274,20 @@ impl Live {
     }
 }
 
+/// Every part that moved, by hand or by the nudger, as the `(at …)` it now has.
+fn moved_parts(board: &Board, original_at: &[Point]) -> Vec<(kicad_pcb::Span, String)> {
+    board
+        .footprints
+        .iter()
+        .zip(original_at)
+        .filter(|(f, at)| f.at != **at)
+        .filter_map(|(f, _)| {
+            let angle = if f.rotation_deg == 0.0 { String::new() } else { format!(" {}", f.rotation_deg) };
+            Some((f.at_span?, format!("(at {} {}{angle})", mm(f.at.x as f64 * 1e-9), mm(f.at.y as f64 * 1e-9))))
+        })
+        .collect()
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let a = match parse(&args) {
@@ -312,7 +329,10 @@ fn main() {
     });
 
     let mut removed = Vec::new();
-    let mut replace = Vec::new();
+    let original_at: Vec<Point> = board.footprints.iter().map(|f| f.at).collect();
+    for f in board.footprints.iter_mut().filter(|f| a.lock.contains(&f.reference)) {
+        f.locked = true;
+    }
     for (name, x, y) in &a.place {
         let Some(fp) = board.footprints.iter().position(|f| &f.reference == name) else {
             eprintln!("warning: --place {name}: no such part on the board");
@@ -322,11 +342,6 @@ fn main() {
         let at = board.footprints[fp].at;
         let ripped = board.move_footprint(fp, Point::new(target.x - at.x, target.y - at.y));
         removed.extend(ripped.iter().filter_map(|it| it.span));
-        let f = &board.footprints[fp];
-        if let Some(span) = f.at_span {
-            let angle = if f.rotation_deg == 0.0 { String::new() } else { format!(" {}", f.rotation_deg) };
-            replace.push((span, format!("(at {} {}{angle})", mm(f.at.x as f64 * 1e-9), mm(f.at.y as f64 * 1e-9))));
-        }
     }
     if a.strip {
         let loose: Vec<ItemId> = board.items().filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked).map(|(id, _)| id).collect();
@@ -345,6 +360,7 @@ fn main() {
         if let Some(l) = live.as_mut() {
             l.write(&json!({"t": "done", "open": open, "passes": 0, "stopped": null}));
         }
+        let replace = moved_parts(&board, &original_at);
         let _ = std::fs::write(&a.output, apply(&text, &Edit { remove: removed, replace, ..Edit::default() }));
         return;
     }
@@ -422,6 +438,25 @@ fn main() {
         );
         eprintln!("rip-up: {} tries, {} kept, {} ripped, {:.1} s", r.attempts, r.kept, r.ripped, started.elapsed().as_secs_f64());
     }
+    if a.nudge {
+        let locked = board.footprints.iter().enumerate().filter(|(_, f)| f.locked).map(|(i, _)| i).collect();
+        let n = grid::nudge(
+            &mut board,
+            solver.as_mut(),
+            &grid::NudgeOptions {
+                max_seconds: a.timeout.map(|s| (s - started.elapsed().as_secs_f64()).max(0.0)),
+                locked,
+                pours_block: a.pours_block,
+                cancel: Some(cancel.clone()),
+                ..Default::default()
+            },
+            &mut laid,
+            &mut watch,
+        );
+        removed.extend(n.ripped_spans.iter().copied());
+        let names: Vec<&str> = n.moved.iter().map(|(f, _)| board.footprints[*f].reference.as_str()).collect();
+        eprintln!("nudge: {} steps tried, {} illegal, {} kept, moved {names:?}, {:.1} s", n.tried, n.illegal, n.kept, started.elapsed().as_secs_f64());
+    }
     if a.tighten {
         let c = grid::pull_tight(&mut board, &mut laid);
         eprintln!(
@@ -436,6 +471,7 @@ fn main() {
     let open = if a.pours_block { connectivity(&board) } else { connectivity_without_pours(&board) }.airlines.len();
     eprintln!("routed {} more, {} failed, {} open, {:.1} s", stats.routed, stats.failed, open, started.elapsed().as_secs_f64());
 
+    let replace = moved_parts(&board, &original_at);
     let (tracks, vias) = grid::edits(&board, &laid);
     if let Err(e) = std::fs::write(&a.output, apply(&text, &Edit { remove: removed, replace, tracks, vias })) {
         eprintln!("{}: {e}", a.output);
