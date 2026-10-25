@@ -59,6 +59,10 @@ fn anchors(board: &Board, id: ItemId) -> Vec<Point> {
     }
 }
 
+fn cluster_member(item: &crate::model::Item, with_pours: bool) -> bool {
+    with_pours || !matches!(item.kind, Kind::Pour { .. })
+}
+
 /// As KiCad joins them: at anchors. A track anchors at its round ends, a via or a round pad at
 /// its whole disc, any other pad at its centre; two items join where an anchor of one meets the
 /// other's copper, so copper that merely overlaps a pad's corner or crosses a track does not
@@ -83,7 +87,20 @@ fn joined(board: &Board, a: ItemId, b: ItemId) -> bool {
 }
 
 pub fn connectivity(board: &Board) -> Connectivity {
-    let ids: Vec<ItemId> = board.items().filter(|(_, it)| it.is_copper() && it.net != 0).map(|(id, _)| id).collect();
+    joined_copper(board, true)
+}
+
+/// Connectivity as it will stand whatever the pours are refilled to: poured copper joins nothing.
+pub fn connectivity_without_pours(board: &Board) -> Connectivity {
+    joined_copper(board, false)
+}
+
+fn joined_copper(board: &Board, with_pours: bool) -> Connectivity {
+    let ids: Vec<ItemId> = board
+        .items()
+        .filter(|(_, it)| it.is_copper() && it.net != 0 && (with_pours || !matches!(it.kind, Kind::Pour { .. })))
+        .map(|(id, _)| id)
+        .collect();
     let max = ids.iter().copied().max().map_or(0, |m| m + 1);
     let mut sets = Sets((0..max).collect());
     for &id in &ids {
@@ -94,7 +111,7 @@ pub fn connectivity(board: &Board) -> Connectivity {
                     continue;
                 }
                 let Some(o) = board.item(other) else { continue };
-                if o.net == item.net && o.is_copper() && o.on(layer) && joined(board, id, other) {
+                if o.net == item.net && o.is_copper() && o.on(layer) && cluster_member(o, with_pours) && joined(board, id, other) {
                     sets.join(id, other);
                 }
             }

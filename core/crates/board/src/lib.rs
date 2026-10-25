@@ -7,6 +7,6 @@ pub mod connect;
 pub mod geom;
 
 pub use model::{Board, FootprintInfo, Item, ItemId, Kind, LoadError};
-pub use check::{check, Rule, Violation};
-pub use connect::{connectivity, Airline, Connectivity};
-pub use geom::{nm, BBox, Nm, Point, Shape};
+pub use check::{check, check_item, intrudes, Rule, Violation};
+pub use connect::{connectivity, connectivity_without_pours, Airline, Connectivity};
+pub use geom::{inside, nm, point_segment, BBox, Nm, Point, Shape};

@@ -70,7 +70,14 @@ with WebGPU) under MIT. Estimate ~15k lines:
       earring, clean, stripped, half-stripped and shifted: identical open-connection and
       clearance counts, except 455 vs 458 open on half-stripped bluebuzz. 66 ms connectivity,
       0.5 s full check on bluebuzz.
-- [ ] Our routers moved onto it: grid with negotiation, topo with rip-up, nudge and diffusion.
+- [x] Grid routing on the core (`core/crates/grid`, CPU): a conservative obstacle map per net
+      class, our integer-cost search, legs out of crowded pads, every piece checked before it is
+      kept. Pours are refilled around new copper (`tools/refill_zones.py`), so every connection is
+      made in tracks. Judged by KiCad after a refill: the earring 249 → 14 open in 22 s, bluebuzz
+      with its unlocked copper stripped 25 → 5 open in 13 s, 0 errors on both.
+- [ ] Holes as slots (oval drills), not only round.
+- [ ] The GPU field solver and negotiated congestion on the core; then topo with rip-up, nudge
+      and diffusion.
 - [ ] Our own finisher and cleanup in place of freerouting's maze router and optimizer.
 - [ ] copperroute kept as the reference router across the process boundary until the core
       matches it on the leaderboards.

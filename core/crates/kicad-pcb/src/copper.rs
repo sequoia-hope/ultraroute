@@ -381,7 +381,14 @@ fn primitives(prims: &Node) -> Result<Vec<Vec<[f64; 2]>>, KicadParse> {
         match g.head() {
             Some("gr_poly") => {
                 if let Some(p) = g.find("pts") {
-                    out.push(pts(p)?);
+                    let poly = pts(p)?;
+                    // A stroked outline widens the shape by half its width all round.
+                    if width > 0.0 {
+                        for k in 0..poly.len() {
+                            out.push(capsule(poly[k], poly[(k + 1) % poly.len()], width / 2.0));
+                        }
+                    }
+                    out.push(poly);
                 }
             }
             Some("gr_circle") => {
