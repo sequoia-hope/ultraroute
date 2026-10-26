@@ -101,6 +101,7 @@
   ];
   let ripUp = $state(true);
   let prefanout = $state(true);
+  let diffPairs = $state(true);
   let moveParts = $state(true);
   let viewMode = $state('all');
   let flipped = $state(false);
@@ -147,6 +148,7 @@
     if (router === 'core') {
       if (negotiate) args.push('--negotiate');
       if (ripUp) args.push('--rip-up');
+      if (diffPairs) args.push('--diff-pairs');
       if (prefanout) args.push('--prefanout');
       if (moveParts) args.push('--nudge');
       if (tighten) args.push('--tighten');
@@ -702,6 +704,7 @@
         </label>
       {/if}
       <label class="check"><input type="checkbox" bind:checked={ripUp} onchange={compose} /> Rip up and retry what is left</label>
+      <label class="check" title="Routes each differential pair (USB D+ and D-) first, its two tracks side by side at the pair's width and gap"><input type="checkbox" bind:checked={diffPairs} onchange={compose} /> Route USB pairs side by side</label>
       <label class="check" title="Escapes every fine-pitch pad to a via first, on a fine local grid"><input type="checkbox" bind:checked={prefanout} onchange={compose} /> Fan out fine-pitch parts first</label>
       <label class="check"><input type="checkbox" bind:checked={tighten} onchange={compose} /> Pull the copper tight</label>
     {:else}

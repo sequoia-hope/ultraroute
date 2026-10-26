@@ -24,7 +24,7 @@ use board::{connectivity, connectivity_without_pours, Board, Item, ItemId, Kind,
 use kicad_pcb::{apply, mm, Edit};
 use serde_json::{json, Value};
 
-pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--gpu] \
+pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--diff-pairs] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--gpu] \
 [--timeout SECONDS] [--cell MM] [--first NET,...] [--first-negotiate] [--first-weight W] [--restart N] [--topo-first REF,...|auto] [--topo-trapped] [--topo-trapped-rip] [--topo-sample MM] \
 [--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough warp|linear|rip|gentle|dipole] [--shove-steps N] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-late] [--shove-seconds S] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
 [--live PATH|-] [--live-fps N] [--live-step MS] [--blame]";
@@ -37,6 +37,8 @@ pub struct Args {
     /// Escape every fine-pitch part's pads before routing: how, in what order, how far out the
     /// escapes end, whether the router may rip them, whether unused ones stay, and whether power
     /// pads are first bridged inward to their pours.
+    /// Route differential pairs (USB D+ and D-) coupled, before anything else.
+    pub diff_pairs: bool,
     pub prefanout: bool,
     pub prefanout_mode: Option<grid::EscapeMode>,
     pub prefanout_order: Option<grid::EscapeOrder>,
@@ -133,6 +135,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         output: String::new(),
         strip: false,
         strip_all: false,
+        diff_pairs: false,
         prefanout: false,
         prefanout_mode: None,
         prefanout_order: None,
@@ -200,6 +203,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             "-o" | "--output" => a.output = value()?,
             "--strip" => a.strip = true,
             "--strip-all" => a.strip_all = true,
+            "--diff-pairs" => a.diff_pairs = true,
             "--prefanout" => a.prefanout = true,
             "--prefanout-mode" => {
                 a.prefanout = true;
@@ -979,6 +983,7 @@ pub fn run(a: &Args, mut board: Board, text: &str, mut live: Option<Live>, cance
         }
     };
     say("start", format!("{} connections to make", connectivity_without_pours(&board).airlines.len()));
+    let mut pair_laid = Vec::new();
     // Escapes laid before routing, held apart from the router's own copper until the grid has
     // had its pass, so the ones no route used can be taken out again.
     let mut fanout_laid = Vec::new();
@@ -1028,6 +1033,18 @@ pub fn run(a: &Args, mut board: Board, text: &str, mut live: Option<Live>, cance
         } else {
             fanout_laid = f.laid;
         }
+    }
+    // Differential pairs next, round the escapes, and held apart from the router's own copper so
+    // nothing rips or straightens them apart; the legs to their pads are routed as usual.
+    if a.diff_pairs {
+        let p = grid::route_pairs(
+            &mut board,
+            &grid::PairOptions { cell: a.cell.unwrap_or(grid::PairOptions::default().cell), pours_block: a.pours_block, log: log.clone() },
+            &mut watch,
+        );
+        eprintln!("pairs: {} pairs, {} of {} runs coupled, {:.1} mm, {:.1} s", p.pairs, p.coupled, p.runs, p.coupled_mm, started.elapsed().as_secs_f64());
+        step(&board);
+        pair_laid = p.laid;
     }
     let cores = std::thread::available_parallelism().map_or(1, |n| n.get() / 2).max(1);
     let threads = a.threads.unwrap_or(cores);
@@ -1619,6 +1636,8 @@ pub fn run(a: &Args, mut board: Board, text: &str, mut live: Option<Live>, cance
     }
     let open_now = |board: &Board| if a.pours_block { connectivity(board) } else { connectivity_without_pours(board) }.airlines.len();
     let open_before = open_now(&board);
+    // The pairs' copper is cleaned with the rest: a run whose legs never came is taken out.
+    laid.extend(pair_laid.iter().copied().filter(|id| board.item(*id).is_some()));
     let (doubled, spans) = grid::drop_duplicates(&mut board, &mut laid);
     removed.extend(spans);
     let (pruned, spans) = grid::prune_dangling(&mut board, &mut laid);

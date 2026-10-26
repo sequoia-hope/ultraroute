@@ -4,7 +4,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use board::{check_item, joined, Board, Item, ItemId, Kind, Point, Shape};
+use board::{check_item, joined, Board, Item, ItemId, Kind, Nm, Point, Shape};
 use kicad_pcb::Span;
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -236,6 +236,7 @@ fn trim_overhang(board: &mut Board, id: ItemId) -> Option<(Option<Span>, Vec<Ite
     let (keep, loose) = match (end_met(a, b), end_met(b, a)) {
         (true, false) => (a, b),
         (false, true) => (b, a),
+        (false, false) => return trim_both(board, id, &item, a, b, r),
         _ => return None,
     };
     let around = neighbours(board, id);
@@ -275,6 +276,10 @@ fn trim_overhang(board: &mut Board, id: ItemId) -> Option<(Option<Span>, Vec<Ite
             candidates.push(vec![(keep, proj)]);
         } else {
             candidates.push(vec![(keep, proj), (proj, target)]);
+            // The joint already inside the track: cut back to it, with no piece across.
+            if proj.distance(target) <= r as f64 {
+                candidates.push(vec![(keep, proj)]);
+            }
         }
     }
     if candidates.is_empty() {
@@ -304,6 +309,50 @@ fn trim_overhang(board: &mut Board, id: ItemId) -> Option<(Option<Span>, Vec<Ite
             board.discard(nid);
         }
     }
+    board.restore(id, removed);
+    None
+}
+
+/// A track loose at both ends that still joins what lies along it, such as a coupled pair run
+/// crossing the vias its legs came down: cut back to the stretch between its outermost joints,
+/// a part of itself and so as legal as it was.
+fn trim_both(board: &mut Board, id: ItemId, item: &Item, a: Point, b: Point, r: Nm) -> Option<(Option<Span>, Vec<ItemId>)> {
+    let around = neighbours(board, id);
+    let along = |p: Point| closest_on_segment(a, b, p);
+    let mut ts: Vec<(f64, Point)> = Vec::new();
+    for &o in &around {
+        let Some(other) = board.item(o) else { continue };
+        let at = match &other.shape {
+            Shape::Capsule { a: oa, b: ob, .. } if oa == ob => *oa,
+            Shape::Capsule { a: oa, b: ob, .. } => {
+                if point_gap(&item.shape, *oa) <= point_gap(&item.shape, *ob) {
+                    *oa
+                } else {
+                    *ob
+                }
+            }
+            Shape::Polygon(_) => return None,
+        };
+        // Only a joint the track's own line runs through: its new end must lie in the joint.
+        let (t, p) = along(at);
+        if other.shape.contains(p) {
+            ts.push((t, p));
+        } else {
+            return None;
+        }
+    }
+    let first = ts.iter().copied().min_by(|x, y| x.0.total_cmp(&y.0))?;
+    let last = ts.iter().copied().max_by(|x, y| x.0.total_cmp(&y.0))?;
+    if first.1 == last.1 || (first.1 == a && last.1 == b) {
+        return None;
+    }
+    let removed = board.remove(id)?;
+    let nid = board.insert(Item { shape: Shape::Capsule { a: first.1, b: last.1, r }, span: None, ..item.clone() });
+    let connected = around.iter().all(|&o| joined(board, nid, o));
+    if connected && check_item(board, nid).is_empty() && !dangles(board, nid) {
+        return Some((removed.span, vec![nid]));
+    }
+    board.discard(nid);
     board.restore(id, removed);
     None
 }
@@ -562,6 +611,32 @@ mod tests {
     }
 
     #[test]
+    fn a_run_crossing_the_vias_it_joins_loses_both_tails() {
+        let (pcb, copper) = kicad_pcb::parse_board(
+            "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal)) (net 0 \"\") (net 1 \"N1\"))",
+        )
+        .unwrap();
+        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+        let mut put = |kind: Kind, layers: u64, a: Point, b: Point, r, hole| {
+            board.insert(Item { kind, net: 1, layers, shape: Shape::Capsule { a, b, r }, hole, locked: false, span: None })
+        };
+        let pad = || Kind::Pad { footprint: 0, number: "1".into(), plated: false };
+        // Two pads on the back, each under a via; a front track runs over both vias and 1 mm
+        // past each, carrying the only connection between them.
+        for x in [1_000_000, 3_000_000] {
+            put(pad(), 2, Point::new(x, 0), Point::new(x, 0), 150_000, None);
+            put(Kind::Via, 3, Point::new(x, 50_000), Point::new(x, 50_000), 200_000, Some((Point::new(x, 50_000), 100_000)));
+        }
+        let run = put(Kind::Track, 1, Point::new(0, 0), Point::new(4_000_000, 0), 75_000, None);
+        let mut soft = vec![run];
+        prune_dangling(&mut board, &mut soft);
+        assert!(board.item(run).is_none());
+        let [cut] = soft[..] else { panic!("one track in place of the run: {soft:?}") };
+        assert_eq!(board.item(cut).unwrap().shape, Shape::Capsule { a: Point::new(1_000_000, 0), b: Point::new(3_000_000, 0), r: 75_000 });
+        assert!(board::connectivity(&board).airlines.is_empty());
+    }
+
+    #[test]
     fn watch_hooks_report_tightened_chains_duplicates_and_dangling_stubs() {
         let mut board = empty_board();
         for x in [0, 1_000_000] {
@@ -650,3 +725,4 @@ mod tests {
         }
     }
 }
+

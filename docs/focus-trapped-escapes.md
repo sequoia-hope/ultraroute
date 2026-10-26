@@ -233,3 +233,15 @@ second pass over undone tries.
   ends lie inside other tracks of its net when nothing needs it, unless it meets a via
   (taking those stranded vias in a first try). Lab `redundant-20`, one thread: bluebuzz 8 of 8
   clean; earring unchanged. Best bluebuzz kept as job `bluebuzz-routed` (seed 3, 232 vias against the hand-routed board's 331, 1348 mm).
+- 2026-10-26, differential pairs (`--diff-pairs`, grid/src/pairs.rs): pairs found by name (one P
+  against N/M, or + against -), ends as pin pairs, each run between them routed as one centreline
+  wide enough for both tracks and the gap on a single layer, then laid as two offset tracks; the
+  pad legs are left to the router. Routed before the escapes, the runs blocked U1 pins
+  (LED_DATA_L, TAC_CS2 open on every seed, lab `diffpairs-21`); after them, nothing is blocked.
+  The cleanup now cuts a track loose at both ends back to its outermost joints (pair runs
+  crossing their legs' vias) and cuts a tail back to a joint that already lies inside it. Lab
+  `diffpairs-24`, one thread: earring stripped 0 0 0 0 2 3 unconnected (was 0 0 1 0 4 2), no
+  pair copper dangling; locked 0 1 1 1 0 0; bluebuzz 0 on all 6. Coupling (`pair_check`):
+  earring USB_DP/DM 78-92%, USB_C 17-38%; bluebuzz USB_DP/DM 72-83% (hand-routed 31%), its 4
+  mm USB_D*_C pair uncoupled. Jobs earring-routed, earring-locked-routed and bluebuzz-routed
+  re-solved with pairs.

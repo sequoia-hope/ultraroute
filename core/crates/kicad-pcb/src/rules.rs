@@ -45,6 +45,10 @@ pub struct NetClass {
     pub track_width: f64,
     pub via_diameter: f64,
     pub via_drill: f64,
+    /// Each track of a differential pair, the gap between them, and between their vias; 0 unset.
+    pub diff_pair_width: f64,
+    pub diff_pair_gap: f64,
+    pub diff_pair_via_gap: f64,
     /// Lower wins when several classes match one net.
     pub priority: i64,
 }
@@ -84,6 +88,9 @@ impl Rules {
                 track_width: mm(c, "track_width"),
                 via_diameter: mm(c, "via_diameter"),
                 via_drill: mm(c, "via_drill"),
+                diff_pair_width: mm(c, "diff_pair_width"),
+                diff_pair_gap: mm(c, "diff_pair_gap"),
+                diff_pair_via_gap: mm(c, "diff_pair_via_gap"),
                 priority: c["priority"].as_i64().unwrap_or(i64::MAX),
             })
             .collect();
