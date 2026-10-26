@@ -64,9 +64,11 @@ fn cluster_member(item: &crate::model::Item, with_pours: bool) -> bool {
 }
 
 /// As KiCad joins them: at anchors. A track anchors at its round ends, a via or a round pad at
-/// its whole disc, any other pad at its centre; two items join where an anchor of one meets the
-/// other's copper, so copper that merely overlaps a pad's corner or crosses a track does not
-/// connect. Pours join wherever they touch.
+/// its whole disc, any other pad at its centre; two items join where an anchor of one overlaps
+/// the other's copper, so copper that merely overlaps a pad's corner or crosses a track does not
+/// connect. Overlap means more than touching: KiCad leaves two collinear pieces of track whose
+/// round ends only touch (0.15 mm wide, their ends 0.15 mm apart) unconnected. Pours join
+/// wherever they touch.
 pub fn joined(board: &Board, a: ItemId, b: ItemId) -> bool {
     let (Some(x), Some(y)) = (board.item(a), board.item(b)) else { return false };
     let pour = |it: &crate::model::Item| matches!(it.kind, Kind::Pour { .. });
@@ -80,7 +82,8 @@ pub fn joined(board: &Board, a: ItemId, b: ItemId) -> bool {
         };
         anchors(board, from_id).iter().any(|p| {
             let dot = Shape::Capsule { a: *p, b: *p, r: 0 };
-            into.shape.gap_within(&dot, reach) <= reach
+            let gap = into.shape.gap_within(&dot, reach);
+            gap == 0.0 || gap < reach - 0.5
         })
     };
     reaches(x, a, y) || reaches(y, b, x)

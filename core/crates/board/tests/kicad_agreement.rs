@@ -83,3 +83,18 @@ fn the_clean_boards_break_no_rule() {
         assert_eq!(check(&b), Vec::new(), "{pcb}");
     }
 }
+
+#[test]
+fn track_ends_join_where_they_overlap_not_where_they_only_touch() {
+    // Two collinear pieces 0.15 mm wide, as a plough cuts copper: KiCad leaves them unconnected
+    // when their round ends only touch (ends 0.15 mm apart), and joins them when they overlap.
+    let text = std::fs::read_to_string(fixture("earring.kicad_pcb")).unwrap();
+    let (pcb, copper) = parse_board(&text).unwrap();
+    let mut b = Board::new(&pcb, &copper, Rules::read(&fixture("earring.kicad_pro")).unwrap());
+    let track = |x0: i64, x1: i64| Item { kind: Kind::Track, net: 1, layers: 1, shape: Shape::Capsule { a: Point::new(x0, 0), b: Point::new(x1, 0), r: 75_000 }, hole: None, locked: false, span: None };
+    let a = b.insert(track(0, 75_000));
+    let touching = b.insert(track(225_000, 300_000));
+    let overlapping = b.insert(track(200_000, 275_000));
+    assert!(!joined(&b, a, touching));
+    assert!(joined(&b, a, overlapping));
+}

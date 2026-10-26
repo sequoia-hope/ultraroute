@@ -252,16 +252,19 @@ impl World {
     /// Bends `points` out round the deepest cut into any obstacle's reach, until nothing is cut
     /// or `MAX_BENDS` bends are added; the ends stay put. The samples keep the channel clear only
     /// at the samples themselves; between them, and round a corner the funnel cut, this is what
-    /// keeps the wire off the copper.
-    pub fn clear_path(&self, wire: &WireRules, layer: usize, mut points: Vec<Pt>) -> Vec<Pt> {
+    /// keeps the wire off the copper. At a pad end (`pad_start` or `pad_end`), the first or last
+    /// segment uses `necked` so a wide net or margin does not fight neighbouring fine-pitch pads.
+    pub fn clear_path(&self, wire: &WireRules, necked: &WireRules, layer: usize, mut points: Vec<Pt>, pad_start: bool, pad_end: bool) -> Vec<Pt> {
         for _ in 0..MAX_BENDS {
             let mut worst: Option<(usize, Pt, f64)> = None;
-            for k in 0..points.len().saturating_sub(1) {
+            let segs = points.len().saturating_sub(1);
+            for k in 0..segs {
                 let (a, b) = (points[k], points[k + 1]);
+                let active = if (pad_start && k == 0) || (pad_end && k + 1 == segs) { necked } else { wire };
                 let mid = Pt::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
                 let span = (a.x - b.x).abs().max((a.y - b.y).abs()) / 2.0 + CELL;
                 for o in self.near(layer, mid, span) {
-                    let Some(reach) = wire.trace_reach(o.rule, o.net) else { continue };
+                    let Some(reach) = active.trace_reach(o.rule, o.net) else { continue };
                     let (d, on_segment, on_obstacle) = o.outline.segment_within(a, b, reach);
                     let cut = reach - d;
                     if cut <= reach * 1e-3 || worst.as_ref().is_some_and(|w| cut <= w.2) {

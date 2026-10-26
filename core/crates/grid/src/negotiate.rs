@@ -7,7 +7,7 @@
 //! Rounds repeat, the present price rising and history accumulating where nets still collide,
 //! until no path lies in another net's zone; then routes are committed, each checked exactly.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use board::{connectivity, connectivity_without_pours, nm, Board, ItemId, Kind, Nm};
 
@@ -38,7 +38,15 @@ pub struct NegotiationOptions {
     pub threads: usize,
     /// Rounds without fewer collisions than the best so far before negotiation gives up.
     pub patience: usize,
+    /// Nets whose open connections participate; every net when `None`.
+    pub nets: Option<HashSet<u32>>,
+    /// Per-net multiplier on history and present congestion prices (`1.0` when absent). Nets
+    /// priced below `1.0` also route and commit before the rest, so a favoured escape keeps its
+    /// way out of a pad while neighbours pay the full price to go round it.
+    pub net_weight: HashMap<u32, f64>,
     pub pours_block: bool,
+    /// Reorders the connections, for a search over many runs; 0 keeps the board's order.
+    pub seed: u64,
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub log: Option<Log>,
 }
@@ -55,7 +63,10 @@ impl Default for NegotiationOptions {
             max_seconds: None,
             threads: 1,
             patience: 4,
+            nets: None,
+            net_weight: HashMap::new(),
             pours_block: false,
+            seed: 0,
             cancel: None,
             log: None,
         }
@@ -179,6 +190,18 @@ impl Zones {
 /// as it goes, and whether it collided with another net's route in the last round.
 pub type Trial = (u32, Vec<(usize, board::Point)>, bool);
 
+/// One round's congestion snapshot, for watching PathFinder settle.
+pub struct RoundView<'a> {
+    pub round: usize,
+    pub colliding: usize,
+    pub present: f64,
+    pub grid: &'a RouteGrid,
+    /// Maximum across viewer classes of how many nets claim each `(layer, i, j)` node.
+    pub overlap: Vec<u16>,
+    pub history: &'a [u32],
+    pub trials: &'a [Trial],
+}
+
 pub fn route_negotiated(
     board: &mut Board,
     solver: &mut dyn FieldSolver,
@@ -186,13 +209,29 @@ pub fn route_negotiated(
     watch: &mut dyn FnMut(&Board),
     trials: &mut dyn FnMut(usize, &[Trial]),
 ) -> NegotiationStats {
+    route_negotiated_rounds(board, solver, options, watch, trials, None)
+}
+
+/// As [`route_negotiated`], optionally reporting each round's congestion map and trials.
+pub fn route_negotiated_rounds(
+    board: &mut Board,
+    solver: &mut dyn FieldSolver,
+    options: &NegotiationOptions,
+    watch: &mut dyn FnMut(&Board),
+    trials: &mut dyn FnMut(usize, &[Trial]),
+    mut on_round: Option<&mut dyn FnMut(RoundView)>,
+) -> NegotiationStats {
     let started = crate::clock::Instant::now();
     let out_of_time = || {
         options.max_seconds.is_some_and(|limit| started.elapsed().as_secs_f64() > limit)
             || options.cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
     };
     let mut stats = NegotiationStats::default();
-    let open = if options.pours_block { connectivity(board) } else { connectivity_without_pours(board) }.airlines;
+    let mut open = if options.pours_block { connectivity(board) } else { connectivity_without_pours(board) }.airlines;
+    if let Some(only) = &options.nets {
+        open.retain(|a| only.contains(&a.net));
+    }
+    let weight_of = |net: u32| options.net_weight.get(&net).copied().unwrap_or(1.0);
     let mut connections: Vec<Connection> = open
         .iter()
         .map(|a| Connection {
@@ -205,6 +244,9 @@ pub fn route_negotiated(
             colliding: false,
         })
         .collect();
+    crate::jitter::shuffle(&mut connections, options.seed);
+    // Favoured nets first; the sort is stable, so with no weights the order is the seed's.
+    connections.sort_by(|a, b| weight_of(a.net).total_cmp(&weight_of(b.net)));
     stats.connections = connections.len();
     if connections.is_empty() {
         return stats;
@@ -282,7 +324,7 @@ pub fn route_negotiated(
                 tell(&options.log, "negotiating", || format!("round {}: rerouting {}", round + 1, board.net_name(c.net)), None);
                 zones.remove(c.net, &c.zone);
                 maps[&c.class].view_into(c.net, &mut grid_buf);
-                penalties_into(zones.seen_by(&c.class), &history, present, c.net, &mut grid_buf.penalty);
+                penalties_into(zones.seen_by(&c.class), &history, present, c.net, weight_of(c.net), &mut grid_buf.penalty);
                 let (sources, targets) = &ends[k];
                 c.path = solver.route(&grid_buf, &cells_of(sources), &cells_of(targets), options.via_cost);
                 c.zone = c.path.as_ref().map(|p| claims_of(p, &c.class)).unwrap_or_default();
@@ -307,7 +349,17 @@ pub fn route_negotiated(
             colliding += usize::from(collides);
             c.colliding = collides;
         }
-        trials(round, &trial_list(&connections, &sample));
+        let list = trial_list(&connections, &sample);
+        trials(round, &list);
+        if let Some(cb) = on_round.as_deref_mut() {
+            let mut overlap = vec![0u16; layers * cells];
+            for z in zones.by_viewer.values() {
+                for (o, &c) in overlap.iter_mut().zip(&z.count) {
+                    *o = (*o).max(c);
+                }
+            }
+            cb(RoundView { round, colliding, present, grid: &sample, overlap, history: &history, trials: &list });
+        }
         shown = crate::clock::Instant::now();
         stats.conflicted = colliding;
         tell(&options.log, "negotiating", || format!("round {}: {colliding} of {} routes still collide", round + 1, connections.len()), None);
@@ -376,23 +428,35 @@ fn corners(path: &GridPath) -> Vec<(usize, usize, usize)> {
     out
 }
 
-fn penalties(zones: &Zones, history: &[u32], present: f64, net: u32) -> Vec<u32> {
+fn penalties(zones: &Zones, history: &[u32], present: f64, net: u32, weight: f64) -> Vec<u32> {
     let mut out = Vec::new();
-    penalties_into(zones, history, present, net, &mut out);
+    penalties_into(zones, history, present, net, weight, &mut out);
     out
 }
 
 /// Each node's price for `net`: its history plus the present price of every other net covering
-/// it. Filled in place, so a worker reuses one buffer, and counted for all nets at once before
-/// the net's own cells are taken back out, instead of asking the net's map about every node.
-fn penalties_into(zones: &Zones, history: &[u32], present: f64, net: u32, out: &mut Vec<u32>) {
-    let price = |h: u32, others: u16| h + (present * f64::from(others)).round() as u32;
+/// it, scaled by `weight`. Filled in place, so a worker reuses one buffer, and counted for all
+/// nets at once before the net's own cells are taken back out, instead of asking the net's map
+/// about every node.
+fn penalties_into(zones: &Zones, history: &[u32], present: f64, net: u32, weight: f64, out: &mut Vec<u32>) {
     out.clear();
-    out.extend(history.iter().zip(&zones.count).map(|(&h, &n)| price(h, n)));
-    if let Some(mine) = zones.per_net.get(&net) {
-        for &c in mine.keys() {
-            let c = c as usize;
-            out[c] = price(history[c], zones.count[c] - 1);
+    if (weight - 1.0).abs() < 1e-12 {
+        let price = |h: u32, others: u16| h + (present * f64::from(others)).round() as u32;
+        out.extend(history.iter().zip(&zones.count).map(|(&h, &n)| price(h, n)));
+        if let Some(mine) = zones.per_net.get(&net) {
+            for &c in mine.keys() {
+                let c = c as usize;
+                out[c] = price(history[c], zones.count[c] - 1);
+            }
+        }
+    } else {
+        let price = |h: u32, others: u16| ((f64::from(h) + present * f64::from(others)) * weight).round().max(0.0) as u32;
+        out.extend(history.iter().zip(&zones.count).map(|(&h, &n)| price(h, n)));
+        if let Some(mine) = zones.per_net.get(&net) {
+            for &c in mine.keys() {
+                let c = c as usize;
+                out[c] = price(history[c], zones.count[c] - 1);
+            }
         }
     }
 }
@@ -416,7 +480,8 @@ fn route_round_in_batches(
             .iter()
             .map(|c| {
                 let mut grid = maps[&c.class].view(c.net);
-                grid.penalty = penalties(zones.seen_by(&c.class), history, present, c.net);
+                let w = options.net_weight.get(&c.net).copied().unwrap_or(1.0);
+                grid.penalty = penalties(zones.seen_by(&c.class), history, present, c.net, w);
                 grid
             })
             .collect();
@@ -447,7 +512,8 @@ fn route_round_in_parallel(
 ) {
     let next = std::sync::atomic::AtomicUsize::new(0);
     let done = std::sync::atomic::AtomicUsize::new(0);
-    let jobs: Vec<(u32, &str)> = connections.iter().map(|c| (c.net, c.class.as_str())).collect();
+    let jobs: Vec<(u32, &str, f64)> =
+        connections.iter().map(|c| (c.net, c.class.as_str(), options.net_weight.get(&c.net).copied().unwrap_or(1.0))).collect();
     let paths: Vec<std::sync::Mutex<Option<Option<GridPath>>>> = (0..connections.len()).map(|_| std::sync::Mutex::new(None)).collect();
     std::thread::scope(|scope| {
         for _ in 0..options.threads {
@@ -460,7 +526,7 @@ fn route_round_in_parallel(
                     if k >= jobs.len() {
                         break;
                     }
-                    let (net, class) = jobs[k];
+                    let (net, class, weight) = jobs[k];
                     let grid = match &mut grid {
                         Some(g) => {
                             maps[class].view_into(net, g);
@@ -468,7 +534,7 @@ fn route_round_in_parallel(
                         }
                         None => grid.insert(maps[class].view(net)),
                     };
-                    penalties_into(zones.seen_by(class), history, present, net, &mut grid.penalty);
+                    penalties_into(zones.seen_by(class), history, present, net, weight, &mut grid.penalty);
                     let (sources, targets) = &ends[k];
                     let s: Vec<usize> = sources.iter().map(|t| t.0).collect();
                     let t: Vec<usize> = targets.iter().map(|t| t.0).collect();
@@ -601,9 +667,15 @@ mod tests {
             let history: Vec<u32> = (0..nodes).map(|_| (next() % 50) as u32).collect();
             let net = (next() % 7) as u32;
             let mut fast = vec![7; 3];
-            penalties_into(&z, &history, 23.7, net, &mut fast);
+            penalties_into(&z, &history, 23.7, net, 1.0, &mut fast);
             let slow: Vec<u32> = (0..nodes).map(|n| history[n] + (23.7 * f64::from(z.others(net, n))).round() as u32).collect();
             assert_eq!(fast, slow);
+
+            let mut scaled = Vec::new();
+            penalties_into(&z, &history, 23.7, net, 0.25, &mut scaled);
+            let slow_scaled: Vec<u32> =
+                (0..nodes).map(|n| ((f64::from(history[n]) + 23.7 * f64::from(z.others(net, n))) * 0.25).round() as u32).collect();
+            assert_eq!(scaled, slow_scaled);
         }
     }
 

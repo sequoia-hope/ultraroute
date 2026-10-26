@@ -1,8 +1,8 @@
 //! Open connections routed on the grid, one at a time, and laid as tracks and vias.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
-use board::{connectivity, connectivity_without_pours, Board, Item, ItemId, Kind, Nm, Point, Shape};
+use board::{connectivity, connectivity_without_pours, joined, BBox, Board, Item, ItemId, Kind, Nm, Point, Shape};
 
 use crate::grid::{ObstacleMap, Profile, RouteGrid};
 use crate::report::{item_name, tell, Focus, Log};
@@ -52,8 +52,13 @@ pub struct Options {
     pub cell: Nm,
     pub via_cost: u32,
     pub max_seconds: Option<f64>,
+    /// Nets whose open connections are routed; every net when `None`.
+    pub nets: Option<HashSet<u32>>,
     /// Keep other nets out of poured copper instead of routing through it to be refilled.
     pub pours_block: bool,
+    /// Reorders connections of nearly equal length, for a search over many runs; 0 keeps the
+    /// shortest-first order exact.
+    pub seed: u64,
     /// Set from elsewhere to stop at the next connection.
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub log: Option<Log>,
@@ -61,7 +66,7 @@ pub struct Options {
 
 impl Default for Options {
     fn default() -> Options {
-        Options { cell: 50_000, via_cost: 80, max_seconds: None, pours_block: false, cancel: None, log: None }
+        Options { cell: 50_000, via_cost: 80, max_seconds: None, nets: None, pours_block: false, seed: 0, cancel: None, log: None }
     }
 }
 
@@ -114,7 +119,16 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
         // Unless pours are kept as planes, they will be refilled around what is routed, and may
         // no longer join what they join now; so every connection is made in tracks.
         let mut open = if options.pours_block { connectivity(board) } else { connectivity_without_pours(board) }.airlines;
+        if let Some(only) = &options.nets {
+            open.retain(|a| only.contains(&a.net));
+        }
         open.sort_by(|a, b| a.from.distance(a.to).total_cmp(&b.from.distance(b.to)));
+        if options.seed != 0 {
+            // Shortest first still, roughly: shuffled within runs of eight.
+            for (k, chunk) in open.chunks_mut(8).enumerate() {
+                crate::jitter::shuffle(chunk, options.seed.wrapping_add(k as u64));
+            }
+        }
         open.retain(|a| !given_up.contains(&(a.from_item, a.to_item)));
         if open.is_empty() {
             break;
@@ -188,12 +202,18 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
     stats
 }
 
+/// How far around a connection's chosen anchor `terminals` walks joined copper to gather escape
+/// vias, stubs, and bridged sibling pads; wider when crossing a kept block pour inside a package.
+const CLUSTER_REACH: Nm = 2_500_000;
+const POUR_REACH: Nm = 8_000_000;
+const CLUSTER_LIMIT: usize = 32;
+
 fn routing_layers(item: &Item, grid: &RouteGrid) -> Vec<usize> {
     grid.layers.iter().enumerate().filter(|(_, l)| item.on(**l)).map(|(r, _)| r).collect()
 }
 
 /// The point a leg into the item must reach: a pad's or via's centre, or the nearer end of a track.
-fn anchor(item: &Item, near: Point) -> Point {
+pub(crate) fn anchor(item: &Item, near: Point) -> Point {
     match (&item.kind, &item.shape) {
         (_, Shape::Capsule { a, b, .. }) if a == b => *a,
         (Kind::Track, Shape::Capsule { a, b, .. }) => {
@@ -211,14 +231,82 @@ fn anchor(item: &Item, near: Point) -> Point {
     }
 }
 
-/// Free cells on the item's copper, and free cells a short straight leg from its anchor reaches
-/// legally: how a path leaves a pad too small or too crowded to hold a free cell of its own.
-/// Free cells on the item's copper, and free cells a short straight leg from its anchor reaches
-/// legally: how a path leaves a pad too small or too crowded to hold a free cell of its own.
-/// Where no full-width leg fits, a leg necked down to the board's narrowest track may reach
-/// further, as a designer would leave a fine-pitch pad.
+/// Local non-refilled copper joined to `root`, so a pad's escape stub, via, inner straw, or
+/// kept-pour bridge offers its free cells even when connectivity named the pad itself as the
+/// airline's nearest item.
+pub(crate) fn local_cluster(board: &Board, root: ItemId) -> Vec<ItemId> {
+    let Some(root_item) = board.item(root) else { return Vec::new() };
+    if !root_item.is_copper() || root_item.net == 0 {
+        return vec![root];
+    }
+    let net = root_item.net;
+    let rb = board.bbox(root).unwrap_or_else(|| root_item.shape.bbox());
+    let origin = Point::new((rb.min.x + rb.max.x) / 2, (rb.min.y + rb.max.y) / 2);
+    let mut seen = BTreeSet::from([root]);
+    let mut queue = VecDeque::from([(root, matches!(root_item.kind, Kind::Pour { kept: true, .. }))]);
+    let mut out = Vec::new();
+    while let Some((cur, via_pour)) = queue.pop_front() {
+        let Some(item) = board.item(cur) else { continue };
+        if matches!(item.kind, Kind::Pad { .. } | Kind::Track | Kind::Via) {
+            out.push(cur);
+        }
+        let cb = board.bbox(cur).unwrap_or_else(|| item.shape.bbox());
+        for l in (0..board.layers.len()).filter(|l| item.on(*l)) {
+            for other in board.near(l, cb) {
+                if seen.len() >= CLUSTER_LIMIT || seen.contains(&other) {
+                    continue;
+                }
+                let Some(o) = board.item(other) else { continue };
+                if o.net != net || !o.is_copper() || o.refilled() {
+                    continue;
+                }
+                let is_pour = matches!(o.kind, Kind::Pour { kept: true, .. });
+                let reach = if via_pour || is_pour { POUR_REACH } else { CLUSTER_REACH };
+                let ob = board.bbox(other).unwrap_or_else(|| o.shape.bbox());
+                if !ob.overlaps(BBox::of([origin]).grow(reach)) || !joined(board, cur, other) {
+                    continue;
+                }
+                seen.insert(other);
+                queue.push_back((other, via_pour || is_pour));
+            }
+        }
+    }
+    if out.is_empty() {
+        out.push(root);
+    }
+    out
+}
+
+/// The free cells a path to or from the item may start at, for tools that look at the grid.
+pub fn terminal_cells(board: &mut Board, grid: &RouteGrid, id: ItemId) -> Vec<usize> {
+    terminals(board, grid, id).into_iter().map(|t| t.0).collect()
+}
+
+/// Free cells on the item's local copper cluster, and free cells a short straight leg from its
+/// anchors reaches legally: how a path leaves a pad too small or too crowded to hold a free cell
+/// of its own, or picks up a pre-laid escape via. Where no full-width leg fits, a leg necked down
+/// to the board's narrowest track may reach further, as a designer would leave a fine-pitch pad.
 pub(crate) fn terminals(board: &mut Board, grid: &RouteGrid, id: ItemId) -> Vec<Terminal> {
-    let found = terminals_with(board, grid, id, grid.half_width, LEG_CELLS, LEG_CANDIDATES);
+    let cluster = local_cluster(board, id);
+    let gather = |board: &mut Board, hw: Nm, cells: Nm, tries: usize| -> Vec<Terminal> {
+        let mut by_cell: BTreeMap<usize, Option<(Point, Nm)>> = BTreeMap::new();
+        for &member in &cluster {
+            for (cell, leg) in item_terminals(board, grid, member, hw, cells, tries) {
+                match by_cell.get(&cell) {
+                    Some(None) => {}
+                    Some(Some(_)) if leg.is_none() => {
+                        by_cell.insert(cell, None);
+                    }
+                    None => {
+                        by_cell.insert(cell, leg);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        by_cell.into_iter().collect()
+    };
+    let found = gather(board, grid.half_width, LEG_CELLS, LEG_CANDIDATES);
     if !found.is_empty() {
         return found;
     }
@@ -226,13 +314,18 @@ pub(crate) fn terminals(board: &mut Board, grid: &RouteGrid, id: ItemId) -> Vec<
     if narrow >= grid.half_width {
         return found;
     }
-    terminals_with(board, grid, id, narrow, NECK_CELLS, 2 * LEG_CANDIDATES)
+    gather(board, narrow, NECK_CELLS, 2 * LEG_CANDIDATES)
 }
 
-fn terminals_with(board: &mut Board, grid: &RouteGrid, id: ItemId, leg_half_width: Nm, leg_cells: Nm, tries: usize) -> Vec<Terminal> {
+pub(crate) fn item_terminals(board: &mut Board, grid: &RouteGrid, id: ItemId, leg_half_width: Nm, leg_cells: Nm, tries: usize) -> Vec<Terminal> {
     let Some(item) = board.item(id).cloned() else { return Vec::new() };
     let mut out: Vec<Terminal> = Vec::new();
     let bb = item.shape.bbox();
+    let anchors: Vec<Point> = match (&item.kind, &item.shape) {
+        (Kind::Track, Shape::Capsule { a, b, .. }) if a != b => vec![*a, *b],
+        _ => vec![anchor(&item, Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2))],
+    };
+    let per_anchor = (tries / anchors.len().max(1)).max(8);
     for layer in routing_layers(&item, grid) {
         let (Some(lo), Some(hi)) = (
             grid.cell_at(Point::new(bb.min.x.max(grid.x0), bb.min.y.max(grid.y0))),
@@ -248,33 +341,38 @@ fn terminals_with(board: &mut Board, grid: &RouteGrid, id: ItemId, leg_half_widt
                 }
             }
         }
-        let from = anchor(&item, Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2));
-        let reach = ((bb.max.x - bb.min.x).max(bb.max.y - bb.min.y) / 2 + leg_cells * grid.h) as f64;
-        let Some(c) = grid.cell_at(from) else { continue };
-        let span = (reach / grid.h as f64).ceil() as usize;
-        let mut candidates: Vec<(f64, usize, Point)> = Vec::new();
-        for j in c.1.saturating_sub(span)..=(c.1 + span).min(grid.ny - 1) {
-            for i in c.0.saturating_sub(span)..=(c.0 + span).min(grid.nx - 1) {
-                let index = grid.index(layer, i, j);
-                let centre = grid.centre(i, j);
-                let d = centre.distance(from);
-                if !grid.blocked[index] && d <= reach && !item.shape.contains(centre) {
-                    candidates.push((d, index, centre));
+        let extent = match &item.kind {
+            Kind::Track => 0,
+            _ => (bb.max.x - bb.min.x).max(bb.max.y - bb.min.y) / 2,
+        };
+        let reach = (extent + leg_cells * grid.h) as f64;
+        for &from in &anchors {
+            let Some(c) = grid.cell_at(from) else { continue };
+            let span = (reach / grid.h as f64).ceil() as usize;
+            let mut candidates: Vec<(f64, usize, Point)> = Vec::new();
+            for j in c.1.saturating_sub(span)..=(c.1 + span).min(grid.ny - 1) {
+                for i in c.0.saturating_sub(span)..=(c.0 + span).min(grid.nx - 1) {
+                    let index = grid.index(layer, i, j);
+                    let centre = grid.centre(i, j);
+                    let d = centre.distance(from);
+                    if !grid.blocked[index] && d <= reach && !item.shape.contains(centre) {
+                        candidates.push((d, index, centre));
+                    }
                 }
             }
-        }
-        candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
-        for (_, index, centre) in candidates.into_iter().take(tries) {
-            let leg = track(item.net, grid.layers[layer], from, centre, leg_half_width);
-            if fits(board, grid, leg) {
-                out.push((index, Some((from, leg_half_width))));
+            candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
+            for (_, index, centre) in candidates.into_iter().take(per_anchor) {
+                let leg = track(item.net, grid.layers[layer], from, centre, leg_half_width);
+                if fits(board, grid, leg) {
+                    out.push((index, Some((from, leg_half_width))));
+                }
             }
         }
     }
     out
 }
 
-fn track(net: u32, layer: usize, a: Point, b: Point, half_width: Nm) -> Item {
+pub(crate) fn track(net: u32, layer: usize, a: Point, b: Point, half_width: Nm) -> Item {
     Item {
         kind: Kind::Track,
         net,
@@ -287,7 +385,7 @@ fn track(net: u32, layer: usize, a: Point, b: Point, half_width: Nm) -> Item {
 }
 
 /// Whether the item could be laid without breaking a rule; the board is left as it was.
-fn fits(board: &mut Board, grid: &RouteGrid, item: Item) -> bool {
+pub(crate) fn fits(board: &mut Board, grid: &RouteGrid, item: Item) -> bool {
     let id = board.insert(item);
     let ok = grid.violations(board, id).is_empty();
     board.remove(id);

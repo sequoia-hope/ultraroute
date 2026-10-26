@@ -36,7 +36,7 @@ pub fn flow(board: &mut Board, moves: &HashMap<usize, Point>, soft: &mut Vec<Ite
     if moves.values().all(|v| *v == Point::new(0, 0)) {
         return stats;
     }
-    let field = field_for(board, moves);
+    let field = warp_for(board, moves);
     let free = |it: &Item| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked;
     let junctions = junctions(board);
     let pads: HashMap<ItemId, usize> =
@@ -119,7 +119,7 @@ pub(crate) fn layer_of(it: &Item) -> usize {
 
 /// The warp field the moves make: rigid on each moving part (its pads and the space between
 /// them), still on every other pad, keepout and piece of locked copper.
-fn field_for(board: &Board, moves: &HashMap<usize, Point>) -> WarpField {
+pub fn warp_for(board: &Board, moves: &HashMap<usize, Point>) -> WarpField {
     let bounds = board
         .outline
         .iter()

@@ -47,28 +47,29 @@ pub struct EscapeStats {
 
 /// One edge of the package: the direction out of it and the direction along it, both unit,
 /// where its pad row ends, and its pads' lanes by net as positions along the edge.
-struct Edge {
-    out: (f64, f64),
-    along: (f64, f64),
-    row: f64,
-    from: f64,
-    to: f64,
-    lanes: BTreeMap<u32, Vec<f64>>,
+#[derive(Debug, Clone)]
+pub struct Edge {
+    pub out: (f64, f64),
+    pub along: (f64, f64),
+    pub row: f64,
+    pub from: f64,
+    pub to: f64,
+    pub lanes: BTreeMap<u32, Vec<f64>>,
 }
 
 impl Edge {
-    fn depth(&self, p: Point) -> f64 {
+    pub fn depth(&self, p: Point) -> f64 {
         p.x as f64 * self.out.0 + p.y as f64 * self.out.1 - self.row
     }
 
-    fn lateral(&self, p: Point) -> f64 {
+    pub fn lateral(&self, p: Point) -> f64 {
         p.x as f64 * self.along.0 + p.y as f64 * self.along.1
     }
 }
 
 /// The package's edges with their lanes: each pad is assigned to the side of the pads' bounding
 /// box it is nearest, and a pad far from every side (an exposed pad) to none.
-fn edges(board: &Board, footprint: usize) -> Vec<Edge> {
+pub fn edges(board: &Board, footprint: usize) -> Vec<Edge> {
     let pads: Vec<&Item> = board.items().filter(|(_, it)| matches!(it.kind, Kind::Pad { footprint: f, .. } if f == footprint)).map(|(_, it)| it).collect();
     let Some(b) = pads.iter().map(|p| p.shape.bbox()).reduce(BBox::union) else { return Vec::new() };
     let centre = |p: &Item| {
@@ -178,12 +179,17 @@ pub fn clear_lane(board: &mut Board, footprint: usize, pad: ItemId, options: &Es
     (moved, spans)
 }
 
+fn move_copper(board: &mut Board, soft: &mut Vec<ItemId>, rule: &dyn Fn(Point, u32) -> Option<(Point, bool)>) -> (usize, usize, Vec<Span>) {
+    shift_copper(board, soft, PIECE, &|p, net, _| rule(p, net))
+}
+
 /// Moves every unlocked track and via by `rule`, a point at a time, without breaking it: a point
 /// touching a pad or locked copper of its net stays put, and copper ending inside a free via
-/// moves as the via's centre does, so every piece meeting at a point gets the same move. Pieces
-/// are cut short so copper bends. Counts the pieces moved by the rule's two kinds of move, and
-/// returns the board file's spans of what moved.
-fn move_copper(board: &mut Board, soft: &mut Vec<ItemId>, rule: &dyn Fn(Point, u32) -> Option<(Point, bool)>) -> (usize, usize, Vec<Span>) {
+/// moves as the via's centre does, so every piece meeting at a point gets the same move. The
+/// rule is told the layer of a track's point, and no layer for a via's centre, which is on all
+/// of them. Tracks are cut into pieces no longer than `piece` so they bend. Counts the pieces
+/// moved by the rule's two kinds of move, and returns the board file's spans of what moved.
+pub fn shift_copper(board: &mut Board, soft: &mut Vec<ItemId>, piece: f64, rule: &dyn Fn(Point, u32, Option<usize>) -> Option<(Point, bool)>) -> (usize, usize, Vec<Span>) {
     // A point stays put when copper there could touch a pad, on any layer: every piece meeting
     // at a point must get the same answer, whatever its own width or layers.
     let reach = board
@@ -210,9 +216,9 @@ fn move_copper(board: &mut Board, soft: &mut Vec<ItemId>, rule: &dyn Fn(Point, u
         })
         .collect();
     let via_at = |p: Point, net: u32| vias.iter().find(|(c, r, n)| *n == net && c.distance(p) <= *r as f64).map(|(c, _, _)| *c);
-    let shift = |p: Point, net: u32| {
-        let p = via_at(p, net).unwrap_or(p);
-        if held(p, net) { None } else { rule(p, net) }
+    let shift = |p: Point, net: u32, layer: Option<usize>| {
+        let (p, layer) = via_at(p, net).map_or((p, layer), |c| (c, None));
+        if held(p, net) { None } else { rule(p, net, layer) }
     };
     let junctions = junctions(board);
     let mut ids: Vec<ItemId> = board.items().filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked).map(|(id, _)| id).collect();
@@ -221,12 +227,13 @@ fn move_copper(board: &mut Board, soft: &mut Vec<ItemId>, rule: &dyn Fn(Point, u
     for id in ids {
         let Some(it) = board.item(id) else { continue };
         let Shape::Capsule { a, b, .. } = it.shape else { continue };
-        let points = if a == b { vec![a] } else { cut(a, b, junctions.get(&layer_of(it)).map_or(&[][..], Vec::as_slice), PIECE) };
+        let points = if a == b { vec![a] } else { cut(a, b, junctions.get(&layer_of(it)).map_or(&[][..], Vec::as_slice), piece) };
+        let layer = (it.kind == Kind::Track).then(|| layer_of(it));
         let mut first_kind = false;
         let mut moved = false;
         let to: Vec<Point> = points
             .iter()
-            .map(|&p| match shift(p, it.net) {
+            .map(|&p| match shift(p, it.net, layer) {
                 Some((by, kind)) if by != Point::new(0, 0) => {
                     moved = true;
                     first_kind |= kind;
@@ -289,6 +296,47 @@ pub fn fine_pitch(board: &Board, pitch: Nm) -> Vec<usize> {
     out
 }
 
+/// One pole of a smooth radial field: positive `strength` pushes copper away from `center`,
+/// negative draws it in, zero at `center` itself and peaking one `radius` out.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Pole {
+    pub center: Point,
+    /// Radial move one `radius` from `center`, in nanometres; negative attracts.
+    pub strength: f64,
+    /// Distance at which the move peaks and beyond which it decays, in nanometres.
+    pub radius: f64,
+}
+
+/// Combined displacement `(dx, dy)` in nanometres at `p` from `poles`. Because each pole goes
+/// linearly to zero at its centre, a small attractor step never pulls a point past the pole.
+pub fn poles_at(poles: &[Pole], p: Point) -> (f64, f64) {
+    let (mut sx, mut sy) = (0.0, 0.0);
+    for pole in poles {
+        let (dx, dy) = ((p.x - pole.center.x) as f64, (p.y - pole.center.y) as f64);
+        let d = dx.hypot(dy);
+        if d == 0.0 {
+            continue;
+        }
+        let r = pole.radius.max(1.0);
+        let u = 2.0 * pole.strength * (d / r) / (1.0 + (d / r).powi(2));
+        sx += u * dx / d;
+        sy += u * dy / d;
+    }
+    (sx, sy)
+}
+
+/// Moves every unlocked track and via one step along `poles`, holding pads and locked copper
+/// still and keeping copper joined at junctions and vias.
+pub fn shift_poles(board: &mut Board, soft: &mut Vec<ItemId>, poles: &[Pole], piece: f64) -> (usize, Vec<Span>) {
+    let rule = |p: Point, _net: u32, _layer: Option<usize>| -> Option<(Point, bool)> {
+        let (dx, dy) = poles_at(poles, p);
+        let by = Point::new(dx.round() as i64, dy.round() as i64);
+        (by != Point::new(0, 0)).then_some((by, false))
+    };
+    let (_, moved, spans) = shift_copper(board, soft, piece, &rule);
+    (moved, spans)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,5 +346,68 @@ mod tests {
         let e = Edge { out: (0.0, 1.0), along: (1.0, 0.0), row: 1000.0, from: 0.0, to: 0.0, lanes: BTreeMap::new() };
         assert_eq!(e.depth(Point::new(5, 1500)), 500.0);
         assert_eq!(e.lateral(Point::new(5, 1500)), 5.0);
+    }
+
+    #[test]
+    fn poles_repel_attract_and_superpose_smoothly() {
+        let repel = Pole { center: Point::new(0, 0), strength: 1000.0, radius: 10_000.0 };
+        assert_eq!(poles_at(&[repel], Point::new(0, 0)), (0.0, 0.0));
+        let (dx, dy) = poles_at(&[repel], Point::new(10_000, 0));
+        assert!((dx - 1000.0).abs() < 1e-9 && dy.abs() < 1e-9);
+
+        let attract = Pole { strength: -600.0, ..repel };
+        let (ax, _) = poles_at(&[attract], Point::new(10_000, 0));
+        assert!((ax + 600.0).abs() < 1e-9);
+
+        // Between a repulsor on the left and an attractor on the right, both push rightward.
+        let pair = [
+            Pole { center: Point::new(-10_000, 0), strength: 500.0, radius: 10_000.0 },
+            Pole { center: Point::new(10_000, 0), strength: -500.0, radius: 10_000.0 },
+        ];
+        let (px, py) = poles_at(&pair, Point::new(0, 0));
+        assert!((px - 1000.0).abs() < 1e-9 && py.abs() < 1e-9);
+    }
+
+    #[test]
+    fn shift_poles_bends_a_free_track_while_pad_ends_hold_still() {
+        let (pcb, copper) = kicad_pcb::parse_board(
+            "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal)) (net 0 \"\") (net 1 \"A\"))",
+        )
+        .unwrap();
+        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+        for x in [0, 2_000_000] {
+            board.insert(Item {
+                kind: Kind::Pad { footprint: 0, number: "1".into(), plated: false },
+                net: 1,
+                layers: 1,
+                shape: Shape::Capsule { a: Point::new(x, 0), b: Point::new(x, 0), r: 100_000 },
+                hole: None,
+                locked: true,
+                span: None,
+            });
+        }
+        let tr = board.insert(Item {
+            kind: Kind::Track,
+            net: 1,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(0, 0), b: Point::new(2_000_000, 0), r: 50_000 },
+            hole: None,
+            locked: false,
+            span: None,
+        });
+        let mut soft = vec![tr];
+        let pole = Pole { center: Point::new(1_000_000, -500_000), strength: 200_000.0, radius: 500_000.0 };
+        let (moved, _) = shift_poles(&mut board, &mut soft, &[pole], 200_000.0);
+        assert_eq!(moved, 1);
+        assert!(board::connectivity_without_pours(&board).airlines.is_empty(), "pads stay joined");
+        let max_y = soft
+            .iter()
+            .filter_map(|&id| match board.item(id)?.shape {
+                Shape::Capsule { a, b, .. } => Some(a.y.max(b.y)),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0);
+        assert!(max_y > 150_000, "middle of the track bowed away from the repulsor: {max_y}");
     }
 }

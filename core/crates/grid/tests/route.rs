@@ -339,3 +339,35 @@ fn pruning_never_opens_a_connection() {
     prune_dangling(&mut b, &mut soft);
     assert!(open(&b) <= before, "{} open after pruning, {before} before", open(&b));
 }
+
+#[test]
+fn route_open_and_negotiate_respect_net_filter_and_weights() {
+    let (mut b, nets) = stripped(4);
+    let chosen: Vec<u32> = nets.iter().copied().take(2).collect();
+    let only: std::collections::HashSet<u32> = chosen.iter().copied().collect();
+    let only_tree: BTreeSet<u32> = chosen.iter().copied().collect();
+    let before = b.clone();
+
+    let stats = route_open(
+        &mut b,
+        &mut CpuSolver,
+        &Options { cell: CELL, nets: Some(only.clone()), pours_block: true, ..Default::default() },
+        &mut |_| {},
+    );
+    assert!(stats.routed > 0, "{stats:?}");
+    assert_clean_and_on_nets(&before, &b, &stats.laid, &only_tree);
+
+    let (mut b2, nets2) = stripped(4);
+    let before2 = b2.clone();
+    let mut weights = std::collections::HashMap::new();
+    weights.insert(*nets2.iter().next().unwrap(), 0.2);
+    let n = route_negotiated(
+        &mut b2,
+        &mut CpuSolver,
+        &NegotiationOptions { cell: CELL, pours_block: true, threads: 2, max_rounds: 6, nets: Some(only.clone()), net_weight: weights, ..Default::default() },
+        &mut |_| {},
+        &mut |_, _| {},
+    );
+    assert!(n.committed > 0, "{n:?}");
+    assert_clean_and_on_nets(&before2, &b2, &n.laid, &only_tree);
+}

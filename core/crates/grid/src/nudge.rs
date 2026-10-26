@@ -9,7 +9,7 @@
 
 use std::collections::HashSet;
 
-use board::{check_item, connectivity, connectivity_without_pours, point_segment, Board, ItemId, Kind, Nm, Point, Shape};
+use board::{check_item, connectivity, connectivity_without_pours, point_segment, Airline, Board, ItemId, Kind, Nm, Point, Shape};
 use kicad_pcb::Span;
 
 use crate::blame::{blame, BlameOptions};
@@ -160,6 +160,23 @@ fn near_airline(board: &Board, a: Point, b: Point, ends: [Option<usize>; 2], opt
     out
 }
 
+/// Events reported to [`nudge_watch`], including blame reports and steps before revert.
+pub enum NudgeEvent<'a> {
+    Blame { airline: &'a Airline, blamed: &'a [crate::blame::Blame] },
+    Step {
+        airline: &'a Airline,
+        footprint: usize,
+        requested: Point,
+        moved: Point,
+        guided: bool,
+        ripped: usize,
+        open_before: usize,
+        open_after: usize,
+        /// `"kept"`, `"illegal"`, or `"no better"`.
+        outcome: &'static str,
+    },
+}
+
 /// Nudges parts until a round frees nothing more. `soft` holds the copper the router laid.
 /// One step of one part, judged: the part steps and the copper around it flows aside with it,
 /// its own traces dragged along, copper ripped only where it would be pushed into something
@@ -172,9 +189,11 @@ fn try_step(
     options: &NudgeOptions,
     soft: &mut Vec<ItemId>,
     stats: &mut NudgeStats,
-    watch: &mut dyn FnMut(&Board),
+    watch: &mut dyn FnMut(&Board, NudgeEvent),
+    airline: &Airline,
     footprint: usize,
     by: Point,
+    guided: bool,
     why: &str,
 ) -> bool {
     stats.tried += 1;
@@ -187,22 +206,53 @@ fn try_step(
     let only = Some(HashSet::from([footprint]));
     let pushed = push(board, &field, &PushOptions { steps: 1, locked: options.locked.clone(), only, pours_block: options.pours_block, log: None }, soft, &mut |_| {});
     let moved = pushed.moved.first().map(|&(_, by)| by);
-    let Some(by) = moved.filter(|_| legal(board, footprint)) else {
+    let Some(actual) = moved.filter(|_| legal(board, footprint)) else {
         stats.illegal += 1;
+        watch(
+            board,
+            NudgeEvent::Step {
+                airline,
+                footprint,
+                requested: by,
+                moved: moved.unwrap_or(Point::new(0, 0)),
+                guided,
+                ripped: pushed.ripped,
+                open_before: before,
+                open_after: before,
+                outcome: "illegal",
+            },
+        );
         *board = snapshot;
         *soft = soft_before;
         return false;
     };
     let reroute = Options {
+        seed: 0,
         cell: options.cell,
         via_cost: options.via_cost,
         max_seconds: Some(options.reroute_seconds),
+        nets: None,
         pours_block: options.pours_block,
         cancel: options.cancel.clone(),
         log: None,
     };
     let again = route_open(board, solver, &reroute, &mut |_| {});
-    if open_count(board, options.pours_block) >= before {
+    let after = open_count(board, options.pours_block);
+    if after >= before {
+        watch(
+            board,
+            NudgeEvent::Step {
+                airline,
+                footprint,
+                requested: by,
+                moved: actual,
+                guided,
+                ripped: pushed.ripped,
+                open_before: before,
+                open_after: after,
+                outcome: "no better",
+            },
+        );
         *board = snapshot;
         *soft = soft_before;
         return false;
@@ -210,13 +260,26 @@ fn try_step(
     soft.retain(|id| board.item(*id).is_some());
     soft.extend(again.laid);
     stats.kept += 1;
-    tell(&options.log, "nudging", || format!("{reference}: moved, {} connections open", open_count(board, options.pours_block)), Some(Focus::Part(footprint)));
+    tell(&options.log, "nudging", || format!("{reference}: moved, {after} connections open"), Some(Focus::Part(footprint)));
     stats.ripped_spans.extend(pushed.removed_spans);
     match stats.moved.iter_mut().find(|(f, _)| *f == footprint) {
-        Some((_, total)) => *total = Point::new(total.x + by.x, total.y + by.y),
-        None => stats.moved.push((footprint, by)),
+        Some((_, total)) => *total = Point::new(total.x + actual.x, total.y + actual.y),
+        None => stats.moved.push((footprint, actual)),
     }
-    watch(board);
+    watch(
+        board,
+        NudgeEvent::Step {
+            airline,
+            footprint,
+            requested: by,
+            moved: actual,
+            guided,
+            ripped: pushed.ripped,
+            open_before: before,
+            open_after: after,
+            outcome: "kept",
+        },
+    );
     true
 }
 
@@ -224,6 +287,21 @@ fn try_step(
 /// Each open connection first tries the moves blame works out for the parts in its way, then,
 /// if none helps, small steps of the parts near it in every direction.
 pub fn nudge(board: &mut Board, solver: &mut dyn FieldSolver, options: &NudgeOptions, soft: &mut Vec<ItemId>, watch: &mut dyn FnMut(&Board)) -> NudgeStats {
+    nudge_watch(board, solver, options, soft, &mut |b, ev| {
+        if matches!(ev, NudgeEvent::Step { outcome: "kept", .. }) {
+            watch(b);
+        }
+    })
+}
+
+/// As [`nudge`], reporting every blame query and tried step before any revert.
+pub fn nudge_watch(
+    board: &mut Board,
+    solver: &mut dyn FieldSolver,
+    options: &NudgeOptions,
+    soft: &mut Vec<ItemId>,
+    watch: &mut dyn FnMut(&Board, NudgeEvent),
+) -> NudgeStats {
     let started = crate::clock::Instant::now();
     let out_of_time = || {
         options.max_seconds.is_some_and(|limit| started.elapsed().as_secs_f64() > limit)
@@ -245,13 +323,20 @@ pub fn nudge(board: &mut Board, solver: &mut dyn FieldSolver, options: &NudgeOpt
             let ask = BlameOptions { cell: options.cell, via_cost: options.via_cost, pours_block: options.pours_block, ..Default::default() };
             let fixed: Vec<bool> = board.footprints.iter().enumerate().map(|(i, f)| f.locked || options.locked.contains(&i)).collect();
             let free = |f: usize| !fixed[f];
-            let blamed = blame(board, airline.from_item, airline.to_item, &ask, &free).blamed;
+            let mut blamed = blame(board, airline.from_item, airline.to_item, &ask, &free).blamed;
+            if blamed.is_empty() {
+                // Priced, routed copper is cheap enough that the path crosses it rather than
+                // brush a part; with that copper a wall, the parts in the way show.
+                let walled = BlameOptions { routed_copper: None, ..ask.clone() };
+                blamed = blame(board, airline.from_item, airline.to_item, &walled, &free).blamed;
+            }
+            watch(board, NudgeEvent::Blame { airline: &airline, blamed: &blamed });
             for b in blamed {
                 if out_of_time() {
                     break 'connections;
                 }
                 let by = Point::new(b.dx.round() as i64, b.dy.round() as i64);
-                if try_step(board, solver, options, soft, &mut stats, watch, b.footprint, by, &why) {
+                if try_step(board, solver, options, soft, &mut stats, watch, &airline, b.footprint, by, true, &why) {
                     stats.guided += 1;
                     continue 'connections;
                 }
@@ -266,7 +351,7 @@ pub fn nudge(board: &mut Board, solver: &mut dyn FieldSolver, options: &NudgeOpt
                         if out_of_time() {
                             break 'connections;
                         }
-                        if try_step(board, solver, options, soft, &mut stats, watch, footprint, Point::new(dx * step, dy * step), &why) {
+                        if try_step(board, solver, options, soft, &mut stats, watch, &airline, footprint, Point::new(dx * step, dy * step), false, &why) {
                             continue 'connections;
                         }
                     }

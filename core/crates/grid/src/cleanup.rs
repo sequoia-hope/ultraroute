@@ -112,6 +112,11 @@ fn chains(board: &Board, soft: &HashSet<ItemId>) -> Vec<Chain> {
 /// a reroute along copper its net already has can lay. Which one goes does not matter; the
 /// router's own goes before the board file's. How many, and the file's spans among them.
 pub fn drop_duplicates(board: &mut Board, soft: &mut Vec<ItemId>) -> (usize, Vec<Span>) {
+    drop_duplicates_watch(board, soft, &mut |_, _| {})
+}
+
+/// As [`drop_duplicates`], showing `watch` each duplicate removed and the board after it goes.
+pub fn drop_duplicates_watch(board: &mut Board, soft: &mut Vec<ItemId>, watch: &mut dyn FnMut(&Board, &Item)) -> (usize, Vec<Span>) {
     let soft_set: HashSet<ItemId> = soft.iter().copied().collect();
     let key = |item: &Item| match &item.shape {
         Shape::Capsule { a, b, r } if item.kind == Kind::Track => Some((item.net, item.layers, *r, (*a).min(*b), (*a).max(*b))),
@@ -130,8 +135,9 @@ pub fn drop_duplicates(board: &mut Board, soft: &mut Vec<ItemId>) -> (usize, Vec
     }
     let mut spans = Vec::new();
     for &id in &doubled {
-        if let Some(item) = board.remove(id) {
-            spans.extend(item.span);
+        if let Some(mut item) = board.remove(id) {
+            spans.extend(item.span.take());
+            watch(board, &item);
         }
     }
     soft.retain(|id| board.item(*id).is_some());
@@ -142,6 +148,11 @@ pub fn drop_duplicates(board: &mut Board, soft: &mut Vec<ItemId>) -> (usize, Vec
 /// Taking one out can leave the next loose, so it goes round until none is left. How many went,
 /// and the board file's spans among them, for removing from the file.
 pub fn prune_dangling(board: &mut Board, soft: &mut Vec<ItemId>) -> (usize, Vec<Span>) {
+    prune_dangling_watch(board, soft, &mut |_, _| {})
+}
+
+/// As [`prune_dangling`], showing `watch` each dangling track or via removed.
+pub fn prune_dangling_watch(board: &mut Board, soft: &mut Vec<ItemId>, watch: &mut dyn FnMut(&Board, &Item)) -> (usize, Vec<Span>) {
     let (mut pruned, mut spans) = (0, Vec::new());
     loop {
         let loose: Vec<ItemId> = soft.iter().copied().filter(|&id| dangles(board, id)).collect();
@@ -152,9 +163,10 @@ pub fn prune_dangling(board: &mut Board, soft: &mut Vec<ItemId>) -> (usize, Vec<
             if !dangles(board, id) || !bridges_nothing(board, id) {
                 continue;
             }
-            if let Some(item) = board.remove(id) {
-                spans.extend(item.span);
+            if let Some(mut item) = board.remove(id) {
+                spans.extend(item.span.take());
                 pruned += 1;
+                watch(board, &item);
             }
         }
         soft.retain(|id| board.item(*id).is_some());
@@ -259,6 +271,15 @@ fn length(points: &[Point]) -> f64 {
 /// Pulls every chain of the router's tracks tight. `soft` holds the copper the router laid and
 /// is updated with the tracks that replace it.
 pub fn pull_tight(board: &mut Board, soft: &mut Vec<ItemId>) -> CleanStats {
+    pull_tight_watch(board, soft, &mut |_, _, _, _| {})
+}
+
+/// Sees a chain pulled tight: the board after, the net, the tracks replaced and the new ones.
+pub type TightWatch<'a> = dyn FnMut(&Board, u32, &[Item], &[ItemId]) + 'a;
+
+/// As [`pull_tight`], calling `watch` with the net, replaced tracks and new track ids whenever a
+/// chain is shortened.
+pub fn pull_tight_watch(board: &mut Board, soft: &mut Vec<ItemId>, watch: &mut TightWatch) -> CleanStats {
     let soft_set: HashSet<ItemId> = soft.iter().copied().filter(|id| board.item(*id).is_some()).collect();
     let mut stats = CleanStats::default();
     let mut replaced: HashSet<ItemId> = HashSet::new();
@@ -268,11 +289,14 @@ pub fn pull_tight(board: &mut Board, soft: &mut Vec<ItemId>) -> CleanStats {
         stats.segments_before += chain.tracks.len();
         stats.length_before += length(&chain.points);
         let mut kept_points = vec![chain.points[0]];
+        let mut chain_old: Vec<Item> = Vec::new();
+        let mut chain_new: Vec<ItemId> = Vec::new();
         let mut i = 0;
         let n = chain.points.len() - 1;
         while i < n {
             let mut j = n;
             let mut laid = None;
+            let mut taken_here: Vec<Item> = Vec::new();
             while j > i + 1 {
                 // Try the straight track from point i to point j in place of the tracks between.
                 // Whatever joined those tracks must still join the straight one, or the chain's
@@ -305,6 +329,7 @@ pub fn pull_tight(board: &mut Board, soft: &mut Vec<ItemId>) -> CleanStats {
                 let id = board.insert(straight);
                 let still_joined = partners.iter().all(|&p| joined(board, p, id) || sides.iter().any(|&s| s == p || joined(board, p, s)));
                 if still_joined && check_item(board, id).is_empty() {
+                    taken_here = removed.into_iter().map(|(_, it)| it).collect();
                     laid = Some(id);
                     break;
                 }
@@ -319,6 +344,8 @@ pub fn pull_tight(board: &mut Board, soft: &mut Vec<ItemId>) -> CleanStats {
                 Some(id) => {
                     replaced.extend(&chain.tracks[i..j]);
                     added.push(id);
+                    chain_old.extend(taken_here);
+                    chain_new.push(id);
                 }
                 None => j = i + 1,
             }
@@ -327,8 +354,66 @@ pub fn pull_tight(board: &mut Board, soft: &mut Vec<ItemId>) -> CleanStats {
         }
         stats.segments_after += kept_points.len() - 1;
         stats.length_after += length(&kept_points);
+        if !chain_new.is_empty() {
+            watch(board, chain.net, &chain_old, &chain_new);
+        }
     }
     soft.retain(|id| !replaced.contains(id) && board.item(*id).is_some());
     soft.extend(added);
     stats
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_board() -> Board {
+        let (pcb, copper) = kicad_pcb::parse_board(
+            "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal)) (net 0 \"\") (net 1 \"N1\"))",
+        )
+        .unwrap();
+        Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap())
+    }
+
+    fn seg(a: Point, b: Point) -> Item {
+        Item { kind: Kind::Track, net: 1, layers: 1, shape: Shape::Capsule { a, b, r: 50_000 }, hole: None, locked: false, span: None }
+    }
+
+    #[test]
+    fn watch_hooks_report_tightened_chains_duplicates_and_dangling_stubs() {
+        let mut board = empty_board();
+        for x in [0, 1_000_000] {
+            board.insert(Item {
+                kind: Kind::Pad { footprint: 0, number: "1".into(), plated: false },
+                net: 1,
+                layers: 1,
+                shape: Shape::Capsule { a: Point::new(x, 0), b: Point::new(x, 0), r: 100_000 },
+                hole: None,
+                locked: true,
+                span: None,
+            });
+        }
+        let s1 = board.insert(seg(Point::new(0, 0), Point::new(500_000, 300_000)));
+        let s2 = board.insert(seg(Point::new(500_000, 300_000), Point::new(1_000_000, 0)));
+        let mut soft = vec![s1, s2];
+        let mut tightened = 0;
+        let clean = pull_tight_watch(&mut board, &mut soft, &mut |_, net, old, new| {
+            assert_eq!(net, 1);
+            assert_eq!(old.len(), 2);
+            assert_eq!(new.len(), 1);
+            tightened += 1;
+        });
+        assert_eq!((clean.segments_before, clean.segments_after, tightened), (2, 1, 1));
+
+        // A duplicate of the pulled-tight track and a dangling branch off one end.
+        let dup = board.insert(seg(Point::new(0, 0), Point::new(1_000_000, 0)));
+        let stub = board.insert(seg(Point::new(0, 0), Point::new(0, 600_000)));
+        soft.extend([dup, stub]);
+        let mut dups = 0;
+        assert_eq!(drop_duplicates_watch(&mut board, &mut soft, &mut |_, _| dups += 1).0, 1);
+        assert_eq!(dups, 1);
+        let mut pruned = 0;
+        assert_eq!(prune_dangling_watch(&mut board, &mut soft, &mut |_, _| pruned += 1).0, 1);
+        assert_eq!(pruned, 1);
+    }
 }

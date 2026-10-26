@@ -1,6 +1,7 @@
-//! Design rules and net classes from a `.kicad_pro`, in metres.
-//!
-//! Custom rules in a `.kicad_dru` file are not applied; [`Rules::read`] says when one is there.
+//! Design rules and net classes from a `.kicad_pro`, in metres, and the custom rules of a
+//! `.kicad_dru` beside it that the router understands: the stricter clearances a fab sets for
+//! through-hole pad holes and between SMD pads. [`Rules::read`] warns of any other custom rule,
+//! which is not applied.
 
 use std::path::Path;
 
@@ -26,6 +27,14 @@ pub struct Rules {
     pub patterns: Vec<(String, String)>,
     /// Nets assigned to a class by name.
     pub assignments: Vec<(String, String)>,
+    /// From custom rules: hole clearance where either item is a through-hole pad, hole-to-hole
+    /// between two through-hole pads, and clearance between two SMD pads; 0 where unset.
+    #[serde(default)]
+    pub pth_hole_clearance: f64,
+    #[serde(default)]
+    pub pth_hole_to_hole: f64,
+    #[serde(default)]
+    pub smd_pad_clearance: f64,
     pub warnings: Vec<String>,
 }
 
@@ -53,11 +62,9 @@ impl Rules {
     pub fn read(path: &Path) -> Result<Rules, RulesError> {
         let text = std::fs::read_to_string(path).map_err(|e| RulesError::Io(path.display().to_string(), e.to_string()))?;
         let mut rules = Rules::parse(&text)?;
-        if path.with_extension("kicad_dru").is_file() {
-            rules.warnings.push(format!(
-                "{} has custom rules; they are not applied",
-                path.with_extension("kicad_dru").display()
-            ));
+        let dru = path.with_extension("kicad_dru");
+        if let Ok(custom) = std::fs::read_to_string(&dru) {
+            rules.apply_custom(&custom, &dru.display().to_string());
         }
         Ok(rules)
     }
@@ -111,8 +118,46 @@ impl Rules {
             classes,
             patterns: pairs(&net["netclass_patterns"], "pattern"),
             assignments,
+            pth_hole_clearance: 0.0,
+            pth_hole_to_hole: 0.0,
+            smd_pad_clearance: 0.0,
             warnings: Vec::new(),
         })
+    }
+
+    /// Applies the custom rules the router understands from a `.kicad_dru`'s text, and warns of
+    /// each other rule, which is not applied. A rule is understood when its condition is one of
+    /// these, spaces aside, with a `min` constraint of that kind:
+    /// `A.Pad_Type == 'Through-hole'` with `hole_clearance`;
+    /// `A.Pad_Type == 'Through-hole' && B.Pad_Type == 'Through-hole'` with `hole_to_hole`;
+    /// `A.Pad_Type == 'SMD' && B.Pad_Type == 'SMD'` with `clearance`.
+    /// KiCad tries a rule both ways round, so the first holds wherever either item is a
+    /// through-hole pad.
+    pub fn apply_custom(&mut self, text: &str, source: &str) {
+        for rule in forms(text, "rule") {
+            let name = quoted(&rule).unwrap_or_default();
+            let condition = forms(&rule, "condition").first().and_then(|c| quoted(c)).unwrap_or_default();
+            let condition: String = condition.chars().filter(|c| !c.is_whitespace()).collect();
+            let constraints = forms(&rule, "constraint");
+            let mut understood = !constraints.is_empty();
+            for constraint in &constraints {
+                let kind = constraint.trim_start_matches("(constraint").split_whitespace().next().unwrap_or("").to_string();
+                let min = forms(constraint, "min").first().and_then(|m| length(m.trim_start_matches("(min").trim_end_matches(')')));
+                let slot = match (condition.as_str(), kind.as_str()) {
+                    ("A.Pad_Type=='Through-hole'", "hole_clearance") => Some(&mut self.pth_hole_clearance),
+                    ("A.Pad_Type=='Through-hole'&&B.Pad_Type=='Through-hole'", "hole_to_hole") => Some(&mut self.pth_hole_to_hole),
+                    ("A.Pad_Type=='SMD'&&B.Pad_Type=='SMD'", "clearance") => Some(&mut self.smd_pad_clearance),
+                    _ => None,
+                };
+                match (slot, min) {
+                    (Some(slot), Some(v)) => *slot = slot.max(v),
+                    _ => understood = false,
+                }
+            }
+            if !understood {
+                self.warnings.push(format!("{source}: custom rule \"{name}\" is not applied"));
+            }
+        }
     }
 
     /// The class a net belongs to: assigned by name, else the matching pattern of the lowest
@@ -161,6 +206,60 @@ fn wildcard(pattern: &str, text: &str) -> bool {
     p[pi..].iter().all(|c| *c == '*')
 }
 
+/// Each `(head ...)` form in `text`, at any depth, outside strings.
+fn forms(text: &str, head: &str) -> Vec<String> {
+    let open = format!("({head}");
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(at) = text[i..].find(&open).map(|k| k + i) {
+        let after = bytes.get(at + open.len()).copied().unwrap_or(b' ');
+        if after.is_ascii_alphanumeric() || after == b'_' {
+            i = at + open.len();
+            continue;
+        }
+        let (mut depth, mut j, mut in_string) = (0i32, at, false);
+        while j < bytes.len() {
+            match bytes[j] {
+                b'"' => in_string = !in_string,
+                b'(' if !in_string => depth += 1,
+                b')' if !in_string => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            j += 1;
+        }
+        out.push(text[at..=j.min(bytes.len() - 1)].to_string());
+        i = at + open.len();
+    }
+    out
+}
+
+/// The first quoted string in `text`.
+fn quoted(text: &str) -> Option<String> {
+    let start = text.find('"')? + 1;
+    let end = text[start..].find('"')? + start;
+    Some(text[start..end].to_string())
+}
+
+/// A length such as `0.28mm`, `0.28 mm` or `11mil`, in metres.
+fn length(text: &str) -> Option<f64> {
+    let t = text.trim();
+    let (number, unit) = t.split_at(t.find(|c: char| c.is_ascii_alphabetic()).unwrap_or(t.len()));
+    let v: f64 = number.trim().parse().ok()?;
+    match unit.trim() {
+        "" | "mm" => Some(v * MM),
+        "mil" => Some(v * 25.4e-6),
+        "in" => Some(v * 25.4e-3),
+        "um" => Some(v * 1e-6),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,14 +289,37 @@ mod tests {
     }
 
     #[test]
-    fn a_custom_rules_file_is_reported() {
+    fn custom_rules_for_holes_and_smd_pads_are_applied_and_others_reported() {
         let dir = std::env::temp_dir().join(format!("kicad-rules-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let pro = dir.join("b.kicad_pro");
         std::fs::write(&pro, r#"{"board":{"design_settings":{"rules":{"min_clearance":0.2}}},"net_settings":{"classes":[]}}"#).unwrap();
         assert!(Rules::read(&pro).unwrap().warnings.is_empty());
-        std::fs::write(dir.join("b.kicad_dru"), "(version 1)").unwrap();
-        assert_eq!(Rules::read(&pro).unwrap().warnings.len(), 1);
+        std::fs::write(
+            dir.join("b.kicad_dru"),
+            r#"(version 1)
+# A comment.
+(rule "JLC PTH hole to copper"
+  (condition "A.Pad_Type == 'Through-hole'")
+  (constraint hole_clearance (min 0.28mm)))
+(rule "JLC PTH hole to hole"
+  (condition "A.Pad_Type == 'Through-hole' && B.Pad_Type == 'Through-hole'")
+  (constraint hole_to_hole (min 0.45mm)))
+(rule "JLC SMD pad to pad"
+  (condition "A.Pad_Type == 'SMD' && B.Pad_Type == 'SMD'")
+  (constraint clearance (min 0.15mm)))
+(rule "Something else"
+  (condition "A.NetClass == 'Power'")
+  (constraint track_width (min 0.3mm)))"#,
+        )
+        .unwrap();
+        let r = Rules::read(&pro).unwrap();
+        let near = |a: f64, b: f64| assert!((a - b).abs() < 1e-12, "{a} vs {b}");
+        near(r.pth_hole_clearance, 0.28e-3);
+        near(r.pth_hole_to_hole, 0.45e-3);
+        near(r.smd_pad_clearance, 0.15e-3);
+        assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
+        assert!(r.warnings[0].contains("Something else"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

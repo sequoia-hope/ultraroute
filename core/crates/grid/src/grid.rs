@@ -119,6 +119,49 @@ impl ObstacleMap {
         ObstacleMap::without(board, profile, h, pours_block, &|_| false)
     }
 
+    /// A map covering only `bounds`, for fine-grid work such as escaping a single package without
+    /// paying for a fine grid over the whole board.
+    pub fn window(board: &Board, profile: Profile, h: Nm, bounds: board::BBox, pours_block: bool) -> ObstacleMap {
+        let (x0, y0) = (bounds.min.x, bounds.min.y);
+        let nx = ((bounds.max.x - x0) / h).max(1) as usize;
+        let ny = ((bounds.max.y - y0) / h).max(1) as usize;
+        let layers = board.layers.len();
+        let mut map = ObstacleMap {
+            pours_block,
+            profile,
+            x0,
+            y0,
+            h,
+            nx,
+            ny,
+            layers,
+            owner: vec![FREE; layers * nx * ny],
+            via_owner: vec![FREE; nx * ny],
+        };
+        map.stamp_outline(board);
+        let max_clr = (0..board.nets.len() as u32)
+            .map(|n| map.clearance_to(board, n))
+            .max()
+            .unwrap_or(map.profile.clearance);
+        let hole_margin = (map.profile.drill_radius + nm(board.rules.min_hole_to_hole))
+            .max(map.profile.via_radius + nm(board.rules.min_hole_clearance))
+            .max(map.profile.half_width + nm(board.rules.min_hole_clearance) + map.reach());
+        let copper_margin = (map.profile.half_width + max_clr + map.reach()).max(map.profile.via_radius + max_clr);
+        let reach_box = board::BBox {
+            min: Point::new(x0, y0),
+            max: Point::new(x0 + nx as Nm * h, y0 + ny as Nm * h),
+        }
+        .grow(copper_margin.max(hole_margin) + h);
+        let ids: Vec<ItemId> = board
+            .items()
+            .filter_map(|(id, _)| board.bbox(id).filter(|b| b.overlaps(reach_box)).map(|_| id))
+            .collect();
+        for id in ids {
+            map.stamp(board, id);
+        }
+        map
+    }
+
     /// The map with the items `skip` names left out, as if they were not on the board.
     pub fn without(board: &Board, profile: Profile, h: Nm, pours_block: bool, skip: &dyn Fn(ItemId) -> bool) -> ObstacleMap {
         let b = board.outline.iter().flatten().copied().fold(None, |b: Option<board::BBox>, p| {
@@ -149,7 +192,7 @@ impl ObstacleMap {
         map
     }
 
-    fn reach(&self) -> Nm {
+    pub(crate) fn reach(&self) -> Nm {
         (self.h as f64 * STEP_REACH).ceil() as Nm
     }
 
@@ -320,9 +363,20 @@ impl ObstacleMap {
                 ObstacleMap::claim(&mut self.via_owner[c], item.net);
             }
         }
+        // A through-hole pad may carry a stricter hole clearance from custom rules, both ways
+        // round: from its hole to other copper, and from other holes (a via's) to its copper.
+        let through_hole = matches!(item.kind, Kind::Pad { plated: true, .. }) && item.hole.is_some();
+        let hole_clearance = if through_hole { nm(rules.min_hole_clearance.max(rules.pth_hole_clearance)) } else { nm(rules.min_hole_clearance) };
+        if through_hole && rules.pth_hole_clearance > rules.min_hole_clearance {
+            let mut hit = Vec::new();
+            self.cells_near(&item.shape, drill_radius + hole_clearance, &mut |c| hit.push(c));
+            for c in hit {
+                self.via_owner[c] = SEVERAL;
+            }
+        }
         if let Some((centre, r)) = item.hole {
             let hole = Shape::Capsule { a: centre, b: centre, r };
-            let margin = (drill_radius + nm(rules.min_hole_to_hole)).max(via_radius + nm(rules.min_hole_clearance));
+            let margin = (drill_radius + nm(rules.min_hole_to_hole)).max(via_radius + hole_clearance);
             let mut hit = Vec::new();
             self.cells_near(&hole, margin, &mut |c| hit.push(c));
             for c in hit {
@@ -331,7 +385,7 @@ impl ObstacleMap {
             }
             // Tracks keep the hole clearance from every hole, unplated ones too.
             let mut hit = Vec::new();
-            self.cells_near(&hole, half_width + nm(rules.min_hole_clearance) + reach, &mut |c| hit.push(c));
+            self.cells_near(&hole, half_width + hole_clearance + reach, &mut |c| hit.push(c));
             for l in 0..self.layers {
                 for &c in &hit {
                     ObstacleMap::claim(&mut self.owner[l * cells + c], if item.plated_hole() { item.net } else { 0 });
@@ -380,6 +434,44 @@ impl ObstacleMap {
             via_blocked: self.via_owner.iter().map(|&o| !free(o)).collect(),
             penalty: Vec::new(),
             pours_block: self.pours_block,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn a_window_map_agrees_cell_for_cell_with_a_full_board_map() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/earring.kicad_pcb");
+        let board = Board::load(&path).unwrap().0;
+        let profile = Profile::for_net(&board, 1);
+        let h = 50_000;
+        for pours_block in [false, true] {
+            let full = ObstacleMap::new(&board, profile.clone(), h, pours_block);
+            let (i0, j0, wn, hn) = (full.nx / 3, full.ny / 3, 80.min(full.nx / 2), 80.min(full.ny / 2));
+            let bounds = board::BBox {
+                min: Point::new(full.x0 + i0 as Nm * h, full.y0 + j0 as Nm * h),
+                max: Point::new(full.x0 + (i0 + wn) as Nm * h, full.y0 + (j0 + hn) as Nm * h),
+            };
+            let win = ObstacleMap::window(&board, profile.clone(), h, bounds, pours_block);
+            assert_eq!((win.nx, win.ny), (wn, hn));
+            for j in 0..win.ny {
+                for i in 0..win.nx {
+                    let wc = j * win.nx + i;
+                    let fc = (j0 + j) * full.nx + (i0 + i);
+                    assert_eq!(win.via_owner[wc], full.via_owner[fc], "via_owner mismatch at ({i}, {j}) pours={pours_block}");
+                    for l in 0..full.layers {
+                        assert_eq!(
+                            win.owner[l * win.nx * win.ny + wc],
+                            full.owner[l * full.nx * full.ny + fc],
+                            "owner mismatch on layer {l} at ({i}, {j}) pours={pours_block}"
+                        );
+                    }
+                }
+            }
         }
     }
 }

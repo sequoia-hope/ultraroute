@@ -12,7 +12,7 @@ each log into the lab as it is written, then refills the zones, asks KiCad's DRC
 broken, and counts copper cut into blocks. `ingest` records runs made by hand: DIR/NAME.log,
 DIR/NAME.drc.json and DIR/NAME.out.kicad_pcb, whichever exist. The lab lives in
 $ULTRAROUTE_LAB or ~/Software/ultraroute-lab, outside the repository, so the Pages site never
-carries it; the page itself is lab/index.html here, copied in on every write.
+carries it; its pages are lab/*.html here, copied in on every write.
 """
 import argparse
 import json
@@ -51,15 +51,40 @@ def write_json(path, value):
 
 
 def sync():
-    """The page, and the list of experiments it starts from."""
+    """The pages, and the list of experiments and feature films the lab starts from."""
     LAB.mkdir(parents=True, exist_ok=True)
-    shutil.copy(ROOT / "lab/index.html", LAB / "index.html")
+    for page in sorted((ROOT / "lab").glob("*.html")):
+        shutil.copy(page, LAB / page.name)
     listed = []
     for f in sorted((LAB / "experiments").glob("*/experiment.json")):
         e = json.loads(f.read_text())
         listed.append({k: e.get(k) for k in ("id", "title", "status", "started", "finished", "commit")} | {"runs": len(e.get("runs", []))})
     listed.sort(key=lambda e: e["started"] or "", reverse=True)
     write_json(LAB / "index.json", listed)
+    films_dir = LAB / "films"
+    if films_dir.is_dir():
+        order = ["dipole", "push", "flow", "comb", "clear-lane", "shove", "nudge", "negotiate", "route", "rip-up", "chase", "tighten", "cleanup", "topo"]
+        rank = {k: i for i, k in enumerate(order)}
+        films = []
+        for f in sorted(films_dir.glob("*/*.json")):
+            try:
+                v = json.loads(f.read_text())
+            except Exception:
+                continue
+            feat, name = v.get("feature"), v.get("name")
+            if feat and name:
+                films.append({
+                    "feature": feat,
+                    "name": name,
+                    "title": v.get("title") or name,
+                    "subtitle": v.get("subtitle") or "",
+                    "board": v.get("board") or "",
+                    "cropped": bool(v.get("cropped")),
+                    "frames": len(v.get("frames") or []),
+                    "path": f"films/{feat}/{name}.json",
+                })
+        films.sort(key=lambda x: (rank.get(x["feature"], 999), x["feature"], x["name"]))
+        write_json(films_dir / "index.json", films)
 
 
 # Lines the router prints when a stage ends, and what each says.
@@ -101,9 +126,10 @@ def judge(pcb, out_dir):
     if not pcb.exists():
         return verdict
     filled, report = out_dir / "filled.kicad_pcb", out_dir / "drc.json"
-    pro = pcb.with_suffix(".kicad_pro")
-    if pro.exists():
-        shutil.copy(pro, filled.with_suffix(".kicad_pro"))
+    # The project and its custom rules go with the board, or KiCad judges by its defaults.
+    for suffix in (".kicad_pro", ".kicad_dru"):
+        if pcb.with_suffix(suffix).exists():
+            shutil.copy(pcb.with_suffix(suffix), filled.with_suffix(suffix))
     subprocess.run([sys.executable, ROOT / "tools/refill_zones.py", pcb, filled], capture_output=True)
     subprocess.run(["kicad-cli", "pcb", "drc", "--format", "json", "--severity-all", "-o", report, filled], capture_output=True)
     if report.exists():
@@ -168,7 +194,7 @@ def run(a):
         if rd.exists():
             shutil.rmtree(rd)
         rd.mkdir(parents=True)
-        for src in [board, board.with_suffix(".kicad_pro")]:
+        for src in [board, board.with_suffix(".kicad_pro"), board.with_suffix(".kicad_dru")]:
             if src.exists():
                 shutil.copy(src, rd / ("input" + src.suffix))
         args = shlex.split(a.recipe) + shlex.split(extra) + ["--threads", str(a.threads), "--timeout", str(a.timeout), "--verbose"]
@@ -187,7 +213,9 @@ def run(a):
                     pending.discard(name)
                     log.close()
                     if (rd / "out.kicad_pcb").exists():
-                        shutil.copy(rd / "input.kicad_pro", rd / "out.kicad_pro")
+                        for suffix in (".kicad_pro", ".kicad_dru"):
+                            if (rd / ("input" + suffix)).exists():
+                                shutil.copy(rd / ("input" + suffix), rd / ("out" + suffix))
                     finish(r, rd, p.returncode)
                     write_json(f, e)
     except KeyboardInterrupt:

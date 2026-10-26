@@ -44,6 +44,11 @@ pub struct Options {
     pub rip_cost: Nm,
     /// Rounds of rip-up over the connections still open; 0 turns rip-up off.
     pub rip_passes: usize,
+    /// Connections to route, each as `(from.min(to), from.max(to))`; every open connection when
+    /// `None`.
+    pub only: Option<HashSet<(ItemId, ItemId)>>,
+    /// Nets whose open connections are routed; every net when `None`.
+    pub nets: Option<HashSet<u32>>,
     /// Keep other nets out of poured copper instead of routing through it to be refilled.
     pub pours_block: bool,
     /// Set from elsewhere to stop at the next connection.
@@ -61,6 +66,8 @@ impl Default for Options {
             orders: 1,
             rip_cost: 1_000_000,
             rip_passes: 6,
+            only: None,
+            nets: None,
             pours_block: false,
             cancel: None,
             log: None,
@@ -89,6 +96,19 @@ fn tell(log: &Option<Log>, phase: &'static str, text: impl FnOnce() -> String, f
     }
 }
 
+fn filtered_gaps(board: &Board, options: &Options) -> Vec<(f64, ItemId, ItemId)> {
+    let pair = |a: ItemId, b: ItemId| (a.min(b), a.max(b));
+    let airlines = if options.pours_block { board::connectivity(board) } else { board::connectivity_without_pours(board) }.airlines;
+    let mut gaps: Vec<(f64, ItemId, ItemId)> = airlines
+        .iter()
+        .filter(|a| options.nets.as_ref().is_none_or(|n| n.contains(&a.net)))
+        .filter(|a| options.only.as_ref().is_none_or(|o| o.contains(&pair(a.from_item, a.to_item))))
+        .map(|a| (a.from.distance(a.to), a.from_item, a.to_item))
+        .collect();
+    gaps.sort_by(|a, b| a.0.total_cmp(&b.0));
+    gaps
+}
+
 /// Routes the board's open connections as rubber bands, then rips up what is still open. Each
 /// order is tried on a copy of the board; the copy that joins most, with fewest vias, is kept.
 /// `watch` sees the board being routed after every connection laid.
@@ -98,9 +118,10 @@ pub fn route_topological(board: &mut Board, options: &Options, watch: &mut dyn F
         options.max_seconds.is_some_and(|limit| started.elapsed().as_secs_f64() > limit)
             || options.cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
     };
-    let airlines = if options.pours_block { board::connectivity(board) } else { board::connectivity_without_pours(board) }.airlines;
-    let mut gaps: Vec<(f64, ItemId, ItemId)> = airlines.iter().map(|a| (a.from.distance(a.to), a.from_item, a.to_item)).collect();
-    gaps.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let gaps = filtered_gaps(board, options);
+    if gaps.is_empty() {
+        return Stats::default();
+    }
     let mut best: Option<(Stats, Board)> = None;
     for order in 0..options.orders.max(1) {
         if order > 0 && out_of_time() {
@@ -131,6 +152,250 @@ pub fn route_topological(board: &mut Board, options: &Options, watch: &mut dyn F
     }
     let Some((stats, routed)) = best else { return Stats::default() };
     *board = routed;
+    stats
+}
+
+/// Groups the caller's unlocked `soft` copper into touching same-net clusters, numbered from
+/// `base` on, so topological rip-up can cross and rip a grid route as one unit.
+fn adopt_soft(board: &Board, soft: &[ItemId], base: usize) -> (Conns, Vec<Vec<ItemId>>) {
+    let soft_set: HashSet<ItemId> = soft
+        .iter()
+        .copied()
+        .filter(|&id| board.item(id).is_some_and(|it| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked))
+        .collect();
+    let mut sorted: Vec<ItemId> = soft_set.iter().copied().collect();
+    sorted.sort_unstable();
+    let mut visited: HashSet<ItemId> = HashSet::new();
+    let mut conns = Conns::new();
+    let mut clusters = Vec::new();
+    for start_id in sorted {
+        if !visited.insert(start_id) {
+            continue;
+        }
+        let Some(first) = board.item(start_id) else { continue };
+        let net = first.net;
+        let idx = base + clusters.len();
+        let mut cluster = vec![start_id];
+        let mut queue = vec![start_id];
+        while let Some(id) = queue.pop() {
+            let Some(it) = board.item(id) else { continue };
+            let bb = it.shape.bbox();
+            for layer in (0..board.layers.len()).filter(|l| it.on(*l)) {
+                for other in board.near(layer, bb) {
+                    if soft_set.contains(&other) && !visited.contains(&other) {
+                        if let Some(o) = board.item(other) {
+                            if o.net == net && o.on(layer) && it.shape.gap_within(&o.shape, 0.0) == 0.0 {
+                                visited.insert(other);
+                                cluster.push(other);
+                                queue.push(other);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for &id in &cluster {
+            conns.insert(id, idx as u32);
+        }
+        clusters.push(cluster);
+    }
+    (conns, clusters)
+}
+
+/// Routes the open connections `options` selects as rubber bands, treating `soft` tracks and vias
+/// from earlier passes as rippable copper during rip-up. When a rubber band crosses an existing
+/// cluster, that cluster is ripped and the connections it opened are routed again (as rubber
+/// bands, then on the grid, and if needed with a short grid rip-up while the freed rubber band
+/// holds still). Each rip stands only when fewer connections are left open across the whole board.
+/// `soft` is updated in place with what survived and what was laid.
+pub fn route_topological_with_soft(
+    board: &mut Board,
+    options: &Options,
+    soft: &mut Vec<ItemId>,
+    watch: &mut dyn FnMut(&Board),
+) -> Stats {
+    let started = grid::clock::Instant::now();
+    let out_of_time = || {
+        options.max_seconds.is_some_and(|limit| started.elapsed().as_secs_f64() > limit)
+            || options.cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+    };
+    let raw_gaps = filtered_gaps(board, options);
+    if raw_gaps.is_empty() {
+        return Stats::default();
+    }
+    let gaps = reorder(&raw_gaps, 0);
+    let pours = options.pours_block;
+    let all_open = |b: &Board| if pours { board::connectivity(b) } else { board::connectivity_without_pours(b) }.airlines;
+    let pair = |a: ItemId, b: ItemId| (a.min(b), a.max(b));
+
+    let initial_soft: HashSet<ItemId> = soft.iter().copied().collect();
+    let (conns, clusters) = adopt_soft(board, soft, gaps.len());
+    let mut items = vec![Vec::new(); gaps.len()];
+    items.extend(clusters);
+    let mut laid = Laid { conns, items };
+    let mut world = World::build(board, options.sample as f64, pours, &laid.conns);
+    let mut stats = Stats { connections: gaps.len(), ..Stats::default() };
+
+    for (conn, &gap) in gaps.iter().enumerate() {
+        if out_of_time() {
+            break;
+        }
+        match attempt(board, &world, gap, options) {
+            Attempt::Routed(added) => {
+                laid.record(&mut world, board, conn, added);
+                watch(board);
+            }
+            Attempt::Joined => {}
+            Attempt::NoChannel => stats.no_channel += 1,
+            Attempt::Rejected(_) => stats.rejected += 1,
+        }
+    }
+
+    let mut history = vec![0.0; laid.items.len()];
+    for _ in 0..options.rip_passes {
+        if out_of_time() {
+            break;
+        }
+        let open_conns: Vec<usize> = (0..gaps.len()).filter(|&c| !made(board, gaps[c], pours)).collect();
+        let mut moved = false;
+        for conn in open_conns {
+            if out_of_time() {
+                break;
+            }
+            let (from, to) = gaps[conn];
+            if made(board, (from, to), pours) {
+                continue;
+            }
+            let Some(net) = board.item(from).map(|it| it.net) else { continue };
+            let name = board.net_name(net).to_string();
+            let before_air = all_open(board);
+            let before_len = before_air.len();
+            let was_open: HashSet<(ItemId, ItemId)> = before_air.iter().map(|a| pair(a.from_item, a.to_item)).collect();
+
+            if history.len() < laid.items.len() {
+                history.resize(laid.items.len(), 0.0);
+            }
+            let wire = WireRules::new(board, net, options.sample as f64 * MARGINS[0]);
+            let rip = Rip { cost: options.rip_cost as f64, history: &history };
+            let route = search(board, &world, &wire, from, to, options, Some(&rip));
+            let mut victims: BTreeSet<u32> = route.as_ref().map(|r| r.victims.clone()).unwrap_or_default();
+            if victims.is_empty() {
+                if let Attempt::Rejected(clashed) = attempt(board, &world, (from, to), options) {
+                    victims.extend(clashed.iter().filter_map(|id| laid.conns.get(id).copied()));
+                }
+            }
+            if victims.is_empty() {
+                continue;
+            }
+            tell(&options.log, "topo-rip", || format!("{name}: ripping {} clusters for a rubber band", victims.len()), None);
+            let saved = (board.clone(), world.clone(), laid.clone());
+            for &v in &victims {
+                laid.rip(board, v as usize);
+                if (v as usize) < history.len() {
+                    history[v as usize] += 1.0;
+                }
+            }
+            world = World::build(board, options.sample as f64, pours, &laid.conns);
+            let mut routed = route.and_then(|r| commit(board, &world, &wire, &r, from, to, pours).ok());
+            if routed.is_none() {
+                if let Attempt::Routed(added) = attempt(board, &world, (from, to), options) {
+                    routed = Some(added);
+                }
+            }
+            if let Some(added) = routed {
+                laid.record(&mut world, board, conn, added.clone());
+                let fresh = all_open(board);
+                for a in fresh.iter().filter(|a| !was_open.contains(&pair(a.from_item, a.to_item))) {
+                    if let Attempt::Routed(v_added) = attempt(board, &world, (a.from_item, a.to_item), options) {
+                        let slot = laid.items.len();
+                        laid.items.push(Vec::new());
+                        history.push(0.0);
+                        laid.record(&mut world, board, slot, v_added);
+                    }
+                }
+                if !all_open(board).is_empty() && !out_of_time() {
+                    let g = grid::route_open(
+                        board,
+                        &mut grid::CpuSolver,
+                        &grid::Options { max_seconds: Some(3.0), pours_block: pours, cancel: options.cancel.clone(), ..Default::default() },
+                        &mut |_| {},
+                    );
+                    if !g.laid.is_empty() {
+                        let slot = laid.items.len();
+                        laid.items.push(Vec::new());
+                        history.push(0.0);
+                        laid.record(&mut world, board, slot, g.laid);
+                    }
+                }
+                let mid_len = all_open(board).len();
+                if mid_len >= before_len && mid_len <= before_len + 2 && !out_of_time() {
+                    // Hold the newly laid rubber band still while grid rip-up tries to repair
+                    // the one or two knocked-loose connections that could not find a plain path.
+                    let mut held = Vec::new();
+                    for &id in &added {
+                        if let Some(mut it) = board.remove(id) {
+                            it.locked = true;
+                            board.restore(id, it);
+                            held.push(id);
+                        }
+                    }
+                    let mut repair_soft: Vec<ItemId> = laid.all().into_iter().filter(|id| !held.contains(id) && board.item(*id).is_some()).collect();
+                    grid::rip_up(
+                        board,
+                        &mut grid::CpuSolver,
+                        &grid::RipOptions { max_seconds: Some(2.5), reroute_seconds: 1.0, pours_block: pours, cancel: options.cancel.clone(), ..Default::default() },
+                        &mut repair_soft,
+                        &mut |_| {},
+                    );
+                    for id in held {
+                        if let Some(mut it) = board.remove(id) {
+                            it.locked = false;
+                            board.restore(id, it);
+                        }
+                    }
+                    if all_open(board).len() < before_len {
+                        let (new_conns, new_clusters) = adopt_soft(board, &repair_soft, gaps.len());
+                        let mut new_items = vec![Vec::new(); gaps.len()];
+                        for (c, old) in laid.items.iter().take(gaps.len()).enumerate() {
+                            if c == conn {
+                                new_items[c] = added.iter().copied().filter(|id| board.item(*id).is_some()).collect();
+                            } else {
+                                new_items[c] = old.iter().copied().filter(|id| board.item(*id).is_some()).collect();
+                            }
+                        }
+                        let mut merged_conns = new_conns;
+                        for (c, ids) in new_items.iter().enumerate() {
+                            for &id in ids {
+                                merged_conns.insert(id, c as u32);
+                            }
+                        }
+                        new_items.extend(new_clusters);
+                        laid = Laid { conns: merged_conns, items: new_items };
+                        history.resize(laid.items.len(), 0.0);
+                        world = World::build(board, options.sample as f64, pours, &laid.conns);
+                    }
+                }
+            }
+            let after_len = all_open(board).len();
+            if !laid.items[conn].is_empty() && after_len < before_len {
+                moved = true;
+                stats.rip_ups += 1;
+                tell(&options.log, "topo-rip", || format!("{name}: kept, {before_len} -> {after_len} open"), None);
+                watch(board);
+            } else {
+                tell(&options.log, "topo-rip", || format!("{name}: no better ({before_len} -> {after_len} open), put back"), None);
+                (*board, world, laid) = saved;
+            }
+        }
+        if !moved {
+            break;
+        }
+    }
+
+    *soft = laid.all().into_iter().filter(|id| board.item(*id).is_some()).collect();
+    stats.routed = gaps.iter().filter(|&&gap| made(board, gap, pours)).count();
+    stats.laid = soft.iter().copied().filter(|id| !initial_soft.contains(id)).collect();
+    stats.vias = stats.laid.iter().filter(|id| board.item(**id).is_some_and(|it| it.kind == Kind::Via)).count();
     stats
 }
 
@@ -387,6 +652,7 @@ fn rip_up(
 }
 
 /// What one net's wire needs, in nanometres: its width, clearances and via.
+#[derive(Clone)]
 pub struct WireRules {
     net: u32,
     half_width: Nm,
@@ -446,6 +712,12 @@ impl WireRules {
             widths.push(floor);
         }
         widths
+    }
+
+    /// Rules at a pad exit, where the first or last segment may neck down to the board's
+    /// narrowest track so a wide net or wider margin can still leave a fine-pitch pad.
+    pub fn necked(&self) -> WireRules {
+        WireRules { half_width: self.min_half_width, margin: self.margin.min(25_000.0), ..self.clone() }
     }
 
     /// How near the wire's centre may come to an obstacle, `None` when it may cross it.
@@ -587,7 +859,13 @@ fn search(board: &Board, world: &World, wire: &WireRules, from: ItemId, to: Item
         return None;
     }
     let goal: HashMap<State, Pt> = targets.iter().copied().collect();
+    let source_points: Vec<Pt> = sources.iter().map(|(_, p)| *p).collect();
     let goal_points: Vec<Pt> = targets.iter().map(|(_, p)| *p).collect();
+    let necked = wire.necked();
+    let near_pad = |p: Pt| {
+        (wire.half_width > wire.min_half_width || wire.margin > 25_000.0)
+            && source_points.iter().chain(&goal_points).any(|q| p.distance(*q) <= 500_000.0)
+    };
     let h = |p: Pt| goal_points.iter().map(|q| p.distance(*q)).fold(f64::INFINITY, f64::min) * HEURISTIC_WEIGHT;
 
     let mut best: HashMap<State, f64> = HashMap::new();
@@ -619,7 +897,8 @@ fn search(board: &Board, world: &World, wire: &WireRules, from: ItemId, to: Item
                 open.push(Open { f: g2 + h(at2), g: g2, state: next, at: at2 });
             }
         };
-        for (face, gate, victims) in world.gates(wire, state.layer, state.face, rip.is_some()) {
+        let gate_wire = if near_pad(at) { &necked } else { wire };
+        for (face, gate, victims) in world.gates(gate_wire, state.layer, state.face, rip.is_some()) {
             let p = gate.nearest(at);
             let g2 = g + at.distance(p) + price(&victims);
             push(State { layer: state.layer, face }, g2, p, Step::Cross(gate, victims));
@@ -702,10 +981,11 @@ fn commit(board: &mut Board, world: &World, wire: &WireRules, route: &Route, fro
             board.remove(id);
         }
     };
+    let necked = wire.necked();
     for (k, run) in route.runs.iter().enumerate() {
         let pulled: Vec<Pt> = funnel::pull(run.from, &run.gates, run.to).iter().flat_map(Bend::points).collect();
         let mut points: Vec<Point> = Vec::new();
-        for q in world.clear_path(wire, run.layer, pulled).into_iter().map(round) {
+        for q in world.clear_path(wire, &necked, run.layer, pulled, k == 0, k + 1 == route.runs.len()).into_iter().map(round) {
             if points.last() != Some(&q) {
                 points.push(q);
             }

@@ -143,3 +143,83 @@ fn a_routed_board_routes_nothing_more() {
         assert_eq!(b.items().count(), items);
     }
 }
+
+#[test]
+fn only_selected_connections_are_routed_and_soft_blockers_can_be_ripped() {
+    let mut b = window(Point::new(0, 0), false);
+    let before = b.clone();
+    let air = connectivity(&b).airlines;
+    assert!(air.len() >= 3);
+    let pair = (air[0].from_item.min(air[0].to_item), air[0].from_item.max(air[0].to_item));
+    let only = std::collections::HashSet::from([pair]);
+    let stats = route_topological(&mut b, &Options { only: Some(only), rip_passes: 0, ..quick() }, &mut |_| {});
+    assert_eq!(stats.connections, 1);
+    assert!(stats.routed <= 1);
+    assert_clean(&before, &b, &stats.laid);
+
+    // Fence pad `b1` inside a soft closed ring of net 1 on a 1-layer board (taken from `earring`
+    // with all items stripped and layers truncated to F.Cu), so `b1` has no channel out unless
+    // `route_topological_with_soft` rips net 1's soft cluster and reroutes net 1 round the back.
+    let mut syn = earring();
+    let all_ids: Vec<ItemId> = syn.items().map(|(id, _)| id).collect();
+    for id in all_ids {
+        syn.remove(id);
+    }
+    syn.layers.truncate(1);
+    let bb = BBox::of(syn.outline.iter().flatten().copied());
+    let c = Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2);
+    let pad = |net: u32, dx: Nm, dy: Nm, num: &str| Item {
+        kind: Kind::Pad { footprint: 0, number: num.into(), plated: false },
+        net,
+        layers: 1,
+        shape: Shape::Capsule { a: Point::new(c.x + dx, c.y + dy), b: Point::new(c.x + dx, c.y + dy), r: 120_000 },
+        hole: None,
+        locked: true,
+        span: None,
+    };
+    let _a1 = syn.insert(pad(1, -900_000, -600_000, "1"));
+    let _a2 = syn.insert(pad(1, -900_000, 600_000, "2"));
+    let b1 = syn.insert(pad(2, 0, 0, "3"));
+    let b2 = syn.insert(pad(2, 1_800_000, 0, "4"));
+    let corners = [
+        Point::new(c.x - 900_000, c.y - 600_000),
+        Point::new(c.x + 700_000, c.y - 600_000),
+        Point::new(c.x + 700_000, c.y + 600_000),
+        Point::new(c.x - 900_000, c.y + 600_000),
+        Point::new(c.x - 900_000, c.y - 600_000),
+    ];
+    let mut soft: Vec<ItemId> = corners
+        .windows(2)
+        .map(|w| {
+            syn.insert(Item {
+                kind: Kind::Track,
+                net: 1,
+                layers: 1,
+                shape: Shape::Capsule { a: w[0], b: w[1], r: 75_000 },
+                hole: None,
+                locked: false,
+                span: None,
+            })
+        })
+        .collect();
+    assert_eq!(open(&syn), 1, "only net B is open while net A's ring encloses b1");
+    assert!(violations(&syn).is_empty(), "starting setup is legal: {:?}", violations(&syn));
+
+    let only_b = std::collections::HashSet::from([(b1.min(b2), b1.max(b2))]);
+    let no_rip = route_topological(
+        &mut syn.clone(),
+        &Options { only: Some(only_b.clone()), rip_passes: 0, sample: 80_000, ..Default::default() },
+        &mut |_| {},
+    );
+    assert_eq!(no_rip.routed, 0, "cannot escape a closed ring without ripping it");
+
+    let ripped = route_topological_with_soft(
+        &mut syn,
+        &Options { only: Some(only_b), rip_passes: 2, sample: 80_000, ..Default::default() },
+        &mut soft,
+        &mut |_| {},
+    );
+    assert_eq!(ripped.routed, 1, "{ripped:?}");
+    assert_eq!(open(&syn), 0, "both nets end connected");
+    assert!(violations(&syn).is_empty(), "violations: {:?}", violations(&syn));
+}

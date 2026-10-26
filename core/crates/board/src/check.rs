@@ -48,22 +48,55 @@ struct Limits {
     edge: Nm,
     hole_clearance: Nm,
     hole_to_hole: Nm,
+    /// From custom rules: hole clearance where either item is a through-hole pad, hole-to-hole
+    /// between two of them, and clearance between two SMD pads; never below the plain ones.
+    pth_hole_clearance: Nm,
+    pth_hole_to_hole: Nm,
+    smd_pad_clearance: Nm,
+}
+
+/// A pad with a plated hole: KiCad's `Pad_Type == 'Through-hole'`.
+fn through_hole(item: &Item) -> bool {
+    matches!(item.kind, Kind::Pad { plated: true, .. }) && item.hole.is_some()
+}
+
+/// A pad without a hole: KiCad's `Pad_Type == 'SMD'`.
+fn smd(item: &Item) -> bool {
+    matches!(item.kind, Kind::Pad { .. }) && item.hole.is_none()
+}
+
+impl Limits {
+    /// The hole clearance between two items, one of whose holes is measured.
+    fn hole_clearance(&self, a: &Item, b: &Item) -> Nm {
+        if through_hole(a) || through_hole(b) { self.pth_hole_clearance } else { self.hole_clearance }
+    }
+
+    fn hole_to_hole(&self, a: &Item, b: &Item) -> Nm {
+        if through_hole(a) && through_hole(b) { self.pth_hole_to_hole } else { self.hole_to_hole }
+    }
 }
 
 impl Limits {
     fn of(board: &Board) -> Limits {
         let rules = &board.rules;
+        let (hole_clearance, hole_to_hole) = (nm(rules.min_hole_clearance), nm(rules.min_hole_to_hole));
+        let pth_hole_clearance = hole_clearance.max(nm(rules.pth_hole_clearance));
+        let pth_hole_to_hole = hole_to_hole.max(nm(rules.pth_hole_to_hole));
+        let smd_pad_clearance = nm(rules.smd_pad_clearance);
         Limits {
             max_clearance: rules
                 .classes
                 .iter()
                 .map(|c| nm(c.clearance))
-                .chain([nm(rules.min_clearance), nm(rules.min_hole_clearance), nm(rules.min_hole_to_hole)])
+                .chain([nm(rules.min_clearance), pth_hole_clearance, pth_hole_to_hole, smd_pad_clearance])
                 .max()
                 .unwrap_or(0),
             edge: nm(rules.min_copper_edge_clearance),
-            hole_clearance: nm(rules.min_hole_clearance),
-            hole_to_hole: nm(rules.min_hole_to_hole),
+            hole_clearance,
+            hole_to_hole,
+            pth_hole_clearance,
+            pth_hole_to_hole,
+            smd_pad_clearance,
         }
     }
 }
@@ -129,7 +162,10 @@ fn item_checks(
                         }
                     }
                     _ if partner(other) && o.is_copper() && (o.net != item.net || item.net == 0) && !same_pad(item, o) => {
-                        let required = board.clearance(item.net, o.net);
+                        let mut required = board.clearance(item.net, o.net);
+                        if smd(item) && smd(o) {
+                            required = required.max(limits.smd_pad_clearance);
+                        }
                         let other_bbox = board.bbox(other).unwrap_or_else(|| o.shape.bbox());
                         if !item_bbox.grow(required).overlaps(other_bbox) {
                             continue;
@@ -152,34 +188,36 @@ fn item_checks(
         }
         // Copper against the plated holes of others, when they are not walked themselves.
         if everyone {
-            for other in board.near(holes, item_bbox.grow(limits.hole_clearance)) {
+            for other in board.near(holes, item_bbox.grow(limits.pth_hole_clearance)) {
                 let Some(o) = board.item(other) else { continue };
                 let Some(h) = o.hole else { continue };
+                let required = limits.hole_clearance(o, item);
                 if other == id || !holds_clear(o, item) || same_pad(item, o) || (o.plated_hole() && o.net == item.net && item.net != 0) {
                     continue;
                 }
                 if failed_pairs.contains(&(id.min(other), id.max(other))) {
                     continue;
                 }
-                let gap = item.shape.gap_within(&hole_shape(h), limits.hole_clearance as f64);
-                if gap + SLACK < limits.hole_clearance as f64 {
-                    found.push(Violation { rule: Rule::HoleClearance, a: id, b: Some(other), layer: None, gap, required: limits.hole_clearance });
+                let gap = item.shape.gap_within(&hole_shape(h), required as f64);
+                if gap + SLACK < required as f64 {
+                    found.push(Violation { rule: Rule::HoleClearance, a: id, b: Some(other), layer: None, gap, required });
                 }
             }
         }
     }
     if let Some(hole) = item.hole {
         let shape = hole_shape(hole);
-        let reach = shape.bbox().grow(limits.hole_clearance.max(limits.hole_to_hole));
+        let reach = shape.bbox().grow(limits.pth_hole_clearance.max(limits.pth_hole_to_hole));
         for other in board.near(holes, reach) {
             let Some(o) = board.item(other) else { continue };
             if !partner(other) || same_pad(item, o) {
                 continue;
             }
             if let Some(h) = o.hole {
+                let required = limits.hole_to_hole(item, o);
                 let gap = shape.gap(&hole_shape(h));
-                if gap + SLACK < limits.hole_to_hole as f64 {
-                    found.push(Violation { rule: Rule::HoleToHole, a: id, b: Some(other), layer: None, gap, required: limits.hole_to_hole });
+                if gap + SLACK < required as f64 {
+                    found.push(Violation { rule: Rule::HoleToHole, a: id, b: Some(other), layer: None, gap, required });
                 }
             }
         }
@@ -200,10 +238,11 @@ fn item_checks(
                 {
                     continue;
                 }
-                let gap = shape.gap_within(&o.shape, limits.hole_clearance as f64);
-                if gap + SLACK < limits.hole_clearance as f64 {
+                let required = limits.hole_clearance(item, o);
+                let gap = shape.gap_within(&o.shape, required as f64);
+                if gap + SLACK < required as f64 {
                     failed_pairs.insert((id.min(other), id.max(other)));
-                    found.push(Violation { rule: Rule::HoleClearance, a: id, b: Some(other), layer: Some(layer), gap, required: limits.hole_clearance });
+                    found.push(Violation { rule: Rule::HoleClearance, a: id, b: Some(other), layer: Some(layer), gap, required });
                 }
             }
         }

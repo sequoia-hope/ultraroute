@@ -12,7 +12,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use board::{check_item, check_item_with_pours, nm, Board, ItemId, Kind, Point, Shape};
+use board::{check_item, check_item_with_pours, nm, Board, Item, ItemId, Kind, Point, Shape};
 use kicad_pcb::Span;
 
 use crate::report::{tell, Log};
@@ -137,9 +137,29 @@ pub(crate) fn part_clear(board: &Board, footprint: usize, pads: &[ItemId], flowi
     })
 }
 
+/// One step of [`push_watch`], after parts and copper flowed and broken copper was ripped.
+pub struct PushStep<'a> {
+    pub step: usize,
+    pub moves: &'a HashMap<usize, Point>,
+    pub held_back: usize,
+    pub flowed: usize,
+    pub ripped: &'a [Item],
+}
+
 /// Pushes everything free to move along `field`. `soft` holds the router's copper; copper from
 /// the board file that moves joins it, as it must now be written back.
 pub fn push(board: &mut Board, field: &Field, options: &PushOptions, soft: &mut Vec<ItemId>, watch: &mut dyn FnMut(&Board)) -> PushStats {
+    push_watch(board, field, options, soft, &mut |b, _| watch(b))
+}
+
+/// As [`push`], reporting each step's part moves and ripped copper to `watch`.
+pub fn push_watch(
+    board: &mut Board,
+    field: &Field,
+    options: &PushOptions,
+    soft: &mut Vec<ItemId>,
+    watch: &mut dyn FnMut(&Board, PushStep),
+) -> PushStats {
     let mut stats = PushStats::default();
     let steps = options.steps.max(1);
     let still = |board: &Board, f: usize| {
@@ -154,6 +174,7 @@ pub fn push(board: &mut Board, field: &Field, options: &PushOptions, soft: &mut 
         // that cannot move. Parts stand where they would go while the rest are judged, and go
         // back after, for the flow to carry them with their copper.
         let mut moves: HashMap<usize, Point> = HashMap::new();
+        let mut step_held_back = 0;
         for f in 0..board.footprints.len() {
             if still(board, f) {
                 continue;
@@ -177,6 +198,7 @@ pub fn push(board: &mut Board, field: &Field, options: &PushOptions, soft: &mut 
             }
             if kept != Some(rounded(full)) {
                 stats.held_back += 1;
+                step_held_back += 1;
             }
             if let Some(by) = kept {
                 moves.insert(f, by);
@@ -194,11 +216,11 @@ pub fn push(board: &mut Board, field: &Field, options: &PushOptions, soft: &mut 
         stats.removed_spans.extend(flowed.removed_spans);
 
         // Copper the flow pushed into something it may not touch is ripped, to be routed again.
-        let (ripped, spans) = rip_broken(board, soft, options.pours_block);
-        stats.ripped += ripped;
+        let (ripped_items, spans) = rip_broken_items(board, soft, options.pours_block);
+        stats.ripped += ripped_items.len();
         stats.removed_spans.extend(spans);
         tell(&options.log, "pushing", || format!("step {} of {steps}: {} parts moved, {} ripped so far", step + 1, moves.len(), stats.ripped), None);
-        watch(board);
+        watch(board, PushStep { step, moves: &moves, held_back: step_held_back, flowed: flowed.flowed, ripped: &ripped_items });
     }
     let mut moved: Vec<(usize, Point)> = total.into_iter().filter(|(_, p)| *p != Point::new(0, 0)).collect();
     moved.sort_unstable_by_key(|(f, _)| *f);
@@ -209,19 +231,25 @@ pub fn push(board: &mut Board, field: &Field, options: &PushOptions, soft: &mut 
 /// Rips every unlocked track and via that breaks a rule, to be routed again: how many, and the
 /// board file's spans among them.
 pub fn rip_broken(board: &mut Board, soft: &mut Vec<ItemId>, pours_block: bool) -> (usize, Vec<Span>) {
+    let (items, spans) = rip_broken_items(board, soft, pours_block);
+    (items.len(), spans)
+}
+
+/// As [`rip_broken`], returning the ripped items themselves so callers can inspect or draw them.
+pub fn rip_broken_items(board: &mut Board, soft: &mut Vec<ItemId>, pours_block: bool) -> (Vec<Item>, Vec<Span>) {
     let mut ids: Vec<ItemId> = board.items().filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked).map(|(id, _)| id).collect();
     ids.sort_unstable();
-    let (mut ripped, mut spans) = (0, Vec::new());
+    let (mut ripped, mut spans) = (Vec::new(), Vec::new());
     for id in ids {
         if board.item(id).is_none() {
             continue;
         }
         let broken = if pours_block { check_item_with_pours(board, id) } else { check_item(board, id) };
         if !broken.is_empty() {
-            if let Some(it) = board.remove(id) {
-                spans.extend(it.span);
+            if let Some(mut it) = board.remove(id) {
+                spans.extend(it.span.take());
+                ripped.push(it);
             }
-            ripped += 1;
         }
     }
     soft.retain(|id| board.item(*id).is_some());
