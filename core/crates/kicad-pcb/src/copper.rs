@@ -115,6 +115,10 @@ pub struct Zone {
     pub filled: Vec<(String, Vec<[f64; 2]>)>,
     pub keepout: Option<Keepout>,
     pub priority: u32,
+    /// `(connect_pads (clearance …))`: the gap the pour keeps from other nets, in metres; 0 when unset.
+    pub clearance: f64,
+    /// `(min_thickness …)`: the narrowest copper the fill keeps, in metres; 0 when unset.
+    pub min_thickness: f64,
     /// Inside a footprint, the footprint's index in `Pcb::footprints`.
     pub footprint: Option<usize>,
     pub uuid: String,
@@ -399,6 +403,12 @@ fn read_zone(z: &Node, footprint: Option<usize>) -> Result<Zone, KicadParse> {
         filled,
         keepout,
         priority: z.find("priority").and_then(|p| p.number_arg(0, "priority").ok()).unwrap_or(0.0) as u32,
+        clearance: z
+            .find("connect_pads")
+            .and_then(|c| c.find("clearance"))
+            .and_then(|c| c.number_arg(0, "clearance").ok())
+            .map_or(0.0, |mm| mm * MM),
+        min_thickness: z.find("min_thickness").and_then(|t| t.number_arg(0, "min_thickness").ok()).map_or(0.0, |mm| mm * MM),
         footprint,
         uuid: uuid(z),
         span: z.pos().into(),

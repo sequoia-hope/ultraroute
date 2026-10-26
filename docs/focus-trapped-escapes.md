@@ -219,3 +219,10 @@ second pass over undone tries.
   portfolio of 4-6 gives a clean full route of either job today. Next: keep tracks out of the
   gaps between U1's thermal vias on refilled-pour layers; let the plough search finish seeds
   left at 1 open.
+- 2026-10-26, bluebuzz (agy, worktree `agy-bluebuzz`, audited): `bluebuzz-rm2` routes with
+  `--prefanout`, from bare pads and with its locked copper, 0 unconnected and 0 KiCad errors on
+  seeds 0-3 each (lab `bluebuzz-check-2`; its .kicad_pro makes dangling copper an error).
+  Without pre-fanout it ends at 9 open. agy's cleanup fix (a via no longer counts as covering a
+  track, overhanging stubs past a T-joint are trimmed) is merged; on the earring it removes nearly
+  all dangling warnings and leaves the open count before and after cleanup unchanged (lab
+  `cleanup-agy-18`, one thread per run: stripped 0 0 1 0 3 2, locked 1 0 0 1 1 0).

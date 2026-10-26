@@ -160,7 +160,15 @@ pub fn prune_dangling_watch(board: &mut Board, soft: &mut Vec<ItemId>, watch: &m
         // One at a time, judged again: two stubs covering each other must not both go. What
         // carries a connection stays however it looks, so a round may take nothing out.
         for id in loose {
-            if !dangles(board, id) || !bridges_nothing(board, id) {
+            if !dangles(board, id) {
+                continue;
+            }
+            if !bridges_nothing(board, id) {
+                if let Some((span, new_ids)) = trim_overhang(board, id) {
+                    spans.extend(span);
+                    soft.extend(new_ids);
+                    pruned += 1;
+                }
                 continue;
             }
             if let Some(mut item) = board.remove(id) {
@@ -175,6 +183,122 @@ pub fn prune_dangling_watch(board: &mut Board, soft: &mut Vec<ItemId>, watch: &m
         }
     }
     (pruned, spans)
+}
+
+fn closest_on_segment(a: Point, b: Point, p: Point) -> (f64, Point) {
+    let (dx, dy) = ((b.x - a.x) as f64, (b.y - a.y) as f64);
+    let len_sq = dx * dx + dy * dy;
+    if len_sq <= 0.0 {
+        return (0.0, a);
+    }
+    let t = (((p.x - a.x) as f64 * dx + (p.y - a.y) as f64 * dy) / len_sq).clamp(0.0, 1.0);
+    let proj = Point::new(a.x + (t * dx).round() as board::Nm, a.y + (t * dy).round() as board::Nm);
+    (t, proj)
+}
+
+fn point_gap(shape: &Shape, p: Point) -> f64 {
+    shape.gap(&Shape::Capsule { a: p, b: p, r: 0 })
+}
+
+/// When a track has one loose end because another track joined it mid-segment (such as a global
+/// route meeting a pre-fanout inner-layer stub before its tip), trims the overhanging tail back to
+/// the furthest neighbour joint so KiCad does not flag the unused tail as `track_dangling`.
+fn trim_overhang(board: &mut Board, id: ItemId) -> Option<(Option<Span>, Vec<ItemId>)> {
+    let item = board.item(id)?.clone();
+    let (Kind::Track, Shape::Capsule { a, b, r }) = (&item.kind, &item.shape) else { return None };
+    let (a, b, r) = (*a, *b, *r);
+    if a == b || item.net == 0 {
+        return None;
+    }
+    let layer = item.layers.trailing_zeros() as usize;
+    let near = board.near(layer, item.shape.bbox());
+    let end_met = |p: Point, q: Point| {
+        let end = Shape::Capsule { a: p, b: p, r };
+        near.iter().any(|&o| {
+            o != id
+                && board.item(o).is_some_and(|it| {
+                    it.net == item.net
+                        && it.is_copper()
+                        && !it.refilled()
+                        && it.on(layer)
+                        && it.shape.gap_within(&end, 0.0) == 0.0
+                        && (it.shape.contains(p) || point_gap(&it.shape, p) <= point_gap(&it.shape, q))
+                })
+        })
+    };
+    let (keep, loose) = match (end_met(a, b), end_met(b, a)) {
+        (true, false) => (a, b),
+        (false, true) => (b, a),
+        _ => return None,
+    };
+    let around = neighbours(board, id);
+    if around.is_empty() {
+        return None;
+    }
+    let seg = Shape::Capsule { a: keep, b: loose, r: 0 };
+    let mut best: Option<(f64, Point)> = None;
+    for &o in &around {
+        let Some(other) = board.item(o) else { continue };
+        let pt = match &other.shape {
+            Shape::Capsule { a: oa, b: ob, .. } => {
+                if point_gap(&seg, *oa) <= point_gap(&seg, *ob) {
+                    *oa
+                } else {
+                    *ob
+                }
+            }
+            Shape::Polygon(pts) => {
+                let n = pts.len().max(1) as board::Nm;
+                Point::new(pts.iter().map(|q| q.x).sum::<board::Nm>() / n, pts.iter().map(|q| q.y).sum::<board::Nm>() / n)
+            }
+        };
+        let (t, _) = closest_on_segment(keep, loose, pt);
+        if t > 0.0 && best.is_none_or(|(bt, _)| t > bt) {
+            best = Some((t, pt));
+        }
+    }
+    let (_, target) = best?;
+    let (_, proj) = closest_on_segment(keep, loose, target);
+    let mut candidates: Vec<Vec<(Point, Point)>> = Vec::new();
+    if target != keep && target != loose {
+        candidates.push(vec![(keep, target)]);
+    }
+    if proj != keep && proj != loose {
+        if proj == target {
+            candidates.push(vec![(keep, proj)]);
+        } else {
+            candidates.push(vec![(keep, proj), (proj, target)]);
+        }
+    }
+    if candidates.is_empty() {
+        return None;
+    }
+    let removed = board.remove(id)?;
+    for segs in candidates {
+        let mut new_ids = Vec::with_capacity(segs.len());
+        for (p, q) in segs {
+            new_ids.push(board.insert(Item {
+                kind: Kind::Track,
+                net: item.net,
+                layers: item.layers,
+                shape: Shape::Capsule { a: p, b: q, r },
+                hole: None,
+                locked: item.locked,
+                span: None,
+            }));
+        }
+        let legal = new_ids.iter().all(|&nid| check_item(board, nid).is_empty());
+        let connected = around.iter().all(|&o| new_ids.iter().any(|&nid| joined(board, nid, o)));
+        let clean = new_ids.iter().all(|&nid| !dangles(board, nid));
+        if legal && connected && clean {
+            return Some((removed.span, new_ids));
+        }
+        for nid in new_ids.into_iter().rev() {
+            board.discard(nid);
+        }
+    }
+    board.restore(id, removed);
+    None
 }
 
 /// Pieces a search for another way round may visit before giving up and keeping the piece.
@@ -234,22 +358,30 @@ fn dangles(board: &Board, id: ItemId) -> bool {
         return false;
     }
     let ours = |layer: usize, other: ItemId| {
-        (other != id).then(|| board.item(other)).flatten().filter(|o| o.net == item.net && o.is_copper() && o.on(layer))
+        (other != id)
+            .then(|| board.item(other))
+            .flatten()
+            .filter(|o| o.net == item.net && o.is_copper() && !o.refilled() && o.on(layer))
     };
     match (&item.kind, &item.shape) {
         (Kind::Track, Shape::Capsule { a, b, r }) => {
             let layer = item.layers.trailing_zeros() as usize;
             let near = board.near(layer, item.shape.bbox());
-            let loose_end = [*a, *b].iter().any(|&p| {
+            let loose_end = [(*a, *b), (*b, *a)].iter().any(|&(p, q)| {
                 let end = Shape::Capsule { a: p, b: p, r: *r };
-                !near.iter().any(|&o| ours(layer, o).is_some_and(|o| o.shape.gap_within(&end, 0.0) == 0.0))
+                !near.iter().any(|&o| {
+                    ours(layer, o).is_some_and(|o| {
+                        o.shape.gap_within(&end, 0.0) == 0.0
+                            && (o.shape.contains(p) || point_gap(&o.shape, p) <= point_gap(&o.shape, q))
+                    })
+                })
             });
             if loose_end {
                 return true;
             }
             let neighbours: Vec<ItemId> = near.iter().copied().filter(|&o| ours(layer, o).is_some() && joined(board, id, o)).collect();
             near.iter().any(|&cover| {
-                ours(layer, cover).is_some_and(|c| !matches!(c.kind, Kind::Pour { .. }) && c.shape.contains(*a) && c.shape.contains(*b))
+                ours(layer, cover).is_some_and(|c| !matches!(c.kind, Kind::Pour { .. } | Kind::Via) && c.shape.contains(*a) && c.shape.contains(*b))
                     && neighbours.iter().all(|&o| o == cover || joined(board, cover, o))
             })
         }
@@ -415,5 +547,56 @@ mod tests {
         let mut pruned = 0;
         assert_eq!(prune_dangling_watch(&mut board, &mut soft, &mut |_, _| pruned += 1).0, 1);
         assert_eq!(pruned, 1);
+    }
+
+    #[test]
+    fn prune_dangling_removes_single_layer_via_and_trims_overhanging_stub() {
+        let (pcb, copper) = kicad_pcb::parse_board(
+            "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal)) (net 0 \"\") (net 1 \"N1\"))",
+        )
+        .unwrap();
+        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+        let p1 = board.insert(Item {
+            kind: Kind::Pad { footprint: 0, number: "1".into(), plated: false },
+            net: 1,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(0, 0), b: Point::new(0, 0), r: 100_000 },
+            hole: None,
+            locked: true,
+            span: None,
+        });
+        let p2 = board.insert(Item {
+            kind: Kind::Pad { footprint: 0, number: "2".into(), plated: false },
+            net: 1,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(2_000_000, 300_000), b: Point::new(2_000_000, 300_000), r: 100_000 },
+            hole: None,
+            locked: true,
+            span: None,
+        });
+        // Short track from p1 to via center (covered by the via's 200 um radius), an unused via at
+        // (120_000, 0), a long vertical stub from (120_000, 0) to (120_000, 1_000_000), and a
+        // horizontal track from p2 joining that stub mid-segment at (120_000, 300_000).
+        let t_pad = board.insert(seg(Point::new(0, 0), Point::new(120_000, 0)));
+        let unused_via = board.insert(Item {
+            kind: Kind::Via,
+            net: 1,
+            layers: 3,
+            shape: Shape::Capsule { a: Point::new(120_000, 0), b: Point::new(120_000, 0), r: 200_000 },
+            hole: Some((Point::new(120_000, 0), 100_000)),
+            locked: false,
+            span: None,
+        });
+        let stub = board.insert(seg(Point::new(120_000, 0), Point::new(120_000, 1_000_000)));
+        let branch = board.insert(seg(Point::new(120_000, 300_000), Point::new(2_000_000, 300_000)));
+        let mut soft = vec![t_pad, unused_via, stub, branch];
+        let (pruned, _) = prune_dangling(&mut board, &mut soft);
+        assert!(pruned >= 2, "expected unused via and overhanging stub to be cleaned: pruned={pruned}");
+        assert!(board.item(unused_via).is_none(), "single-layer via should be pruned");
+        assert!(board.item(t_pad).is_some(), "pad-to-via-center track on F.Cu must stay");
+        assert!(board::connectivity(&board).airlines.is_empty(), "pads p1={p1} and p2={p2} must stay connected");
+        for &id in &soft {
+            assert!(!dangles(&board, id), "remaining soft item {id} still dangles");
+        }
     }
 }

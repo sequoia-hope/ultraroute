@@ -528,6 +528,21 @@ impl Live {
         self.frame(board, true, Vec::new());
     }
 
+    /// The zones of the board in `text` poured as KiCad would refill them, for drawing.
+    fn fills(&mut self, text: &str, rules: &kicad_pcb::Rules) {
+        let Ok((pcb, copper)) = kicad_pcb::parse_board(text) else { return };
+        let board = Board::new(&pcb, &copper, rules.clone());
+        let mm = |v: Nm| round(v as f64 * 1e-6);
+        let fills: Vec<Value> = board::fill_zones(&board, &copper)
+            .iter()
+            .map(|f| {
+                let rects: Vec<f64> = f.rects.iter().flat_map(|r| [mm(r[0]), mm(-r[3]), mm(r[2]), mm(-r[1])]).collect();
+                json!({"zone": f.zone, "net": f.net, "layer": f.layer, "r": rects})
+            })
+            .collect();
+        self.write(&json!({"t": "fill", "fills": fills}));
+    }
+
     /// Negotiation's current trial routes, drawn over the board until the next ones.
     fn trials(&mut self, _round: usize, trials: &[grid::Trial]) {
         if self.last.is_some_and(|t| t.elapsed() < self.interval) {
@@ -889,14 +904,16 @@ pub fn run(a: &Args, mut board: Board, text: &str, mut live: Option<Live>, cance
 
     if a.no_route {
         let open = if a.pours_block { connectivity(&board) } else { connectivity_without_pours(&board) }.airlines.len();
-        if let Some(l) = live.as_mut() {
-            l.write(&json!({"t": "done", "open": open, "passes": 0, "stopped": null}));
-        }
         if a.blame {
             print_blame(&mut board, a.pours_block);
         }
         let replace = moved_parts(&board, &original_at);
-        return apply(text, &Edit { remove: removed, replace, ..Edit::default() });
+        let out = apply(text, &Edit { remove: removed, replace, ..Edit::default() });
+        if let Some(l) = live.as_mut() {
+            l.fills(&out, &board.rules);
+            l.write(&json!({"t": "done", "open": open, "passes": 0, "stopped": null}));
+        }
+        return out;
     }
     let started = Instant::now();
     let mut solver: Box<dyn grid::FieldSolver> = Box::new(grid::CpuSolver);
@@ -1630,6 +1647,7 @@ pub fn run(a: &Args, mut board: Board, text: &str, mut live: Option<Live>, cance
     let mut live = live.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(l) = live.as_mut() {
         l.frame(&board, true, Vec::new());
+        l.fills(&routed, &board.rules);
         let stopped = if cancel.load(Ordering::Relaxed) {
             Some("Cancelled")
         } else if a.timeout.is_some_and(|t| started.elapsed().as_secs_f64() >= t) {

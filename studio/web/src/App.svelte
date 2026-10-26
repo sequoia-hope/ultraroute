@@ -4,6 +4,7 @@
   import Board from './lib/Board.svelte';
 
   const studio = new Studio();
+  studio.set_show_pours(true);
   // Built for a static host: no router to talk to, only recorded runs.
   const STATIC = import.meta.env.VITE_STATIC === '1';
   // Built to route in the tab itself: the core router runs here, in a worker, with no server.
@@ -104,7 +105,7 @@
   let viewMode = $state('all');
   let flipped = $state(false);
   let highContrast = $state(false);
-  let showPours = $state(false);
+  let showPours = $state(true);
   let showHelp = $state(false);
   // On a phone the board fills the screen and the panel is a sheet over its lower part.
   let sheetOpen = $state(typeof location !== 'undefined' && location.hash === '#controls');
@@ -874,8 +875,8 @@
           {/each}
           <label class="check small-gap"><input type="checkbox" bind:checked={highContrast} onchange={() => { studio.set_high_contrast(highContrast); version++; }} /> High contrast (Ctrl+H)</label>
           <label class="check small-gap"><input type="checkbox" bind:checked={flipped} /> Flip board view (Ctrl+Shift+F)</label>
-          <label class="check small-gap" title="The zone fills in the board file; KiCad refills them after routing">
-            <input type="checkbox" bind:checked={showPours} onchange={() => { studio.set_show_pours(showPours); version++; }} /> Old zone fills
+          <label class="check small-gap" title="Zones poured around the copper as KiCad refills them; before the router has poured them, the fills in the board file">
+            <input type="checkbox" bind:checked={showPours} onchange={() => { studio.set_show_pours(showPours); version++; }} /> Pours
           </label>
         </div>
       </section>

@@ -161,8 +161,11 @@ pub struct Scene {
     pub hot_net: Option<i32>,
     pub selected: Option<i32>,
     pub show_congestion: bool,
-    /// Zone fills as the board file has them; the router leaves them for KiCad to refill.
+    /// Whether pours are drawn: as the router filled them, or before it has, as the board file has them.
     pub show_pours: bool,
+    /// Zones the router poured around the copper, as KiCad would: net, layer and rectangles
+    /// `x0, y0, x1, y1`.
+    pub fills: Vec<(i32, usize, Vec<f32>)>,
     /// The layer drawn on top, and in high-contrast mode the only one drawn bright.
     pub active_layer: usize,
     pub high_contrast: bool,
@@ -369,6 +372,15 @@ impl Scene {
                 }
                 true
             }
+            Some("fill") => {
+                self.fills = v["fills"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|f| (f["net"].as_i64().unwrap_or(0) as i32, layer(&f["layer"]), floats(&f["r"])))
+                    .collect();
+                true
+            }
             Some("done") => {
                 self.trials.clear();
                 self.trial_vias.clear();
@@ -448,9 +460,25 @@ impl Scene {
             self.items.values().any(|it| matches!(&it.geom, Geom::Pin { part: p, pads, .. } if *p == part && pads.iter().any(|(l, _)| shown(*l))))
         };
 
+        if self.show_pours {
+            for &layer in &back_to_front {
+                if !shown(layer) {
+                    continue;
+                }
+                for (net, l, rects) in &self.fills {
+                    if *l == layer {
+                        let color = self.tint(with_alpha(self.drawn_color(layer), 0.5), *net);
+                        for r in rects.chunks_exact(4) {
+                            m.fill(&[r[0], r[1], r[2], r[1], r[2], r[3], r[0], r[3]], [0.0, 0.0], color);
+                        }
+                    }
+                }
+            }
+        }
         for item in self.items.values() {
             if let Geom::Area { kind, part, tiles } = &item.geom {
-                if *kind == AreaKind::Pour && !self.show_pours {
+                // Fills from the file are stale once the router has poured its own.
+                if *kind == AreaKind::Pour && (!self.show_pours || !self.fills.is_empty()) {
                     continue;
                 }
                 let o = self.offset(*part);
@@ -1087,6 +1115,23 @@ mod tests {
         assert!(!s.is_locked(7));
         s.lock_overrides.insert(7, true);
         assert!(s.is_locked(7));
+    }
+
+    #[test]
+    fn router_fills_replace_the_files_pours_and_go_with_the_board() {
+        let mut s = Scene::default();
+        s.show_pours = true;
+        s.apply(BOARD);
+        s.apply(&frame(r#"{"id":2,"k":"pour","net":3,"tiles":[{"layer":0,"g":[0,0,1,0,1,1]}]}"#, ""));
+        let with_file = s.mesh(0.01).len();
+        assert!(with_file > 0);
+        s.apply(r#"{"t":"fill","fills":[{"zone":0,"net":3,"layer":0,"r":[0,0,2,2,3,3,4,4]}]}"#);
+        // Two rectangles of two triangles each, in place of the file's one triangle.
+        assert_eq!(s.mesh(0.01).len(), 12 * STRIDE);
+        s.show_pours = false;
+        assert!(s.mesh(0.01).is_empty());
+        s.apply(BOARD);
+        assert!(s.fills.is_empty());
     }
 
     #[test]
