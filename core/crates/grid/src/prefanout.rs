@@ -1337,13 +1337,16 @@ fn lay_grid_escape(
 
     let gmap = &global_maps[&profile.class];
     let gcells = gmap.nx * gmap.ny;
-    let inner_layers: Vec<usize> = if board.layers.len() >= 3 {
-        (1..board.layers.len() - 1).collect()
-    } else if board.layers.len() == 2 {
-        vec![1 - pad.layer]
-    } else {
-        vec![pad.layer]
-    };
+    // The layers an escape heads for: the inner signal layers, planes left out; with none, as on
+    // a two-layer board, the other signal layer, so each escape drops to it by a via.
+    let signal = |l: &usize| board.planes & (1 << l) == 0;
+    let mut inner_layers: Vec<usize> = (1..board.layers.len().saturating_sub(1)).filter(signal).collect();
+    if inner_layers.is_empty() {
+        inner_layers = (0..board.layers.len()).filter(signal).filter(|&l| l != pad.layer).collect();
+    }
+    if inner_layers.is_empty() {
+        inner_layers = vec![pad.layer];
+    }
     let preferred_inner = inner_layers[pad.seq_index % inner_layers.len()];
 
     for hw in widths {

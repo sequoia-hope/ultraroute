@@ -226,7 +226,7 @@ fn trim_overhang(board: &mut Board, id: ItemId) -> Option<(Option<Span>, Vec<Ite
                 && board.item(o).is_some_and(|it| {
                     it.net == item.net
                         && it.is_copper()
-                        && !it.refilled()
+                        && (!it.refilled() || board.is_plane(it))
                         && it.on(layer)
                         && it.shape.gap_within(&end, 0.0) == 0.0
                         && (it.shape.contains(p) || point_gap(&it.shape, p) <= point_gap(&it.shape, q))
@@ -367,7 +367,7 @@ fn neighbours(board: &Board, id: ItemId) -> Vec<ItemId> {
     let mut out: Vec<ItemId> = (0..board.layers.len())
         .filter(|l| item.on(*l))
         .flat_map(|l| board.near(l, bb).into_iter().filter(move |&o| o != id))
-        .filter(|&o| board.item(o).is_some_and(|it| it.net == item.net && it.is_copper() && !it.refilled()) && joined(board, id, o))
+        .filter(|&o| board.item(o).is_some_and(|it| it.net == item.net && it.is_copper() && (!it.refilled() || board.is_plane(it))) && joined(board, id, o))
         .collect();
     out.sort_unstable();
     out.dedup();
@@ -438,7 +438,7 @@ fn dangles(board: &Board, id: ItemId) -> bool {
         (other != id)
             .then(|| board.item(other))
             .flatten()
-            .filter(|o| o.net == item.net && o.is_copper() && !o.refilled() && o.on(layer))
+            .filter(|o| o.net == item.net && o.is_copper() && (!o.refilled() || board.is_plane(o)) && o.on(layer))
     };
     match (&item.kind, &item.shape) {
         (Kind::Track, Shape::Capsule { a, b, r }) => {

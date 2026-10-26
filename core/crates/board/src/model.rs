@@ -127,6 +127,9 @@ pub struct Board {
     /// Precomputed outline edge segments `(a, b, BBox::of([a, b]))` for fast edge-clearance checks.
     pub outline_edges: Vec<(Point, Point, BBox)>,
     pub rules: Rules,
+    /// Plane layers, one bit per index into `layers`: whole layers given to one net's pour,
+    /// which no track crosses, other nets' vias pass through and which joins its net.
+    pub planes: u64,
     /// Clearances per net number, in nanometres, so `clearance(a, b)` is two array lookups.
     net_clearances: Vec<Nm>,
     min_clearance_nm: Nm,
@@ -200,6 +203,7 @@ impl Board {
             outline: Vec::new(),
             outline_edges: Vec::new(),
             rules,
+            planes: 0,
             net_clearances,
             min_clearance_nm,
             items: Vec::new(),
@@ -514,6 +518,29 @@ impl Board {
 
     pub fn net_name(&self, net: u32) -> &str {
         self.nets.get(net as usize).map_or("", String::as_str)
+    }
+
+    /// Makes the layers in `mask` planes: a rule area over the whole board keeps every track off
+    /// them, vias still passing, and their pours join their nets (see [`crate::connectivity_without_pours`]).
+    pub fn set_planes(&mut self, mask: u64) {
+        self.planes |= mask;
+        let Some(outer) = self.outline.first().cloned() else { return };
+        for layer in (0..self.layers.len()).filter(|l| mask & (1 << l) != 0) {
+            self.insert(Item {
+                kind: Kind::Keepout { forbids: Keepout { tracks: true, ..Keepout::default() }, footprint: None },
+                net: 0,
+                layers: 1 << layer,
+                shape: Shape::Polygon(outer.clone()),
+                hole: None,
+                locked: true,
+                span: None,
+            });
+        }
+    }
+
+    /// Whether an item is a plane's pour.
+    pub fn is_plane(&self, item: &Item) -> bool {
+        matches!(item.kind, Kind::Pour { .. }) && item.layers & self.planes != 0
     }
 
     /// The clearance the rules ask between two nets' copper, in nanometres.

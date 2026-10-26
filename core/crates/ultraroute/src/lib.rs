@@ -24,7 +24,7 @@ use board::{connectivity, connectivity_without_pours, Board, Item, ItemId, Kind,
 use kicad_pcb::{apply, mm, Edit};
 use serde_json::{json, Value};
 
-pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--diff-pairs] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--gpu] \
+pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--diff-pairs] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--gpu] \
 [--timeout SECONDS] [--cell MM] [--first NET,...] [--first-negotiate] [--first-weight W] [--restart N] [--topo-first REF,...|auto] [--topo-trapped] [--topo-trapped-rip] [--topo-sample MM] \
 [--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough warp|linear|rip|gentle|dipole] [--shove-steps N] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-late] [--shove-seconds S] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
 [--live PATH|-] [--live-fps N] [--live-step MS] [--blame]";
@@ -39,6 +39,14 @@ pub struct Args {
     /// pads are first bridged inward to their pours.
     /// Route differential pairs (USB D+ and D-) coupled, before anything else.
     pub diff_pairs: bool,
+    /// Layers given whole to a plane (`In1.Cu,In2.Cu`): no tracks on them, vias through them, and
+    /// their pours join their nets.
+    pub planes: Vec<String>,
+    /// Negotiation's most rounds, rounds without progress before it stops, and how fast its
+    /// congestion price grows; the router's defaults when unset.
+    pub negotiate_rounds: Option<usize>,
+    pub negotiate_patience: Option<usize>,
+    pub negotiate_growth: Option<f64>,
     pub prefanout: bool,
     pub prefanout_mode: Option<grid::EscapeMode>,
     pub prefanout_order: Option<grid::EscapeOrder>,
@@ -136,6 +144,10 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         strip: false,
         strip_all: false,
         diff_pairs: false,
+        planes: Vec::new(),
+        negotiate_rounds: None,
+        negotiate_patience: None,
+        negotiate_growth: None,
         prefanout: false,
         prefanout_mode: None,
         prefanout_order: None,
@@ -204,6 +216,16 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             "--strip" => a.strip = true,
             "--strip-all" => a.strip_all = true,
             "--diff-pairs" => a.diff_pairs = true,
+            "--negotiate-rounds" => a.negotiate_rounds = Some(value()?.parse().map_err(|e| format!("--negotiate-rounds: {e}"))?),
+            "--negotiate-patience" => a.negotiate_patience = Some(value()?.parse().map_err(|e| format!("--negotiate-patience: {e}"))?),
+            "--negotiate-growth" => {
+                let g: f64 = value()?.parse().map_err(|e| format!("--negotiate-growth: {e}"))?;
+                if !g.is_finite() || g < 1.0 {
+                    return Err(format!("--negotiate-growth: {g} must be 1 or more"));
+                }
+                a.negotiate_growth = Some(g);
+            }
+            "--planes" => a.planes.extend(value()?.split(',').filter(|s| !s.is_empty()).map(String::from)),
             "--prefanout" => a.prefanout = true,
             "--prefanout-mode" => {
                 a.prefanout = true;
@@ -914,6 +936,16 @@ pub fn run_with_solver(
             }
         }
     }
+    if !a.planes.is_empty() {
+        let mut mask = 0u64;
+        for name in &a.planes {
+            match board.layers.iter().position(|l| l == name) {
+                Some(l) => mask |= 1 << l,
+                None => panic!("--planes: the board has no copper layer {name} (it has {})", board.layers.join(", ")),
+            }
+        }
+        board.set_planes(mask);
+    }
     if let Some(l) = live.as_mut() {
         l.header(&board);
     }
@@ -1060,6 +1092,14 @@ pub fn run_with_solver(
             fanout_laid = f.laid;
         }
     }
+    // Plane pads not on their plane get a via down to it beside them, held like the pairs.
+    if board.planes != 0 {
+        let p = grid::join_planes(&mut board, &log);
+        say("planes", format!("{} of {} pads joined to their planes by a via", p.joined, p.pads));
+        eprintln!("planes: {} of {} pads off their planes joined, {:.1} s", p.joined, p.pads, started.elapsed().as_secs_f64());
+        step(&board);
+        pair_laid.extend(p.laid);
+    }
     // Differential pairs next, round the escapes, and held apart from the router's own copper so
     // nothing rips or straightens them apart; the legs to their pads are routed as usual.
     if a.diff_pairs {
@@ -1074,7 +1114,7 @@ pub fn run_with_solver(
         );
         eprintln!("pairs: {} pairs, {} of {} runs coupled, {:.1} mm, {:.1} s", p.pairs, p.coupled, p.runs, p.coupled_mm, started.elapsed().as_secs_f64());
         step(&board);
-        pair_laid = p.laid;
+        pair_laid.extend(p.laid);
     }
     let cores = std::thread::available_parallelism().map_or(1, |n| n.get() / 2).max(1);
     let threads = a.threads.unwrap_or(cores);
@@ -1274,6 +1314,9 @@ pub fn run_with_solver(
                     seed: a.seed,
                     cancel: Some(cancel.clone()),
                     log: log.clone(),
+                    max_rounds: a.negotiate_rounds.unwrap_or(grid::NegotiationOptions::default().max_rounds),
+                    patience: a.negotiate_patience.unwrap_or(grid::NegotiationOptions::default().patience),
+                    present_growth: a.negotiate_growth.unwrap_or(grid::NegotiationOptions::default().present_growth),
                     ..Default::default()
                 },
                 &mut watch,

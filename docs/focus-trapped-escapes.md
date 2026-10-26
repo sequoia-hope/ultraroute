@@ -269,3 +269,11 @@ second pass over undone tries.
   `--threads 2+` does, so its boards match the server's and any native multi-thread run of the
   same time limit (results depend on `--timeout`, which later stages share out). Seeds for it
   from lab `jacobi-27`: earring-kicad 1, bluebuzz-kicad 4, both clean in the browser.
+- 2026-10-26, inner power planes for easy_pcb (`--planes In1.Cu,In2.Cu`, job easy2350): a
+  board-wide rule area per plane layer keeps tracks off it (vias pass, refilled round), a
+  plane's pour joins its net in connectivity and in the cleanup, and plane-net pads off their
+  plane get a via beside them (grid::join_planes). Escapes from fine-pitch parts drop to the
+  other signal layer when the inner layers are planes. easy2350 with easy_pcb's recipe: GND
+  and +3V3 joined through the planes, no tracks on In1/In2, but 7-10 signal opens (lab
+  planes-28..33); the Freerouting reference has 0. Negotiation settles at 56-62 of 87; longer
+  and gentler negotiation (new --negotiate-rounds/-patience/-growth) does not help.

@@ -60,8 +60,10 @@ fn anchors(board: &Board, id: ItemId) -> ([Point; 2], usize) {
     }
 }
 
-fn cluster_member(item: &crate::model::Item, with_pours: bool) -> bool {
-    with_pours || !item.refilled()
+/// Whether copper joins its net's clusters: all of it with pours counted; without, all but pours
+/// refilled round new copper, though a plane's pour still joins.
+fn cluster_member(board: &Board, item: &crate::model::Item, with_pours: bool) -> bool {
+    with_pours || !item.refilled() || board.is_plane(item)
 }
 
 /// As KiCad joins them: at anchors. A track anchors at its round ends, a via or a round pad at
@@ -96,7 +98,8 @@ pub fn connectivity(board: &Board) -> Connectivity {
 }
 
 /// Connectivity as it will stand whatever the pours are refilled to: poured copper joins nothing,
-/// except a block's kept pours, which are not refilled.
+/// except a block's kept pours, which are not refilled, and planes, whose layer nothing else
+/// may take.
 pub fn connectivity_without_pours(board: &Board) -> Connectivity {
     joined_copper(board, false)
 }
@@ -104,7 +107,7 @@ pub fn connectivity_without_pours(board: &Board) -> Connectivity {
 fn joined_copper(board: &Board, with_pours: bool) -> Connectivity {
     let ids: Vec<ItemId> = board
         .items()
-        .filter(|(_, it)| it.is_copper() && it.net != 0 && (with_pours || !it.refilled()))
+        .filter(|(_, it)| it.is_copper() && it.net != 0 && cluster_member(board, it, with_pours))
         .map(|(id, _)| id)
         .collect();
     let max = ids.iter().copied().max().map_or(0, |m| m + 1);
@@ -118,7 +121,7 @@ fn joined_copper(board: &Board, with_pours: bool) -> Connectivity {
                     continue;
                 }
                 let Some(o) = board.item(other) else { continue };
-                if o.net == item.net && o.is_copper() && o.on(layer) && cluster_member(o, with_pours) && sets.find(id) != sets.find(other) && joined(board, id, other) {
+                if o.net == item.net && o.is_copper() && o.on(layer) && cluster_member(board, o, with_pours) && sets.find(id) != sets.find(other) && joined(board, id, other) {
                     sets.join(id, other);
                 }
             }

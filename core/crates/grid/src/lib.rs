@@ -14,6 +14,7 @@ pub mod prefanout;
 pub mod report;
 pub mod nudge;
 pub mod pairs;
+pub mod planes;
 pub mod push;
 pub mod ripup;
 pub mod route;
@@ -29,6 +30,7 @@ pub use cleanup::{drop_duplicates, drop_duplicates_watch, prune_dangling, prune_
 pub use grid::{ObstacleMap, Profile, RouteGrid, ViaSpec};
 pub use nudge::{nudge, nudge_watch, NudgeEvent, NudgeOptions, NudgeStats};
 pub use push::{push, push_watch, rip_broken, rip_broken_items, Field, PushOptions, PushStats, PushStep};
+pub use planes::{join_planes, PlaneStats};
 pub use pairs::{diff_pairs, route_pairs, route_pairs_watch, shares_layer, Pair, PairOptions, PairRun, PairStats};
 pub use prefanout::{prefanout, prune_closed_escapes, EscapeMode, EscapeOrder, PrefanoutOptions, PrefanoutStats};
 pub use report::{item_name, Activity, Focus, Log};
