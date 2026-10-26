@@ -18,8 +18,10 @@ const PIN_PAIR_SPAN: Nm = 3_000_000;
 const SHORTEST_RUN: Nm = 1_500_000;
 /// Where a coupled run may start around a pin pair: rings of (inner, outer) radius, tried in turn.
 const START_RINGS: [(Nm, Nm); 4] = [(0, 300_000), (400_000, 900_000), (900_000, 1_600_000), (1_600_000, 2_500_000)];
-/// What a run that does not start on its pads' layer pays per end, as in grid steps: a via.
-const OFF_LAYER: u32 = 80;
+/// A coupled run shorter than this is not worth laying.
+const SHORTEST_COUPLED: f64 = 500_000.0;
+/// What a via at a run's end costs, as run length: the via and the leg down to it.
+const VIA_COST: f64 = 2_000_000.0;
 /// A turn sharper than this (cosine of the angle between the pieces) is cut in two first.
 const SHARP_TURN: f64 = 0.75;
 
@@ -105,15 +107,15 @@ fn centre(board: &Board, id: ItemId) -> Point {
 
 /// One end of a pair: a pad of each net.
 #[derive(Debug, Clone, Copy)]
-struct PinPair {
-    p: ItemId,
-    n: ItemId,
-    mid: Point,
-    layers: u64,
+pub(crate) struct PinPair {
+    pub(crate) p: ItemId,
+    pub(crate) n: ItemId,
+    pub(crate) mid: Point,
+    pub(crate) layers: u64,
 }
 
 /// Each positive pad with the nearest negative pad that has it as its own nearest.
-fn pin_pairs(board: &Board, pair: &Pair) -> Vec<PinPair> {
+pub(crate) fn pin_pairs(board: &Board, pair: &Pair) -> Vec<PinPair> {
     let pads = |net: u32| -> Vec<ItemId> {
         board.items().filter(|(_, it)| it.net == net && matches!(it.kind, Kind::Pad { .. }) && it.layers != 0).map(|(id, _)| id).collect()
     };
@@ -276,7 +278,10 @@ fn lay_line(board: &mut Board, line: &[Point], net: u32, layer: usize, r: Nm, la
             span: None,
         });
         laid.push(id);
-        if !board::check_item(board, id).is_empty() {
+        // A pour is refilled round the pair, a block's kept plane too, as the designer's own
+        // routes through it were.
+        let poured = |v: &board::Violation| v.b.and_then(|o| board.item(o)).is_some_and(|it| matches!(it.kind, Kind::Pour { .. }));
+        if !board::check_item(board, id).iter().all(poured) {
             return false;
         }
     }
@@ -310,13 +315,21 @@ pub fn route_pairs(board: &mut Board, options: &PairOptions, watch: &mut dyn FnM
             );
             // Fresh each run: the pair's own copper is left off the map, so the run may start
             // right at its pads; a track that would meet the other net's pad is refused below.
+            // Pours are left off too, to be refilled round the run.
             let ours: HashSet<u32> = [pair.p, pair.n].into();
             let map = ObstacleMap::without(board, fat.clone(), options.cell, options.pours_block, &|id| {
-                board.item(id).is_some_and(|it| ours.contains(&it.net) && !matches!(it.kind, Kind::Keepout { .. }))
+                board.item(id).is_some_and(|it| (ours.contains(&it.net) && !matches!(it.kind, Kind::Keepout { .. })) || matches!(it.kind, Kind::Pour { .. }))
             });
             let mut grid = map.view(pair.p);
             grid.via = None;
             if let Some(laid) = couple(board, &mut grid, &pair, a, b) {
+                let layer = laid.0.first().and_then(|id| board.item(*id)).map_or(0, |it| it.layers.trailing_zeros() as usize);
+                tell(
+                    &options.log,
+                    "pairs",
+                    || format!("coupled {} and {} on {} for {:.2} mm", board.net_name(pair.p), board.net_name(pair.n), board.layers[layer], laid.1 * 1e-6),
+                    None,
+                );
                 stats.coupled += 1;
                 stats.coupled_mm += laid.1 * 1e-6;
                 stats.laid.extend(laid.0);
@@ -328,57 +341,77 @@ pub fn route_pairs(board: &mut Board, options: &PairOptions, watch: &mut dyn FnM
     stats
 }
 
-/// The best coupled run between two pin pairs that lays cleanly: each start ring in turn, on
-/// each layer, the shortest kept. Returns what was laid and the centreline's length.
+/// The best coupled run between two pin pairs that lays cleanly. Each layer gets the run from
+/// the nearest start ring that lays; of those, the cheapest is kept: its length, a price for
+/// each via its ends need, and the uncoupled legs its start ring leaves.
 fn couple(board: &mut Board, grid: &mut RouteGrid, pair: &Pair, a: PinPair, b: PinPair) -> Option<(Vec<ItemId>, f64)> {
-    let cells = grid.cell_count();
     let all = grid.blocked.clone();
-    let pitch = pair.pitch() as f64;
-    let r = pair.width / 2;
-    for ring in START_RINGS {
-        let mut tries: Vec<(u32, usize, Vec<Point>)> = Vec::new();
-        for layer in 0..grid.layers.len() {
-            // One layer at a time: the others are closed.
-            for l in 0..grid.layers.len() {
-                let on = l == layer;
-                grid.blocked[l * cells..(l + 1) * cells].iter_mut().zip(&all[l * cells..(l + 1) * cells]).for_each(|(c, &o)| *c = o || !on);
-            }
-            let (from, to) = (ring_cells(grid, layer, a.mid, ring), ring_cells(grid, layer, b.mid, ring));
-            if from.is_empty() || to.is_empty() {
-                continue;
-            }
-            let Some(path) = route_astar(grid, &from, &to, 0) else { continue };
-            let points: Vec<Point> = path.iter().map(|&(_, i, j)| grid.centre(i, j)).collect();
-            if points.len() < 2 {
-                continue;
-            }
-            let board_layer = grid.layers[layer];
-            let off = [a.layers, b.layers].iter().filter(|&&m| m & (1 << board_layer) == 0).count() as u32;
-            let cost = (length(&points) / grid.h as f64 * 10.0) as u32 + off * OFF_LAYER;
-            tries.push((cost, layer, pull_straight(grid, layer, &points)));
-        }
-        tries.sort_by_key(|t| t.0);
-        for (_, layer, line) in tries {
-            let line = ease(&line, pair.pitch());
-            if line.len() < 2 {
-                continue;
-            }
-            let p_left = side(&line, centre(board, a.p)) >= side(&line, centre(board, a.n));
-            let half = pitch / 2.0;
-            let (p_line, n_line) = if p_left { (offset(&line, half), offset(&line, -half)) } else { (offset(&line, -half), offset(&line, half)) };
-            let board_layer = grid.layers[layer];
-            let mut laid = Vec::new();
-            if lay_line(board, &p_line, pair.p, board_layer, r, &mut laid) && lay_line(board, &n_line, pair.n, board_layer, r, &mut laid) {
-                grid.blocked.copy_from_slice(&all);
-                return Some((laid, length(&line)));
-            }
+    let mut best: Option<(f64, usize, Vec<Point>)> = None;
+    for layer in 0..grid.layers.len() {
+        let board_layer = grid.layers[layer];
+        let vias = [a.layers, b.layers].iter().filter(|&&m| m & (1 << board_layer) == 0).count() as f64;
+        for ring in START_RINGS {
+            let Some(line) = centreline(grid, &all, layer, a, b, ring).filter(|l| length(l) >= SHORTEST_COUPLED) else { continue };
+            let Some(laid) = lay_pair(board, pair, a, &line, board_layer) else { continue };
             for id in laid.into_iter().rev() {
                 board.discard(id);
             }
+            let cost = length(&line) + vias * VIA_COST + 2.0 * ring.0 as f64;
+            if best.as_ref().is_none_or(|b| cost < b.0) {
+                best = Some((cost, layer, line));
+            }
+            break;
         }
     }
     grid.blocked.copy_from_slice(&all);
+    let (_, layer, line) = best?;
+    let laid = lay_pair(board, pair, a, &line, grid.layers[layer])?;
+    Some((laid, length(&line)))
+}
+
+/// The centreline on one layer from a start ring round `a` to one round `b`, pulled straight.
+fn centreline(grid: &mut RouteGrid, all: &[bool], layer: usize, a: PinPair, b: PinPair, ring: (Nm, Nm)) -> Option<Vec<Point>> {
+    let cells = grid.cell_count();
+    // One layer at a time: the others are closed.
+    for l in 0..grid.layers.len() {
+        let on = l == layer;
+        grid.blocked[l * cells..(l + 1) * cells].iter_mut().zip(&all[l * cells..(l + 1) * cells]).for_each(|(c, &o)| *c = o || !on);
+    }
+    let (from, to) = (ring_cells(grid, layer, a.mid, ring), ring_cells(grid, layer, b.mid, ring));
+    if from.is_empty() || to.is_empty() {
+        return None;
+    }
+    let path = route_astar(grid, &from, &to, 0)?;
+    let points: Vec<Point> = path.iter().map(|&(_, i, j)| grid.centre(i, j)).collect();
+    if points.len() < 2 {
+        return None;
+    }
+    let line = pull_straight(grid, layer, &points);
+    (line.len() >= 2).then_some(line)
+}
+
+/// The pair's two tracks laid along `line`, the positive one on the side its pad at `a` is;
+/// nothing is left laid unless both lay cleanly.
+fn lay_pair(board: &mut Board, pair: &Pair, a: PinPair, line: &[Point], layer: usize) -> Option<Vec<ItemId>> {
+    let line = ease(line, pair.pitch());
+    let half = pair.pitch() as f64 / 2.0;
+    let p_left = side(&line, centre(board, a.p)) >= side(&line, centre(board, a.n));
+    let (p_line, n_line) = if p_left { (offset(&line, half), offset(&line, -half)) } else { (offset(&line, -half), offset(&line, half)) };
+    let mut laid = Vec::new();
+    if lay_line(board, &p_line, pair.p, layer, pair.width / 2, &mut laid) && lay_line(board, &n_line, pair.n, layer, pair.width / 2, &mut laid) {
+        return Some(laid);
+    }
+    for id in laid.into_iter().rev() {
+        board.discard(id);
+    }
     None
+}
+
+/// Whether every end of the pair has pads on a layer they all share, so its runs may reach the
+/// pads without a via: then a fine-pitch part's pins of the pair are better left unescaped.
+pub fn shares_layer(board: &Board, pair: &Pair) -> bool {
+    let ends = pin_pairs(board, pair);
+    ends.len() >= 2 && ends.iter().fold(u64::MAX, |m, e| m & e.layers) != 0
 }
 
 #[cfg(test)]

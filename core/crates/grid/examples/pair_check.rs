@@ -1,6 +1,7 @@
 //! How well a routed board's differential pairs are coupled: per pair, how much of each net's
-//! track runs beside the other's at the pair's pitch (within 10%), on the same layer, and the
-//! two nets' track lengths and vias. `cargo run --release -p grid --example pair_check -- B.kicad_pcb`
+//! track runs beside the other's at the pair's pitch (within 10%), on the same layer, the two
+//! nets' track lengths and vias, and the skew end to end as the length matching measures it.
+//! `cargo run --release -p grid --example pair_check -- B.kicad_pcb`
 
 use std::path::Path;
 
@@ -44,8 +45,10 @@ fn main() {
                 (total * 1e-6, beside * 1e-6)
             };
             let ((lp, cp), (ln, cn)) = (coupled(&tp, &tn), coupled(&tn, &tp));
+            // End to end along the copper, as the length matching measures it.
+            let matched = grid::pair_lengths(&board, &pair).map(|((a, _), (b, _))| (a - b).abs() * 1e-6);
             println!(
-                "  {}/{}: pitch {:.3} mm; {}: {:.2} mm, {:.0}% coupled, {} vias; {}: {:.2} mm, {:.0}% coupled, {} vias; skew {:.2} mm",
+                "  {}/{}: pitch {:.3} mm; {}: {:.2} mm, {:.0}% coupled, {} vias; {}: {:.2} mm, {:.0}% coupled, {} vias; skew {:.2} mm in all, {} end to end",
                 board.net_name(pair.p),
                 board.net_name(pair.n),
                 pitch * 1e-6,
@@ -57,7 +60,8 @@ fn main() {
                 ln,
                 100.0 * cn / ln.max(1e-9),
                 vias(pair.n),
-                (lp - ln).abs()
+                (lp - ln).abs(),
+                matched.map_or("unmeasured".to_string(), |m| format!("{m:.2} mm"))
             );
         }
     }

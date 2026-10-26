@@ -60,6 +60,8 @@ pub struct PrefanoutOptions {
     pub inward: bool,
     /// Footprints to fan out, by index into `Board::footprints`.
     pub parts: Vec<usize>,
+    /// Nets whose pads are left for routing of their own, such as a differential pair's.
+    pub skip_nets: HashSet<u32>,
     pub pours_block: bool,
     pub cancel: Option<Arc<AtomicBool>>,
     pub log: Option<Log>,
@@ -75,6 +77,7 @@ impl Default for PrefanoutOptions {
             order: EscapeOrder::InnerFirst,
             inward: true,
             parts: Vec::new(),
+            skip_nets: HashSet::new(),
             pours_block: false,
             cancel: None,
             log: None,
@@ -93,6 +96,8 @@ pub struct PrefanoutStats {
     pub skipped_pth: usize,
     pub skipped_exposed: usize,
     pub skipped_escaped: usize,
+    /// Pads of nets the options leave out.
+    pub skipped_nets: usize,
     pub failed: usize,
     pub laid: Vec<ItemId>,
 }
@@ -480,6 +485,10 @@ pub fn prefanout(board: &mut Board, options: &PrefanoutOptions, watch: &mut dyn 
         for mut p in raw_pads {
             if !open_nets.contains(&p.net) {
                 stats.skipped_escaped += 1;
+                continue;
+            }
+            if options.skip_nets.contains(&p.net) {
+                stats.skipped_nets += 1;
                 continue;
             }
             let Some(&cid) = conn.cluster.get(&p.id) else { continue };

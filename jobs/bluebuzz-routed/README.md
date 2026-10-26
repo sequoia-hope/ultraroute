@@ -2,11 +2,13 @@
 
 bluebuzz fully routed by the MIT core router: **0 unconnected, 0 errors, no dangling copper** by
 KiCad 9's DRC after a zone refill, under the board's own project rules (which make dangling
-copper an error). The USB pair from the connector to the series resistors (USB_DP/USB_DM, 0.15
-mm tracks, 0.15 mm gap) is routed as a differential pair, side by side for 81% and 80% of its
-length with 0.18 mm of skew (the hand-routed board: 31%); the 4 mm pair on from the resistors
-to the RP2350 is legs only. Stripped of all copper (the bluebuzz-kicad job), routed with
---strip-all --negotiate --rip-up --nudge --tighten --prefanout --diff-pairs --seed 2, 240 s on 1 thread (105.5 s used). No part moved. 272 vias and 1331
+copper an error). Both USB pairs are routed as length-matched differential pairs (0.15 mm
+tracks, 0.15 mm gap): USB_DP/USB_DM from the connector to the series resistors run side by side
+for 76% and 72% of their length, 0.00 mm apart end to end (the hand-routed board: 31% side by
+side); USB_DP_C/USB_DM_C, the 3.7 mm on from the resistors to the RP2350, run side by side on
+F.Cu with no via for 58% and 60%, 0.13 mm apart (their pins are left out of the fan-out so the
+pair reaches them straight). Stripped of all copper (the bluebuzz-kicad job), routed with
+--strip-all --negotiate --rip-up --nudge --tighten --prefanout --diff-pairs --seed 2, 240 s on 1 thread (105.2 s used). No part moved. 265 vias and 1358
 mm of track; the hand-finished board has 331 vias.
 
 Command, on `jobs/bluebuzz-kicad/input/bluebuzz-rm2.kicad_pcb`:
@@ -15,4 +17,5 @@ Command, on `jobs/bluebuzz-kicad/input/bluebuzz-rm2.kicad_pcb`:
 
 The input here is that output after `tools/refill_zones.py`, so the pours show as KiCad fills
 them. It is a finished board to look at, not a routing job: the studio loads it as it is. Lab
-record: experiment `diffpairs-24`, run `BS-s2`; see `docs/focus-trapped-escapes.md`.
+record: experiment `diffpairs-26`, run `BS-s2`; coupling and skew measured with
+`cargo run --release -p grid --example pair_check`; see `docs/focus-trapped-escapes.md`.

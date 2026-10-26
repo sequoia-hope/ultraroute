@@ -248,6 +248,7 @@
     }
     const all = [];
     if (!continuing) all.push(...(job.strip === 'all' ? ['--strip-all'] : job.strip === true ? ['--strip'] : []));
+    all.push(...(typeof job.args === 'string' ? job.args.split(/\s+/).filter(Boolean) : []));
     if (load) all.push('--no-route');
     else if (Number(timeout)) all.push('--timeout', String(Number(timeout)));
     for (const [name, at] of Object.entries(placements)) all.push(`--place=${name}=${at[0].toFixed(4)},${at[1].toFixed(4)}`);

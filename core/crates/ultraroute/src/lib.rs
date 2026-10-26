@@ -990,6 +990,12 @@ pub fn run(a: &Args, mut board: Board, text: &str, mut live: Option<Live>, cance
     if a.prefanout {
         let parts = morph::fine_pitch(&board, 500_000);
         let defaults = grid::PrefanoutOptions::default();
+        // A pair whose ends share a layer is left for its coupled run to reach straight.
+        let skip_nets: HashSet<u32> = if a.diff_pairs {
+            grid::diff_pairs(&board).iter().filter(|p| grid::shares_layer(&board, p)).flat_map(|p| [p.p, p.n]).collect()
+        } else {
+            HashSet::new()
+        };
         let f = grid::prefanout(
             &mut board,
             &grid::PrefanoutOptions {
@@ -999,6 +1005,7 @@ pub fn run(a: &Args, mut board: Board, text: &str, mut live: Option<Live>, cance
                 order: a.prefanout_order.unwrap_or(defaults.order),
                 inward: a.prefanout_inward,
                 parts,
+                skip_nets,
                 pours_block: a.pours_block,
                 cancel: Some(cancel.clone()),
                 log: log.clone(),
@@ -1039,7 +1046,11 @@ pub fn run(a: &Args, mut board: Board, text: &str, mut live: Option<Live>, cance
     if a.diff_pairs {
         let p = grid::route_pairs(
             &mut board,
-            &grid::PairOptions { cell: a.cell.unwrap_or(grid::PairOptions::default().cell), pours_block: a.pours_block, log: log.clone() },
+            &grid::PairOptions {
+                cell: a.cell.unwrap_or(grid::PairOptions::default().cell),
+                pours_block: a.pours_block,
+                log: log.clone(),
+            },
             &mut watch,
         );
         eprintln!("pairs: {} pairs, {} of {} runs coupled, {:.1} mm, {:.1} s", p.pairs, p.coupled, p.runs, p.coupled_mm, started.elapsed().as_secs_f64());
@@ -1645,6 +1656,16 @@ pub fn run(a: &Args, mut board: Board, text: &str, mut live: Option<Live>, cance
     if doubled + pruned > 0 {
         say("cleaning", format!("{doubled} doubled tracks and {pruned} pieces of copper leading nowhere taken out"));
         eprintln!("dropped {doubled} doubled, pruned {pruned} dangling, open {open_before} -> {}, {:.1} s", open_now(&board), started.elapsed().as_secs_f64());
+    }
+    if a.diff_pairs {
+        // Last, once the copper is settled: the shorter net of each pair is given bumps.
+        let pairs = grid::diff_pairs(&board);
+        let t = grid::match_lengths(&mut board, &pairs, &mut laid);
+        for (pair, before, after) in &t.skews {
+            say("pairs", format!("{pair}: {before:.2} mm apart in length, {after:.2} mm after tuning"));
+            eprintln!("tune: {pair} skew {before:.2} -> {after:.2} mm");
+        }
+        step(&board);
     }
     let open = if a.pours_block { connectivity(&board) } else { connectivity_without_pours(&board) }.airlines.len();
     eprintln!("routed {} more, {} failed, {} open, {:.1} s", stats.routed, stats.failed, open, started.elapsed().as_secs_f64());

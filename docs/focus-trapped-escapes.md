@@ -245,3 +245,16 @@ second pass over undone tries.
   earring USB_DP/DM 78-92%, USB_C 17-38%; bluebuzz USB_DP/DM 72-83% (hand-routed 31%), its 4
   mm USB_D*_C pair uncoupled. Jobs earring-routed, earring-locked-routed and bluebuzz-routed
   re-solved with pairs.
+- 2026-10-26, length matching and the short pair. Pins of a pair whose ends share a layer are
+  left out of the fan-out; each run's layer is chosen by cost (length, 2 mm per via its ends
+  need, the start ring's radius), each layer from its nearest start ring that lays; pair runs
+  may cross pours, kept block planes included, to be refilled round them (bluebuzz's 1V1 block
+  pour had cut USB_D*_C off F.Cu). After the cleanup, `grid::match_lengths` measures each net
+  end to end along its copper and bumps the shorter one, one bump at a time, tallest that lays,
+  uncoupled tracks first, undoing any bump that does not reduce the skew. Lab `diffpairs-26`,
+  one thread: earring stripped 1 0 0 0 0 0 unconnected, locked 0 0 0 0 1 0, bluebuzz 0 0 0 0
+  0 1; skew after tuning mostly 0.00-0.16 mm (earring seed 2, a 19.8 mm detour, ends at 6.5
+  mm); bluebuzz's short pair now 54-60% coupled on F.Cu with no via, 0.08-0.25 mm apart (too
+  short for a bump). The earring's USB_DP/DM side-by-side share falls to 35-59%: about as much
+  is coupled as before, but the matching bumps add length. Jobs re-solved; job.json `args`
+  now carries the seed the studio routes each job with (earring-kicad 5, bluebuzz-kicad 2).

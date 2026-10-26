@@ -401,6 +401,7 @@ fn jobs(root: &Path) -> Value {
             "studio": job_settings(&dir)["studio"].as_bool().unwrap_or(false),
             "order": job_settings(&dir)["order"],
             "strip": job_settings(&dir)["strip"],
+            "args": job_settings(&dir)["args"],
             "presets": presets,
             "notes": dir.join("README.md").is_file(),
         }));
@@ -408,8 +409,9 @@ fn jobs(root: &Path) -> Value {
     Value::Array(out)
 }
 
-/// A job's `job.json`: whether the studio offers it (`studio`) and what copper to take out before
-/// routing (`strip`: true for unlocked tracks and vias, "all" for every one).
+/// A job's `job.json`: whether the studio offers it (`studio`), what copper to take out before
+/// routing (`strip`: true for unlocked tracks and vias, "all" for every one) and arguments the
+/// core router always gets for it (`args`, such as the seed that routes it best).
 fn job_settings(dir: &Path) -> Value {
     std::fs::read_to_string(dir.join("job.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null)
 }
@@ -576,6 +578,7 @@ fn start(request: &Value, config: &Config, runner: &Arc<Runner>, owner: u64) -> 
                 _ => {}
             }
         }
+        args.extend(job_settings(&dir)["args"].as_str().unwrap_or("").split_whitespace().map(String::from));
         if load {
             args.push("--no-route".into());
         }
