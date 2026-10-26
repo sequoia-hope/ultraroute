@@ -226,3 +226,10 @@ second pass over undone tries.
   track, overhanging stubs past a T-joint are trimmed) is merged; on the earring it removes nearly
   all dangling warnings and leaves the open count before and after cleanup unchanged (lab
   `cleanup-agy-18`, one thread per run: stripped 0 0 1 0 3 2, locked 1 0 0 1 1 0).
+- Bluebuzz on main (lab `bluebuzz-main-19`, 2 threads): stripped and locked both 0 unconnected
+  and 0 KiCad violations on seeds 0-3. On one thread (as in the browser) seed 0 left a 0.11 mm
+  XOUT piece on In1.Cu running from the route's end into the side of a fan-out stub, which KiCad
+  calls dangling (an error under bluebuzz's rules). The cleanup now drops a track whose both
+  ends lie inside other tracks of its net when nothing needs it, unless it meets a via
+  (taking those stranded vias in a first try). Lab `redundant-20`, one thread: bluebuzz 8 of 8
+  clean; earring unchanged. Best bluebuzz kept as job `bluebuzz-routed` (seed 3, 232 vias against the hand-routed board's 331, 1348 mm).

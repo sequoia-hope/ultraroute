@@ -155,12 +155,19 @@ pub fn prune_dangling(board: &mut Board, soft: &mut Vec<ItemId>) -> (usize, Vec<
 pub fn prune_dangling_watch(board: &mut Board, soft: &mut Vec<ItemId>, watch: &mut dyn FnMut(&Board, &Item)) -> (usize, Vec<Span>) {
     let (mut pruned, mut spans) = (0, Vec::new());
     loop {
-        let loose: Vec<ItemId> = soft.iter().copied().filter(|&id| dangles(board, id)).collect();
+        let loose: Vec<ItemId> = soft.iter().copied().filter(|&id| dangles(board, id) || redundant(board, id)).collect();
         let before = pruned;
         // One at a time, judged again: two stubs covering each other must not both go. What
         // carries a connection stays however it looks, so a round may take nothing out.
         for id in loose {
             if !dangles(board, id) {
+                if redundant(board, id) && bridges_nothing(board, id) {
+                    if let Some(mut item) = board.remove(id) {
+                        spans.extend(item.span.take());
+                        pruned += 1;
+                        watch(board, &item);
+                    }
+                }
                 continue;
             }
             if !bridges_nothing(board, id) {
@@ -347,6 +354,27 @@ fn bridges_nothing(board: &Board, id: ItemId) -> bool {
     false
 }
 
+/// Whether a track has both ends inside other tracks of its net, as a short piece from
+/// one track into the side of another does: KiCad finds such a piece's end loose. Whether the
+/// rest still joins without it is for the caller to judge.
+fn redundant(board: &Board, id: ItemId) -> bool {
+    let Some(item) = board.item(id) else { return false };
+    let (Kind::Track, Shape::Capsule { a, b, .. }) = (&item.kind, &item.shape) else { return false };
+    if item.net == 0 {
+        return false;
+    }
+    let layer = item.layers.trailing_zeros() as usize;
+    let near = board.near(layer, item.shape.bbox());
+    let ours = |o: ItemId| board.item(o).filter(|c| o != id && c.net == item.net && c.on(layer));
+    // A piece into a via is how the via meets this layer, as KiCad sees it.
+    if near.iter().any(|&o| ours(o).is_some_and(|c| c.kind == Kind::Via && c.shape.gap_within(&item.shape, 0.0) == 0.0)) {
+        return false;
+    }
+    // Nor into a pad: what else meets the pad may do so only by overlapping it, which KiCad
+    // does not count as an end met.
+    [*a, *b].iter().all(|&p| near.iter().any(|&o| ours(o).is_some_and(|c| c.kind == Kind::Track && c.shape.contains(p))))
+}
+
 /// Whether KiCad would call it dangling: a track with an end that meets nothing of its net, or
 /// lying wholly inside another piece of its net's copper that already joins everything it joins
 /// (a stub that adds nothing); a via that meets its net's copper on fewer than two layers. Ends
@@ -509,6 +537,28 @@ mod tests {
 
     fn seg(a: Point, b: Point) -> Item {
         Item { kind: Kind::Track, net: 1, layers: 1, shape: Shape::Capsule { a, b, r: 50_000 }, hole: None, locked: false, span: None }
+    }
+
+    #[test]
+    fn a_short_piece_from_one_track_into_the_side_of_another_is_pruned() {
+        let mut board = empty_board();
+        let mut put = |kind: Kind, a: Point, b: Point, r| {
+            board.insert(Item { kind, net: 1, layers: 1, shape: Shape::Capsule { a, b, r }, hole: None, locked: false, span: None })
+        };
+        let pad = || Kind::Pad { footprint: 0, number: "1".into(), plated: false };
+        // bluebuzz's XOUT on In1.Cu, less (101.9, 116.6) mm: a fan-out stub from one pad, a
+        // route from the other that crosses the stub's tip, and the route's last short piece
+        // ending in the stub's side.
+        put(pad(), Point::new(90_000, 20_000), Point::new(90_000, 20_000), 100_000);
+        put(pad(), Point::new(275_000, 1_230_000), Point::new(275_000, 1_230_000), 100_000);
+        let stub = put(Kind::Track, Point::new(90_000, 20_000), Point::new(90_000, 660_000), 63_500);
+        let route = put(Kind::Track, Point::new(275_000, 1_230_000), Point::new(25_000, 530_000), 75_000);
+        let piece = put(Kind::Track, Point::new(25_000, 530_000), Point::new(75_000, 430_000), 75_000);
+        let mut soft = vec![stub, route, piece];
+        prune_dangling(&mut board, &mut soft);
+        assert!(board.item(piece).is_none(), "the short piece into the stub's side adds nothing");
+        assert!(board.item(stub).is_some() && board.item(route).is_some());
+        assert!(board::connectivity(&board).airlines.is_empty());
     }
 
     #[test]
