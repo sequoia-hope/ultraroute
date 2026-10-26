@@ -1092,13 +1092,14 @@ pub fn run_with_solver(
             fanout_laid = f.laid;
         }
     }
-    // Plane pads not on their plane get a via down to it beside them, held like the pairs.
+    // Plane pads not on their plane get a via down to it beside them, as the router's own copper
+    // a rip-up may take up again.
     if board.planes != 0 {
         let p = grid::join_planes(&mut board, &log);
         say("planes", format!("{} of {} pads joined to their planes by a via", p.joined, p.pads));
         eprintln!("planes: {} of {} pads off their planes joined, {:.1} s", p.joined, p.pads, started.elapsed().as_secs_f64());
         step(&board);
-        pair_laid.extend(p.laid);
+        laid.extend(p.laid);
     }
     // Differential pairs next, round the escapes, and held apart from the router's own copper so
     // nothing rips or straightens them apart; the legs to their pads are routed as usual.

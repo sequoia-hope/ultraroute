@@ -277,3 +277,11 @@ second pass over undone tries.
   and +3V3 joined through the planes, no tracks on In1/In2, but 7-10 signal opens (lab
   planes-28..33); the Freerouting reference has 0. Negotiation settles at 56-62 of 87; longer
   and gentler negotiation (new --negotiate-rounds/-patience/-growth) does not help.
+- easy2350, continued: plane vias laid greedily and held walled in VLED near the LEDs (via-free
+  silk keepouts left it F.Cu only). Now they are the router's own copper (rip-up may take them
+  up), placed where they leave the most room, and a plane-net piece of track alone can take a
+  via at its end. With a 35 um grid (--cell 0.035): 4 3 5 3 unconnected over seeds 0-3 (lab
+  planes-39), from 7-10. A 10 um grid is worse at 240 s (negotiation gets 5 rounds); 15 um ~
+  35 um. The +3V3 open left on every run is not the router's: easy_pcb's pre-route board lacks
+  the release's 'transplant 0 +3V3' and 'plane 3V3 L1 around U1' F.Cu pours, which join U1-49's
+  piece there, and has keepouts the release does not (U1 ring, regulator corner); reported.
