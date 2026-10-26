@@ -292,9 +292,30 @@ fn length(points: &[Point]) -> f64 {
     points.windows(2).map(|w| w[0].distance(w[1])).sum()
 }
 
+/// One run between two pin pairs as `route_pairs_watch` tried it: the pin pairs' midpoints, and
+/// if it was laid, its layer, centreline and the two tracks.
+#[derive(Debug, Clone)]
+pub struct PairRun<'a> {
+    pub pair: &'a Pair,
+    pub from: Point,
+    pub to: Point,
+    pub layer: Option<usize>,
+    pub centreline: &'a [Point],
+    pub laid: &'a [ItemId],
+}
+
 /// Routes every differential pair's runs coupled, as far as they will go; what is laid is
 /// returned in the stats, for the caller to keep apart from copper it may rip.
 pub fn route_pairs(board: &mut Board, options: &PairOptions, watch: &mut dyn FnMut(&Board)) -> PairStats {
+    route_pairs_watch(board, options, &mut |b, run| {
+        if run.layer.is_some() {
+            watch(b);
+        }
+    })
+}
+
+/// `route_pairs`, telling `watch` of every run tried, laid or not.
+pub fn route_pairs_watch(board: &mut Board, options: &PairOptions, watch: &mut dyn FnMut(&Board, &PairRun)) -> PairStats {
     let mut stats = PairStats::default();
     for pair in diff_pairs(board) {
         stats.pairs += 1;
@@ -332,8 +353,10 @@ pub fn route_pairs(board: &mut Board, options: &PairOptions, watch: &mut dyn FnM
                 );
                 stats.coupled += 1;
                 stats.coupled_mm += laid.1 * 1e-6;
-                stats.laid.extend(laid.0);
-                watch(board);
+                stats.laid.extend(laid.0.iter().copied());
+                watch(board, &PairRun { pair: &pair, from: a.mid, to: b.mid, layer: Some(layer), centreline: &laid.2, laid: &laid.0 });
+            } else {
+                watch(board, &PairRun { pair: &pair, from: a.mid, to: b.mid, layer: None, centreline: &[], laid: &[] });
             }
         }
     }
@@ -343,8 +366,9 @@ pub fn route_pairs(board: &mut Board, options: &PairOptions, watch: &mut dyn FnM
 
 /// The best coupled run between two pin pairs that lays cleanly. Each layer gets the run from
 /// the nearest start ring that lays; of those, the cheapest is kept: its length, a price for
-/// each via its ends need, and the uncoupled legs its start ring leaves.
-fn couple(board: &mut Board, grid: &mut RouteGrid, pair: &Pair, a: PinPair, b: PinPair) -> Option<(Vec<ItemId>, f64)> {
+/// each via its ends need, and the uncoupled legs its start ring leaves. The tracks laid come
+/// back with the centreline's length and the centreline.
+fn couple(board: &mut Board, grid: &mut RouteGrid, pair: &Pair, a: PinPair, b: PinPair) -> Option<(Vec<ItemId>, f64, Vec<Point>)> {
     let all = grid.blocked.clone();
     let mut best: Option<(f64, usize, Vec<Point>)> = None;
     for layer in 0..grid.layers.len() {
@@ -366,7 +390,7 @@ fn couple(board: &mut Board, grid: &mut RouteGrid, pair: &Pair, a: PinPair, b: P
     grid.blocked.copy_from_slice(&all);
     let (_, layer, line) = best?;
     let laid = lay_pair(board, pair, a, &line, grid.layers[layer])?;
-    Some((laid, length(&line)))
+    Some((laid, length(&line), line))
 }
 
 /// The centreline on one layer from a start ring round `a` to one round `b`, pulled straight.

@@ -97,12 +97,16 @@ const FEATURES = [
   ['clear-lane', 'Clear lane'],
   ['shove', 'Shove'],
   ['nudge', 'Nudge'],
+  ['prefanout', 'Prefanout'],
+  ['pairs', 'Pairs'],
   ['negotiate', 'Negotiate'],
   ['route', 'Route'],
   ['rip-up', 'Rip-up'],
   ['chase', 'Chase'],
   ['tighten', 'Tighten'],
   ['cleanup', 'Cleanup'],
+  ['tune', 'Tune'],
+  ['fill', 'Fill'],
   ['topo', 'Topological'],
 ];
 const FEATURE_BLURB = {
@@ -120,6 +124,10 @@ const FEATURE_BLURB = {
   'tighten': 'Pulls stair-stepped grid track chains into taut straight segments wherever clearance permits.',
   'cleanup': 'Drops redundant overlapping segments and prunes dangling stubs and single-layer vias.',
   'topo': 'Rubber-band topological routing on a CDT mesh with iterative rip-up and visibility-graph repair.',
+  'prefanout': 'Before any routing, escapes each fine-pitch pad to a via (or bridges it inward to its pour or a sibling pad), one pad per frame.',
+  'pairs': 'Differential pairs routed coupled: one centreline per run between pin pairs on a single layer, a track laid each side at the pair pitch; the legs to the pads are left to the router.',
+  'tune': 'Length matching once the copper has settled: bumps put into the shorter net of each pair, one per frame, until the two lengths agree within tolerance.',
+  'fill': 'Zones poured as KiCad would refill them after routing (board::fill_zones), highest priority first, one zone layer per frame.',
 };
 
 const NS = 'http://www.w3.org/2000/svg';
@@ -229,6 +237,37 @@ function drawPours(g, scale = 1) {
       });
       e.dataset.tip = `${p.kept ? 'kept (block) ' : ''}pour of ${netName(p.net)} on ${F.layers[l]}`;
       e.dataset.net = p.net;
+    }
+  }
+}
+
+// Zone fills of a fill film: each one rectangles in mm, drawn as one path, the newest brightest.
+function drawFills(g, fr) {
+  if (!state.pours || !F.fills || !fr.fills?.length) return;
+  F._fillPaths ??= F.fills.map((f) => {
+    let d = '';
+    for (let k = 0; k + 3 < f.r.length; k += 4) {
+      const [x0, y0, x1, y1] = [f.r[k], f.r[k + 1], f.r[k + 2], f.r[k + 3]];
+      d += `M${x0} ${y0}h${+(x1 - x0).toFixed(4)}v${+(y1 - y0).toFixed(4)}h${+(x0 - x1).toFixed(4)}z`;
+    }
+    return d;
+  });
+  const shown = new Set(fr.fills);
+  for (const l of drawOrder()) {
+    if (!state.layers.has(l)) continue;
+    for (const k of shown) {
+      const f = F.fills[k];
+      if (f.layer !== l) continue;
+      const isNew = k === fr.fill_new;
+      const dim = state.net !== null && f.net !== state.net;
+      const e = el('path', {
+        d: F._fillPaths[k],
+        fill: isNew ? '#ffffff' : layerColor(l),
+        'fill-opacity': dim ? 0.05 : isNew ? 0.5 : 0.3,
+        stroke: 'none',
+      }, g);
+      e.dataset.tip = `${f.name} · ${netName(f.net)} poured on ${F.layers[l]}`;
+      e.dataset.net = f.net;
     }
   }
 }
@@ -431,6 +470,13 @@ function drawPaths(g, paths, u) {
   const ordered = [...paths].sort((a, b) => Number(!!a.collides) - Number(!!b.collides));
   for (const p of ordered) {
     if (state.net !== null && p.net !== state.net) continue;
+    if (p.kind === 'centreline') {
+      const pts = (p.points || []).map((q) => `${q[1]},${q[2]}`).join(' ');
+      const poly = el('polyline', { points: pts, fill: 'none', stroke: '#7fe3ff', 'stroke-width': 1.25 * u, 'stroke-opacity': 0.95, 'stroke-dasharray': `${4 * u} ${1.6 * u}`, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, g);
+      poly.dataset.tip = `pair centreline on ${F.layers[p.points?.[0]?.[0]] ?? '?'} · ${netName(p.net)}`;
+      poly.dataset.net = p.net;
+      continue;
+    }
     const collides = !!p.collides;
     let run = [];
     const flush = () => {
@@ -747,6 +793,7 @@ function renderFrame() {
   drawHeat(groups.heat, fr.heat);
   drawOutline(groups.outline, u);
   drawPours(groups.pours, fr.initial ? 0.85 : 0.42);
+  drawFills(groups.pours, fr);
   drawCorridors(groups.corridors, fr.corridors, u);
   drawPartsAndPads(groups.parts, groups.pads, fr, u);
 
@@ -761,7 +808,7 @@ function renderFrame() {
   const hasWork = movedFrom.length || movedTo.length || ripped.length || laid.length || (fr.moved_parts?.length ?? 0) || (fr.paths?.length ?? 0);
   const baseOpacity = fr.initial
     ? ((fr.arrows?.length || fr.poles?.length || fr.corridors?.length) ? 0.52 : 0.78)
-    : (fr.summary && !hasWork ? 0.62 : 0.14);
+    : F.fills ? 0.55 : (fr.summary && !hasWork ? 0.62 : 0.14);
 
   drawCopper(groups.baseCopper, untouched, { opacity: baseOpacity, label: fr.initial ? 'initial copper' : 'untouched' });
 
@@ -840,6 +887,8 @@ function renderFrame() {
     <div><span class="l" style="border-color:#ffd166"></span>moved copper <span class="muted">(dashed: ghost from)</span></div>
     <div><span class="l" style="border-color:#ff4d4d;border-top-style:dashed"></span>ripped copper</div>
     ${F.feature === 'negotiate' ? '<div><span class="sw" style="background:linear-gradient(90deg,#2d64be,#e69b2d,#ff482a);margin-right:6px;vertical-align:middle"></span>congestion heat map (history → overlap)</div><div><span class="l" style="border-color:#ff5938"></span>colliding trial route</div>' : ''}
+    ${F.feature === 'pairs' ? '<div><span class="l" style="border-color:#7fe3ff;border-top-style:dashed"></span>pair centreline <span class="muted">(focus: the run\'s pin pairs)</span></div>' : ''}
+    ${F.fills ? '<div><span class="sw" style="background:#d8dde3;border:1px solid #888;margin-right:6px;vertical-align:middle"></span>zone poured this frame <span class="muted">(earlier ones in layer colour)</span></div>' : ''}
     ${(fr.arrows?.length || fr.poles?.length) ? '<div><span class="l" style="border-color:#74c7ff"></span>displacement field / blame vector</div>' : ''}
     <div><span class="l" style="border-color:#d0d8e2;border-top-style:dashed"></span>open airline <span class="muted">(pink: opened here)</span></div>
     <div class="muted" style="font-size:11.5px">Untouched copper &amp; pads fade back on step frames.</div>

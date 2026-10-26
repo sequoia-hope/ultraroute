@@ -6,11 +6,14 @@
 //! a capped sequence of frames. Every frame records incremental `add`/`del` indices into the copper
 //! pool so files stay compact, alongside explicit step highlights (`moved_from`, `moved_to`,
 //! `ripped`, `laid`), moved parts, open airlines, debug overlays (displacement arrows, paths,
-//! corridors, poles, congestion heat maps) and a one-line caption.
+//! corridors, poles, congestion heat maps, zone fills) and a one-line caption.
+//!
+//! `--prepare STAGE` strips the board bare and takes it through the router's default recipe up to
+//! and including STAGE first (see `RECIPE`), so a later stage is filmed on the board it gets.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use board::{
@@ -35,8 +38,13 @@ usage:
   feature_film tighten    BOARD.kicad_pcb OUT.json [--prepare-route]
   feature_film cleanup    BOARD.kicad_pcb OUT.json [--prepare-messy|--prepare-route]
   feature_film topo       BOARD.kicad_pcb OUT.json [--strip-all] [--rip-passes N] [--seconds S]
+  feature_film prefanout  BOARD.kicad_pcb OUT.json [--part REF,..|auto]
+  feature_film pairs      BOARD.kicad_pcb OUT.json
+  feature_film tune       BOARD.kicad_pcb OUT.json
+  feature_film fill       BOARD.kicad_pcb OUT.json
   feature_film index      FILMS_DIR
-common flags: [--max-frames N] [--title TEXT] [--subtitle TEXT] [--pours-block] [--crop X0,Y0,X1,Y1]";
+common flags: [--max-frames N] [--title TEXT] [--subtitle TEXT] [--pours-block] [--crop X0,Y0,X1,Y1]
+              [--prepare strip|prefanout|pairs|negotiate|finish|rip-up|nudge|tighten|cleanup [--seed N] [--threads N]]";
 
 fn mm(v: f64) -> f64 {
     (v * 1e-6 * 1e4).round() / 1e4
@@ -161,6 +169,9 @@ struct FrameOverlays {
     heat: Value,
     focus: Value,
     stats: Vec<(String, Value)>,
+    /// Zone fills (indices into the film's `fills`) shown, and the one poured this frame.
+    fills: Vec<usize>,
+    fill_new: Option<usize>,
 }
 
 struct RawFrame {
@@ -192,6 +203,8 @@ struct FilmBuilder {
     pool_index: HashMap<PoolKey, u32>,
     frames: Vec<RawFrame>,
     started: Instant,
+    /// Further top-level fields of the film, such as a fill film's `fills`.
+    extra: serde_json::Map<String, Value>,
 }
 
 impl FilmBuilder {
@@ -296,6 +309,7 @@ impl FilmBuilder {
             pool_index: HashMap::new(),
             frames: Vec::new(),
             started: Instant::now(),
+            extra: serde_json::Map::new(),
         }
     }
 
@@ -460,6 +474,12 @@ impl FilmBuilder {
             if !f.overlays.focus.is_null() {
                 obj.insert("focus".into(), f.overlays.focus.clone());
             }
+            if !f.overlays.fills.is_empty() {
+                obj.insert("fills".into(), json!(f.overlays.fills));
+            }
+            if let Some(k) = f.overlays.fill_new {
+                obj.insert("fill_new".into(), json!(k));
+            }
             if !f.overlays.stats.is_empty() {
                 obj.insert(
                     "stats".into(),
@@ -470,12 +490,17 @@ impl FilmBuilder {
         }
 
         let secs = (self.started.elapsed().as_secs_f64() * 100.0).round() / 100.0;
-        let doc = json!({
+        let board_name = Path::new(&self.board_path).file_name().and_then(|s| s.to_str()).unwrap_or(&self.board_path);
+        let board_name = match PREPARED.get() {
+            Some(how) => format!("{board_name} {how}"),
+            None => board_name.to_string(),
+        };
+        let mut doc = json!({
             "feature": self.feature,
             "name": self.name,
             "title": self.title,
             "subtitle": self.subtitle,
-            "board": Path::new(&self.board_path).file_name().and_then(|s| s.to_str()).unwrap_or(&self.board_path),
+            "board": board_name,
             "cropped": self.cropped,
             "window": [xy(self.window.min), xy(self.window.max)],
             "layers": self.layers,
@@ -488,6 +513,7 @@ impl FilmBuilder {
             "frames": json_frames,
             "seconds": secs,
         });
+        doc.as_object_mut().unwrap().append(&mut self.extra);
         if let Some(parent) = out.parent() {
             std::fs::create_dir_all(parent).unwrap_or_else(|e| panic!("{}: {e}", parent.display()));
         }
@@ -519,8 +545,8 @@ impl RawFrame {
 
 fn write_films_index(films_dir: &Path) {
     let order = [
-        "dipole", "push", "flow", "comb", "clear-lane", "shove", "nudge",
-        "negotiate", "route", "rip-up", "chase", "tighten", "cleanup", "topo",
+        "dipole", "push", "flow", "comb", "clear-lane", "shove", "nudge", "prefanout", "pairs",
+        "negotiate", "route", "rip-up", "chase", "tighten", "cleanup", "tune", "fill", "topo",
     ];
     let rank = |f: &str| order.iter().position(|&x| x == f).unwrap_or(999);
     let mut entries: Vec<Value> = Vec::new();
@@ -636,7 +662,7 @@ impl Cli {
             "--pair", "--reroute", "--steps", "--part", "--zone", "--trials",
             "--plough", "--cascade", "--repair", "--seconds", "--rounds",
             "--threads", "--seed", "--links", "--rip-passes", "--max-frames",
-            "--title", "--subtitle", "--crop",
+            "--title", "--subtitle", "--crop", "--prepare",
         ];
         let mut i = 0;
         while i < self.args.len() {
@@ -697,6 +723,88 @@ fn prepare_fresh_route(board: &mut Board, pours_block: bool) -> Vec<ItemId> {
     laid
 }
 
+/// The router's default recipe (`ultraroute route --strip-all --prefanout --diff-pairs --negotiate
+/// --rip-up --nudge --tighten`), stage by stage in the order it runs them, for `--prepare STAGE`.
+/// `finish` is the grid's pass over what negotiation left; `cleanup` drops doubled tracks and
+/// prunes dangling copper; length matching comes after it.
+const RECIPE: [&str; 9] = ["strip", "prefanout", "pairs", "negotiate", "finish", "rip-up", "nudge", "tighten", "cleanup"];
+
+/// How the board was prepared, for the film's board label.
+static PREPARED: OnceLock<String> = OnceLock::new();
+
+/// Strips the board bare and takes it through the recipe up to and including `upto`, with the
+/// router's own options, returning the copper the next stage may move or rip as the router holds
+/// it then: the escapes join it after rip-up, the pairs' runs before cleanup.
+fn prepare_recipe(board: &mut Board, upto: &str, seed: u64, threads: usize, pours_block: bool) -> Vec<ItemId> {
+    let last = RECIPE.iter().position(|s| *s == upto).unwrap_or_else(|| panic!("--prepare {upto}: not one of {}", RECIPE.join(", ")));
+    let runs = |stage: &str| RECIPE.iter().position(|s| *s == stage).is_some_and(|i| i <= last);
+    let started = Instant::now();
+    strip_unlocked(board, true);
+    let mut solver = grid::CpuSolver;
+    let (mut soft, mut fanout, mut pair_laid) = (Vec::new(), Vec::new(), Vec::new());
+    if runs("prefanout") {
+        let parts = morph::fine_pitch(board, 500_000);
+        // A pair whose ends share a layer is left for its coupled run to reach straight.
+        let skip_nets = grid::diff_pairs(board).iter().filter(|p| grid::shares_layer(board, p)).flat_map(|p| [p.p, p.n]).collect();
+        fanout = grid::prefanout(board, &grid::PrefanoutOptions { parts, skip_nets, pours_block, ..Default::default() }, &mut |_| {}).laid;
+    }
+    if runs("pairs") {
+        pair_laid = grid::route_pairs(board, &grid::PairOptions { pours_block, ..Default::default() }, &mut |_| {}).laid;
+    }
+    if runs("negotiate") {
+        let n = grid::route_negotiated(
+            board,
+            &mut solver,
+            &grid::NegotiationOptions { threads, seed, pours_block, ..Default::default() },
+            &mut |_| {},
+            &mut |_, _| {},
+        );
+        soft.extend(n.laid);
+    }
+    if runs("finish") {
+        let r = grid::route_open(board, &mut solver, &grid::Options { seed, pours_block, ..Default::default() }, &mut |_| {});
+        soft.extend(r.laid);
+        grid::prune_closed_escapes(board, &mut fanout, pours_block);
+    }
+    if runs("rip-up") {
+        grid::rip_up(board, &mut solver, &grid::RipOptions { pours_block, ..Default::default() }, &mut soft, &mut |_| {});
+        soft.append(&mut fanout);
+    }
+    if runs("nudge") {
+        let locked = board.footprints.iter().enumerate().filter(|(_, f)| f.locked).map(|(i, _)| i).collect();
+        grid::nudge(board, &mut solver, &grid::NudgeOptions { locked, pours_block, ..Default::default() }, &mut soft, &mut |_| {});
+    }
+    if runs("tighten") {
+        grid::pull_tight(board, &mut soft);
+        soft.extend(pair_laid.iter().copied());
+    }
+    if runs("cleanup") {
+        grid::drop_duplicates(board, &mut soft);
+        grid::prune_dangling(board, &mut soft);
+    }
+    let mut seen = HashSet::new();
+    soft.retain(|id| board.item(*id).is_some() && seen.insert(*id));
+    eprintln!(
+        "prepared through {upto}: {} open, {} soft pieces, {:.1} s",
+        open_airlines(board, pours_block).len(),
+        soft.len(),
+        started.elapsed().as_secs_f64()
+    );
+    soft
+}
+
+/// With `--prepare STAGE`, the board taken through the recipe and the copper the router holds
+/// as its own; without it, nothing is done.
+fn prepared(cli: &Cli, board: &mut Board, pours_block: bool) -> Option<Vec<ItemId>> {
+    let upto = cli.flag("--prepare")?;
+    let seed: u64 = cli.flag("--seed").map_or(0, |s| s.parse().expect("--seed"));
+    let threads: usize = cli.flag("--threads").map_or(1, |s| s.parse().expect("--threads"));
+    let soft = prepare_recipe(board, &upto, seed, threads, pours_block);
+    let last = RECIPE.iter().position(|s| *s == upto).unwrap();
+    let _ = PREPARED.set(format!("after {} (seed {seed})", RECIPE[..=last].join(" → ")));
+    Some(soft)
+}
+
 // --- 1. Dipole -----------------------------------------------------------------------------
 
 fn run_dipole(cli: &Cli) {
@@ -737,7 +845,7 @@ fn run_dipole(cli: &Cli) {
         .collect();
 
     let (mut board, _) = Board::load(Path::new(&board_path)).unwrap_or_else(|e| panic!("{e}"));
-    let mut soft = adopt_soft(&mut board);
+    let mut soft = prepared(cli, &mut board, pours_block).unwrap_or_else(|| adopt_soft(&mut board));
     let margin = ((radius_mm * 2.6).max(5.5) * 1e6).round() as Nm;
     let window = cli.crop_override().unwrap_or_else(|| {
         total_poles.iter().map(|p| BBox::of([p.center])).reduce(BBox::union).unwrap().grow(margin)
@@ -955,7 +1063,7 @@ fn run_push(cli: &Cli) {
     let max_frames = cli.flag("--max-frames").map_or(200, |s| s.parse().expect("--max-frames"));
 
     let (mut board, _) = Board::load(Path::new(board_path)).unwrap_or_else(|e| panic!("{e}"));
-    let mut soft = adopt_soft(&mut board);
+    let mut soft = prepared(cli, &mut board, pours_block).unwrap_or_else(|| adopt_soft(&mut board));
     let center = Point::new(nm_mm(cx), nm_mm(cy));
     let field = grid::Field {
         center,
@@ -1157,7 +1265,7 @@ fn run_flow(cli: &Cli) {
         .iter()
         .position(|f| f.reference == ref_name)
         .unwrap_or_else(|| panic!("no footprint {ref_name}"));
-    let mut soft = adopt_soft(&mut board);
+    let mut soft = prepared(cli, &mut board, pours_block).unwrap_or_else(|| adopt_soft(&mut board));
     let c0 = part_centre(&board, fp);
     let window = cli.crop_override().unwrap_or_else(|| BBox::of([c0, Point::new(c0.x + delta.x, c0.y + delta.y)]).grow(5_500_000));
 
@@ -1396,7 +1504,7 @@ fn run_comb(cli: &Cli) {
     let (mut board, _) = Board::load(Path::new(board_path)).unwrap_or_else(|e| panic!("{e}"));
     let fp = resolve_part(&board, cli.flag("--part").as_deref());
     let ref_name = board.footprints[fp].reference.clone();
-    let mut soft = adopt_soft(&mut board);
+    let mut soft = prepared(cli, &mut board, pours_block).unwrap_or_else(|| adopt_soft(&mut board));
     let pad_box = pad_box_of(&board, fp).expect("part has pads");
     let window = cli.crop_override().unwrap_or_else(|| pad_box.grow(opts.zone + 1_800_000));
 
@@ -1594,7 +1702,7 @@ fn run_clear_lane(cli: &Cli) {
     let (mut board, _) = Board::load(Path::new(board_path)).unwrap_or_else(|e| panic!("{e}"));
     let fp = resolve_part(&board, cli.flag("--part").as_deref());
     let ref_name = board.footprints[fp].reference.clone();
-    let mut soft = adopt_soft(&mut board);
+    let mut soft = prepared(cli, &mut board, pours_block).unwrap_or_else(|| adopt_soft(&mut board));
     let pad_box = pad_box_of(&board, fp).expect("part has pads");
     let window = cli.crop_override().unwrap_or_else(|| pad_box.grow(opts.zone + 1_800_000));
 
@@ -1775,7 +1883,7 @@ fn run_shove(cli: &Cli) {
     let accept_ties = cli.has("--ties");
 
     let (mut board, _) = Board::load(Path::new(board_path)).unwrap_or_else(|e| panic!("{e}"));
-    let mut soft = adopt_soft(&mut board);
+    let mut soft = prepared(cli, &mut board, pours_block).unwrap_or_else(|| adopt_soft(&mut board));
     let parts: HashSet<usize> = match cli.flag("--part").as_deref() {
         None | Some("auto") => morph::fine_pitch(&board, 500_000).into_iter().collect(),
         Some(list) => list
@@ -2057,7 +2165,9 @@ fn run_nudge(cli: &Cli) {
     let max_frames = cli.flag("--max-frames").map_or(140, |s| s.parse().expect("--max-frames"));
 
     let (mut board, _) = Board::load(Path::new(board_path)).unwrap_or_else(|e| panic!("{e}"));
-    let mut soft = if prep {
+    let mut soft = if let Some(s) = prepared(cli, &mut board, pours_block) {
+        s
+    } else if prep {
         strip_unlocked(&mut board, true);
         let r = grid::route_open(
             &mut board,
@@ -2305,7 +2415,7 @@ fn run_negotiate(cli: &Cli) {
     let max_frames = cli.flag("--max-frames").map_or(200, |s| s.parse().expect("--max-frames"));
 
     let (mut board, _) = Board::load(Path::new(board_path)).unwrap_or_else(|e| panic!("{e}"));
-    if strip_all {
+    if prepared(cli, &mut board, pours_block).is_none() && strip_all {
         strip_unlocked(&mut board, true);
     }
     let window = cli.crop_override().unwrap_or_else(|| board_bounds(&board));
@@ -2430,10 +2540,11 @@ fn run_route(cli: &Cli) {
     let max_frames = cli.flag("--max-frames").map_or(200, |s| s.parse().expect("--max-frames"));
 
     let (mut board, _) = Board::load(Path::new(board_path)).unwrap_or_else(|e| panic!("{e}"));
-    if strip_all || after_neg {
+    let prep = prepared(cli, &mut board, pours_block).is_some();
+    if !prep && (strip_all || after_neg) {
         strip_unlocked(&mut board, true);
     }
-    if after_neg {
+    if !prep && after_neg {
         grid::route_negotiated(
             &mut board,
             &mut grid::CpuSolver,
@@ -2584,7 +2695,9 @@ fn run_rip_up(cli: &Cli) {
     let max_frames = cli.flag("--max-frames").map_or(200, |s| s.parse().expect("--max-frames"));
 
     let (mut board, _) = Board::load(Path::new(board_path)).unwrap_or_else(|e| panic!("{e}"));
-    let mut soft = if prep {
+    let mut soft = if let Some(s) = prepared(cli, &mut board, pours_block) {
+        s
+    } else if prep {
         strip_unlocked(&mut board, true);
         let r = grid::route_open(
             &mut board,
@@ -2739,7 +2852,9 @@ fn run_chase(cli: &Cli) {
     let max_frames = cli.flag("--max-frames").map_or(200, |s| s.parse().expect("--max-frames"));
 
     let (mut board, _) = Board::load(Path::new(board_path)).unwrap_or_else(|e| panic!("{e}"));
-    let mut soft = if prep {
+    let mut soft = if let Some(s) = prepared(cli, &mut board, pours_block) {
+        s
+    } else if prep {
         strip_unlocked(&mut board, true);
         let r = grid::route_open(
             &mut board,
@@ -2872,7 +2987,13 @@ fn run_tighten(cli: &Cli) {
     let max_frames = cli.flag("--max-frames").map_or(200, |s| s.parse().expect("--max-frames"));
 
     let (mut board, _) = Board::load(Path::new(board_path)).unwrap_or_else(|e| panic!("{e}"));
-    let mut soft = if prep { prepare_fresh_route(&mut board, pours_block) } else { adopt_soft(&mut board) };
+    let mut soft = if let Some(s) = prepared(cli, &mut board, pours_block) {
+        s
+    } else if prep {
+        prepare_fresh_route(&mut board, pours_block)
+    } else {
+        adopt_soft(&mut board)
+    };
     let window = cli.crop_override().unwrap_or_else(|| board_bounds(&board));
 
     let mut fb = FilmBuilder::new(
@@ -2972,7 +3093,9 @@ fn run_cleanup(cli: &Cli) {
     let max_frames = cli.flag("--max-frames").map_or(200, |s| s.parse().expect("--max-frames"));
 
     let (mut board, _) = Board::load(Path::new(board_path)).unwrap_or_else(|e| panic!("{e}"));
-    let mut soft = if prep_messy {
+    let mut soft = if let Some(s) = prepared(cli, &mut board, pours_block) {
+        s
+    } else if prep_messy {
         let mut s = adopt_soft(&mut board);
         // Combing + ripping broken pieces + rerouting along existing net copper leaves real
         // duplicate segments and multi-piece dangling branches and single-layer vias to clean up.
@@ -3116,7 +3239,7 @@ fn run_topo(cli: &Cli) {
     let max_frames = cli.flag("--max-frames").map_or(200, |s| s.parse().expect("--max-frames"));
 
     let (mut board, _) = Board::load(Path::new(board_path)).unwrap_or_else(|e| panic!("{e}"));
-    if strip_all {
+    if prepared(cli, &mut board, pours_block).is_none() && strip_all {
         strip_unlocked(&mut board, true);
     }
     let window = cli.crop_override().unwrap_or_else(|| board_bounds(&board));
@@ -3228,6 +3351,474 @@ fn run_topo(cli: &Cli) {
     fb.write(&out_path);
 }
 
+// --- 15. Prefanout -------------------------------------------------------------------------
+
+fn focus_json(board: &Board, focus: Option<&grid::Focus>, failed: bool) -> Value {
+    match focus {
+        Some(grid::Focus::Connection { net, from, to }) if from == to => json!({"net": net, "at": xy(*from), "failed": failed}),
+        Some(grid::Focus::Connection { net, from, to }) => json!({"net": net, "from": xy(*from), "to": xy(*to), "failed": failed}),
+        Some(grid::Focus::Part(fp)) => json!({"at": xy(part_centre(board, *fp)), "failed": failed}),
+        _ => Value::Null,
+    }
+}
+
+fn run_prefanout(cli: &Cli) {
+    let pos = cli.positional();
+    assert!(pos.len() >= 2, "{USAGE}");
+    let (board_path, out_path) = (&pos[0], PathBuf::from(&pos[1]));
+    let pours_block = cli.has("--pours-block");
+    let max_frames = cli.flag("--max-frames").map_or(200, |s| s.parse().expect("--max-frames"));
+
+    let (mut board, _) = Board::load(Path::new(board_path)).unwrap_or_else(|e| panic!("{e}"));
+    // From bare pads, as the router starts, unless --prepare says otherwise.
+    if prepared(cli, &mut board, pours_block).is_none() {
+        strip_unlocked(&mut board, true);
+    }
+    let parts: Vec<usize> = match cli.flag("--part").as_deref() {
+        None | Some("auto") => morph::fine_pitch(&board, 500_000),
+        Some(list) => list
+            .split(',')
+            .map(|r| board.footprints.iter().position(|f| f.reference == r).unwrap_or_else(|| panic!("no part {r}")))
+            .collect(),
+    };
+    let names: Vec<String> = parts.iter().map(|&f| board.footprints[f].reference.clone()).collect();
+    let window = cli.crop_override().unwrap_or_else(|| {
+        parts.iter().filter_map(|&f| pad_box_of(&board, f)).reduce(BBox::union).map_or_else(|| board_bounds(&board), |b| b.grow(2_500_000))
+    });
+    let mut fb = FilmBuilder::new(
+        "prefanout",
+        &out_path,
+        board_path,
+        &board,
+        window,
+        true,
+        pours_block,
+        max_frames,
+        cli.flag("--title").unwrap_or_else(|| "Pre-fanout: escape fine-pitch pins to vias".to_string()),
+        cli.flag("--subtitle").unwrap_or_else(|| format!("{} parts ({}), pad by pad before any routing", parts.len(), names.join(", "))),
+    );
+
+    let init_copper = fb.snapshot_copper(&board);
+    let open0 = open_airlines(&board, pours_block).len();
+    fb.push_frame(
+        &board,
+        format!("Bare pads: {open0} open connections; {} fine-pitch parts to escape", parts.len()),
+        FrameOverlays {
+            initial: true,
+            important: true,
+            stats: vec![("parts".into(), json!(parts.len())), ("escaped".into(), json!(0)), ("open".into(), json!(open0))],
+            ..Default::default()
+        },
+    );
+
+    let latest: Arc<Mutex<(String, Option<grid::Focus>)>> = Arc::new(Mutex::new((String::new(), None)));
+    let shared = latest.clone();
+    let log = grid::Log(Arc::new(move |act| {
+        if act.phase == "prefanout" {
+            *shared.lock().unwrap() = (act.text, act.focus);
+        }
+    }));
+    // A pair whose ends share a layer is left for its coupled run, as the router does with --diff-pairs.
+    let skip_nets = grid::diff_pairs(&board).iter().filter(|p| grid::shares_layer(&board, p)).flat_map(|p| [p.p, p.n]).collect();
+    let mut prev = init_copper.clone();
+    let mut step_n = 0usize;
+    let mut escaped_n = 0usize;
+    let stats = grid::prefanout(
+        &mut board,
+        &grid::PrefanoutOptions { parts: parts.clone(), skip_nets, pours_block, log: Some(log), ..Default::default() },
+        &mut |now| {
+            step_n += 1;
+            let cur = fb.snapshot_copper(now);
+            let (gone, laid) = diff_pools(&prev, &cur);
+            prev = cur;
+            let (text, focus) = latest.lock().unwrap().clone();
+            let bridged = text.ends_with("preparing escapes");
+            if !bridged {
+                escaped_n += 1;
+            }
+            let caption = if bridged {
+                format!("{}: pads bridged inward to their pours and neighbours ({} pieces)", text.trim_end_matches(": preparing escapes"), laid.len())
+            } else {
+                format!("Escape #{escaped_n}: {text} ({} pieces)", laid.len())
+            };
+            let vias = laid.iter().filter(|&&i| fb.pool[i as usize]["via"].as_bool() == Some(true)).count();
+            let open_now = open_airlines(now, pours_block).len();
+            fb.push_frame(
+                now,
+                format!("{caption}; {open_now} open"),
+                FrameOverlays {
+                    important: bridged,
+                    ripped: gone,
+                    laid,
+                    focus: focus_json(now, focus.as_ref(), false),
+                    stats: vec![
+                        ("escaped".into(), json!(escaped_n)),
+                        ("vias now".into(), json!(vias)),
+                        ("open".into(), json!(open_now)),
+                    ],
+                    ..Default::default()
+                },
+            );
+        },
+    );
+
+    let end_copper = fb.snapshot_copper(&board);
+    let (_, total_laid) = diff_pools(&init_copper, &end_copper);
+    let open_end = open_airlines(&board, pours_block).len();
+    fb.push_frame(
+        &board,
+        format!(
+            "Pre-fanout done: {} of {} pads escaped ({} failed), {} inward bridges, {} vias; {open0} -> {open_end} open",
+            stats.escaped, stats.candidates, stats.failed, stats.bridged_inward, stats.vias
+        ),
+        FrameOverlays {
+            important: true,
+            summary: true,
+            laid: total_laid,
+            stats: vec![
+                ("escaped".into(), json!(stats.escaped)),
+                ("failed".into(), json!(stats.failed)),
+                ("vias".into(), json!(stats.vias)),
+                ("open".into(), json!(open_end)),
+            ],
+            ..Default::default()
+        },
+    );
+    fb.write(&out_path);
+}
+
+// --- 16. Pairs -----------------------------------------------------------------------------
+
+fn run_pairs(cli: &Cli) {
+    let pos = cli.positional();
+    assert!(pos.len() >= 2, "{USAGE}");
+    let (board_path, out_path) = (&pos[0], PathBuf::from(&pos[1]));
+    let pours_block = cli.has("--pours-block");
+    let max_frames = cli.flag("--max-frames").map_or(200, |s| s.parse().expect("--max-frames"));
+
+    let (mut board, _) = Board::load(Path::new(board_path)).unwrap_or_else(|e| panic!("{e}"));
+    if prepared(cli, &mut board, pours_block).is_none() {
+        strip_unlocked(&mut board, true);
+    }
+    let pairs = grid::diff_pairs(&board);
+    let names: Vec<String> = pairs.iter().map(|p| format!("{}/{}", board.net_name(p.p), board.net_name(p.n))).collect();
+    let window = cli.crop_override().unwrap_or_else(|| board_bounds(&board));
+    let mut fb = FilmBuilder::new(
+        "pairs",
+        &out_path,
+        board_path,
+        &board,
+        window,
+        cli.crop_override().is_some(),
+        pours_block,
+        max_frames,
+        cli.flag("--title").unwrap_or_else(|| "Differential pairs routed coupled".to_string()),
+        cli.flag("--subtitle").unwrap_or_else(|| format!("{}: one centreline per run between pin pairs, a track laid each side", names.join(", "))),
+    );
+
+    let init_copper = fb.snapshot_copper(&board);
+    let pair_nets: HashSet<u32> = pairs.iter().flat_map(|p| [p.p, p.n]).collect();
+    let pair_open = |b: &Board| open_airlines(b, pours_block).iter().filter(|a| pair_nets.contains(&a.net)).count();
+    let open0 = open_airlines(&board, pours_block).len();
+    fb.push_frame(
+        &board,
+        format!("{} pairs found ({}); {} of their connections open, {open0} in all", pairs.len(), names.join(", "), pair_open(&board)),
+        FrameOverlays {
+            initial: true,
+            important: true,
+            stats: vec![("pairs".into(), json!(pairs.len())), ("pair open".into(), json!(pair_open(&board))), ("open".into(), json!(open0))],
+            ..Default::default()
+        },
+    );
+
+    let mut prev = init_copper.clone();
+    let mut runs: Vec<Value> = Vec::new();
+    let mut run_n = 0usize;
+    let stats = grid::route_pairs_watch(&mut board, &grid::PairOptions { pours_block, ..Default::default() }, &mut |now, run| {
+        run_n += 1;
+        let cur = fb.snapshot_copper(now);
+        let (_, laid) = diff_pools(&prev, &cur);
+        prev = cur;
+        let name = format!("{}/{}", now.net_name(run.pair.p), now.net_name(run.pair.n));
+        let length: f64 = run.centreline.windows(2).map(|w| w[0].distance(w[1])).sum();
+        if let Some(layer) = run.layer {
+            runs.push(json!({
+                "net": run.pair.p,
+                "kind": "centreline",
+                "points": run.centreline.iter().map(|p| json!([layer, xy(*p)[0], xy(*p)[1]])).collect::<Vec<_>>(),
+            }));
+        }
+        let caption = match run.layer {
+            Some(layer) => format!(
+                "Run #{run_n} {name}: coupled on {} for {:.2} mm, {:.2} mm pitch ({} pieces)",
+                now.layers[layer],
+                length * 1e-6,
+                run.pair.pitch() as f64 * 1e-6,
+                run.laid.len()
+            ),
+            None => format!("Run #{run_n} {name}: no coupled run lays cleanly between these pin pairs; left to the router"),
+        };
+        fb.push_frame(
+            now,
+            format!("{caption}; {} pair connections open", pair_open(now)),
+            FrameOverlays {
+                important: true,
+                laid,
+                paths: runs.clone(),
+                focus: json!({"net": run.pair.p, "from": xy(run.from), "to": xy(run.to), "failed": run.layer.is_none()}),
+                stats: vec![
+                    ("pair".into(), json!(name)),
+                    ("run mm".into(), json!((length * 1e-4).round() / 100.0)),
+                    ("pair open".into(), json!(pair_open(now))),
+                ],
+                ..Default::default()
+            },
+        );
+    });
+
+    let end_copper = fb.snapshot_copper(&board);
+    let (_, total_laid) = diff_pools(&init_copper, &end_copper);
+    let open_end = open_airlines(&board, pours_block).len();
+    fb.push_frame(
+        &board,
+        format!(
+            "Pairs done: {} of {} runs coupled, {:.1} mm along their centrelines; the legs to the pads are left to the router ({open_end} open)",
+            stats.coupled, stats.runs, stats.coupled_mm
+        ),
+        FrameOverlays {
+            important: true,
+            summary: true,
+            laid: total_laid,
+            paths: runs,
+            stats: vec![
+                ("pairs".into(), json!(stats.pairs)),
+                ("coupled".into(), json!(format!("{} / {}", stats.coupled, stats.runs))),
+                ("coupled mm".into(), json!((stats.coupled_mm * 100.0).round() / 100.0)),
+                ("open".into(), json!(open_end)),
+            ],
+            ..Default::default()
+        },
+    );
+    fb.write(&out_path);
+}
+
+// --- 17. Tune ------------------------------------------------------------------------------
+
+fn run_tune(cli: &Cli) {
+    let pos = cli.positional();
+    assert!(pos.len() >= 2, "{USAGE}");
+    let (board_path, out_path) = (&pos[0], PathBuf::from(&pos[1]));
+    let pours_block = cli.has("--pours-block");
+    let max_frames = cli.flag("--max-frames").map_or(200, |s| s.parse().expect("--max-frames"));
+
+    let (mut board, _) = Board::load(Path::new(board_path)).unwrap_or_else(|e| panic!("{e}"));
+    let mut soft = prepared(cli, &mut board, pours_block).unwrap_or_else(|| adopt_soft(&mut board));
+    let pairs = grid::diff_pairs(&board);
+    let pair_nets: HashSet<u32> = pairs.iter().flat_map(|p| [p.p, p.n]).collect();
+    let window = cli.crop_override().unwrap_or_else(|| {
+        board
+            .items()
+            .filter(|(_, it)| pair_nets.contains(&it.net) && matches!(it.kind, Kind::Track | Kind::Via | Kind::Pad { .. }))
+            .map(|(_, it)| it.shape.bbox())
+            .reduce(BBox::union)
+            .map_or_else(|| board_bounds(&board), |b| b.grow(1_500_000))
+    });
+    let skew_of = |b: &Board, p: &grid::Pair| grid::pair_lengths(b, p).map(|((lp, _), (ln, _))| (lp - ln).abs() * 1e-6);
+    let name_of = |b: &Board, p: &grid::Pair| format!("{}/{}", b.net_name(p.p), b.net_name(p.n));
+    let skews0: Vec<String> = pairs
+        .iter()
+        .map(|p| skew_of(&board, p).map_or_else(|| format!("{} not joined end to end", name_of(&board, p)), |s| format!("{} {s:.2} mm", name_of(&board, p))))
+        .collect();
+    let mut fb = FilmBuilder::new(
+        "tune",
+        &out_path,
+        board_path,
+        &board,
+        window,
+        true,
+        pours_block,
+        max_frames,
+        cli.flag("--title").unwrap_or_else(|| "Length matching: bumps on the shorter net".to_string()),
+        cli.flag("--subtitle").unwrap_or_else(|| format!("skew before: {}; tolerance {:.2} mm", skews0.join(", "), grid::tune::TOLERANCE * 1e-6)),
+    );
+
+    let init_copper = fb.snapshot_copper(&board);
+    let open0 = open_airlines(&board, pours_block).len();
+    fb.push_frame(
+        &board,
+        format!("Settled copper, pairs apart in length by {}; {open0} open", skews0.join(", ")),
+        FrameOverlays {
+            initial: true,
+            important: true,
+            stats: vec![("pairs".into(), json!(pairs.len())), ("bumps".into(), json!(0)), ("open".into(), json!(open0))],
+            ..Default::default()
+        },
+    );
+
+    let mut bump_n = 0usize;
+    let stats = grid::match_lengths_watch(&mut board, &pairs, &mut soft, &mut |now, bump| {
+        bump_n += 1;
+        let ripped = fb.intern_items(now, std::slice::from_ref(bump.replaced));
+        let laid: Vec<u32> = bump.laid.iter().filter_map(|&id| now.item(id).map(|it| fb.intern(now, id, it))).collect();
+        let bb = bump.replaced.shape.bbox();
+        let at = Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2);
+        let name = name_of(now, bump.pair);
+        fb.push_frame(
+            now,
+            format!(
+                "{name} bump #{bump_n} on {}: skew {:.3} -> {:.3} mm (+{:.3} mm of track)",
+                now.net_name(bump.net),
+                bump.before * 1e-6,
+                bump.after * 1e-6,
+                (bump.before - bump.after) * 1e-6
+            ),
+            FrameOverlays {
+                important: true,
+                ripped,
+                laid,
+                focus: json!({"net": bump.net, "at": xy(at)}),
+                stats: vec![
+                    ("pair".into(), json!(name)),
+                    ("bump".into(), json!(bump_n)),
+                    ("skew mm".into(), json!((bump.after * 1e-3).round() / 1000.0)),
+                    ("open".into(), json!(open_airlines(now, pours_block).len())),
+                ],
+                ..Default::default()
+            },
+        );
+    });
+
+    let end_copper = fb.snapshot_copper(&board);
+    let (gone_total, came_total) = diff_pools(&init_copper, &end_copper);
+    let open_end = open_airlines(&board, pours_block).len();
+    let skews: Vec<String> = stats.skews.iter().map(|(n, b, a)| format!("{n} {b:.2} -> {a:.2} mm")).collect();
+    fb.push_frame(
+        &board,
+        format!("Tuned with {} bumps: {}; {open0} -> {open_end} open", stats.bumps, skews.join(", ")),
+        FrameOverlays {
+            important: true,
+            summary: true,
+            ripped: gone_total,
+            laid: came_total,
+            stats: stats
+                .skews
+                .iter()
+                .map(|(n, _, a)| (n.clone(), json!(format!("{a:.2} mm"))))
+                .chain([("bumps".to_string(), json!(stats.bumps)), ("open".to_string(), json!(open_end))])
+                .collect(),
+            ..Default::default()
+        },
+    );
+    fb.write(&out_path);
+}
+
+// --- 18. Fill ------------------------------------------------------------------------------
+
+fn run_fill(cli: &Cli) {
+    let pos = cli.positional();
+    assert!(pos.len() >= 2, "{USAGE}");
+    let (board_path, out_path) = (&pos[0], PathBuf::from(&pos[1]));
+    let pours_block = cli.has("--pours-block");
+    let max_frames = cli.flag("--max-frames").map_or(200, |s| s.parse().expect("--max-frames"));
+
+    let (mut board, text) = Board::load(Path::new(board_path)).unwrap_or_else(|e| panic!("{e}"));
+    prepared(cli, &mut board, pours_block);
+    let (_, copper) = kicad_pcb::parse_board(&text).unwrap_or_else(|e| panic!("{board_path}: {e}"));
+    let window = cli.crop_override().unwrap_or_else(|| board_bounds(&board));
+    let mut fb = FilmBuilder::new(
+        "fill",
+        &out_path,
+        board_path,
+        &board,
+        window,
+        cli.crop_override().is_some(),
+        pours_block,
+        max_frames,
+        cli.flag("--title").unwrap_or_else(|| "Zone fills as KiCad would pour them".to_string()),
+        cli.flag("--subtitle").unwrap_or_else(|| format!("board::fill_zones on a {} µm raster, highest priority first", board::fill::STEP / 1000)),
+    );
+    // The fills the file holds are stale once the router has moved copper; only fresh ones show.
+    fb.pours.clear();
+
+    let started = Instant::now();
+    let fills = board::fill_zones(&board, &copper);
+    let secs = started.elapsed().as_secs_f64();
+    let zone_name = |z: usize| {
+        let zone = &copper.zones[z];
+        if zone.name.is_empty() { format!("zone {z}") } else { zone.name.clone() }
+    };
+    let area = |f: &board::Fill| f.rects.iter().map(|r| (r[2] - r[0]) as f64 * (r[3] - r[1]) as f64).sum::<f64>() * 1e-12;
+    fb.extra.insert(
+        "fills".into(),
+        json!(fills
+            .iter()
+            .map(|f| json!({
+                "zone": f.zone,
+                "name": zone_name(f.zone),
+                "net": f.net,
+                "layer": f.layer,
+                "r": f.rects.iter().flat_map(|r| [mm(r[0] as f64), mm(r[1] as f64), mm(r[2] as f64), mm(r[3] as f64)]).collect::<Vec<_>>(),
+            }))
+            .collect::<Vec<_>>()),
+    );
+
+    let open0 = open_airlines(&board, pours_block).len();
+    let zones = fills.iter().map(|f| f.zone).collect::<HashSet<_>>().len();
+    fb.push_frame(
+        &board,
+        format!("Routed board, zones unpoured: {zones} zones to fill on {} layer pours; {open0} open without pours", fills.len()),
+        FrameOverlays {
+            initial: true,
+            important: true,
+            stats: vec![("zones".into(), json!(zones)), ("poured".into(), json!(0)), ("open".into(), json!(open0))],
+            ..Default::default()
+        },
+    );
+    for (k, f) in fills.iter().enumerate() {
+        fb.push_frame(
+            &board,
+            format!(
+                "Poured {} ({}) on {}: {:.1} mm² in {} rectangles",
+                zone_name(f.zone),
+                board.net_name(f.net),
+                board.layers[f.layer],
+                area(f),
+                f.rects.len()
+            ),
+            FrameOverlays {
+                important: true,
+                fills: (0..=k).collect(),
+                fill_new: Some(k),
+                stats: vec![
+                    ("zone".into(), json!(zone_name(f.zone))),
+                    ("layer".into(), json!(board.layers[f.layer])),
+                    ("mm²".into(), json!((area(f) * 10.0).round() / 10.0)),
+                    ("poured".into(), json!(format!("{} / {}", k + 1, fills.len()))),
+                ],
+                ..Default::default()
+            },
+        );
+    }
+    let total: f64 = fills.iter().map(area).sum();
+    fb.push_frame(
+        &board,
+        format!("All {} pours filled in {secs:.2} s: {total:.0} mm² of copper over {zones} zones", fills.len()),
+        FrameOverlays {
+            important: true,
+            summary: true,
+            fills: (0..fills.len()).collect(),
+            stats: vec![
+                ("pours".into(), json!(fills.len())),
+                ("mm²".into(), json!(total.round())),
+                ("seconds".into(), json!((secs * 100.0).round() / 100.0)),
+                ("open".into(), json!(open0)),
+            ],
+            ..Default::default()
+        },
+    );
+    fb.write(&out_path);
+}
+
 fn main() {
     let mut raw: Vec<String> = std::env::args().skip(1).collect();
     if raw.is_empty() {
@@ -3251,6 +3842,10 @@ fn main() {
         "tighten" => run_tighten(&cli),
         "cleanup" => run_cleanup(&cli),
         "topo" => run_topo(&cli),
+        "prefanout" => run_prefanout(&cli),
+        "pairs" => run_pairs(&cli),
+        "tune" => run_tune(&cli),
+        "fill" => run_fill(&cli),
         "index" => {
             let pos = cli.positional();
             assert!(!pos.is_empty(), "usage: feature_film index FILMS_DIR");

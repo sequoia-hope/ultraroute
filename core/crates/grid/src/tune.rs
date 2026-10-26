@@ -174,9 +174,26 @@ fn add_bump(board: &mut Board, tracks: &[ItemId], want: f64) -> Option<(f64, (It
     None
 }
 
+/// One bump `match_lengths_watch` kept: the pair, the net bumped, the skew before and after it
+/// in nanometres, the track it replaced and the pieces laid in its place.
+#[derive(Debug, Clone)]
+pub struct TuneBump<'a> {
+    pub pair: &'a Pair,
+    pub net: u32,
+    pub before: f64,
+    pub after: f64,
+    pub replaced: &'a Item,
+    pub laid: &'a [ItemId],
+}
+
 /// Matches every pair's lengths, bumping the shorter net's tracks that `soft` holds (the
 /// router's own), one bump at a time; `soft` is kept up to date.
 pub fn match_lengths(board: &mut Board, pairs: &[Pair], soft: &mut Vec<ItemId>) -> TuneStats {
+    match_lengths_watch(board, pairs, soft, &mut |_, _| {})
+}
+
+/// `match_lengths`, telling `watch` of every bump kept.
+pub fn match_lengths_watch(board: &mut Board, pairs: &[Pair], soft: &mut Vec<ItemId>, watch: &mut dyn FnMut(&Board, &TuneBump)) -> TuneStats {
     let mut stats = TuneStats::default();
     for pair in pairs {
         let Some(((lp, tp), (ln, tn))) = pair_lengths(board, pair) else { continue };
@@ -198,6 +215,7 @@ pub fn match_lengths(board: &mut Board, pairs: &[Pair], soft: &mut Vec<ItemId>) 
             // Measured again, as a bump off the measured way, or one that moves it, adds nothing.
             match skew(board) {
                 Some(next) if next < now => {
+                    watch(board, &TuneBump { pair, net: if lp < ln { pair.p } else { pair.n }, before: now, after: next, replaced: &item, laid: &laid });
                     now = next;
                     want = next;
                 }

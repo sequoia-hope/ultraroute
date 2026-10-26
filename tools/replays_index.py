@@ -1,6 +1,6 @@
 """List the studio's recorded runs in studio/web/public/replays/index.json.
 
-A recording is the `copperroute route --live` stream of one run, gzipped, named
+A recording is the `ultraroute route --live` stream of one run, gzipped, named
 `<job>--<recipe>.jsonl.gz`.
 """
 

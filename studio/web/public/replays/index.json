@@ -1,34 +1,18 @@
 [
  {
-  "file": "earring-kicad--fanout-debug.jsonl.gz",
+  "file": "bluebuzz-kicad--prefanout-pairs-t2-seed4.jsonl.gz",
+  "job": "bluebuzz-kicad",
+  "recipe": "prefanout-pairs-t2-seed4",
+  "open": 0,
+  "seconds": 65.082,
+  "bytes": 1601259
+ },
+ {
+  "file": "earring-kicad--prefanout-pairs-t2-seed1.jsonl.gz",
   "job": "earring-kicad",
-  "recipe": "fanout debug: chase, escape U1, clear lanes",
-  "open": 7,
-  "seconds": 247.6,
-  "bytes": 382952
- },
- {
-  "file": "bluebuzz-1024--cr-gridneg005-nofan.jsonl.gz",
-  "job": "bluebuzz-1024",
-  "recipe": "cr-gridneg005-nofan",
-  "open": 15,
-  "seconds": 123.114,
-  "bytes": 176707
- },
- {
-  "file": "bluebuzz-1024--cr-no-fanout.jsonl.gz",
-  "job": "bluebuzz-1024",
-  "recipe": "cr-no-fanout",
-  "open": 33,
-  "seconds": 75.592,
-  "bytes": 300761
- },
- {
-  "file": "simple_earring-ripped--cr-maze.jsonl.gz",
-  "job": "simple_earring-ripped",
-  "recipe": "cr-maze",
-  "open": 5,
-  "seconds": 91.593,
-  "bytes": 729078
+  "recipe": "prefanout-pairs-t2-seed1",
+  "open": 0,
+  "seconds": 24.762,
+  "bytes": 1061330
  }
 ]

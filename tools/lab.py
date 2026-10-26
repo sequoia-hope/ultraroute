@@ -63,7 +63,7 @@ def sync():
     write_json(LAB / "index.json", listed)
     films_dir = LAB / "films"
     if films_dir.is_dir():
-        order = ["dipole", "push", "flow", "comb", "clear-lane", "shove", "nudge", "negotiate", "route", "rip-up", "chase", "tighten", "cleanup", "topo"]
+        order = ["dipole", "push", "flow", "comb", "clear-lane", "shove", "nudge", "prefanout", "pairs", "negotiate", "route", "rip-up", "chase", "tighten", "cleanup", "tune", "fill", "topo"]
         rank = {k: i for i, k in enumerate(order)}
         films = []
         for f in sorted(films_dir.glob("*/*.json")):
