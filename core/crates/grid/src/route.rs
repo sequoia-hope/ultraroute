@@ -34,6 +34,14 @@ pub trait FieldSolver {
         trace_back(grid, &cost, targets, via_cost)
     }
 
+    /// Cheapest routes for a batch of a negotiation round's connections, each priced by the
+    /// solver itself from the round's shared `prices` (see [`crate::negotiate::price_into`]),
+    /// as a pool of workers does without being sent every connection's prices; `None` when the
+    /// solver cannot, and the batch goes through [`FieldSolver::route_batch`] instead.
+    fn route_priced(&mut self, _prices: &RoundPrices, _jobs: &[PricedJob], _via_cost: u32) -> Option<Vec<Option<GridPath>>> {
+        None
+    }
+
     /// Cheapest routes for several grids of one shape at once.
     fn route_batch(&mut self, jobs: &[(&RouteGrid, &[usize], &[usize])], via_cost: u32) -> Vec<Option<GridPath>> {
         let solve_jobs: Vec<(&RouteGrid, &[usize])> = jobs.iter().map(|&(g, s, _)| (g, s)).collect();
@@ -43,6 +51,27 @@ pub trait FieldSolver {
             .map(|(&(grid, _, targets), cost)| trace_back(grid, &cost, targets, via_cost))
             .collect()
     }
+}
+
+/// What a negotiation round prices every connection from: the nodes' history, how many nets
+/// cover each node as each class sees them (classes in name order), and the present price per
+/// net. `generation` changes from one round to the next.
+pub struct RoundPrices<'a> {
+    pub generation: u64,
+    pub history: &'a [u32],
+    pub counts: Vec<&'a [u16]>,
+    pub present: f64,
+}
+
+/// One connection of a round to price and route: its grid without prices, the class whose
+/// counts it sees, its weight, the nodes its own net covers, and its ends.
+pub struct PricedJob<'a> {
+    pub grid: &'a RouteGrid,
+    pub class: usize,
+    pub weight: f64,
+    pub own: Vec<u32>,
+    pub sources: &'a [usize],
+    pub targets: &'a [usize],
 }
 
 pub struct CpuSolver;

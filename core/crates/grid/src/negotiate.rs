@@ -13,7 +13,7 @@ use board::{connectivity, connectivity_without_pours, nm, Board, ItemId, Kind, N
 
 use crate::grid::{ObstacleMap, Profile, RouteGrid};
 use crate::report::{tell, Log};
-use crate::route::{lay, terminals, FieldSolver, Terminal};
+use crate::route::{lay, terminals, FieldSolver, PricedJob, RoundPrices, Terminal};
 use crate::search::{route_astar, GridPath};
 
 /// How often the trial routes are shown while a round runs one connection after another.
@@ -433,26 +433,30 @@ fn corners(path: &GridPath) -> Vec<(usize, usize, usize)> {
 /// nets at once before the net's own cells are taken back out, instead of asking the net's map
 /// about every node.
 fn penalties_into(zones: &Zones, history: &[u32], present: f64, net: u32, weight: f64, out: &mut Vec<u32>) {
+    let own = zones.per_net.get(&net).into_iter().flat_map(|m| m.keys().copied());
+    price_into(history, &zones.count, own, present, weight, out);
+}
+
+/// Each node's price from a round's `history` and `count` of nets covering it, the nodes `own`
+/// covers counted one fewer, scaled by `weight`: what [`penalties_into`] gives a connection, for
+/// a worker handed the round's counts once instead of every connection's prices.
+pub fn price_into(history: &[u32], count: &[u16], own: impl Iterator<Item = u32>, present: f64, weight: f64, out: &mut Vec<u32>) {
     out.clear();
     if (weight - 1.0).abs() < 1e-12 {
         // The present price of a few covering nets, looked up rather than multiplied out.
         let table: [u32; 32] = std::array::from_fn(|n| (present * n as f64).round() as u32);
         let price = |h: u32, others: u16| h + table.get(others as usize).copied().unwrap_or_else(|| (present * f64::from(others)).round() as u32);
-        out.extend(history.iter().zip(&zones.count).map(|(&h, &n)| price(h, n)));
-        if let Some(mine) = zones.per_net.get(&net) {
-            for &c in mine.keys() {
-                let c = c as usize;
-                out[c] = price(history[c], zones.count[c] - 1);
-            }
+        out.extend(history.iter().zip(count).map(|(&h, &n)| price(h, n)));
+        for c in own {
+            let c = c as usize;
+            out[c] = price(history[c], count[c] - 1);
         }
     } else {
         let price = |h: u32, others: u16| ((f64::from(h) + present * f64::from(others)) * weight).round().max(0.0) as u32;
-        out.extend(history.iter().zip(&zones.count).map(|(&h, &n)| price(h, n)));
-        if let Some(mine) = zones.per_net.get(&net) {
-            for &c in mine.keys() {
-                let c = c as usize;
-                out[c] = price(history[c], zones.count[c] - 1);
-            }
+        out.extend(history.iter().zip(count).map(|(&h, &n)| price(h, n)));
+        for c in own {
+            let c = c as usize;
+            out[c] = price(history[c], count[c] - 1);
         }
     }
 }
@@ -472,8 +476,44 @@ fn route_round_in_batches(
     let size = solver.batch_size().max(1);
     let sample = maps.values().next().expect("one map per class").view(0);
     let mut grids: Vec<RouteGrid> = (0..size.min(connections.len())).map(|_| sample.clone()).collect();
+    // The round's prices are the same for every connection: a solver that can price them itself
+    // is handed them once, and each connection's grid without prices.
+    static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let generation = GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut classes: Vec<&String> = maps.keys().collect();
+    classes.sort();
+    let prices = RoundPrices { generation, history, counts: classes.iter().map(|c| zones.seen_by(c).count.as_slice()).collect(), present };
+    let mut priced = true;
     for start in (0..connections.len()).step_by(size) {
         let end = (start + size).min(connections.len());
+        if priced {
+            let count = end - start;
+            for (c, grid) in connections[start..end].iter().zip(grids[..count].iter_mut()) {
+                maps[&c.class].view_into(c.net, grid);
+            }
+            let sources: Vec<Vec<usize>> = ends[start..end].iter().map(|(s, _)| s.iter().map(|t| t.0).collect()).collect();
+            let targets: Vec<Vec<usize>> = ends[start..end].iter().map(|(_, t)| t.iter().map(|t| t.0).collect()).collect();
+            let jobs: Vec<PricedJob> = connections[start..end]
+                .iter()
+                .zip(&grids[..count])
+                .zip(sources.iter().zip(&targets))
+                .map(|((c, grid), (s, t))| PricedJob {
+                    grid,
+                    class: classes.iter().position(|k| **k == c.class).expect("a map per class"),
+                    weight: options.net_weight.get(&c.net).copied().unwrap_or(1.0),
+                    own: zones.seen_by(&c.class).per_net.get(&c.net).map(|m| m.keys().copied().collect()).unwrap_or_default(),
+                    sources: s,
+                    targets: t,
+                })
+                .collect();
+            if let Some(routed) = solver.route_priced(&prices, &jobs, options.via_cost) {
+                for (k, path) in routed.into_iter().enumerate() {
+                    connections[start + k].path = path;
+                }
+                continue;
+            }
+            priced = false;
+        }
         let count = end - start;
         for (c, grid) in connections[start..end].iter().zip(grids[..count].iter_mut()) {
             maps[&c.class].view_into(c.net, grid);

@@ -258,3 +258,14 @@ second pass over undone tries.
   short for a bump). The earring's USB_DP/DM side-by-side share falls to 35-59%: about as much
   is coupled as before, but the matching bumps add length. Jobs re-solved; job.json `args`
   now carries the seed the studio routes each job with (earring-kicad 5, bluebuzz-kicad 2).
+- 2026-10-26, the in-tab worker pool (from agy-webgpu, audited). Merged with its speedups (native
+  boards byte-identical, 10-25% faster on one thread); its nudge and push changes left out. As
+  merged, the pool was slower than none (65 s against 55 s on the earring): every connection of
+  a batch carried a full price map, a batch averaged 66 MB, 135 of 338 overflowed the shared
+  buffer, and each worker copied the whole batch per job. Now a round's history and per-class
+  counts go to the workers once, each connection carries only its blocked bits, own cells and
+  ends, and a worker prices it with the router's own `grid::price_into`: 38 s with the pool, 55
+  s without, the same copper. The in-tab router always negotiates in Jacobi rounds, as native
+  `--threads 2+` does, so its boards match the server's and any native multi-thread run of the
+  same time limit (results depend on `--timeout`, which later stages share out). Seeds for it
+  from lab `jacobi-27`: earring-kicad 1, bluebuzz-kicad 4, both clean in the browser.
