@@ -704,8 +704,25 @@ aside h1 a {
     padding-bottom: 6px;
   }
   .phone-bar .sheet-toggle {
-    flex: 1;
     font-weight: 600;
+  }
+  /* The run at a glance, so a phone needs no sheet to see how it goes. */
+  .phone-stat {
+    flex: 1;
+    align-self: center;
+    text-align: center;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .phone-stat b {
+    font-size: 1.15em;
+  }
+  .phone-stat b.done {
+    color: var(--ok, #2e9d5b);
+  }
+  .phone-bar .icon {
+    min-width: 38px;
+    padding: 0 8px;
   }
   button {
     min-height: 38px;

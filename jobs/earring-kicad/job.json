@@ -1,1 +1,1 @@
-{"studio": true, "strip": "all", "order": 1, "blocks": {"rp2350_power": {"zones": ["vreg_vdd_core_3", "vreg_vdd_core_6", "vreg_3v3_1", "vreg_3v3_7"], "parts": ["U1"]}}}
+{"studio": true, "strip": "all", "order": 0, "blocks": {"rp2350_power": {"zones": ["vreg_vdd_core_3", "vreg_vdd_core_6", "vreg_3v3_1", "vreg_3v3_7"], "parts": ["U1"]}}}

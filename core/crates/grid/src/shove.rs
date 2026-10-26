@@ -714,7 +714,7 @@ fn force_lay(
     for piece in pieces(grid, path, sources, targets)? {
         let id = board.insert(piece);
         let found = grid.violations(board, id);
-        board.remove(id);
+        board.discard(id);
         for v in found {
             match v.b.filter(|b| board.item(*b).is_some_and(movable)) {
                 Some(b) => blockers.push(b),

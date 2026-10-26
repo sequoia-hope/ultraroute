@@ -1183,8 +1183,8 @@ fn try_commit_items(
             !board::check_item(board, id).is_empty()
         };
         if bad {
-            for id in ids {
-                board.remove(id);
+            for id in ids.into_iter().rev() {
+                board.discard(id);
             }
             return None;
         }
@@ -1192,8 +1192,8 @@ fn try_commit_items(
     let gmap = &global_maps[class];
     let cells = handoff_cells_of(board, &ids, net, gmap);
     if cells.is_empty() || !preserves_handoffs(board, &ids, net, global_maps, handoffs) {
-        for id in ids {
-            board.remove(id);
+        for id in ids.into_iter().rev() {
+            board.discard(id);
         }
         return None;
     }

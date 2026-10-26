@@ -388,7 +388,7 @@ pub(crate) fn track(net: u32, layer: usize, a: Point, b: Point, half_width: Nm) 
 pub(crate) fn fits(board: &mut Board, grid: &RouteGrid, item: Item) -> bool {
     let id = board.insert(item);
     let ok = grid.violations(board, id).is_empty();
-    board.remove(id);
+    board.discard(id);
     ok
 }
 
@@ -402,8 +402,8 @@ pub(crate) fn lay(board: &mut Board, grid: &RouteGrid, path: &GridPath, sources:
         let id = board.insert(piece);
         laid.push(id);
         if !grid.violations(board, id).is_empty() {
-            for id in laid {
-                board.remove(id);
+            for id in laid.into_iter().rev() {
+                board.discard(id);
             }
             return None;
         }

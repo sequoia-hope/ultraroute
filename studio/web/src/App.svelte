@@ -99,6 +99,7 @@
     { key: 'core', label: 'Core', title: 'The MIT core router, on the KiCad board itself: grid routing with negotiated congestion' },
   ];
   let ripUp = $state(true);
+  let prefanout = $state(true);
   let moveParts = $state(true);
   let viewMode = $state('all');
   let flipped = $state(false);
@@ -145,6 +146,7 @@
     if (router === 'core') {
       if (negotiate) args.push('--negotiate');
       if (ripUp) args.push('--rip-up');
+      if (prefanout) args.push('--prefanout');
       if (moveParts) args.push('--nudge');
       if (tighten) args.push('--tighten');
       argsText = args.join(' ');
@@ -228,9 +230,15 @@
     const input = `../jobs/${encodeURIComponent(jobName)}/input/`;
     const fetchText = (name) => fetch(input + encodeURIComponent(name)).then((r) => (r.ok ? r.text() : Promise.reject(new Error(`${name}: ${r.status}`))));
     const continuing = !load && options.continue && routedText;
-    let pcb, pro;
+    let pcb, pro, dru;
+    // The custom rules beside the project are optional; a board without them has none.
+    const druName = job.kicad_project?.replace(/\.kicad_pro$/, '.kicad_dru');
     try {
-      [pcb, pro] = await Promise.all([continuing ? routedText : fetchText(job.kicad_pcb), job.kicad_project ? fetchText(job.kicad_project) : '{}']);
+      [pcb, pro, dru] = await Promise.all([
+        continuing ? routedText : fetchText(job.kicad_pcb),
+        job.kicad_project ? fetchText(job.kicad_project) : '{}',
+        druName ? fetchText(druName).catch(() => '') : '',
+      ]);
     } catch (e) {
       message = `couldn't fetch the board: ${e.message}`;
       return;
@@ -263,7 +271,7 @@
       message = `the router stopped: ${e.message ?? e}`;
       mode = 'idle';
     };
-    worker.postMessage({ pcb, pro, options: all.join(' '), fps: Number(fps) || 30 });
+    worker.postMessage({ pcb, pro, dru, options: all.join(' '), fps: Number(fps) || 30 });
   }
 
   function downloadRouted() {
@@ -689,10 +697,11 @@
     {#if router === 'core'}
       {#if !LOCAL}
         <label class="check" title="Run the core router in this tab, compiled to WebAssembly, instead of on the server">
-          <input type="checkbox" bind:checked={inTab} /> Route in this tab
+          <input type="checkbox" bind:checked={inTab} onchange={() => (timeout = inTab ? 600 : 120)} /> Route in this tab
         </label>
       {/if}
       <label class="check"><input type="checkbox" bind:checked={ripUp} onchange={compose} /> Rip up and retry what is left</label>
+      <label class="check" title="Escapes every fine-pitch pad to a via first, on a fine local grid"><input type="checkbox" bind:checked={prefanout} onchange={compose} /> Fan out fine-pitch parts first</label>
       <label class="check"><input type="checkbox" bind:checked={tighten} onchange={compose} /> Pull the copper tight</label>
     {:else}
       <label class="check"><input type="checkbox" bind:checked={fanout} onchange={compose} /> Fan out pads first</label>
@@ -959,8 +968,9 @@
           <button class="primary" onclick={() => route({ continue: keepGoing })} disabled={!connected}>Route</button>
         {/if}
       {/if}
-      <button class="sheet-toggle" onclick={() => (sheetOpen = !sheetOpen)} aria-expanded={sheetOpen}>{sheetOpen ? 'Hide controls' : 'Controls'}{#if status?.open != null}{' · '}{status.open} open{/if}</button>
-      {#if canFullscreen}<button onclick={toggleFullscreen} title="Full screen">{fullscreen ? 'Exit full screen' : 'Full screen'}</button>{/if}
+      <span class="phone-stat" aria-live="polite"><b class:done={status?.open === 0}>{status?.open ?? '–'}</b> open · {seconds(status?.ms ?? 0)} s</span>
+      <button class="sheet-toggle" onclick={() => (sheetOpen = !sheetOpen)} aria-expanded={sheetOpen}>{sheetOpen ? 'Hide' : 'Controls'}</button>
+      {#if canFullscreen}<button class="icon" onclick={toggleFullscreen} title={fullscreen ? 'Exit full screen' : 'Full screen'} aria-label={fullscreen ? 'Exit full screen' : 'Full screen'}>{fullscreen ? '⤡' : '⤢'}</button>{/if}
     </div>
   </div>
 </main>

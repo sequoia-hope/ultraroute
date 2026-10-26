@@ -333,7 +333,7 @@ pub fn pull_tight_watch(board: &mut Board, soft: &mut Vec<ItemId>, watch: &mut T
                     laid = Some(id);
                     break;
                 }
-                board.remove(id);
+                board.discard(id);
                 // Put back what was taken, under the ids the chain knows them by.
                 for (old, item) in removed {
                     board.restore(old, item);

@@ -35,6 +35,23 @@ fn a_removed_item_is_gone_and_comes_back_when_inserted() {
 }
 
 #[test]
+fn trial_inserts_discarded_do_not_grow_the_board_and_ripped_ids_survive_them() {
+    let mut b = earring();
+    let (id, item) = b.items().find(|(_, it)| it.kind == Kind::Via).map(|(i, it)| (i, it.clone())).unwrap();
+    let ripped = b.remove(id).unwrap();
+    let first = b.insert(item.clone());
+    b.discard(first);
+    for _ in 0..1000 {
+        let trial = b.insert(item.clone());
+        assert_eq!(trial, first, "a discarded trial's slot is given out again");
+        b.discard(trial);
+    }
+    b.restore(id, ripped);
+    assert_eq!(b.item(id), Some(&item));
+    assert!(b.item(first).is_none());
+}
+
+#[test]
 fn removing_a_track_opens_its_net() {
     let mut b = earring();
     let before = connectivity(&b).airlines.len();

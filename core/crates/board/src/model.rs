@@ -373,6 +373,20 @@ impl Board {
         id
     }
 
+    /// Removes an item tried and not kept, and its slot too if it is the newest, so the trial
+    /// inserts a search makes by the million do not grow the board. Only for an item nothing else
+    /// was inserted after, or whose later items are gone the same way: its id may be given out
+    /// again.
+    pub fn discard(&mut self, id: ItemId) -> Option<Item> {
+        let item = self.remove(id);
+        if id + 1 == self.items.len() {
+            self.items.pop();
+            self.shape_bboxes.pop();
+            self.bboxes.pop();
+        }
+        item
+    }
+
     /// Puts a removed item back under the id it had.
     pub fn restore(&mut self, id: ItemId, item: Item) {
         let sb = item.shape.bbox();
