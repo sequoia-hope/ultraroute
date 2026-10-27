@@ -1241,6 +1241,12 @@ pub fn run_with_solver(
     let poured_nets: HashSet<u32> = board.items().filter(|(_, it)| matches!(it.kind, Kind::Pour { .. })).map(|(_, it)| it.net).collect();
     let start_state = (a.restart > 0).then(|| (board.clone(), laid.clone(), removed.clone(), fanout_laid.clone()));
     let mut fail_counts: HashMap<u32, usize> = resolve_priority_nets(&board, &a.first).into_iter().map(|n| (n, 1)).collect();
+    // Nets with a length limit route first, while their shortest ways are still free.
+    for m in &lengths {
+        for &n in &m.nets {
+            fail_counts.entry(n).or_insert(1);
+        }
+    }
     let mut best_run: Option<((usize, usize), Restart)> = None;
     let mut stats = grid::Stats::default();
     // Restarts leave the rescue stages after them a share of the time.
@@ -1251,7 +1257,7 @@ pub fn run_with_solver(
         (t, _) => t,
     };
     // A pass that routes nothing first and does not restart keeps the time limits it always had.
-    let plain = a.restart == 0 && a.first.is_empty() && a.topo_first.is_empty();
+    let plain = a.restart == 0 && a.first.is_empty() && a.topo_first.is_empty() && lengths.is_empty();
 
     for round in 0..total_rounds {
         if round > 0 && (cancel.load(Ordering::Relaxed) || routing_timeout.is_some_and(|t| started.elapsed().as_secs_f64() >= t)) {

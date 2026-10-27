@@ -19,6 +19,10 @@ use std::collections::HashSet;
 use board::{Board, Kind, Point, Region, RegionKind, RegionRule, Shape};
 use serde_json::Value;
 
+/// How far copper may reach over a region's edge and still count as outside it, as KiCad's
+/// geometry allows, in nanometres.
+const TOLERANCE: f64 = 500.0;
+
 /// A net's length limit.
 pub struct MaxLength {
     pub nets: Vec<u32>,
@@ -121,9 +125,14 @@ pub fn report(board: &Board, lengths: &[MaxLength], laid: &[board::ItemId]) -> V
                 if vias_rule != rule.vias || !rule.holds_for(it.net) || it.layers & region.layers == 0 {
                     continue;
                 }
-                let touches = it.shape.gap_within(&region.shape, 0.0) == 0.0;
+                // Copper reaches into the region when its centre line comes nearer than its
+                // radius, by more than KiCad's half micron: touching the edge is outside.
+                let touches = match &it.shape {
+                    Shape::Capsule { a, b, r } => Shape::Capsule { a: *a, b: *b, r: 0 }.gap_within(&region.shape, *r as f64) + TOLERANCE < *r as f64,
+                    Shape::Polygon(_) => it.shape.gap_within(&region.shape, 0.0) == 0.0,
+                };
                 let inside = match &it.shape {
-                    Shape::Capsule { a, b, r } => region.shape.depth(*a) >= *r as f64 && region.shape.depth(*b) >= *r as f64,
+                    Shape::Capsule { a, b, r } => region.shape.depth(*a) + TOLERANCE >= *r as f64 && region.shape.depth(*b) + TOLERANCE >= *r as f64,
                     Shape::Polygon(_) => false,
                 };
                 broken += match rule.kind {
