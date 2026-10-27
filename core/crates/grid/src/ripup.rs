@@ -31,7 +31,7 @@ impl Default for RipOptions {
     fn default() -> RipOptions {
         RipOptions {
             cell: 50_000,
-            via_cost: 80,
+            via_cost: 320,
             rip_cost: 400,
             max_seconds: None,
             reroute_seconds: 10.0,
@@ -113,6 +113,7 @@ pub fn rip_up_watch(
         penalty: Vec::new(),
         via_penalty: Vec::new(),
         pours_block: options.pours_block,
+        directional: false,
     };
     let mut tried: HashSet<(ItemId, ItemId)> = HashSet::new();
     loop {
@@ -214,6 +215,7 @@ pub fn rip_up_watch(
                 max_seconds: Some(options.reroute_seconds),
                 nets: None,
                 pours_block: options.pours_block,
+                directional: false,
                 cancel: options.cancel.clone(),
                 log: options.log.clone(),
             };

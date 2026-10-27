@@ -21,13 +21,14 @@ pub mod route;
 pub mod search;
 pub mod shove;
 pub mod tune;
+pub mod vias;
 #[cfg(feature = "gpu")]
 pub mod sweep;
 
 pub use blame::{blame, Blame, BlameOptions, BlameReport};
 pub use chase::{chase, ChaseOptions, ChaseStats};
 pub use cleanup::{drop_duplicates, drop_duplicates_watch, prune_dangling, prune_dangling_watch, pull_tight, pull_tight_watch, CleanStats};
-pub use grid::{ObstacleMap, Profile, RouteGrid, ViaSpec};
+pub use grid::{NetView, ObstacleMap, Profile, RouteGrid, ViaSpec};
 pub use nudge::{nudge, nudge_watch, NudgeEvent, NudgeOptions, NudgeStats};
 pub use push::{push, push_watch, rip_broken, rip_broken_items, Field, PushOptions, PushStats, PushStep};
 pub use planes::{join_planes, PlaneStats};
@@ -37,7 +38,9 @@ pub use report::{item_name, Activity, Focus, Log};
 pub use negotiate::{price_into, route_negotiated, route_negotiated_rounds, NegotiationOptions, NegotiationStats, RoundView, Trial};
 pub use ripup::{rip_up, rip_up_watch, RipAttempt, RipOptions, RipStats};
 pub use route::{edits, route_open, terminal_cells, CpuSolver, FieldSolver, Options, PricedJob, RoundPrices, Stats};
+pub use search::via_cost_mm;
 pub use tune::{match_lengths, match_lengths_watch, pair_lengths, TuneBump, TuneStats};
+pub use vias::{reduce_vias, reduce_vias_all, ViaOptions, ViaStats};
 pub use shove::{plough_fields, shove_escape, shove_escape_steps, Plough, ShoveEvent, ShoveOptions, ShoveRound, ShoveStats, ShoveTry};
 #[cfg(feature = "gpu")]
 pub use gpu::GpuSolver;

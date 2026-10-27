@@ -11,7 +11,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use board::{connectivity, connectivity_without_pours, nm, Board, ItemId, Kind, Nm};
 
-use crate::grid::{ObstacleMap, Profile, RouteGrid};
+use crate::grid::{NetView, ObstacleMap, Profile, RouteGrid};
 use crate::report::{tell, Log};
 use crate::route::{lay, terminals, FieldSolver, PricedJob, RoundPrices, Terminal};
 use crate::search::{route_astar, GridPath};
@@ -45,6 +45,8 @@ pub struct NegotiationOptions {
     /// way out of a pad while neighbours pay the full price to go round it.
     pub net_weight: HashMap<u32, f64>,
     pub pours_block: bool,
+    /// Prefer one routing axis per layer on two-layer boards.
+    pub directional: bool,
     /// Reorders the connections, for a search over many runs; 0 keeps the board's order.
     pub seed: u64,
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
@@ -55,7 +57,7 @@ impl Default for NegotiationOptions {
     fn default() -> Self {
         NegotiationOptions {
             cell: 50_000,
-            via_cost: 200,
+            via_cost: 500,
             max_rounds: 30,
             present: 20.0,
             present_growth: 1.6,
@@ -66,6 +68,7 @@ impl Default for NegotiationOptions {
             nets: None,
             net_weight: HashMap::new(),
             pours_block: false,
+            directional: true,
             seed: 0,
             cancel: None,
             log: None,
@@ -280,12 +283,20 @@ pub fn route_negotiated_rounds(
     let mut zones = Claims::new(classes.iter().cloned(), layers * cells);
     let mut history = vec![0u32; layers * cells];
     let mut present = options.present;
-    let mut grid_buf = sample.clone();
+    let directional = options.directional && board.layers.len() == 2 && solver.batch_size() <= 1;
+    let mut views: HashMap<String, NetView> = maps
+        .iter()
+        .map(|(k, m)| {
+            let mut nv = m.net_view();
+            nv.grid.directional = directional;
+            (k.clone(), nv)
+        })
+        .collect();
     let ends: Vec<(Vec<Terminal>, Vec<Terminal>)> = connections
         .iter()
         .map(|c| {
-            maps[&c.class].view_into(c.net, &mut grid_buf);
-            (terminals(board, &grid_buf, c.from), terminals(board, &grid_buf, c.to))
+            let g = views.get_mut(&c.class).expect("a view per class").switch(c.net);
+            (terminals(board, g, c.from), terminals(board, g, c.to))
         })
         .collect();
     let cells_of = |t: &[Terminal]| t.iter().map(|t| t.0).collect::<Vec<usize>>();
@@ -294,6 +305,7 @@ pub fn route_negotiated_rounds(
     let own_ends: Vec<BTreeSet<usize>> =
         ends.iter().map(|(s, t)| s.iter().chain(t).filter(|t| t.1.is_none()).map(|t| t.0).collect()).collect();
 
+    let mut weighted_penalty: Vec<u32> = Vec::new();
     let mut shown = crate::clock::Instant::now();
     let (mut best_colliding, mut stale) = (usize::MAX, 0);
     for round in 0..options.max_rounds {
@@ -309,26 +321,80 @@ pub fn route_negotiated_rounds(
                 zones.add(c.net, &c.zone);
             }
         } else if options.threads > 1 {
-            route_round_in_parallel(&mut connections, &maps, &ends, &zones, &history, present, options, round, &sample, trials);
+            route_round_in_parallel(&mut connections, &maps, &ends, &zones, &history, present, options, directional, round, &sample, trials);
             zones.clear();
             for c in connections.iter_mut() {
                 c.zone = c.path.as_ref().map(|p| claims_of(p, &c.class)).unwrap_or_default();
                 zones.add(c.net, &c.zone);
             }
         } else {
+            // In Gauss-Seidel negotiation `history` and `present` stay fixed across the round and
+            // only a connection's claimed cells change `zones.count`, so each viewer class's base
+            // penalty buffer is filled once per round and patched only on the cells touched.
+            let table: [u32; 32] = std::array::from_fn(|n| (present * n as f64).round() as u32);
+            let price_1 = |h: u32, others: u16| h + table.get(others as usize).copied().unwrap_or_else(|| (present * f64::from(others)).round() as u32);
+            for (class, view) in &mut views {
+                let z = zones.seen_by(class);
+                view.grid.penalty.clear();
+                view.grid.penalty.extend(history.iter().zip(&z.count).map(|(&h, &n)| price_1(h, n)));
+            }
             for k in 0..connections.len() {
                 if out_of_time() {
                     break;
                 }
-                let c = &mut connections[k];
-                tell(&options.log, "negotiating", || format!("round {}: rerouting {}", round + 1, board.net_name(c.net)), None);
-                zones.remove(c.net, &c.zone);
-                maps[&c.class].view_into(c.net, &mut grid_buf);
-                penalties_into(zones.seen_by(&c.class), &history, present, c.net, weight_of(c.net), &mut grid_buf.penalty);
+                let (net, class) = (connections[k].net, connections[k].class.clone());
+                tell(&options.log, "negotiating", || format!("round {}: rerouting {}", round + 1, board.net_name(net)), None);
+                zones.remove(net, &connections[k].zone);
+                for (viewer, touched) in &connections[k].zone {
+                    if let Some(v) = views.get_mut(viewer) {
+                        let z = zones.seen_by(viewer);
+                        for &cell in touched {
+                            let idx = cell as usize;
+                            v.grid.penalty[idx] = price_1(history[idx], z.count[idx]);
+                        }
+                    }
+                }
+                let w = weight_of(net);
                 let (sources, targets) = &ends[k];
-                c.path = solver.route(&grid_buf, &cells_of(sources), &cells_of(targets), options.via_cost);
-                c.zone = c.path.as_ref().map(|p| claims_of(p, &c.class)).unwrap_or_default();
-                zones.add(c.net, &c.zone);
+                let (src, dst) = (cells_of(sources), cells_of(targets));
+                let path = if (w - 1.0).abs() < 1e-12 {
+                    let grid = views.get_mut(&class).expect("a view per class").switch(net);
+                    let z = zones.seen_by(&class);
+                    if let Some(mine) = z.per_net.get(&net) {
+                        for &cell in mine.keys() {
+                            let idx = cell as usize;
+                            grid.penalty[idx] = price_1(history[idx], z.count[idx] - 1);
+                        }
+                    }
+                    let routed = solver.route(grid, &src, &dst, options.via_cost);
+                    if let Some(mine) = z.per_net.get(&net) {
+                        for &cell in mine.keys() {
+                            let idx = cell as usize;
+                            grid.penalty[idx] = price_1(history[idx], z.count[idx]);
+                        }
+                    }
+                    routed
+                } else {
+                    penalties_into(zones.seen_by(&class), &history, present, net, w, &mut weighted_penalty);
+                    let grid = views.get_mut(&class).expect("a view per class").switch(net);
+                    std::mem::swap(&mut grid.penalty, &mut weighted_penalty);
+                    let routed = solver.route(grid, &src, &dst, options.via_cost);
+                    std::mem::swap(&mut grid.penalty, &mut weighted_penalty);
+                    routed
+                };
+                let new_zone = path.as_ref().map(|p| claims_of(p, &class)).unwrap_or_default();
+                zones.add(net, &new_zone);
+                for (viewer, touched) in &new_zone {
+                    if let Some(v) = views.get_mut(viewer) {
+                        let z = zones.seen_by(viewer);
+                        for &cell in touched {
+                            let idx = cell as usize;
+                            v.grid.penalty[idx] = price_1(history[idx], z.count[idx]);
+                        }
+                    }
+                }
+                connections[k].path = path;
+                connections[k].zone = new_zone;
                 if shown.elapsed() > TRIAL_INTERVAL {
                     trials(round, &trial_list(&connections, &sample));
                     shown = crate::clock::Instant::now();
@@ -380,6 +446,9 @@ pub fn route_negotiated_rounds(
 
     // Commit greedily: a route whose cells lie in no committed net's zone is legal against
     // everything committed so far, converged or not; each piece is still checked exactly.
+    for view in views.values_mut() {
+        view.grid.penalty.clear();
+    }
     let mut committed = Claims::new(classes.iter().cloned(), layers * cells);
     for (k, c) in connections.iter().enumerate() {
         let Some(path) = &c.path else {
@@ -389,9 +458,9 @@ pub fn route_negotiated_rounds(
         if path.iter().map(|&(l, i, j)| l * cells + j * nx + i).any(|n| !own_ends[k].contains(&n) && committed.seen_by(&c.class).others(c.net, n) > 0) {
             continue;
         }
-        maps[&c.class].view_into(c.net, &mut grid_buf);
+        let g = views.get_mut(&c.class).expect("a view per class").switch(c.net);
         let (sources, targets) = &ends[k];
-        let Some(items) = lay(board, &grid_buf, path, sources, targets) else { continue };
+        let Some(items) = lay(board, g, path, sources, targets) else { continue };
         committed.add(c.net, &c.zone);
         stats.committed += 1;
         tell(&options.log, "committing", || format!("{}: laid its negotiated route", board.net_name(c.net)), None);
@@ -546,6 +615,7 @@ fn route_round_in_parallel(
     history: &[u32],
     present: f64,
     options: &NegotiationOptions,
+    directional: bool,
     round: usize,
     sample: &RouteGrid,
     trials: &mut dyn FnMut(usize, &[Trial]),
@@ -574,6 +644,7 @@ fn route_round_in_parallel(
                         }
                         None => grid.insert(maps[class].view(net)),
                     };
+                    grid.directional = directional;
                     penalties_into(zones.seen_by(class), history, present, net, weight, &mut grid.penalty);
                     let (sources, targets) = &ends[k];
                     let s: Vec<usize> = sources.iter().map(|t| t.0).collect();
@@ -730,5 +801,51 @@ mod tests {
         // The via at (1, 0) claims its disc on both layers, the corner cell clipped to the grid.
         assert!(z.contains(&0) && z.contains(&((nx * ny) as u32)));
         assert!(z.contains(&((nx * ny + 5 * nx + 7) as u32)));
+    }
+
+    #[test]
+    fn incremental_gauss_seidel_penalties_match_full_recomputation() {
+        let mut next = xorshift(0xc0ffee);
+        let nodes = 400;
+        let history: Vec<u32> = (0..nodes).map(|_| (next() % 80) as u32).collect();
+        let present = 32.0;
+        let table: [u32; 32] = std::array::from_fn(|n| (present * n as f64).round() as u32);
+        let price_1 = |h: u32, others: u16| h + table.get(others as usize).copied().unwrap_or_else(|| (present * f64::from(others)).round() as u32);
+        let mut z = Zones::new(nodes);
+        let mut live: Vec<u32> = history.iter().map(|&h| price_1(h, 0)).collect();
+        let mut routes: Vec<(u32, Vec<u32>)> = (0..18).map(|k| ((k % 6 + 1) as u32, Vec::new())).collect();
+        let mut expected = Vec::new();
+        for _ in 0..200 {
+            let idx = (next() as usize) % routes.len();
+            let net = routes[idx].0;
+            z.remove(net, &routes[idx].1);
+            for &cell in &routes[idx].1 {
+                let c = cell as usize;
+                live[c] = price_1(history[c], z.count[c]);
+            }
+            if let Some(mine) = z.per_net.get(&net) {
+                for &cell in mine.keys() {
+                    let c = cell as usize;
+                    live[c] = price_1(history[c], z.count[c] - 1);
+                }
+            }
+            penalties_into(&z, &history, present, net, 1.0, &mut expected);
+            assert_eq!(live, expected);
+            if let Some(mine) = z.per_net.get(&net) {
+                for &cell in mine.keys() {
+                    let c = cell as usize;
+                    live[c] = price_1(history[c], z.count[c]);
+                }
+            }
+            let mut new_cells: Vec<u32> = (0..next() % 35).map(|_| (next() % nodes as u64) as u32).collect();
+            new_cells.sort_unstable();
+            new_cells.dedup();
+            z.add(net, &new_cells);
+            for &cell in &new_cells {
+                let c = cell as usize;
+                live[c] = price_1(history[c], z.count[c]);
+            }
+            routes[idx].1 = new_cells;
+        }
     }
 }

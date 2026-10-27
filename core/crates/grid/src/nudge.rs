@@ -233,6 +233,7 @@ fn try_step(
         max_seconds: Some(options.reroute_seconds),
         nets: None,
         pours_block: options.pours_block,
+        directional: false,
         cancel: options.cancel.clone(),
         log: None,
     };

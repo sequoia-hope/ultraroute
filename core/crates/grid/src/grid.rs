@@ -4,6 +4,8 @@
 //! the other way round. One obstacle map serves every net of a class: each cell records whose
 //! copper claims it.
 
+use std::collections::HashMap;
+
 use board::{nm, Board, ItemId, Kind, Nm, Point, Shape};
 
 /// How far a step between neighbouring centres strays from the nearer one, in cells.
@@ -75,6 +77,8 @@ pub struct RouteGrid {
     pub via_penalty: Vec<u32>,
     /// Pours are planes to keep clear of, not copper refilled around the route.
     pub pours_block: bool,
+    /// Prefer horizontal steps on even routing layers and vertical steps on odd ones.
+    pub directional: bool,
 }
 
 impl RouteGrid {
@@ -179,6 +183,134 @@ impl ObstacleMap {
             .collect();
         for id in ids {
             map.stamp(board, id);
+        }
+        map
+    }
+
+    /// Static board obstacles (outline, edge keepout, mask openings, via-avoid areas) together
+    /// with every fixed item (pads, keepouts, pours, and locked copper), stamped once per net
+    /// class so local reroute windows only need to stamp unlocked tracks and vias in reach.
+    pub fn fixed_board(board: &Board, profile: Profile, h: Nm, pours_block: bool) -> ObstacleMap {
+        let outline_box = board.outline.iter().flatten().copied().fold(None, |b: Option<board::BBox>, p| {
+            Some(b.map_or(board::BBox::of([p]), |b| b.union(board::BBox::of([p]))))
+        });
+        let b = outline_box.unwrap_or_else(|| {
+            let mut acc: Option<board::BBox> = None;
+            for &(a, q, _) in &board.outline_edges {
+                let eb = board::BBox::of([a, q]);
+                acc = Some(acc.map_or(eb, |cur| cur.union(eb)));
+            }
+            for (_, it) in board.items() {
+                let ib = it.shape.bbox();
+                acc = Some(acc.map_or(ib, |cur| cur.union(ib)));
+            }
+            acc.unwrap_or_else(|| board::BBox::of([Point::new(0, 0)])).grow(10_000_000)
+        });
+        let (x0, y0) = (b.min.x, b.min.y);
+        let nx = ((b.max.x - x0) / h).max(1) as usize;
+        let ny = ((b.max.y - y0) / h).max(1) as usize;
+        let layers = board.layers.len();
+        let mut map = ObstacleMap {
+            pours_block,
+            profile,
+            x0,
+            y0,
+            h,
+            nx,
+            ny,
+            layers,
+            owner: vec![FREE; layers * nx * ny],
+            via_owner: vec![FREE; nx * ny],
+            via_avoid: Vec::new(),
+        };
+        map.stamp_outline(board);
+        map.stamp_via_avoid(board);
+        map.stamp_mask_areas(board);
+        let fixed_ids: Vec<ItemId> = board
+            .items()
+            .filter_map(|(id, it)| (it.locked || !matches!(it.kind, Kind::Track | Kind::Via)).then_some(id))
+            .collect();
+        for id in fixed_ids {
+            map.stamp(board, id);
+        }
+        map
+    }
+
+    /// Slices `bounds` out of an [`ObstacleMap::fixed_board`] base map and stamps only the
+    /// unlocked tracks and vias whose spatial index cells overlap the window's reach, avoiding
+    /// repeated polygon rasterization (keepouts, pours, pads) across local reroute queries.
+    pub fn subwindow(&self, board: &Board, bounds: board::BBox) -> ObstacleMap {
+        let h = self.h;
+        let i0 = ((bounds.min.x - self.x0).div_euclid(h)).clamp(0, self.nx.saturating_sub(1) as Nm) as usize;
+        let j0 = ((bounds.min.y - self.y0).div_euclid(h)).clamp(0, self.ny.saturating_sub(1) as Nm) as usize;
+        let i1 = ((bounds.max.x - self.x0 + h - 1).div_euclid(h)).clamp((i0 + 1) as Nm, self.nx as Nm) as usize;
+        let j1 = ((bounds.max.y - self.y0 + h - 1).div_euclid(h)).clamp((j0 + 1) as Nm, self.ny as Nm) as usize;
+        let (nx, ny) = (i1 - i0, j1 - j0);
+        let (x0, y0) = (self.x0 + i0 as Nm * h, self.y0 + j0 as Nm * h);
+        let layers = self.layers;
+        let full_cells = self.nx * self.ny;
+        let win_cells = nx * ny;
+        let mut owner = vec![FREE; layers * win_cells];
+        for l in 0..layers {
+            for j in 0..ny {
+                let src = l * full_cells + (j0 + j) * self.nx + i0;
+                let dst = l * win_cells + j * nx;
+                owner[dst..dst + nx].copy_from_slice(&self.owner[src..src + nx]);
+            }
+        }
+        let mut via_owner = vec![FREE; win_cells];
+        for j in 0..ny {
+            let src = (j0 + j) * self.nx + i0;
+            let dst = j * nx;
+            via_owner[dst..dst + nx].copy_from_slice(&self.via_owner[src..src + nx]);
+        }
+        let via_avoid = if self.via_avoid.is_empty() {
+            Vec::new()
+        } else {
+            let mut va = vec![0; win_cells];
+            for j in 0..ny {
+                let src = (j0 + j) * self.nx + i0;
+                let dst = j * nx;
+                va[dst..dst + nx].copy_from_slice(&self.via_avoid[src..src + nx]);
+            }
+            va
+        };
+        let mut map = ObstacleMap {
+            pours_block: self.pours_block,
+            profile: self.profile.clone(),
+            x0,
+            y0,
+            h,
+            nx,
+            ny,
+            layers,
+            owner,
+            via_owner,
+            via_avoid,
+        };
+        let max_clr = (0..board.nets.len() as u32)
+            .map(|n| map.clearance_to(board, n))
+            .max()
+            .unwrap_or(map.profile.clearance);
+        let hole_margin = (map.profile.drill_radius + nm(board.rules.min_hole_to_hole))
+            .max(map.profile.via_radius + nm(board.rules.min_hole_clearance))
+            .max(map.profile.half_width + nm(board.rules.min_hole_clearance) + map.reach());
+        let copper_margin = (map.profile.half_width + max_clr + map.reach()).max(map.profile.via_radius + max_clr);
+        let reach_box = board::BBox {
+            min: Point::new(x0, y0),
+            max: Point::new(x0 + nx as Nm * h, y0 + ny as Nm * h),
+        }
+        .grow(copper_margin.max(hole_margin) + h);
+        let mut ids: Vec<ItemId> = Vec::new();
+        for slot in 0..=board.layers.len() {
+            ids.extend(board.near(slot, reach_box));
+        }
+        ids.sort_unstable();
+        ids.dedup();
+        for id in ids {
+            if board.item(id).is_some_and(|it| !it.locked && matches!(it.kind, Kind::Track | Kind::Via)) {
+                map.stamp(board, id);
+            }
         }
         map
     }
@@ -572,6 +704,7 @@ impl ObstacleMap {
         grid.penalty.clear();
         grid.via_penalty.clone_from(&self.via_avoid);
         grid.pours_block = self.pours_block;
+        grid.directional = false;
     }
 
     pub fn view(&self, net: u32) -> RouteGrid {
@@ -591,7 +724,60 @@ impl ObstacleMap {
             penalty: Vec::new(),
             via_penalty: self.via_avoid.clone(),
             pours_block: self.pours_block,
+            directional: false,
         }
+    }
+
+    /// A [`NetView`] over this static map, built in one pass so switching between nets flips only
+    /// the cells claimed solely by those two nets instead of scanning the whole board.
+    pub fn net_view(&self) -> NetView {
+        let grid = self.view(0);
+        let mut own: HashMap<u32, (Vec<u32>, Vec<u32>)> = HashMap::new();
+        for (idx, &o) in self.owner.iter().enumerate() {
+            if o > 0 {
+                own.entry(o as u32).or_default().0.push(idx as u32);
+            }
+        }
+        for (c, &o) in self.via_owner.iter().enumerate() {
+            if o > 0 {
+                own.entry(o as u32).or_default().1.push(c as u32);
+            }
+        }
+        NetView { grid, own }
+    }
+}
+
+/// A reusable [`RouteGrid`] backed by an unchanging [`ObstacleMap`] that switches from one net to
+/// another in time proportional to the two nets' own copper rather than the grid's cell count.
+pub struct NetView {
+    pub grid: RouteGrid,
+    own: HashMap<u32, (Vec<u32>, Vec<u32>)>,
+}
+
+impl NetView {
+    /// Updates `self.grid`'s blocked and via-blocked bits for `net`, leaving `self.grid.penalty`
+    /// untouched so a caller maintaining congestion prices incrementally keeps them across switches.
+    pub fn switch(&mut self, net: u32) -> &mut RouteGrid {
+        if self.grid.net != net {
+            if let Some((cells, vias)) = self.own.get(&self.grid.net) {
+                for &idx in cells {
+                    self.grid.blocked[idx as usize] = true;
+                }
+                for &c in vias {
+                    self.grid.via_blocked[c as usize] = true;
+                }
+            }
+            if let Some((cells, vias)) = self.own.get(&net) {
+                for &idx in cells {
+                    self.grid.blocked[idx as usize] = false;
+                }
+                for &c in vias {
+                    self.grid.via_blocked[c as usize] = false;
+                }
+            }
+            self.grid.net = net;
+        }
+        &mut self.grid
     }
 }
 
@@ -599,6 +785,21 @@ impl ObstacleMap {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn net_view_switches_match_fresh_views_on_every_net() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/earring.kicad_pcb");
+        let board = Board::load(&path).unwrap().0;
+        let map = ObstacleMap::new(&board, Profile::for_net(&board, 1), 50_000, false);
+        let mut nv = map.net_view();
+        for net in (0..board.nets.len() as u32).chain([0, 3, 1, 0]) {
+            let fresh = map.view(net);
+            let switched = nv.switch(net);
+            assert_eq!(switched.net, fresh.net);
+            assert_eq!(switched.blocked, fresh.blocked, "blocked mismatch for net {net}");
+            assert_eq!(switched.via_blocked, fresh.via_blocked, "via_blocked mismatch for net {net}");
+        }
+    }
 
     #[test]
     fn a_window_map_agrees_cell_for_cell_with_a_full_board_map() {
@@ -629,6 +830,51 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn subwindow_agrees_cell_for_cell_with_window() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/earring.kicad_pcb");
+        let mut board = Board::load(&path).unwrap().0;
+        board.via_avoid.push(Shape::Polygon(vec![
+            Point::new(board.footprints[0].at.x - 1_000_000, board.footprints[0].at.y - 1_000_000),
+            Point::new(board.footprints[0].at.x + 1_000_000, board.footprints[0].at.y - 1_000_000),
+            Point::new(board.footprints[0].at.x + 1_000_000, board.footprints[0].at.y + 1_000_000),
+            Point::new(board.footprints[0].at.x - 1_000_000, board.footprints[0].at.y + 1_000_000),
+        ]));
+        let profile = Profile::for_net(&board, 1);
+        let h = 50_000;
+        for pours_block in [false, true] {
+            let fixed = ObstacleMap::fixed_board(&board, profile.clone(), h, pours_block);
+            let added = board.insert(board::Item {
+                kind: Kind::Track,
+                net: 2,
+                layers: 1,
+                shape: Shape::Capsule {
+                    a: Point::new(fixed.x0 + 15 * h, fixed.y0 + 15 * h),
+                    b: Point::new(fixed.x0 + 45 * h, fixed.y0 + 35 * h),
+                    r: 100_000,
+                },
+                hole: None,
+                locked: false,
+                span: None,
+            });
+            for &(fx, fy) in &[(0usize, 0usize), (fixed.nx / 4, fixed.ny / 3), (fixed.nx / 2, fixed.ny / 2)] {
+                let wn = 90.min(fixed.nx.saturating_sub(fx)).max(1);
+                let hn = 90.min(fixed.ny.saturating_sub(fy)).max(1);
+                let bounds = board::BBox {
+                    min: Point::new(fixed.x0 + fx as Nm * h, fixed.y0 + fy as Nm * h),
+                    max: Point::new(fixed.x0 + (fx + wn) as Nm * h, fixed.y0 + (fy + hn) as Nm * h),
+                };
+                let sub = fixed.subwindow(&board, bounds);
+                let win = ObstacleMap::window(&board, profile.clone(), h, bounds, pours_block);
+                assert_eq!((sub.x0, sub.y0, sub.nx, sub.ny), (win.x0, win.y0, win.nx, win.ny));
+                assert_eq!(sub.via_owner, win.via_owner, "via_owner mismatch at ({fx}, {fy}) pours={pours_block}");
+                assert_eq!(sub.via_avoid, win.via_avoid, "via_avoid mismatch at ({fx}, {fy}) pours={pours_block}");
+                assert_eq!(sub.owner, win.owner, "owner mismatch at ({fx}, {fy}) pours={pours_block}");
+            }
+            board.discard(added);
         }
     }
 }

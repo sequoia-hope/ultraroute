@@ -361,7 +361,7 @@ fn trim_both(board: &mut Board, id: ItemId, item: &Item, a: Point, b: Point, r: 
 const DETOUR_LIMIT: usize = 400;
 
 /// Its net's copper joined to an item, leaving out pours a refill may take back.
-fn neighbours(board: &Board, id: ItemId) -> Vec<ItemId> {
+pub(crate) fn neighbours(board: &Board, id: ItemId) -> Vec<ItemId> {
     let Some(item) = board.item(id) else { return Vec::new() };
     let bb = board.bbox(id).unwrap_or_else(|| item.shape.bbox());
     let mut out: Vec<ItemId> = (0..board.layers.len())
@@ -429,7 +429,7 @@ fn redundant(board: &Board, id: ItemId) -> bool {
 /// (a stub that adds nothing); a via that meets its net's copper on fewer than two layers. Ends
 /// meet as [`joined`] has them, by the track's round end. Pours do not count as covering a
 /// track, as a refill may draw them back from it.
-fn dangles(board: &Board, id: ItemId) -> bool {
+pub(crate) fn dangles(board: &Board, id: ItemId) -> bool {
     let Some(item) = board.item(id) else { return false };
     if item.net == 0 {
         return false;

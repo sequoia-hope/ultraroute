@@ -24,7 +24,7 @@ use board::{connectivity, connectivity_without_pours, Board, Item, ItemId, Kind,
 use kicad_pcb::{apply, mm, Edit};
 use serde_json::{json, Value};
 
-pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--diff-pairs] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--gpu] \
+pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--diff-pairs] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--no-reduce-vias] [--no-directional] [--via-cost MM[,OPEN_MM]] [--gpu] \
 [--timeout SECONDS] [--cell MM] [--first NET,...] [--first-negotiate] [--first-weight W] [--restart N] [--topo-first REF,...|auto] [--topo-trapped] [--topo-trapped-rip] [--topo-sample MM] \
 [--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough warp|linear|rip|gentle|dipole|region] [--shove-steps N] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-late] [--shove-seconds S] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
 [--live PATH|-] [--live-fps N] [--live-step MS] [--blame]";
@@ -58,6 +58,13 @@ pub struct Args {
     pub negotiate: bool,
     pub rip_up: bool,
     pub tighten: bool,
+    /// Skip the post-route pass that collapses unnecessary vias onto one layer.
+    pub no_reduce_vias: bool,
+    /// Skip the horizontal/vertical layer preference on two-layer boards.
+    pub no_directional: bool,
+    /// Via cost in millimetres of straight trace: negotiation's cost, and optionally a second cost
+    /// for single-net finish, rip-up, and rescue passes.
+    pub via_cost: Option<(f64, Option<f64>)>,
     pub nudge: bool,
     /// Nudge only by blame's moves, without trying small steps in every direction.
     pub nudge_guided: bool,
@@ -137,6 +144,47 @@ pub struct Args {
     pub blame: bool,
 }
 
+impl Args {
+    /// Default step-cost via prices when `--via-cost` is unset: high (`500 / 600 / 320`) when all
+    /// signal layers are free for routing, and gentle (`200 / 80 / 80`) when dedicated inner
+    /// planes (`board.planes != 0`) leave only the outer component layers peppered with plane
+    /// stitching vias, letting `reduce_vias_all` collapse unneeded hops afterwards instead of
+    /// forcing routes to wrap around dense SMD perimeters during routing.
+    fn neg_via_cost(&self, cell: Nm, has_planes: bool) -> u32 {
+        match self.via_cost {
+            Some((neg, _)) => grid::via_cost_mm(cell, neg),
+            None if has_planes => 200,
+            None => grid::NegotiationOptions::default().via_cost,
+        }
+    }
+
+    fn open_via_cost(&self, cell: Nm, has_planes: bool) -> u32 {
+        match self.via_cost {
+            Some((_, Some(open))) => grid::via_cost_mm(cell, open),
+            Some((neg, None)) => grid::via_cost_mm(cell, neg * 1.2),
+            None if has_planes => 80,
+            None => grid::Options::default().via_cost,
+        }
+    }
+
+    fn rip_via_cost(&self, cell: Nm, has_planes: bool) -> u32 {
+        match self.via_cost {
+            Some((_, Some(open))) => grid::via_cost_mm(cell, open),
+            Some((neg, None)) => grid::via_cost_mm(cell, neg * 0.8),
+            None if has_planes => 80,
+            None => grid::RipOptions::default().via_cost,
+        }
+    }
+
+    fn rescue_via_cost(&self, cell: Nm) -> u32 {
+        match self.via_cost {
+            Some((_, Some(open))) => grid::via_cost_mm(cell, open),
+            Some((neg, None)) => grid::via_cost_mm(cell, neg.min(0.4)),
+            None => grid::ShoveOptions::default().via_cost,
+        }
+    }
+}
+
 pub fn parse(args: &[String]) -> Result<Args, String> {
     if args.first().map(String::as_str) != Some("route") {
         return Err(USAGE.to_string());
@@ -162,6 +210,9 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         negotiate: false,
         rip_up: false,
         tighten: false,
+        no_reduce_vias: false,
+        no_directional: false,
+        via_cost: None,
         nudge: false,
         nudge_guided: false,
         lock: Vec::new(),
@@ -277,6 +328,23 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             "--negotiate" => a.negotiate = true,
             "--rip-up" => a.rip_up = true,
             "--tighten" => a.tighten = true,
+            "--no-reduce-vias" => a.no_reduce_vias = true,
+            "--no-directional" => a.no_directional = true,
+            "--via-cost" => {
+                let v = value()?;
+                let nums: Vec<f64> = v
+                    .split(',')
+                    .map(|x| x.trim().parse::<f64>().map_err(|e| format!("--via-cost {v}: {e}")))
+                    .collect::<Result<_, _>>()?;
+                if nums.iter().any(|&x| !x.is_finite() || !(0.05..=50.0).contains(&x)) {
+                    return Err(format!("--via-cost {v}: values must lie in 0.05 to 50 mm"));
+                }
+                a.via_cost = match nums[..] {
+                    [neg] => Some((neg, None)),
+                    [neg, open] => Some((neg, Some(open))),
+                    _ => return Err(format!("--via-cost {v}: give MM or NEG_MM,OPEN_MM")),
+                };
+            }
             "--gpu" => a.gpu = true,
             "--pours-block" => a.pours_block = true,
             "--no-route" => a.no_route = true,
@@ -871,11 +939,13 @@ fn shove_pass(
     for pass in 0..a.shove_passes.max(1) {
         let before = open_now(board);
         let fine: HashSet<usize> = morph::fine_pitch(board, 500_000).into_iter().collect();
+        let shove_cell = a.cell.unwrap_or(defaults.cell);
         let s = grid::shove_escape(
             board,
             solver,
             &grid::ShoveOptions {
-                cell: a.cell.unwrap_or(defaults.cell),
+                cell: shove_cell,
+                via_cost: a.rescue_via_cost(shove_cell),
                 // Ripping and renegotiating round a path frees any connection, not only an escape.
                 parts: (a.shove_plough != Some(grid::Plough::Region)).then_some(fine),
                 plough: a.shove_plough.unwrap_or(defaults.plough),
@@ -1259,16 +1329,20 @@ pub fn run_with_solver(
                 let prio_nets: HashSet<u32> = fail_counts.keys().copied().collect();
                 let weights: HashMap<u32, f64> = fail_counts.iter().map(|(&net, &k)| (net, 0.5_f64.powi(k.saturating_sub(1) as i32))).collect();
                 say("first", format!("negotiating {} priority nets among themselves first", prio_nets.len()));
+                let first_neg_cell = a.cell.unwrap_or(grid::NegotiationOptions::default().cell);
+                let has_planes = board.planes != 0;
                 let n = grid::route_negotiated(
                     &mut board,
                     solver.as_mut(),
                     &grid::NegotiationOptions {
                         max_seconds: left_in_round().map(|s| s * 0.25),
                         threads,
-                        cell: a.cell.unwrap_or(grid::NegotiationOptions::default().cell),
+                        cell: first_neg_cell,
+                        via_cost: a.neg_via_cost(first_neg_cell, has_planes),
                         nets: Some(prio_nets.clone()),
                         net_weight: weights,
                         pours_block: a.pours_block,
+                        directional: !a.no_directional,
                         seed: a.seed,
                         cancel: Some(cancel.clone()),
                         log: log.clone(),
@@ -1282,15 +1356,18 @@ pub fn run_with_solver(
                     },
                 );
                 laid.extend(n.laid);
+                let first_open_cell = a.cell.unwrap_or(grid::Options::default().cell);
                 let finish = grid::route_open(
                     &mut board,
                     solver.as_mut(),
                     &grid::Options {
-                        cell: a.cell.unwrap_or(grid::Options::default().cell),
+                        cell: first_open_cell,
+                        via_cost: a.open_via_cost(first_open_cell, has_planes),
                         seed: a.seed,
                         max_seconds: left_in_round().map(|s| s * 0.15),
                         nets: Some(prio_nets.clone()),
                         pours_block: a.pours_block,
+                        directional: !a.no_directional,
                         cancel: Some(cancel.clone()),
                         log: log.clone(),
                         ..Default::default()
@@ -1312,17 +1389,21 @@ pub fn run_with_solver(
                 let total_prio: usize = tiers.iter().map(BTreeSet::len).sum();
                 say("first", format!("routing {} priority nets one at a time before negotiation", total_prio));
                 let (mut routed, mut failed, mut vias) = (0, 0, 0);
+                let prio_cell = a.cell.unwrap_or(grid::Options::default().cell);
+                let has_planes = board.planes != 0;
                 for tier in tiers {
                     let net_set: HashSet<u32> = tier.into_iter().collect();
                     let s = grid::route_open(
                         &mut board,
                         solver.as_mut(),
                         &grid::Options {
-                            cell: a.cell.unwrap_or(grid::Options::default().cell),
+                            cell: prio_cell,
+                            via_cost: a.open_via_cost(prio_cell, has_planes),
                             seed: a.seed,
                             max_seconds: left_in_round().map(|s| s * 0.25),
                             nets: Some(net_set),
                             pours_block: a.pours_block,
+                            directional: !a.no_directional,
                             cancel: Some(cancel.clone()),
                             log: log.clone(),
                             ..Default::default()
@@ -1337,21 +1418,25 @@ pub fn run_with_solver(
                 eprintln!("first: {total_prio} nets, {routed} routed, {failed} failed, {vias} vias, {:.1} s", started.elapsed().as_secs_f64());
             }
         }
+        let has_planes = board.planes != 0;
         if a.negotiate {
             // Nets that failed more often route at a lower price, and so first.
             let net_weight: HashMap<u32, f64> = match a.first_weight {
                 Some(w) => fail_counts.iter().map(|(&net, &k)| (net, w.powi(k as i32))).collect(),
                 None => HashMap::new(),
             };
+            let neg_cell = a.cell.unwrap_or(grid::NegotiationOptions::default().cell);
             let n = grid::route_negotiated(
                 &mut board,
                 solver.as_mut(),
                 &grid::NegotiationOptions {
                     max_seconds: if plain { a.timeout.map(|s| s / 2.0) } else { left_in_round().map(|s| s * if a.restart > 0 { 0.6 } else { 0.5 }) },
                     threads,
-                    cell: a.cell.unwrap_or(grid::NegotiationOptions::default().cell),
+                    cell: neg_cell,
+                    via_cost: a.neg_via_cost(neg_cell, has_planes),
                     net_weight,
                     pours_block: a.pours_block,
+                    directional: !a.no_directional,
                     seed: a.seed,
                     cancel: Some(cancel.clone()),
                     log: log.clone(),
@@ -1377,11 +1462,14 @@ pub fn run_with_solver(
             );
             laid.extend(n.laid);
         }
+        let open_cell = a.cell.unwrap_or(grid::Options::default().cell);
         let options = grid::Options {
-            cell: a.cell.unwrap_or(grid::Options::default().cell),
+            cell: open_cell,
+            via_cost: a.open_via_cost(open_cell, has_planes),
             seed: a.seed,
             max_seconds: left_in_round(),
             pours_block: a.pours_block,
+            directional: !a.no_directional,
             cancel: Some(cancel.clone()),
             log: log.clone(),
             ..Default::default()
@@ -1394,11 +1482,13 @@ pub fn run_with_solver(
             removed.extend(spans);
         }
         if a.rip_up {
+            let rip_cell = a.cell.unwrap_or(grid::RipOptions::default().cell);
             let r = grid::rip_up(
                 &mut board,
                 solver.as_mut(),
                 &grid::RipOptions {
-                    cell: a.cell.unwrap_or(grid::RipOptions::default().cell),
+                    cell: rip_cell,
+                    via_cost: a.rip_via_cost(rip_cell, has_planes),
                     max_seconds: left_in_round(),
                     pours_block: a.pours_block,
                     cancel: Some(cancel.clone()),
@@ -1420,11 +1510,13 @@ pub fn run_with_solver(
             );
         }
         if a.chase {
+            let chase_cell = a.cell.unwrap_or(grid::ChaseOptions::default().cell);
             let c = grid::chase(
                 &mut board,
                 solver.as_mut(),
                 &grid::ChaseOptions {
-                    cell: a.cell.unwrap_or(grid::ChaseOptions::default().cell),
+                    cell: chase_cell,
+                    via_cost: a.rescue_via_cost(chase_cell),
                     rip_cost: a.chase_costs.map_or(grid::ChaseOptions::default().rip_cost, |c| c.0),
                     chain_cost: a.chase_costs.map_or(grid::ChaseOptions::default().chain_cost, |c| c.1),
                     links: a.chase_costs.and_then(|c| c.2).unwrap_or(grid::ChaseOptions::default().links),
@@ -1509,11 +1601,13 @@ pub fn run_with_solver(
             let again = grid::route_open(&mut board, solver.as_mut(), &reroute, &mut watch);
             laid.extend(again.laid.iter().copied());
             if a.rip_up {
+                let esc_rip_cell = a.cell.unwrap_or(grid::RipOptions::default().cell);
                 grid::rip_up(
                     &mut board,
                     solver.as_mut(),
                     &grid::RipOptions {
-                        cell: a.cell.unwrap_or(grid::RipOptions::default().cell),
+                        cell: esc_rip_cell,
+                        via_cost: a.rip_via_cost(esc_rip_cell, has_planes),
                         max_seconds: left_in_round(),
                         pours_block: a.pours_block,
                         cancel: Some(cancel.clone()),
@@ -1665,14 +1759,18 @@ pub fn run_with_solver(
                 say("topo-trapped", format!("routing {} trapped connections as rubber bands with rip-up", topo_opts.only.as_ref().map_or(0, HashSet::len)));
                 let t = topo::route_topological_with_soft(&mut board, &topo_opts, &mut laid, &mut watch);
                 if t.routed > 0 || t.rip_ups > 0 {
+                    let after_cell = a.cell.unwrap_or(grid::Options::default().cell);
+                    let has_planes = board.planes != 0;
                     let after_topo = grid::route_open(
                         &mut board,
                         solver.as_mut(),
                         &grid::Options {
-                            cell: a.cell.unwrap_or(grid::Options::default().cell),
+                            cell: after_cell,
+                            via_cost: a.open_via_cost(after_cell, has_planes),
                             seed: a.seed,
                             max_seconds: left_total(),
                             pours_block: a.pours_block,
+                            directional: !a.no_directional,
                             cancel: Some(cancel.clone()),
                             log: log.clone(),
                             ..Default::default()
@@ -1710,11 +1808,13 @@ pub fn run_with_solver(
     }
     if a.nudge {
         let locked = board.footprints.iter().enumerate().filter(|(_, f)| f.locked).map(|(i, _)| i).collect();
+        let nudge_cell = a.cell.unwrap_or(grid::NudgeOptions::default().cell);
         let n = grid::nudge(
             &mut board,
             solver.as_mut(),
             &grid::NudgeOptions {
-                cell: a.cell.unwrap_or(grid::NudgeOptions::default().cell),
+                cell: nudge_cell,
+                via_cost: a.rescue_via_cost(nudge_cell),
                 blind: !a.nudge_guided,
                 // A plough to come after keeps its share of the time.
                 max_seconds: a.timeout.map(|s| (s - started.elapsed().as_secs_f64() - if a.shove && a.shove_late { a.shove_seconds } else { 0.0 }).max(0.0)),
@@ -1735,9 +1835,49 @@ pub fn run_with_solver(
         let spans = shove_pass(a, &mut board, solver.as_mut(), &mut laid, started, a.timeout, &cancel, &log, &step);
         removed.extend(spans);
     }
+    let mut tightened = None;
     if a.tighten {
         say("tightening", "straightening the routed copper".to_string());
-        let c = grid::pull_tight(&mut board, &mut laid);
+        tightened = Some(grid::pull_tight(&mut board, &mut laid));
+    }
+    if !a.no_reduce_vias && (!laid.is_empty() || !fanout_laid.is_empty()) {
+        say("vias", "dropping unnecessary vias".to_string());
+        let v = grid::reduce_vias_all(
+            &mut board,
+            &grid::ViaOptions {
+                cell: a.cell.unwrap_or(grid::ViaOptions::default().cell),
+                pours_block: a.pours_block,
+                cancel: Some(cancel.clone()),
+                log: log.clone(),
+                ..Default::default()
+            },
+            &mut laid,
+            &mut fanout_laid,
+            &mut watch,
+        );
+        removed.extend(v.removed_spans);
+        if v.dropped > 0 {
+            say("vias", format!("{} of {} vias dropped ({} left)", v.dropped, v.vias_before, v.vias_after));
+            eprintln!(
+                "vias: dropped {} ({} -> {}, {} of {} kept), {:.1} s",
+                v.dropped,
+                v.vias_before,
+                v.vias_after,
+                v.kept,
+                v.tried,
+                started.elapsed().as_secs_f64()
+            );
+            step(&board);
+            if a.tighten {
+                let c2 = grid::pull_tight(&mut board, &mut laid);
+                if let Some(c1) = &mut tightened {
+                    c1.segments_after = c2.segments_after;
+                    c1.length_after = c2.length_after;
+                }
+            }
+        }
+    }
+    if let Some(c) = tightened {
         say("tightening", format!("{} segments became {}, {:.0} mm became {:.0} mm", c.segments_before, c.segments_after, c.length_before, c.length_after));
         eprintln!(
             "pulled tight: {} -> {} segments, {:.0} -> {:.0} mm, {:.1} s",
@@ -1897,5 +2037,29 @@ mod tests {
 
         assert!(parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--prefanout-mode", "bogus"])).is_err());
         assert!(parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--prefanout-ring", "9.0"])).is_err());
+    }
+
+    #[test]
+    fn via_flags_parse_and_scale_with_cell_size() {
+        let d = parse(&words("route in.kicad_pcb -o out.kicad_pcb")).unwrap();
+        assert!(!d.no_reduce_vias && !d.no_directional && d.via_cost.is_none());
+        assert_eq!(d.neg_via_cost(50_000, false), 500);
+        assert_eq!(d.neg_via_cost(35_000, false), 500);
+        assert_eq!(d.open_via_cost(50_000, false), 600);
+        assert_eq!(d.rip_via_cost(50_000, false), 320);
+        assert_eq!(d.neg_via_cost(35_000, true), 200);
+        assert_eq!(d.open_via_cost(35_000, true), 80);
+        assert_eq!(d.rip_via_cost(35_000, true), 80);
+        assert_eq!(d.rescue_via_cost(35_000), 80);
+
+        let leg = parse(&words("route in.kicad_pcb -o out.kicad_pcb --no-reduce-vias --no-directional --via-cost 0.7,0.28")).unwrap();
+        assert!(leg.no_reduce_vias && leg.no_directional);
+        assert_eq!(leg.neg_via_cost(35_000, false), 200);
+        assert_eq!(leg.open_via_cost(35_000, false), 80);
+        assert_eq!(leg.rip_via_cost(35_000, false), 80);
+        assert_eq!(leg.rescue_via_cost(35_000), 80);
+
+        assert!(parse(&words("route in.kicad_pcb -o out.kicad_pcb --via-cost 0.0")).is_err());
+        assert!(parse(&words("route in.kicad_pcb -o out.kicad_pcb --via-cost 1,2,3")).is_err());
     }
 }
