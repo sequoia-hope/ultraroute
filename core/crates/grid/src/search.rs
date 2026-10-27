@@ -516,7 +516,7 @@ mod tests {
             blocked: (0..nodes).map(|_| next() % 4 == 0).collect(),
             via_blocked: (0..nx * ny).map(|_| next() % 3 == 0).collect(),
             penalty: (0..nodes).map(|_| (next() % 5) as u32).collect(),
-            via_penalty: Vec::new(),
+            via_penalty: (0..nx * ny).map(|_| (next() % 7) as u32).collect(),
             pours_block: false,
         }
     }
