@@ -26,7 +26,7 @@ use serde_json::{json, Value};
 
 pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--diff-pairs] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--gpu] \
 [--timeout SECONDS] [--cell MM] [--first NET,...] [--first-negotiate] [--first-weight W] [--restart N] [--topo-first REF,...|auto] [--topo-trapped] [--topo-trapped-rip] [--topo-sample MM] \
-[--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough warp|linear|rip|gentle|dipole|region] [--shove-steps N] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-late] [--shove-seconds S] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
+[--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--push-decay D] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough warp|linear|rip|gentle|dipole|region] [--shove-steps N] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-late] [--shove-seconds S] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
 [--live PATH|-] [--live-fps N] [--live-step MS] [--blame]";
 
 pub struct Args {
@@ -92,6 +92,8 @@ pub struct Args {
     /// optional flow along a direction.
     pub push: Option<[f64; 6]>,
     pub push_steps: usize,
+    /// How fast the push field falls off beyond its radius (2 by default: as 1/d far out).
+    pub push_decay: f64,
     /// Parts whose escapes are combed into lanes after routing, or "auto" for fine-pitch ones.
     pub escape: Vec<String>,
     pub escape_zone: Option<f64>,
@@ -184,6 +186,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         topo_sample: None,
         push: None,
         push_steps: 20,
+        push_decay: 2.0,
         escape: Vec::new(),
         escape_zone: None,
         clear_lanes: false,
@@ -365,6 +368,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             }
             "--escape-zone" => a.escape_zone = Some(value()?.parse().map_err(|e| format!("--escape-zone: {e}"))?),
             "--push-steps" => a.push_steps = value()?.parse().map_err(|e| format!("--push-steps: {e}"))?,
+            "--push-decay" => a.push_decay = value()?.parse().map_err(|e| format!("--push-decay: {e}"))?,
             "--blame" => a.blame = true,
             "--via-avoid" => {
                 let v = value()?;
@@ -1459,7 +1463,7 @@ pub fn run_with_solver(
                 outward: outward * 1e6,
                 vector: (dx * 1e6, -dy * 1e6),
                 radius: radius * 1e6,
-                decay: 2.0,
+                decay: a.push_decay,
             };
             say("pushing", format!("flowing everything free to move away from ({x}, {y}) mm"));
             let locked = board.footprints.iter().enumerate().filter(|(_, f)| f.locked).map(|(i, _)| i).collect();
