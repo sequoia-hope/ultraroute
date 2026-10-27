@@ -19,7 +19,7 @@ use board::{anchors, connectivity, connectivity_without_pours, nm, Airline, Boar
 
 use crate::grid::{ObstacleMap, Profile, RouteGrid};
 use crate::report::{tell, Log};
-use crate::route::{lay, pieces, terminals, FieldSolver, PricedJob, RoundPrices, Terminal};
+use crate::route::{cluster_pads, ends_with_pads, lay, pieces, terminals, FieldSolver, PricedJob, RoundPrices, Terminal};
 use crate::search::{route_astar, GridPath};
 
 /// How often the trial routes are shown while a round runs one connection after another.
@@ -73,6 +73,9 @@ pub struct NegotiationOptions {
     /// Span a net of several clusters by pairs that can meet before pairs that cannot, so that a
     /// pin walled into a pocket in the middle does not keep the open pins either side apart.
     pub reachable_tree: bool,
+    /// A connection may also end at the pads of its ends' clusters nearest them, as the region
+    /// plough has it (see [`crate::route::ends_with_pads`]).
+    pub pad_ends: bool,
     /// Reorders the connections, for a search over many runs; 0 keeps the board's order.
     pub seed: u64,
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
@@ -98,6 +101,7 @@ impl Default for NegotiationOptions {
             repasses: 2,
             rip_blocked: true,
             reachable_tree: true,
+            pad_ends: false,
             seed: 0,
             cancel: None,
             log: None,
@@ -617,13 +621,26 @@ fn run_pass(
     let mut via_history = if options.via_zones { vec![0u32; cells] } else { Vec::new() };
     let mut present = options.present;
 
+    let near = options.pad_ends.then(|| {
+        let conn = joined(board, options.pours_block);
+        let pads = cluster_pads(board, &conn);
+        (conn, pads)
+    });
     let ends: Vec<(Vec<Terminal>, Vec<Terminal>)> = connections
         .iter()
         .map(|c| {
             maps[&c.class].view_into(c.net, grid_buf);
-            (terminals(board, grid_buf, c.from), terminals(board, grid_buf, c.to))
+            let mut end = |id: ItemId| match &near {
+                Some((conn, pads)) => {
+                    let pads = conn.cluster.get(&id).and_then(|k| pads.get(k)).map_or(&[][..], Vec::as_slice);
+                    ends_with_pads(board, grid_buf, id, pads, &terminals)
+                }
+                None => terminals(board, grid_buf, id),
+            };
+            (end(c.from), end(c.to))
         })
         .collect();
+    drop(near);
     let cells_of = |t: &[Terminal]| t.iter().map(|t| t.0).collect::<Vec<usize>>();
     // A path must start and end on its own pads, however near a neighbour's route runs: those
     // cells are the footprint's doing and not counted as collisions.
@@ -1070,7 +1087,7 @@ type Anchor = (Point, ItemId);
 /// airlines with it, and the clusters either side, which could meet past it, stay apart. Where
 /// an airline of such a net has no way on the grid, its tree is spanned again by pairs that have
 /// one first, nearest first, the pocketed clusters joined last: as many airlines as before.
-fn reachable_airlines(
+pub(crate) fn reachable_airlines(
     board: &mut Board,
     conn: &Connectivity,
     mut open: Vec<Airline>,

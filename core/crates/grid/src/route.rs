@@ -162,13 +162,21 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
         pours_block: options.pours_block,
     };
     let mut given_up: BTreeSet<(ItemId, ItemId)> = BTreeSet::new();
+    // Once nothing more routes, a net of several clusters is spanned again by pairs that can meet
+    // first: an airline into a pin walled in a pocket hides the way between the pins either side.
+    let mut respan = false;
     loop {
         // Unless pours are kept as planes, they will be refilled around what is routed, and may
         // no longer join what they join now; so every connection is made in tracks.
-        let mut open = if options.pours_block { connectivity(board) } else { connectivity_without_pours(board) }.airlines;
+        let conn = if options.pours_block { connectivity(board) } else { connectivity_without_pours(board) };
+        let mut open = conn.airlines.clone();
         if let Some(only) = &options.nets {
             open.retain(|a| only.contains(&a.net));
         }
+        if respan {
+            open = crate::negotiate::reachable_airlines(board, &conn, open, &maps, &mut grid, options.via_cost);
+        }
+        drop(conn);
         open.sort_by(|a, b| a.from.distance(a.to).total_cmp(&b.from.distance(b.to)));
         if options.seed != 0 {
             // Shortest first still, roughly: shuffled within runs of eight.
@@ -178,7 +186,11 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
         }
         open.retain(|a| !given_up.contains(&(a.from_item, a.to_item)));
         if open.is_empty() {
-            break;
+            if respan || given_up.is_empty() {
+                break;
+            }
+            respan = true;
+            continue;
         }
         let routed_before = stats.routed;
         for airline in open {
@@ -243,7 +255,10 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
             }
         }
         if stats.routed == routed_before {
-            break;
+            if respan || given_up.is_empty() {
+                break;
+            }
+            respan = true;
         }
     }
     stats
@@ -322,6 +337,50 @@ pub(crate) fn local_cluster(board: &Board, root: ItemId) -> Vec<ItemId> {
         out.push(root);
     }
     out
+}
+
+/// How many of its cluster's pads, nearest first, a connection may also end at.
+const NEAR_PADS: usize = 4;
+
+/// The pads of each of `conn`'s clusters.
+pub(crate) fn cluster_pads(board: &Board, conn: &board::Connectivity) -> HashMap<usize, Vec<ItemId>> {
+    let mut pads: HashMap<usize, Vec<ItemId>> = HashMap::new();
+    for (id, _) in board.items().filter(|(_, it)| matches!(it.kind, Kind::Pad { .. })) {
+        if let Some(&c) = conn.cluster.get(&id) {
+            pads.entry(c).or_default().push(id);
+        }
+    }
+    pads
+}
+
+/// `ends` of `root`, and of the pads of its cluster nearest it, from `pads`. A connection the
+/// plough cut ends at the cut, in a channel the cut may have lost; it can as well join its net
+/// at a pad, and the stub at the cut is pruned after. Where two give the same cell, the one that
+/// needs no leg is kept.
+pub(crate) fn ends_with_pads(
+    board: &mut Board,
+    grid: &RouteGrid,
+    root: ItemId,
+    pads: &[ItemId],
+    ends: &dyn Fn(&mut Board, &RouteGrid, ItemId) -> Vec<Terminal>,
+) -> Vec<Terminal> {
+    let centre = |board: &Board, id: ItemId| {
+        board.bbox(id).map(|b| Point::new((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2))
+    };
+    let Some(origin) = centre(board, root) else { return ends(board, grid, root) };
+    let mut near: Vec<(f64, ItemId)> =
+        pads.iter().filter(|&&id| id != root).filter_map(|&id| Some((centre(board, id)?.distance(origin), id))).collect();
+    near.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut by_cell: BTreeMap<usize, Option<(Point, Nm)>> = BTreeMap::new();
+    for id in std::iter::once(root).chain(near.into_iter().take(NEAR_PADS).map(|(_, id)| id)) {
+        for (cell, leg) in ends(board, grid, id) {
+            let at = by_cell.entry(cell).or_insert(leg);
+            if leg.is_none() {
+                *at = None;
+            }
+        }
+    }
+    by_cell.into_iter().collect()
 }
 
 /// The free cells a path to or from the item may start at, for tools that look at the grid.
@@ -597,4 +656,54 @@ pub fn edits(board: &Board, laid: &[ItemId]) -> (Vec<kicad_pcb::NewTrack>, Vec<k
         }
     }
     (tracks, vias)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn route_open_joins_the_pins_either_side_of_a_walled_pin() {
+        let (pcb, copper) = kicad_pcb::parse_board(
+            "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal)) (net 0 \"\") (net 1 \"A\")
+             (gr_rect (start 0 0) (end 20 20) (layer \"Edge.Cuts\") (width 0.1)))",
+        )
+        .unwrap();
+        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+        let mm = |v: f64| (v * 1e6) as Nm;
+        let pad = |x, y| Item {
+            kind: Kind::Pad { footprint: 0, number: "1".into(), plated: false },
+            net: 1,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(mm(x), mm(y)), b: Point::new(mm(x), mm(y)), r: mm(0.3) },
+            hole: None,
+            locked: true,
+            span: None,
+        };
+        let left = board.insert(pad(2.0, 10.0));
+        board.insert(pad(10.0, 10.0));
+        let right = board.insert(pad(18.0, 10.0));
+        // The middle pin is boxed in by locked copper: both airlines of the closest-pairs tree run
+        // into it, while left and right can meet round the box.
+        for (a, b) in [((8.5, 8.5), (11.5, 8.5)), ((11.5, 8.5), (11.5, 11.5)), ((11.5, 11.5), (8.5, 11.5)), ((8.5, 11.5), (8.5, 8.5))] {
+            board.insert(Item {
+                kind: Kind::Track,
+                net: 0,
+                layers: 1,
+                shape: Shape::Capsule { a: Point::new(mm(a.0), mm(a.1)), b: Point::new(mm(b.0), mm(b.1)), r: mm(0.2) },
+                hole: None,
+                locked: true,
+                span: None,
+            });
+        }
+        assert_eq!(connectivity_without_pours(&board).airlines.len(), 2);
+        let stats = route_open(&mut board, &mut CpuSolver, &Options::default(), &mut |_| {});
+        assert_eq!(stats.routed, 1);
+        let conn = connectivity_without_pours(&board);
+        assert_eq!(conn.airlines.len(), 1, "only the walled pin is left open");
+        assert_eq!(conn.cluster[&left], conn.cluster[&right]);
+        for id in stats.laid {
+            assert!(board::check_item(&board, id).is_empty());
+        }
+    }
 }

@@ -7,11 +7,11 @@
 
 use std::collections::{HashMap, HashSet};
 
-use board::{check_item, connectivity, connectivity_without_pours, Airline, Board, Item, ItemId, Point};
+use board::{check_item, connectivity, connectivity_without_pours, Airline, Board, Connectivity, Item, ItemId, Point};
 
 use crate::grid::{ObstacleMap, Profile};
 use crate::report::{tell, Focus, Log};
-use crate::route::{pieces, route_open, terminals, FieldSolver, Options};
+use crate::route::{cluster_pads, ends_with_pads, pieces, route_open, terminals, FieldSolver, Options};
 
 #[derive(Debug, Clone)]
 pub struct RipOptions {
@@ -23,6 +23,12 @@ pub struct RipOptions {
     /// Time allowed for rerouting what one attempt ripped.
     pub reroute_seconds: f64,
     pub pours_block: bool,
+    /// The repair after a region plough: a connection may end at a pad of its cluster near the
+    /// cut it ends at; on a board with planes, plane nets' copper is cheap to rip and joined to
+    /// its planes again after, and only signal connections are tried and counted first; when
+    /// rerouting one after another leaves the ripped nets no better, they are negotiated
+    /// together, the connection's net with them; a change kept prunes closed nets' stubs.
+    pub region_repair: bool,
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub log: Option<Log>,
 }
@@ -36,6 +42,7 @@ impl Default for RipOptions {
             max_seconds: None,
             reroute_seconds: 10.0,
             pours_block: false,
+            region_repair: false,
             cancel: None,
             log: None,
         }
@@ -55,9 +62,12 @@ pub struct RipStats {
     pub no_better: usize,
 }
 
-fn open_count(board: &Board, pours_block: bool) -> usize {
-    if pours_block { connectivity(board) } else { connectivity_without_pours(board) }.airlines.len()
+fn joined(board: &Board, pours_block: bool) -> Connectivity {
+    if pours_block { connectivity(board) } else { connectivity_without_pours(board) }
 }
+
+/// At most so many nets ripped for one connection are negotiated over together.
+const NEGOTIATED: usize = 8;
 
 /// One connection's rip-up attempt, shown to [`rip_up_watch`] before an unsuccessful try reverts.
 pub struct RipAttempt<'a> {
@@ -114,9 +124,24 @@ pub fn rip_up_watch(
         via_penalty: Vec::new(),
         pours_block: options.pours_block,
     };
+    // Plane nets' connections are the planes' to make (`join_planes`), not rip-up's.
+    let plane_nets: HashSet<u32> = if options.region_repair && !options.pours_block && board.planes != 0 {
+        board.items().filter(|(_, it)| board.is_plane(it) && it.net != 0).map(|(_, it)| it.net).collect()
+    } else {
+        HashSet::new()
+    };
+    // Signal connections open, then all: what an attempt must leave fewer of.
+    let score = |board: &Board| {
+        let open = joined(board, options.pours_block).airlines;
+        (open.iter().filter(|a| !plane_nets.contains(&a.net)).count(), open.len())
+    };
+    let mut plane_maps: HashMap<String, ObstacleMap> = HashMap::new();
+    // The clusters and their pads, for ends at pads; made again after a kept attempt.
+    let mut near: Option<(Connectivity, HashMap<usize, Vec<ItemId>>)> = None;
     let mut tried: HashSet<(ItemId, ItemId)> = HashSet::new();
     loop {
-        let mut open = if options.pours_block { connectivity(board) } else { connectivity_without_pours(board) }.airlines;
+        let mut open = joined(board, options.pours_block).airlines;
+        open.retain(|a| !plane_nets.contains(&a.net));
         open.sort_by(|a, b| a.from.distance(a.to).total_cmp(&b.from.distance(b.to)));
         open.retain(|a| !tried.contains(&(a.from_item, a.to_item)));
         if open.is_empty() || out_of_time() {
@@ -132,7 +157,8 @@ pub fn rip_up_watch(
                 continue;
             }
             stats.attempts += 1;
-            let before = open_count(board, options.pours_block);
+            let score_before = score(board);
+            let before = score_before.1;
             let net_name = board.net_name(airline.net).to_string();
             tell(
                 &options.log,
@@ -147,14 +173,44 @@ pub fn rip_up_watch(
                 ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| soft_set.contains(&id))
             });
             hard_map.view_into(airline.net, &mut grid);
+            let plane = |id: ItemId| board.item(id).is_some_and(|it| plane_nets.contains(&it.net));
             let soft_map = soft_maps.entry(profile.class.clone()).or_insert_with(|| {
-                ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| !soft_set.contains(&id))
+                ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| !soft_set.contains(&id) || plane(id))
             });
+            // A plane net's soft copper is mostly vias joining pads to the planes, which
+            // `join_planes` puts back elsewhere: cheap to rip.
+            let plane_map = (!plane_nets.is_empty()).then(|| {
+                &*plane_maps.entry(profile.class.clone()).or_insert_with(|| {
+                    ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| !soft_set.contains(&id) || !plane(id))
+                })
+            });
+            let plane_cost = (options.rip_cost / 40).max(5);
+            let price = |soft: bool, plane: bool| if soft { options.rip_cost } else if plane { plane_cost } else { 0 };
             grid.penalty.clear();
             let nodes = grid.blocked.len();
-            grid.penalty.extend((0..nodes).map(|idx| if soft_map.blocked_at(airline.net, idx) { options.rip_cost } else { 0 }));
-            let sources = terminals(board, &grid, airline.from_item);
-            let targets = terminals(board, &grid, airline.to_item);
+            let net = airline.net;
+            grid.penalty.extend((0..nodes).map(|n| price(soft_map.blocked_at(net, n), plane_map.is_some_and(|m| m.blocked_at(net, n)))));
+            if options.region_repair {
+                // A via is priced where it would rip, as a track is.
+                grid.via_penalty.resize(grid.cell_count(), 0);
+                for (c, p) in grid.via_penalty.iter_mut().enumerate() {
+                    *p += price(soft_map.via_blocked_at(net, c), plane_map.is_some_and(|m| m.via_blocked_at(net, c)));
+                }
+            }
+            let (sources, targets) = if options.region_repair {
+                let (conn, pads) = near.get_or_insert_with(|| {
+                    let conn = joined(board, options.pours_block);
+                    let pads = cluster_pads(board, &conn);
+                    (conn, pads)
+                });
+                let mut end = |id: ItemId| {
+                    let pads = conn.cluster.get(&id).and_then(|k| pads.get(k)).map_or(&[][..], Vec::as_slice);
+                    ends_with_pads(board, &grid, id, pads, &terminals)
+                };
+                (end(airline.from_item), end(airline.to_item))
+            } else {
+                (terminals(board, &grid, airline.from_item), terminals(board, &grid, airline.to_item))
+            };
             if sources.is_empty() || targets.is_empty() {
                 continue;
             }
@@ -218,15 +274,61 @@ pub fn rip_up_watch(
                 log: options.log.clone(),
             };
             tell(&options.log, "ripping up", || format!("{net_name}: ripped {ripped} pieces, rerouting them"), None);
-            let again = route_open(board, solver, &reroute, &mut |_| {});
+            let mut again = route_open(board, solver, &reroute, &mut |_| {}).laid;
+            if !plane_nets.is_empty() {
+                again.extend(crate::planes::join_planes(board, &None).laid);
+            }
+            let mut score_after = score(board);
+            // One after another, the first rerouted may take the only lane of the next. The
+            // ripped nets and this connection's are negotiated together instead, at one weight.
+            let ripped_nets: HashSet<u32> = ripped_items.iter().map(|it| it.net).filter(|n| *n != 0 && !plane_nets.contains(n)).collect();
+            if options.region_repair && score_after >= score_before && (1..=NEGOTIATED).contains(&ripped_nets.len()) && !out_of_time() {
+                for &id in laid.iter().chain(&again) {
+                    board.remove(id);
+                }
+                laid.clear();
+                again.clear();
+                soft.retain(|id| board.item(*id).is_some());
+                let mut nets = ripped_nets;
+                nets.insert(airline.net);
+                let negotiated = crate::negotiate::route_negotiated(
+                    board,
+                    solver,
+                    &crate::negotiate::NegotiationOptions {
+                        cell: options.cell,
+                        via_cost: options.via_cost,
+                        max_seconds: Some(options.reroute_seconds),
+                        nets: Some(nets),
+                        pours_block: options.pours_block,
+                        rip_blocked: false,
+                        pad_ends: true,
+                        cancel: options.cancel.clone(),
+                        ..Default::default()
+                    },
+                    &mut |_| {},
+                    &mut |_, _| {},
+                );
+                again.extend(negotiated.laid);
+                again.extend(route_open(board, solver, &reroute, &mut |_| {}).laid);
+                if !plane_nets.is_empty() {
+                    again.extend(crate::planes::join_planes(board, &None).laid);
+                }
+                score_after = score(board);
+            }
             let mut all_laid = laid;
-            all_laid.extend(again.laid.iter().copied());
-            soft.extend(again.laid);
-            let after = open_count(board, options.pours_block);
-            if after < before {
+            all_laid.extend(again.iter().copied());
+            soft.extend(again);
+            let after = score_after.1;
+            if score_after < score_before {
+                if options.region_repair {
+                    let open: HashSet<u32> = joined(board, options.pours_block).airlines.iter().map(|a| a.net).collect();
+                    crate::cleanup::prune_dangling_of(board, soft, &|it| !it.locked && !open.contains(&it.net), &mut |_, _| {});
+                    near = None;
+                }
                 stats.kept += 1;
                 stats.ripped += ripped;
                 soft_maps.clear();
+                plane_maps.clear();
                 tell(&options.log, "ripping up", || format!("{net_name}: kept, {after} connections open"), None);
                 watch(board, RipAttempt { airline: &airline, path: path_pts, ripped: ripped_items, laid: all_laid, open_before: before, open_after: after, outcome: "kept" });
             } else {
@@ -245,4 +347,64 @@ pub fn rip_up_watch(
     }
     soft.retain(|id| board.item(*id).is_some());
     stats
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use board::Kind;
+
+    #[test]
+    fn region_repair_frees_a_connection_crossed_by_two_ripped_nets() {
+        let (pcb, copper) = kicad_pcb::parse_board(
+            "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal))
+             (net 0 \"\") (net 1 \"A\") (net 2 \"B\") (net 3 \"C\")
+             (gr_rect (start 0 0) (end 14 14) (layer \"Edge.Cuts\") (width 0.1)))",
+        )
+        .unwrap();
+        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+        let mm = |v: f64| (v * 1e6) as board::Nm;
+        let smd = |net, layer: usize, x, y| Item {
+            kind: Kind::Pad { footprint: 0, number: "1".into(), plated: false },
+            net,
+            layers: 1u64 << layer,
+            shape: board::Shape::Capsule { a: Point::new(mm(x), mm(y)), b: Point::new(mm(x), mm(y)), r: mm(0.25) },
+            hole: None,
+            locked: true,
+            span: None,
+        };
+        // Net 1 is open horizontally across y = 7 mm on F.Cu; nets 2 and 3 cross vertically in
+        // soft tracks blocking net 1's direct F.Cu path while B.Cu has room to detour via vias.
+        board.insert(smd(1, 0, 3.0, 7.0));
+        board.insert(smd(1, 0, 11.0, 7.0));
+        board.insert(smd(2, 0, 6.6, 2.0));
+        board.insert(smd(2, 0, 6.6, 12.0));
+        board.insert(smd(3, 0, 7.4, 2.0));
+        board.insert(smd(3, 0, 7.4, 12.0));
+        let mut soft = Vec::new();
+        for (net, x) in [(2, 6.6), (3, 7.4)] {
+            soft.push(board.insert(Item {
+                kind: Kind::Track,
+                net,
+                layers: 1,
+                shape: board::Shape::Capsule { a: Point::new(mm(x), mm(2.0)), b: Point::new(mm(x), mm(12.0)), r: mm(0.1) },
+                hole: None,
+                locked: false,
+                span: None,
+            }));
+        }
+        assert_eq!(connectivity_without_pours(&board).airlines.len(), 1);
+        let stats = rip_up(
+            &mut board,
+            &mut crate::route::CpuSolver,
+            &RipOptions { cell: 35_000, region_repair: true, ..Default::default() },
+            &mut soft,
+            &mut |_| {},
+        );
+        assert!(stats.kept >= 1, "{stats:?}");
+        assert!(connectivity_without_pours(&board).airlines.is_empty());
+        for &id in &soft {
+            assert!(check_item(&board, id).is_empty(), "{:?}", board.item(id));
+        }
+    }
 }

@@ -896,15 +896,31 @@ fn shove_pass(
     log: &Option<grid::Log>,
     step: &dyn Fn(&Board),
 ) -> Vec<kicad_pcb::Span> {
-    let open_now = |b: &Board| if a.pours_block { connectivity(b) } else { connectivity_without_pours(b) }.airlines.len();
+    let region = a.shove_plough == Some(grid::Plough::Region);
+    // On a board with planes, the region plough counts signal connections first: signal
+    // connections open, then all, are what a pass must leave fewer of.
+    let plane_nets: HashSet<u32> = if region && !a.pours_block && board.planes != 0 {
+        board.items().filter(|(_, it)| board.is_plane(it) && it.net != 0).map(|(_, it)| it.net).collect()
+    } else {
+        HashSet::new()
+    };
+    let open_now = |b: &Board| {
+        let open = if a.pours_block { connectivity(b) } else { connectivity_without_pours(b) }.airlines;
+        (open.iter().filter(|x| !plane_nets.contains(&x.net)).count(), open.len())
+    };
     let mut removed = Vec::new();
     let mut stalled = 0;
     let defaults = grid::ShoveOptions::default();
     let reach = a.shove_reach.map_or(defaults.reach, |mm| (mm * 1e6).round() as Nm);
     let mut reaches: HashMap<ItemId, Nm> = HashMap::new();
     let mut net_reaches: HashMap<u32, Nm> = HashMap::new();
+    // The reaches a net has been widened to since the last pass that freed anything.
+    let mut widened: HashSet<(u32, Nm)> = HashSet::new();
     for pass in 0..a.shove_passes.max(1) {
         let before = open_now(board);
+        if before.1 == 0 {
+            break;
+        }
         let fine: HashSet<usize> = morph::fine_pitch(board, 500_000).into_iter().collect();
         let s = grid::shove_escape(
             board,
@@ -942,29 +958,36 @@ fn shove_pass(
         let routed = s.tries.iter().filter(|t| t.routed).count();
         let kept = s.tries.iter().filter(|t| t.kept).count();
         let after = open_now(board);
-        eprintln!("shove pass {}: {} trapped tried, {routed} routed out, {kept} kept, {before} -> {after} open, {:.1} s", pass + 1, s.tries.len(), started.elapsed().as_secs_f64());
+        eprintln!("shove pass {}: {} trapped tried, {routed} routed out, {kept} kept, {} -> {} open, {:.1} s", pass + 1, s.tries.len(), before.1, after.1, started.elapsed().as_secs_f64());
         // Passes go on, each in another order, until `--shove-patience` of them in a row free
-        // nothing more.
+        // nothing more, or nothing is left open.
         // The region plough tries a connection it could not free twice as far round its path
-        // next time, up to the widest region; a pass that widened one is no stall. A tie kept in
-        // a pass that freed nothing only swapped two nets in a corridor, and widens too. The net
-        // widens with the pad: a tie lays the net's copper again under new ids, and a trapped end
-        // that is a track would come back next pass under a new id at the narrowest reach.
+        // next time, up to the widest region, then from the narrowest again; a pass that widened
+        // a net to a reach it had not had is no stall. A tie kept in a pass that freed nothing
+        // only swapped two nets in a corridor, and widens too; a connection walled in by what
+        // cannot move does not. The net widens with the pad: a tie lays the net's copper again
+        // under new ids, and a trapped end that is a track would come back next pass under a new
+        // id at the narrowest reach. A pass that frees anything starts every reach afresh.
         let mut grew = false;
-        if a.shove_plough == Some(grid::Plough::Region) {
+        if region && after < before {
+            reaches.clear();
+            net_reaches.clear();
+            widened.clear();
+        } else if region {
             for t in &s.tries {
-                let swapped = after >= before && t.open_after >= t.open_before;
-                if t.kept && !swapped {
+                if t.kept && t.open_after < t.open_before {
                     reaches.remove(&t.pad);
                     net_reaches.remove(&t.net);
-                } else if t.reach < REGION_WIDEST {
-                    let next = (t.reach * 2).min(REGION_WIDEST);
+                } else if t.rounds.iter().any(|r| !r.path.is_empty()) {
+                    let next = if t.reach < REGION_WIDEST { (t.reach * 2).min(REGION_WIDEST) } else { reach };
                     reaches.insert(t.pad, next);
-                    let net = net_reaches.entry(t.net).or_insert(0);
-                    *net = (*net).max(next);
-                    grew = true;
+                    net_reaches.insert(t.net, next);
+                    grew |= widened.insert((t.net, next));
                 }
             }
+        }
+        if after.1 == 0 {
+            break;
         }
         stalled = if after < before || grew { 0 } else { stalled + 1 };
         if stalled >= a.shove_patience.max(1) || until.is_some_and(|t| started.elapsed().as_secs_f64() >= t) {

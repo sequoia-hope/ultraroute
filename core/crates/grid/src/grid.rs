@@ -227,14 +227,90 @@ impl ObstacleMap {
             via_owner: vec![FREE; nx * ny],
             via_avoid: Vec::new(),
         };
-        map.stamp_outline(board);
         map.stamp_via_avoid(board);
+        // What does not move while routing (outline, pads, pours, keepouts) is stamped once and
+        // copied after: plane pours and hundreds of pads cost far more to stamp than the copy, and
+        // a try of the shove builds maps over and over. Claims commute (a cell is free, one net's,
+        // or several nets'), so stamping them before the tracks gives the same map.
+        let (mut fixed, mut moving) = (Vec::new(), Vec::new());
+        for (id, it) in board.items().filter(|(id, _)| !skip(*id)) {
+            if matches!(it.kind, Kind::Track | Kind::Via) { &mut moving } else { &mut fixed }.push(id);
+        }
+        map.stamp_fixed(board, &fixed);
         map.stamp_mask_areas(board);
-        let ids: Vec<ItemId> = board.items().map(|(id, _)| id).filter(|id| !skip(*id)).collect();
-        for id in ids {
+        for id in moving {
             map.stamp(board, id);
         }
         map
+    }
+
+    /// The outline and `fixed`, from the last few maps' if one had the same.
+    fn stamp_fixed(&mut self, board: &Board, fixed: &[ItemId]) {
+        // A few, for the classes a board's maps are built for. Kept as runs of cells alike,
+        // which fixed copper leaves long: a whole map each would cost a phone's tab too dear.
+        const KEPT: usize = 4;
+        type Kept = Vec<(u128, Vec<(i32, u32)>, Vec<(i32, u32)>)>;
+        thread_local! {
+            static CACHE: std::cell::RefCell<Kept> = const { std::cell::RefCell::new(Vec::new()) };
+        }
+        let key = self.fixed_key(board, fixed);
+        let hit = CACHE.with(|cache| {
+            let cache = cache.borrow();
+            let Some((_, owner, via_owner)) = cache.iter().find(|(k, ..)| *k == key) else { return false };
+            unrun(owner, &mut self.owner);
+            unrun(via_owner, &mut self.via_owner);
+            true
+        });
+        if hit {
+            return;
+        }
+        self.stamp_outline(board);
+        for &id in fixed {
+            self.stamp(board, id);
+        }
+        CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            if cache.len() >= KEPT {
+                cache.remove(0);
+            }
+            cache.push((key, runs(&self.owner), runs(&self.via_owner)));
+        });
+    }
+
+    /// Everything [`ObstacleMap::stamp_fixed`] stamps from: the grid, the profile, the rules, the
+    /// outline and every fixed item as it stands, hashed twice over for 128 bits.
+    fn fixed_key(&self, board: &Board, fixed: &[ItemId]) -> u128 {
+        use std::hash::{Hash, Hasher};
+        let feed = |h: &mut std::collections::hash_map::DefaultHasher| {
+            (self.x0, self.y0, self.h, self.nx, self.ny, self.layers, self.pours_block).hash(h);
+            let p = &self.profile;
+            (p.half_width, p.via_radius, p.drill_radius, p.clearance).hash(h);
+            let r = &board.rules;
+            [r.min_copper_edge_clearance, r.min_clearance, r.min_hole_clearance, r.pth_hole_clearance, r.min_hole_to_hole].map(f64::to_bits).hash(h);
+            board.outline.hash(h);
+            board.outline_edges.iter().map(|&(a, b, _)| (a, b)).collect::<Vec<_>>().hash(h);
+            board.via_openings.hash(h);
+            for &id in fixed {
+                let Some(it) = board.item(id) else { continue };
+                (id, it.net, it.layers, it.refilled(), it.hole, self.clearance_to(board, it.net)).hash(h);
+                (board.pad_clearances.get(&id), board.mask_openings.get(&id)).hash(h);
+                match &it.kind {
+                    Kind::Pad { plated, .. } => (1u8, *plated).hash(h),
+                    Kind::Pour { kept, .. } => (2u8, *kept).hash(h),
+                    Kind::Keepout { forbids, .. } => (3u8, forbids.tracks, forbids.vias).hash(h),
+                    Kind::Track | Kind::Via => 4u8.hash(h),
+                }
+                match &it.shape {
+                    Shape::Capsule { a, b, r } => (a, b, r).hash(h),
+                    Shape::Polygon(pts) => pts.hash(h),
+                }
+            }
+        };
+        let (mut h1, mut h2) = (std::collections::hash_map::DefaultHasher::new(), std::collections::hash_map::DefaultHasher::new());
+        0x9e37_79b9_7f4a_7c15_u64.hash(&mut h2);
+        feed(&mut h1);
+        feed(&mut h2);
+        (u128::from(h1.finish()) << 64) | u128::from(h2.finish())
     }
 
     /// Openings drawn in the mask: only the net they bare may run there; none where they bare
@@ -578,6 +654,12 @@ impl ObstacleMap {
         o != FREE && o != net as i32
     }
 
+    /// Whether a via of `net` at the 2D `cell` is claimed by another net's item.
+    pub fn via_blocked_at(&self, net: u32, cell: usize) -> bool {
+        let o = self.via_owner[cell];
+        o != FREE && o != net as i32
+    }
+
     /// The grid a net sees: a cell is blocked unless nothing claims it or only this net does.
     /// `grid` made over as this map's view for `net`, keeping its buffers.
     pub fn view_into(&self, net: u32, grid: &mut RouteGrid) {
@@ -618,6 +700,27 @@ impl ObstacleMap {
     }
 }
 
+/// `cells` as runs of one claim: the claim and how many cells in a row have it.
+fn runs(cells: &[i32]) -> Vec<(i32, u32)> {
+    let mut out: Vec<(i32, u32)> = Vec::new();
+    for &c in cells {
+        match out.last_mut() {
+            Some((o, n)) if *o == c => *n += 1,
+            _ => out.push((c, 1)),
+        }
+    }
+    out.shrink_to_fit();
+    out
+}
+
+fn unrun(runs: &[(i32, u32)], cells: &mut [i32]) {
+    let mut at = 0;
+    for &(o, n) in runs {
+        cells[at..at + n as usize].fill(o);
+        at += n as usize;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -652,6 +755,62 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn fixed_copper_from_the_cache_gives_the_map_stamped_in_board_order() {
+        let h = 50_000;
+        // Every item in board order, the outline first, as maps were built before the cache.
+        let direct = |board: &Board, like: &ObstacleMap| {
+            let mut map = ObstacleMap {
+                pours_block: like.pours_block,
+                profile: like.profile.clone(),
+                x0: like.x0,
+                y0: like.y0,
+                h,
+                nx: like.nx,
+                ny: like.ny,
+                layers: like.layers,
+                owner: vec![FREE; like.owner.len()],
+                via_owner: vec![FREE; like.via_owner.len()],
+                via_avoid: Vec::new(),
+            };
+            map.stamp_outline(board);
+            map.stamp_mask_areas(board);
+            let ids: Vec<ItemId> = board.items().map(|(id, _)| id).collect();
+            for id in ids {
+                map.stamp(board, id);
+            }
+            map
+        };
+        let same = |a: &ObstacleMap, b: &ObstacleMap| a.owner == b.owner && a.via_owner == b.via_owner;
+        for name in ["earring.kicad_pcb", "bluebuzz-rm2.kicad_pcb"] {
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures").join(name);
+            let mut board = Board::load(&path).unwrap().0;
+            for net in [1, 2] {
+                for pours_block in [false, true] {
+                    let profile = Profile::for_net(&board, net);
+                    let first = ObstacleMap::new(&board, profile.clone(), h, pours_block);
+                    let again = ObstacleMap::new(&board, profile, h, pours_block);
+                    assert!(same(&first, &direct(&board, &first)), "{name} net {net} pours {pours_block}");
+                    assert!(same(&again, &first), "{name} cached, net {net} pours {pours_block}");
+                }
+            }
+            // A track laid since: the fixed copper comes from the cache, the track is stamped on it.
+            let at = ObstacleMap::new(&board, Profile::for_net(&board, 1), h, false);
+            let mid = Point::new(at.x0 + at.nx as Nm * h / 2, at.y0 + at.ny as Nm * h / 2);
+            board.insert(board::Item {
+                kind: Kind::Track,
+                net: 1,
+                layers: 1,
+                shape: Shape::Capsule { a: mid, b: Point::new(mid.x + 1_500_000, mid.y), r: 75_000 },
+                hole: None,
+                locked: false,
+                span: None,
+            });
+            let cached = ObstacleMap::new(&board, at.profile.clone(), h, false);
+            assert!(same(&cached, &direct(&board, &cached)) && !same(&cached, &at), "{name}");
         }
     }
 }
