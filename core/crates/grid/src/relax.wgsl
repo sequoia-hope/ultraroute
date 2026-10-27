@@ -88,10 +88,11 @@ fn relax(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups)
         }
         offer(field, base + layer * cells + u32(nj) * params.nx + u32(ni), c + step[k]);
     }
-    if (params.via_allowed != 0u && via_blocked[field * cells + cell] == 0u) {
+    let vp = via_blocked[field * cells + cell];
+    if (params.via_allowed != 0u && vp != UNREACHED) {
         for (var l = 0u; l < params.layers; l++) {
             if (l != layer) {
-                offer(field, base + l * cells + cell, c + params.via_cost);
+                offer(field, base + l * cells + cell, c + params.via_cost + vp);
             }
         }
     }
@@ -154,12 +155,13 @@ fn trace_paths(@builtin(global_invocation_id) gid: vec3<u32>) {
                 break;
             }
         }
-        if (!found && via_blocked[field * cells + cell] == 0u) {
+        let vp = via_blocked[field * cells + cell];
+        if (!found && vp != UNREACHED) {
             for (var l = 0u; l < params.layers; l++) {
                 if (l != layer) {
                     let n = l * cells + cell;
                     let cn = atomicLoad(&cost[base + n]);
-                    if (cn != UNREACHED && cn + params.via_cost + pen_at == c_at) {
+                    if (cn != UNREACHED && cn + params.via_cost + vp + pen_at == c_at) {
                         prev = n;
                         found = true;
                         break;

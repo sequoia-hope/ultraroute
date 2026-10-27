@@ -24,7 +24,7 @@ use board::{connectivity, connectivity_without_pours, Board, Item, ItemId, Kind,
 use kicad_pcb::{apply, mm, Edit};
 use serde_json::{json, Value};
 
-pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--diff-pairs] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--gpu] \
+pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--no-negotiate-vias] [--no-negotiate-rip] [--no-negotiate-tree] [--negotiate-legacy] [--diff-pairs] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--gpu] \
 [--timeout SECONDS] [--cell MM] [--first NET,...] [--first-negotiate] [--first-weight W] [--restart N] [--topo-first REF,...|auto] [--topo-trapped] [--topo-trapped-rip] [--topo-sample MM] \
 [--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough warp|linear|rip|gentle|dipole|region] [--shove-steps N] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-late] [--shove-seconds S] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
 [--live PATH|-] [--live-fps N] [--live-step MS] [--blame]";
@@ -42,11 +42,16 @@ pub struct Args {
     /// Layers given whole to a plane (`In1.Cu,In2.Cu`): no tracks on them, vias through them, and
     /// their pours join their nets.
     pub planes: Vec<String>,
-    /// Negotiation's most rounds, rounds without progress before it stops, and how fast its
-    /// congestion price grows; the router's defaults when unset.
+    /// Negotiation's most rounds, rounds without progress before it stops, how fast its
+    /// congestion price grows, follow-up passes on uncommitted routes, and toggles for via-zone
+    /// pricing, walled-off rescue, and reachable-first spanning; the router's defaults when unset.
     pub negotiate_rounds: Option<usize>,
     pub negotiate_patience: Option<usize>,
     pub negotiate_growth: Option<f64>,
+    pub negotiate_repasses: Option<usize>,
+    pub negotiate_vias: bool,
+    pub negotiate_rip: bool,
+    pub negotiate_tree: bool,
     pub prefanout: bool,
     pub prefanout_mode: Option<grid::EscapeMode>,
     pub prefanout_order: Option<grid::EscapeOrder>,
@@ -148,6 +153,10 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         negotiate_rounds: None,
         negotiate_patience: None,
         negotiate_growth: None,
+        negotiate_repasses: None,
+        negotiate_vias: true,
+        negotiate_rip: true,
+        negotiate_tree: true,
         prefanout: false,
         prefanout_mode: None,
         prefanout_order: None,
@@ -224,6 +233,16 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                     return Err(format!("--negotiate-growth: {g} must be 1 or more"));
                 }
                 a.negotiate_growth = Some(g);
+            }
+            "--negotiate-repasses" => a.negotiate_repasses = Some(value()?.parse().map_err(|e| format!("--negotiate-repasses: {e}"))?),
+            "--no-negotiate-vias" => a.negotiate_vias = false,
+            "--no-negotiate-rip" => a.negotiate_rip = false,
+            "--no-negotiate-tree" => a.negotiate_tree = false,
+            "--negotiate-legacy" => {
+                a.negotiate_repasses = Some(0);
+                a.negotiate_vias = false;
+                a.negotiate_rip = false;
+                a.negotiate_tree = false;
             }
             "--planes" => a.planes.extend(value()?.split(',').filter(|s| !s.is_empty()).map(String::from)),
             "--prefanout" => a.prefanout = true,
@@ -856,6 +875,8 @@ fn shove_pass(
     let defaults = grid::ShoveOptions::default();
     let reach = a.shove_reach.map_or(defaults.reach, |mm| (mm * 1e6).round() as Nm);
     let mut reaches: HashMap<ItemId, Nm> = HashMap::new();
+    let mut net_reaches: HashMap<u32, Nm> = HashMap::new();
+    let tie_widens = a.negotiate_vias || a.negotiate_repasses != Some(0) || a.negotiate_rip || a.negotiate_tree;
     for pass in 0..a.shove_passes.max(1) {
         let before = open_now(board);
         let fine: HashSet<usize> = morph::fine_pitch(board, 500_000).into_iter().collect();
@@ -870,8 +891,12 @@ fn shove_pass(
                 steps: a.shove_steps.unwrap_or(defaults.steps),
                 reach,
                 reaches: reaches.clone(),
+                net_reaches: net_reaches.clone(),
                 repair_seconds: a.shove_repair.unwrap_or(defaults.repair_seconds),
                 accept_ties: a.shove_ties,
+                negotiate_vias: a.negotiate_vias,
+                negotiate_repasses: a.negotiate_repasses.map_or(defaults.negotiate_repasses, |r| r.min(1)),
+                negotiate_tree: a.negotiate_tree,
                 cascade: a.shove_cascade.unwrap_or(defaults.cascade),
                 seed: a.seed.wrapping_mul(1000).wrapping_add(pass as u64 + 1),
                 max_seconds: until.map(|s| (s - started.elapsed().as_secs_f64()).max(0.0)),
@@ -895,14 +920,27 @@ fn shove_pass(
         // Passes go on, each in another order, until `--shove-patience` of them in a row free
         // nothing more.
         // The region plough tries a connection it could not free twice as far round its path
-        // next time, up to the widest region; a pass that widened one is no stall.
+        // next time, up to the widest region; when `--shove-ties` stalls a whole pass
+        // (`after >= before`) with two nets swapping places in a narrow corridor, widening by net
+        // as well brings in adjacent lanes on the next pass instead of repeating the initial reach.
         let mut grew = false;
         if a.shove_plough == Some(grid::Plough::Region) {
             for t in &s.tries {
-                if t.kept {
+                let stalled_tie = tie_widens && after >= before && t.open_after >= t.open_before;
+                if t.kept && !stalled_tie {
                     reaches.remove(&t.pad);
-                } else if t.reach < REGION_WIDEST {
-                    reaches.insert(t.pad, (t.reach * 2).min(REGION_WIDEST));
+                    if tie_widens {
+                        net_reaches.remove(&t.net);
+                    }
+                } else if (!t.kept || stalled_tie) && t.reach < REGION_WIDEST {
+                    let next = (t.reach * 2).min(REGION_WIDEST);
+                    reaches.insert(t.pad, next);
+                    if tie_widens {
+                        let entry = net_reaches.entry(t.net).or_insert(0);
+                        if next > *entry {
+                            *entry = next;
+                        }
+                    }
                     grew = true;
                 }
             }
@@ -1250,6 +1288,10 @@ pub fn run_with_solver(
                         nets: Some(prio_nets.clone()),
                         net_weight: weights,
                         pours_block: a.pours_block,
+                        via_zones: a.negotiate_vias,
+                        repasses: a.negotiate_repasses.unwrap_or(grid::NegotiationOptions::default().repasses),
+                        rip_blocked: a.negotiate_rip,
+                        reachable_tree: a.negotiate_tree,
                         seed: a.seed,
                         cancel: Some(cancel.clone()),
                         log: log.clone(),
@@ -1339,6 +1381,10 @@ pub fn run_with_solver(
                     max_rounds: a.negotiate_rounds.unwrap_or(grid::NegotiationOptions::default().max_rounds),
                     patience: a.negotiate_patience.unwrap_or(grid::NegotiationOptions::default().patience),
                     present_growth: a.negotiate_growth.unwrap_or(grid::NegotiationOptions::default().present_growth),
+                    via_zones: a.negotiate_vias,
+                    repasses: a.negotiate_repasses.unwrap_or(grid::NegotiationOptions::default().repasses),
+                    rip_blocked: a.negotiate_rip,
+                    reachable_tree: a.negotiate_tree,
                     ..Default::default()
                 },
                 &mut watch,
@@ -1878,5 +1924,37 @@ mod tests {
 
         assert!(parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--prefanout-mode", "bogus"])).is_err());
         assert!(parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--prefanout-ring", "9.0"])).is_err());
+    }
+
+    #[test]
+    fn negotiate_flags_parse_and_validate() {
+        let def = parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--negotiate"])).unwrap();
+        assert!(def.negotiate_vias);
+        assert!(def.negotiate_rip);
+        assert!(def.negotiate_tree);
+        assert_eq!(def.negotiate_repasses, None);
+
+        let leg = parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--negotiate", "--negotiate-legacy"])).unwrap();
+        assert!(!leg.negotiate_vias);
+        assert!(!leg.negotiate_rip);
+        assert!(!leg.negotiate_tree);
+        assert_eq!(leg.negotiate_repasses, Some(0));
+
+        let custom = parse(&vec_args(&[
+            "route",
+            "in.kicad_pcb",
+            "-o",
+            "out.kicad_pcb",
+            "--negotiate-repasses=3",
+            "--no-negotiate-vias",
+            "--no-negotiate-rip",
+            "--no-negotiate-tree",
+        ]))
+        .unwrap();
+        assert_eq!(custom.negotiate_repasses, Some(3));
+        assert!(!custom.negotiate_vias);
+        assert!(!custom.negotiate_rip);
+        assert!(!custom.negotiate_tree);
+        assert!(parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--negotiate-repasses", "nope"])).is_err());
     }
 }

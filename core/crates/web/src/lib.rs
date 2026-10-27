@@ -141,7 +141,7 @@ impl FieldSolver for WebBatchSolver {
         }
         if self.sent != Some(prices.generation) {
             // The round: its generation, node count, classes, present price, history, then each
-            // class's counts two to a word.
+            // class's counts two to a word, followed by the optional 2D via history and counts.
             let nodes = prices.history.len();
             self.packed.clear();
             self.packed.extend([ROUND, prices.generation as u32, (prices.generation >> 32) as u32, nodes as u32, prices.counts.len() as u32]);
@@ -150,6 +150,16 @@ impl FieldSolver for WebBatchSolver {
             self.packed.extend_from_slice(prices.history);
             for counts in &prices.counts {
                 self.packed.extend(counts.chunks(2).map(|c| u32::from(c[0]) | u32::from(c.get(1).copied().unwrap_or(0)) << 16));
+            }
+            let via_cells = prices.via_history.len();
+            self.packed.push(via_cells as u32);
+            if via_cells > 0 {
+                let vpresent = prices.via_present.to_bits();
+                self.packed.extend([vpresent as u32, (vpresent >> 32) as u32]);
+                self.packed.extend_from_slice(prices.via_history);
+                for counts in &prices.via_counts {
+                    self.packed.extend(counts.chunks(2).map(|c| u32::from(c[0]) | u32::from(c.get(1).copied().unwrap_or(0)) << 16));
+                }
             }
             self.send()?;
             self.sent = Some(prices.generation);
@@ -165,6 +175,12 @@ impl FieldSolver for WebBatchSolver {
             let weight = job.weight.to_bits();
             self.packed.extend([job.class as u32, weight as u32, (weight >> 32) as u32, job.own.len() as u32]);
             self.packed.extend_from_slice(&job.own);
+            self.packed.push(job.own_vias.len() as u32);
+            self.packed.extend_from_slice(&job.own_vias);
+            self.packed.push(job.hole_ring.len() as u32);
+            for &(cell, cnt) in &job.hole_ring {
+                self.packed.extend([cell, u32::from(cnt)]);
+            }
             pack_bits(&mut self.packed, &job.grid.blocked);
             pack_bits(&mut self.packed, &job.grid.via_blocked);
             self.packed.push(job.sources.len() as u32);
@@ -180,6 +196,19 @@ impl FieldSolver for WebBatchSolver {
             let grid = grid.get_or_insert_with(|| job.grid.clone());
             grid.clone_from(job.grid);
             grid::price_into(prices.history, prices.counts[job.class], job.own.iter().copied(), prices.present, job.weight, &mut grid.penalty);
+            if !prices.via_history.is_empty() {
+                grid::via_price_into(
+                    prices.via_history,
+                    prices.via_counts[job.class],
+                    job.own_vias.iter().copied(),
+                    &job.hole_ring,
+                    prices.via_present,
+                    job.weight,
+                    &mut grid.via_penalty,
+                );
+            } else {
+                grid.via_penalty.clear();
+            }
             route_astar(grid, job.sources, job.targets, via_cost)
         })
     }
@@ -308,6 +337,9 @@ struct Round {
     history: Vec<u32>,
     counts: Vec<Vec<u16>>,
     present: f64,
+    via_history: Vec<u32>,
+    via_counts: Vec<Vec<u16>>,
+    via_present: f64,
 }
 
 thread_local! {
@@ -321,7 +353,8 @@ pub fn set_round(words: &[u32]) {
     let (Some(&nodes), Some(&classes)) = (words.get(3), words.get(4)) else { return };
     let (nodes, classes) = (nodes as usize, classes as usize);
     let half = nodes.div_ceil(2);
-    if words.len() < 7 + nodes + classes * half {
+    let base = 7 + nodes + classes * half;
+    if words.len() < base {
         return;
     }
     let present = f64::from_bits(u64::from(words[5]) | u64::from(words[6]) << 32);
@@ -332,7 +365,23 @@ pub fn set_round(words: &[u32]) {
             (0..nodes).map(|i| (packed[i / 2] >> (16 * (i % 2))) as u16).collect()
         })
         .collect();
-    ROUND_HELD.with(|r| *r.borrow_mut() = Some(Round { history, counts, present }));
+    let via_cells = words.get(base).copied().unwrap_or(0) as usize;
+    let vhalf = via_cells.div_ceil(2);
+    let (via_present, via_history, via_counts) = if via_cells > 0 && words.len() >= base + 3 + via_cells + classes * vhalf {
+        let vp = f64::from_bits(u64::from(words[base + 1]) | u64::from(words[base + 2]) << 32);
+        let vh_start = base + 3;
+        let vh = words[vh_start..vh_start + via_cells].to_vec();
+        let vc = (0..classes)
+            .map(|c| {
+                let packed = &words[vh_start + via_cells + c * vhalf..vh_start + via_cells + (c + 1) * vhalf];
+                (0..via_cells).map(|i| (packed[i / 2] >> (16 * (i % 2))) as u16).collect()
+            })
+            .collect();
+        (vp, vh, vc)
+    } else {
+        (0.0, Vec::new(), Vec::new())
+    };
+    ROUND_HELD.with(|r| *r.borrow_mut() = Some(Round { history, counts, present, via_history, via_counts, via_present }));
 }
 
 /// A pool worker routes one connection of a [`BATCH`] message (`header`, its first seven words,
@@ -354,6 +403,11 @@ pub fn route_priced_job(header: &[u32], job: &[u32]) -> Vec<u32> {
         let [class, w0, w1, own_len] = take(4)?[..] else { return None };
         let weight = f64::from_bits(u64::from(w0) | u64::from(w1) << 32);
         let own = take(own_len as usize)?.to_vec();
+        let own_vias_len = take(1)?[0] as usize;
+        let own_vias = take(own_vias_len)?.to_vec();
+        let hole_ring_len = take(1)?[0] as usize;
+        let hole_words = take(hole_ring_len * 2)?;
+        let hole_ring: Vec<(u32, u16)> = hole_words.chunks_exact(2).map(|w| (w[0], w[1] as u16)).collect();
         let blocked = take(nodes.div_ceil(32))?.to_vec();
         let via_bits = take(cells.div_ceil(32))?.to_vec();
         let s_len = take(1)?[0] as usize;
@@ -382,6 +436,7 @@ pub fn route_priced_job(header: &[u32], job: &[u32]) -> Vec<u32> {
                     blocked: Vec::new(),
                     via_blocked: Vec::new(),
                     penalty: Vec::new(),
+                    via_penalty: Vec::new(),
                     pours_block: false,
                 });
                 (grid.nx, grid.ny) = (nx, ny);
@@ -392,6 +447,12 @@ pub fn route_priced_job(header: &[u32], job: &[u32]) -> Vec<u32> {
                 grid.via_blocked.clear();
                 grid.via_blocked.extend((0..cells).map(|i| via_bits[i >> 5] >> (i & 31) & 1 != 0));
                 grid::price_into(&round.history, counts, own.iter().copied(), round.present, weight, &mut grid.penalty);
+                if round.via_history.len() == cells {
+                    let vcounts = round.via_counts.get(class as usize)?;
+                    grid::via_price_into(&round.via_history, vcounts, own_vias.iter().copied(), &hole_ring, round.via_present, weight, &mut grid.via_penalty);
+                } else {
+                    grid.via_penalty.clear();
+                }
                 Some(route_astar(grid, &sources, &targets, via_cost))
             })
         })
@@ -427,6 +488,7 @@ pub fn route_packed_job(words: &[u32], job_index: usize) -> Vec<u32> {
                 blocked: Vec::new(),
                 via_blocked: Vec::new(),
                 penalty: Vec::new(),
+                via_penalty: Vec::new(),
                 pours_block: false,
             })
         };
@@ -586,4 +648,55 @@ pub fn route_accelerated(
     let solver: Option<Box<dyn FieldSolver>> =
         (batch_size > 1).then(|| Box::new(WebBatchSolver { batch_size, dispatch: dispatch_batch, packed: Vec::new(), priced, sent: None }) as Box<dyn FieldSolver>);
     Ok(ultraroute::run_with_solver(&a, model, pcb, Some(live), Arc::new(AtomicBool::new(false)), solver))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_round_and_route_priced_job_honour_via_prices_and_hole_ring() {
+        let (nx, ny, layers) = (5usize, 1usize, 2usize);
+        let cells = nx * ny;
+        let nodes = cells * layers;
+        let history = vec![0u32; nodes];
+        let counts = vec![0u16; nodes];
+        let mut via_history = vec![0u32; cells];
+        via_history[1] = 500;
+        let mut via_counts = vec![0u16; cells];
+        via_counts[0] = 1; // claimed by another net at cell 0
+        via_counts[2] = 1; // claimed by another net at cell 2
+        via_counts[3] = 1; // claimed by own net at cell 3 (cancelled by `own_vias`)
+
+        let present = 40.0f64.to_bits();
+        let vpresent = 200.0f64.to_bits();
+        let mut round_msg = vec![ROUND, 1, 0, nodes as u32, 1, present as u32, (present >> 32) as u32];
+        round_msg.extend_from_slice(&history);
+        round_msg.extend(counts.chunks(2).map(|c| u32::from(c[0]) | u32::from(c.get(1).copied().unwrap_or(0)) << 16));
+        round_msg.push(cells as u32);
+        round_msg.extend([vpresent as u32, (vpresent >> 32) as u32]);
+        round_msg.extend_from_slice(&via_history);
+        round_msg.extend(via_counts.chunks(2).map(|c| u32::from(c[0]) | u32::from(c.get(1).copied().unwrap_or(0)) << 16));
+        set_round(&round_msg);
+
+        // Cells 0..4, source at (0, 0, 0), target at (1, 4, 0).
+        // Cell 1 has via_history=500, cell 2 has other-net via_count=1 (+200), cell 4 has sibling
+        // hole_ring (+400), while cell 3 has own_vias cancelling via_counts[3] -> cheapest via is 3.
+        let weight = 1.0f64.to_bits();
+        let mut job = vec![0, weight as u32, (weight >> 32) as u32, 0];
+        job.extend([1, 3]); // own_vias = [3]
+        job.extend([1, 4, 2]); // hole_ring = [(4, 2)]
+        pack_bits(&mut job, &vec![false; nodes]);
+        pack_bits(&mut job, &vec![false; cells]);
+        job.extend([1, 0]); // sources = [0]
+        job.extend([1, (cells + 4) as u32]); // targets = [layer 1, cell 4]
+
+        let header = [BATCH, nx as u32, ny as u32, layers as u32, 50, 1, 1];
+        let ans = route_priced_job(&header, &job);
+        let len = ans[0] as usize;
+        assert!(len >= 2, "{ans:?}");
+        let path: Vec<(usize, usize)> = ans[1..1 + len].iter().map(|&idx| (idx as usize / cells, idx as usize % cells)).collect();
+        let via_cell = path.windows(2).find(|w| w[0].0 != w[1].0).expect("changes layer")[1].1;
+        assert_eq!(via_cell, 3, "worker must pick the unpenalised via site at cell 3: {path:?}");
+    }
 }

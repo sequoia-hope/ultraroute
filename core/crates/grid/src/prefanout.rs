@@ -766,6 +766,7 @@ fn single_layer_view(map: &ObstacleMap, net: u32, board_layer: usize) -> RouteGr
         blocked: full.blocked[start..start + cells].to_vec(),
         via_blocked: vec![true; cells],
         penalty: Vec::new(),
+        via_penalty: Vec::new(),
         pours_block: full.pours_block,
     }
 }

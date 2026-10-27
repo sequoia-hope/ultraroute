@@ -393,7 +393,7 @@ impl GpuSolver {
                     init_state[1 + f_idx] = 0;
                 }
             }
-            self.scratch_via.extend(grid.via_blocked.iter().map(|&b| u32::from(b)));
+            self.scratch_via.extend((0..cells).map(|c| if grid.via_blocked[c] { UNREACHED } else { grid.via_penalty_at(c) }));
             if grid.penalty.is_empty() {
                 self.scratch_penalty.resize(self.scratch_penalty.len() + per_field, 0);
             } else {

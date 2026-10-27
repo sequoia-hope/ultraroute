@@ -57,9 +57,10 @@ pub fn cost_field(grid: &RouteGrid, sources: &[usize], via_cost: u32) -> Vec<u32
             relax(grid.index(layer, ni as usize, nj as usize), step);
         }
         if grid.via.is_some() && !grid.via_blocked[cell] {
+            let step = via_cost + grid.via_penalty_at(cell);
             for other in 0..grid.layers.len() {
                 if other != layer {
-                    relax(other * cells + cell, via_cost);
+                    relax(other * cells + cell, step);
                 }
             }
         }
@@ -98,11 +99,12 @@ pub fn trace_back(
             }
         }
         if previous.is_none() && !grid.via_blocked[cell] {
+            let step = via_cost + grid.via_penalty_at(cell);
             previous = (0..grid.layers.len())
                 .filter(|&other| other != layer)
                 .map(|other| other * cells + cell)
                 .find(|&n| {
-                    cost[n] != UNREACHED && cost[n] + via_cost + grid.penalty_at(at) == cost[at]
+                    cost[n] != UNREACHED && cost[n] + step + grid.penalty_at(at) == cost[at]
                 });
         }
         at = previous?;
@@ -301,11 +303,12 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
                 }
             }
             if grid.via.is_some() && !grid.via_blocked[cell] {
+                let step = via_cost + grid.via_penalty_at(cell);
                 for other in 0..grid.layers.len() {
                     if other != layer {
                         let next = other * cells + cell;
                         if !grid.blocked[next] {
-                            let candidate = c + via_cost + grid.penalty_at(next);
+                            let candidate = c + step + grid.penalty_at(next);
                             let cur = if b.gen[next] == epoch { b.cost[next] } else { UNREACHED };
                             if candidate < cur {
                                 b.gen[next] = epoch;
@@ -339,12 +342,13 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
                 }
             }
             if previous.is_none() && !grid.via_blocked[cell] {
+                let step = via_cost + grid.via_penalty_at(cell);
                 previous = (0..grid.layers.len())
                     .filter(|&other| other != layer)
                     .map(|other| other * cells + cell)
                     .find(|&n| {
                         let cn = cost_at(&b, n);
-                        cn != UNREACHED && cn + via_cost + grid.penalty_at(at) == c_at
+                        cn != UNREACHED && cn + step + grid.penalty_at(at) == c_at
                     });
             }
             at = previous?;
@@ -482,6 +486,7 @@ mod tests {
             blocked: (0..nodes).map(|_| next() % 4 == 0).collect(),
             via_blocked: (0..nx * ny).map(|_| next() % 3 == 0).collect(),
             penalty: (0..nodes).map(|_| (next() % 5) as u32).collect(),
+            via_penalty: (0..nx * ny).map(|_| (next() % 7) as u32).collect(),
             pours_block: false,
         }
     }
@@ -490,7 +495,7 @@ mod tests {
         path.windows(2)
             .map(|w| {
                 let (a, b) = (w[0], w[1]);
-                let step = if a.0 != b.0 { via_cost } else if a.1 != b.1 && a.2 != b.2 { DIAGONAL } else { STRAIGHT };
+                let step = if a.0 != b.0 { via_cost + grid.via_penalty_at(a.2 * grid.nx + a.1) } else if a.1 != b.1 && a.2 != b.2 { DIAGONAL } else { STRAIGHT };
                 step + grid.penalty_at(grid.index(b.0, b.1, b.2))
             })
             .sum()

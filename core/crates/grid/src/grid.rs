@@ -68,6 +68,8 @@ pub struct RouteGrid {
     pub via_blocked: Vec<bool>,
     /// Per routing layer and cell: extra cost of entering it; empty for none.
     pub penalty: Vec<u32>,
+    /// Per cell: extra cost of changing layer here; empty for none.
+    pub via_penalty: Vec<u32>,
     /// Pours are planes to keep clear of, not copper refilled around the route.
     pub pours_block: bool,
 }
@@ -82,6 +84,10 @@ impl RouteGrid {
 impl RouteGrid {
     pub fn penalty_at(&self, index: usize) -> u32 {
         self.penalty.get(index).copied().unwrap_or(0)
+    }
+
+    pub fn via_penalty_at(&self, cell: usize) -> u32 {
+        self.via_penalty.get(cell).copied().unwrap_or(0)
     }
 
     pub fn cell_count(&self) -> usize {
@@ -476,6 +482,7 @@ impl ObstacleMap {
         grid.via_blocked.clear();
         grid.via_blocked.extend(self.via_owner.iter().map(|&o| !free(o)));
         grid.penalty.clear();
+        grid.via_penalty.clear();
         grid.pours_block = self.pours_block;
     }
 
@@ -494,6 +501,7 @@ impl ObstacleMap {
             blocked: self.owner.iter().map(|&o| !free(o)).collect(),
             via_blocked: self.via_owner.iter().map(|&o| !free(o)).collect(),
             penalty: Vec::new(),
+            via_penalty: Vec::new(),
             pours_block: self.pours_block,
         }
     }

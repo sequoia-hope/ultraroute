@@ -98,7 +98,8 @@ fn sweep(@builtin(global_invocation_id) gid: vec3<u32>) {
 fn vias(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) groups: vec3<u32>) {
     let cell = gid.x + gid.y * groups.x * 256u;
     let cells = params.nx * params.ny;
-    if (cell >= cells || params.via_allowed == 0u || via_blocked[cell] != 0u) {
+    let vp = via_blocked[cell];
+    if (cell >= cells || params.via_allowed == 0u || vp == UNREACHED) {
         return;
     }
     var best = UNREACHED;
@@ -113,7 +114,7 @@ fn vias(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups) 
         if (blocked[n] != 0u) {
             continue;
         }
-        let offered = best + params.via_cost + penalty[n];
+        let offered = best + params.via_cost + vp + penalty[n];
         let old = atomicMin(&cost[n], offered);
         if (offered < old) {
             atomicStore(&changed, 1u);
