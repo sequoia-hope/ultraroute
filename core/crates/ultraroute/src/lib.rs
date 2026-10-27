@@ -714,6 +714,26 @@ fn moved_parts(board: &Board, original_at: &[Point]) -> Vec<(kicad_pcb::Span, St
 /// a live stream on standard output stays clean. Each is asked twice: once with routed copper
 /// passable at a price, which names the nets in the way, and once with it a wall, which names
 /// the unlocked parts whose move would open a channel of its own.
+/// The routing regions whose never or must rules hold for `net` and keep the connection from a
+/// path: without each alone, a path exists.
+fn regions_blocking(board: &Board, net: u32, from: ItemId, to: ItemId, pours_block: bool) -> Vec<String> {
+    let routes = |b: &mut Board| {
+        let grid = grid::ObstacleMap::new(b, grid::Profile::for_net(b, net), grid::Options::default().cell, pours_block).view(net);
+        let (src, tgt) = (grid::terminal_cells(b, &grid, from), grid::terminal_cells(b, &grid, to));
+        !src.is_empty() && !tgt.is_empty() && grid::search::route_astar(&grid, &src, &tgt, grid::Options::default().via_cost).is_some()
+    };
+    let hard = |r: &board::RegionRule| r.holds_for(net) && matches!(r.kind, board::RegionKind::Never | board::RegionKind::Must);
+    let mut out = Vec::new();
+    for k in (0..board.regions.len()).filter(|&k| board.regions[k].rules.iter().any(hard)) {
+        let mut without = board.clone();
+        let region = without.regions.remove(k);
+        if routes(&mut without) {
+            out.push(region.name);
+        }
+    }
+    out
+}
+
 fn print_blame(board: &mut Board, pours_block: bool) {
     let open = if pours_block { connectivity(board) } else { connectivity_without_pours(board) }.airlines;
     let priced = grid::BlameOptions { pours_block, ..Default::default() };
@@ -747,6 +767,10 @@ fn print_blame(board: &mut Board, pours_block: bool) {
                 parts.push(*f);
                 what.push(format!("{} (no move clears it)", reference(f)));
             }
+        }
+        // A planner's region whose hard rule holds for the net, and without which it would route.
+        for name in regions_blocking(board, airline.net, airline.from_item, airline.to_item, pours_block) {
+            what.push(format!("region {name}"));
         }
         if what.is_empty() {
             what.push("nothing on the grid: a clear path exists".into());
@@ -2020,5 +2044,32 @@ mod tests {
         assert!(!custom.negotiate_rip);
         assert!(!custom.negotiate_tree);
         assert!(parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--negotiate-repasses", "nope"])).is_err());
+    }
+}
+
+#[cfg(test)]
+mod region_blame_tests {
+    use super::*;
+
+    #[test]
+    fn a_region_that_keeps_a_net_off_the_board_is_blamed() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/earring.kicad_pcb");
+        let (mut board, _) = Board::load(&path).unwrap();
+        let mine: Vec<ItemId> = board.items().filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via)).map(|(id, _)| id).collect();
+        for id in mine {
+            board.remove(id);
+        }
+        let open = connectivity_without_pours(&board).airlines;
+        let airline = open.iter().find(|a| board.net_name(a.net) == "SWDIO").expect("SWDIO open");
+        let p = |x: i64, y: i64| Point::new(x * 1_000_000, y * 1_000_000);
+        board.regions = vec![board::Region {
+            name: "nowhere".into(),
+            shape: Shape::Polygon(vec![p(0, 0), p(300, 0), p(300, 300), p(0, 300)]),
+            layers: (1u64 << board.layers.len()) - 1,
+            rules: vec![board::RegionRule { nets: Some([airline.net].into()), kind: board::RegionKind::Never, vias: false }],
+        }];
+        let grid = grid::ObstacleMap::new(&board, grid::Profile::for_net(&board, airline.net), 100_000, false).view(airline.net);
+        assert!(grid.blocked.iter().all(|b| *b), "the net may run nowhere");
+        assert_eq!(regions_blocking(&board, airline.net, airline.from_item, airline.to_item, false), vec!["nowhere".to_string()]);
     }
 }
