@@ -318,7 +318,7 @@ pub fn shove_escape_steps(
             let again = route_open(
                 board,
                 solver,
-                &Options { cell: options.cell, via_cost: options.via_cost, max_seconds: Some(options.reroute_seconds), nets: None, pours_block: options.pours_block, seed: 0, cancel: options.cancel.clone(), log: None },
+                &Options { cell: options.cell, via_cost: options.via_cost, max_seconds: Some(options.reroute_seconds), nets: None, pours_block: options.pours_block, directional: false, seed: 0, cancel: options.cancel.clone(), log: None },
                 &mut |_| {},
             );
             soft.extend(again.laid.iter().copied());
@@ -1110,6 +1110,7 @@ fn negotiate(
             rip_blocked: false,
             reachable_tree: options.negotiate_tree,
             pad_ends: true,
+            directional: false,
             seed,
             cancel: options.cancel.clone(),
             ..Default::default()
@@ -1128,6 +1129,7 @@ fn negotiate(
             max_seconds: Some(options.reroute_seconds.min(5.0)),
             nets: Some(nets.clone()),
             pours_block: options.pours_block,
+            directional: false,
             seed,
             cancel: options.cancel.clone(),
             log: None,

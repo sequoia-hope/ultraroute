@@ -102,6 +102,8 @@ pub struct Options {
     pub nets: Option<HashSet<u32>>,
     /// Keep other nets out of poured copper instead of routing through it to be refilled.
     pub pours_block: bool,
+    /// Routes on a two-layer board prefer each layer's own direction (`RouteGrid::directional`).
+    pub directional: bool,
     /// Reorders connections of nearly equal length, for a search over many runs; 0 keeps the
     /// shortest-first order exact.
     pub seed: u64,
@@ -112,7 +114,7 @@ pub struct Options {
 
 impl Default for Options {
     fn default() -> Options {
-        Options { cell: 50_000, via_cost: 80, max_seconds: None, nets: None, pours_block: false, seed: 0, cancel: None, log: None }
+        Options { cell: 50_000, via_cost: 80, max_seconds: None, nets: None, pours_block: false, directional: true, seed: 0, cancel: None, log: None }
     }
 }
 
@@ -160,7 +162,10 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
         penalty: Vec::new(),
         via_penalty: Vec::new(),
         pours_block: options.pours_block,
+        directional: false,
     };
+    // The GPU's fields know nothing of directions.
+    let directional = options.directional && board.layers.len() == 2 && solver.batch_size() <= 1;
     let mut given_up: BTreeSet<(ItemId, ItemId)> = BTreeSet::new();
     // Once nothing more routes, a net of several clusters is spanned again by pairs that can meet
     // first: an airline into a pin walled in a pocket hides the way between the pins either side.
@@ -207,6 +212,7 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
             let profile = Profile::for_net(board, airline.net);
             let map = maps.entry(profile.class.clone()).or_insert_with(|| ObstacleMap::new(board, profile, options.cell, options.pours_block));
             map.view_into(airline.net, &mut grid);
+            grid.directional = directional;
             let sources = terminals(board, &grid, airline.from_item);
             let targets = terminals(board, &grid, airline.to_item);
             let laid = if sources.is_empty() || targets.is_empty() {

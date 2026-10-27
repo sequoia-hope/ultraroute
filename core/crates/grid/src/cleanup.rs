@@ -522,7 +522,7 @@ fn redundant(board: &Board, id: ItemId) -> bool {
 /// (a stub that adds nothing); a via that meets its net's copper on fewer than two layers. Ends
 /// meet as [`joined`] has them, by the track's round end. Pours do not count as covering a
 /// track, as a refill may draw them back from it.
-fn dangles(board: &Board, id: ItemId) -> bool {
+pub(crate) fn dangles(board: &Board, id: ItemId) -> bool {
     let Some(item) = board.item(id) else { return false };
     if item.net == 0 {
         return false;

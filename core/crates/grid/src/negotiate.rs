@@ -76,6 +76,9 @@ pub struct NegotiationOptions {
     /// A connection may also end at the pads of its ends' clusters nearest them, as the region
     /// plough has it (see [`crate::route::ends_with_pads`]).
     pub pad_ends: bool,
+    /// Routes on a two-layer board prefer each layer's own direction (`RouteGrid::directional`),
+    /// on the CPU; the GPU's fields and the browser's pool know nothing of directions.
+    pub directional: bool,
     /// Reorders the connections, for a search over many runs; 0 keeps the board's order.
     pub seed: u64,
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
@@ -102,6 +105,7 @@ impl Default for NegotiationOptions {
             rip_blocked: true,
             reachable_tree: true,
             pad_ends: false,
+            directional: true,
             seed: 0,
             cancel: None,
             log: None,
@@ -612,6 +616,7 @@ fn run_pass(
 
     let (nx, ny, layers) = (sample.nx, sample.ny, sample.layers.len());
     let cells = nx * ny;
+    let directional = options.directional && layers == 2 && solver.batch_size() <= 1;
     // A via stands on every layer: crowding at its site is priced, and remembered, as often.
     let via_scale = layers.max(2) as f64;
     let via_step = options.history_step * layers.max(2) as u32;
@@ -697,6 +702,7 @@ fn run_pass(
                     zones.remove(claimer, r);
                 }
                 maps[&c.class].view_into(c.net, grid_buf);
+                grid_buf.directional = directional;
                 let w = weight_of(c.net);
                 penalties_into(zones.trace.seen_by(&c.class), &history, present, c.net, w, &mut grid_buf.penalty);
                 if options.via_zones {
@@ -1431,6 +1437,7 @@ fn route_round_in_parallel(
                         }
                         None => grid.insert(maps[class].view(net)),
                     };
+                    grid.directional = options.directional && grid.layers.len() == 2;
                     penalties_into(zones.trace.seen_by(class), history, present, net, weight, &mut grid.penalty);
                     if options.via_zones {
                         via_penalties_into(zones, class, own_ring, via_history, present * via_scale, net, weight, &mut grid.via_penalty);

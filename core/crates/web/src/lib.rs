@@ -456,6 +456,7 @@ pub fn route_priced_job(header: &[u32], job: &[u32]) -> Vec<u32> {
                     penalty: Vec::new(),
                     via_penalty: Vec::new(),
                     pours_block: false,
+                    directional: false,
                 });
                 (grid.nx, grid.ny) = (nx, ny);
                 grid.layers = (0..layers).collect();
@@ -507,6 +508,7 @@ pub fn route_packed_job(words: &[u32], job_index: usize) -> Vec<u32> {
                 penalty: Vec::new(),
                 via_penalty: Vec::new(),
                 pours_block: false,
+                directional: false,
             })
         };
     }

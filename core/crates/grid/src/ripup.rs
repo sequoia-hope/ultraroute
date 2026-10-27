@@ -123,6 +123,7 @@ pub fn rip_up_watch(
         penalty: Vec::new(),
         via_penalty: Vec::new(),
         pours_block: options.pours_block,
+        directional: false,
     };
     // Plane nets' connections are the planes' to make (`join_planes`), not rip-up's.
     let plane_nets: HashSet<u32> = if options.region_repair && !options.pours_block && board.planes != 0 {
@@ -270,6 +271,7 @@ pub fn rip_up_watch(
                 max_seconds: Some(options.reroute_seconds),
                 nets: None,
                 pours_block: options.pours_block,
+                directional: false,
                 cancel: options.cancel.clone(),
                 log: options.log.clone(),
             };
@@ -302,6 +304,7 @@ pub fn rip_up_watch(
                         pours_block: options.pours_block,
                         rip_blocked: false,
                         pad_ends: true,
+                        directional: false,
                         cancel: options.cancel.clone(),
                         ..Default::default()
                     },

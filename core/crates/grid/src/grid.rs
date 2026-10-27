@@ -39,7 +39,8 @@ impl Profile {
         }
         let Some(pad) = pad.filter(|p| matches!(p.kind, board::Kind::Pad { .. })) else { return self.half_width };
         let b = pad.shape.bbox();
-        ((b.max.x - b.min.x).min(b.max.y - b.min.y) / 2).clamp(self.min_half_width, self.half_width)
+        // Not `clamp`: with no track width in the rules the floor is above the zero width.
+        ((b.max.x - b.min.x).min(b.max.y - b.min.y) / 2).max(self.min_half_width).min(self.half_width)
     }
 
     pub fn for_net(board: &Board, net: u32) -> Profile {
@@ -96,6 +97,10 @@ pub struct RouteGrid {
     pub via_penalty: Vec<u32>,
     /// Pours are planes to keep clear of, not copper refilled around the route.
     pub pours_block: bool,
+    /// Steps along a layer's own direction cost less than across it: horizontal on even
+    /// routing layers, vertical on odd ones (see [`crate::search`]). For two-layer boards, where
+    /// crossing nets otherwise both take the first layer and pay vias to pass each other.
+    pub directional: bool,
 }
 
 impl RouteGrid {
@@ -204,12 +209,75 @@ impl ObstacleMap {
         map
     }
 
+    /// This map's cells within `bounds`, as [`ObstacleMap::window`] would make them over a map
+    /// of the fixed copper alone (a map that left out every unlocked track and via): the cells
+    /// are copied, and only the unlocked tracks and vias in reach are stamped, not the pads and
+    /// pours again.
+    pub fn subwindow(&self, board: &Board, bounds: board::BBox) -> ObstacleMap {
+        let h = self.h;
+        let i0 = (bounds.min.x - self.x0).div_euclid(h).clamp(0, self.nx.saturating_sub(1) as Nm) as usize;
+        let j0 = (bounds.min.y - self.y0).div_euclid(h).clamp(0, self.ny.saturating_sub(1) as Nm) as usize;
+        let i1 = (bounds.max.x - self.x0 + h - 1).div_euclid(h).clamp((i0 + 1) as Nm, self.nx as Nm) as usize;
+        let j1 = (bounds.max.y - self.y0 + h - 1).div_euclid(h).clamp((j0 + 1) as Nm, self.ny as Nm) as usize;
+        let (nx, ny) = (i1 - i0, j1 - j0);
+        let (x0, y0) = (self.x0 + i0 as Nm * h, self.y0 + j0 as Nm * h);
+        let rows = |cells: &[i32], planes: usize, full: usize| -> Vec<i32> {
+            let mut out = Vec::with_capacity(planes * nx * ny);
+            for l in 0..planes {
+                for j in j0..j1 {
+                    let at = l * full + j * self.nx + i0;
+                    out.extend_from_slice(&cells[at..at + nx]);
+                }
+            }
+            out
+        };
+        let full = self.nx * self.ny;
+        let mut map = ObstacleMap {
+            pours_block: self.pours_block,
+            profile: self.profile.clone(),
+            x0,
+            y0,
+            h,
+            nx,
+            ny,
+            layers: self.layers,
+            owner: rows(&self.owner, self.layers, full),
+            via_owner: rows(&self.via_owner, 1, full),
+            via_avoid: Vec::new(),
+        };
+        if !self.via_avoid.is_empty() {
+            map.via_avoid = (j0..j1).flat_map(|j| self.via_avoid[j * self.nx + i0..j * self.nx + i0 + nx].iter().copied()).collect();
+        }
+        // As far as `window` looks for copper whose claims reach into it.
+        let max_clr = (0..board.nets.len() as u32).map(|n| map.clearance_to(board, n)).max().unwrap_or(map.profile.clearance);
+        let p = &map.profile;
+        let hole_margin = (p.drill_radius + nm(board.rules.min_hole_to_hole))
+            .max(p.via_radius + nm(board.rules.min_hole_clearance))
+            .max(p.half_width + nm(board.rules.min_hole_clearance) + map.reach());
+        let copper_margin = (p.half_width + max_clr + map.reach()).max(p.via_radius + max_clr);
+        let reach = board::BBox { min: Point::new(x0, y0), max: Point::new(x0 + nx as Nm * h, y0 + ny as Nm * h) }.grow(copper_margin.max(hole_margin) + h);
+        let mut ids: Vec<ItemId> = (0..=board.layers.len()).flat_map(|slot| board.near(slot, reach)).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        for id in ids {
+            if board.item(id).is_some_and(|it| !it.locked && matches!(it.kind, Kind::Track | Kind::Via)) {
+                map.stamp(board, id);
+            }
+        }
+        map
+    }
+
     /// The map with the items `skip` names left out, as if they were not on the board.
     pub fn without(board: &Board, profile: Profile, h: Nm, pours_block: bool, skip: &dyn Fn(ItemId) -> bool) -> ObstacleMap {
         let b = board.outline.iter().flatten().copied().fold(None, |b: Option<board::BBox>, p| {
             Some(b.map_or(board::BBox::of([p]), |b| b.union(board::BBox::of([p]))))
         });
-        let b = b.unwrap_or_else(|| board::BBox::of(board.items().map(|(_, it)| it.shape.bbox().min)));
+        // With no outline, the items' extent and room round it: not only their corners nearest
+        // the origin, which left a map too small to route round anything.
+        let b = b.unwrap_or_else(|| {
+            let items = board.items().map(|(_, it)| it.shape.bbox()).reduce(board::BBox::union);
+            items.unwrap_or(board::BBox::of([Point::new(0, 0)])).grow(2_000_000)
+        });
         let (x0, y0) = (b.min.x, b.min.y);
         let nx = ((b.max.x - x0) / h).max(1) as usize;
         let ny = ((b.max.y - y0) / h).max(1) as usize;
@@ -677,6 +745,7 @@ impl ObstacleMap {
         grid.penalty.clear();
         grid.via_penalty.clone_from(&self.via_avoid);
         grid.pours_block = self.pours_block;
+        grid.directional = false;
     }
 
     pub fn view(&self, net: u32) -> RouteGrid {
@@ -696,6 +765,7 @@ impl ObstacleMap {
             penalty: Vec::new(),
             via_penalty: self.via_avoid.clone(),
             pours_block: self.pours_block,
+            directional: false,
         }
     }
 }
@@ -811,6 +881,47 @@ mod tests {
             });
             let cached = ObstacleMap::new(&board, at.profile.clone(), h, false);
             assert!(same(&cached, &direct(&board, &cached)) && !same(&cached, &at), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_subwindow_of_the_fixed_copper_agrees_cell_for_cell_with_a_window() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/earring.kicad_pcb");
+        let mut board = Board::load(&path).unwrap().0;
+        let at = board.footprints[0].at;
+        let mm = 1_000_000;
+        board.via_avoid.push(Shape::Polygon(vec![
+            Point::new(at.x - mm, at.y - mm),
+            Point::new(at.x + mm, at.y - mm),
+            Point::new(at.x + mm, at.y + mm),
+            Point::new(at.x - mm, at.y + mm),
+        ]));
+        let profile = Profile::for_net(&board, 1);
+        let h = 50_000;
+        for pours_block in [false, true] {
+            let moving = |b: &Board, id: ItemId| b.item(id).is_some_and(|it| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked);
+            let fixed = ObstacleMap::without(&board, profile.clone(), h, pours_block, &|id| moving(&board, id));
+            let added = board.insert(board::Item {
+                kind: Kind::Track,
+                net: 2,
+                layers: 1,
+                shape: Shape::Capsule { a: Point::new(fixed.x0 + 15 * h, fixed.y0 + 15 * h), b: Point::new(fixed.x0 + 45 * h, fixed.y0 + 35 * h), r: 100_000 },
+                hole: None,
+                locked: false,
+                span: None,
+            });
+            for (fx, fy) in [(0, 0), (fixed.nx / 4, fixed.ny / 3), (fixed.nx / 2, fixed.ny / 2)] {
+                let (wn, hn) = (90.min(fixed.nx - fx), 90.min(fixed.ny - fy));
+                let bounds = board::BBox {
+                    min: Point::new(fixed.x0 + fx as Nm * h, fixed.y0 + fy as Nm * h),
+                    max: Point::new(fixed.x0 + (fx + wn) as Nm * h, fixed.y0 + (fy + hn) as Nm * h),
+                };
+                let sub = fixed.subwindow(&board, bounds);
+                let win = ObstacleMap::window(&board, profile.clone(), h, bounds, pours_block);
+                assert_eq!((sub.x0, sub.y0, sub.nx, sub.ny), (win.x0, win.y0, win.nx, win.ny));
+                assert!(sub.owner == win.owner && sub.via_owner == win.via_owner && sub.via_avoid == win.via_avoid, "at ({fx}, {fy}) pours {pours_block}");
+            }
+            board.discard(added);
         }
     }
 }
