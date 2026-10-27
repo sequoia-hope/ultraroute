@@ -117,7 +117,7 @@ impl FieldSolver for GpuSweepSolver {
         );
         let via_blocked = buffer(
             "via_blocked",
-            &words(&mut grid.via_blocked.iter().map(|&b| u32::from(b))),
+            &words(&mut (0..grid.cell_count()).map(|c| if grid.via_blocked[c] { UNREACHED } else { grid.via_penalty_at(c).min(UNREACHED - 1) })),
             storage,
         );
         let cost = buffer(

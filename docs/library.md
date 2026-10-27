@@ -237,6 +237,10 @@ than `route_open` alone, which is then left to finish. `trials` sees each round'
 | `threads` | 1 | above 1, each round routes every connection at once on that many threads |
 | `nets` | None | |
 | `net_weight` | empty | per-net multiplier on the prices; below 1 also routes that net first |
+| `via_zones` | true | zones as tight as the grid allows, and vias negotiated: priced where they would crowd another net's trace or via, and kept hole-to-hole apart within a net unless shared |
+| `repasses` | 2 | passes after the first over what it left open, routed round what it laid |
+| `rip_blocked` | true | a connection walled off by routes it laid has them ripped and negotiated over with it, kept only when fewer are left open |
+| `reachable_tree` | true | a net's tree spanned by pairs that can meet first, so a pocketed middle pin does not keep the pins either side apart |
 | `seed`, `pours_block`, `max_seconds`, `cancel`, `log` | | as above |
 
 `NegotiationStats`: `connections`, `rounds`, `conflicted`, `committed`, `unroutable`, `vias`,

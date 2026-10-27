@@ -54,22 +54,29 @@ pub trait FieldSolver {
 }
 
 /// What a negotiation round prices every connection from: the nodes' history, how many nets
-/// cover each node as each class sees them (classes in name order), and the present price per
-/// net. `generation` changes from one round to the next.
+/// cover each node as each class sees them (classes in name order), the present price per net,
+/// and the corresponding 2D via history, via-viewer counts, and via present price when via
+/// zones are active (`via_history` is empty otherwise). `generation` changes each round.
 pub struct RoundPrices<'a> {
     pub generation: u64,
     pub history: &'a [u32],
     pub counts: Vec<&'a [u16]>,
     pub present: f64,
+    pub via_history: &'a [u32],
+    pub via_counts: Vec<&'a [u16]>,
+    pub via_present: f64,
 }
 
 /// One connection of a round to price and route: its grid without prices, the class whose
-/// counts it sees, its weight, the nodes its own net covers, and its ends.
+/// counts it sees, its weight, the nodes and 2D via cells its own net covers, sibling via-drill
+/// annulus counts on the same net, and its ends.
 pub struct PricedJob<'a> {
     pub grid: &'a RouteGrid,
     pub class: usize,
     pub weight: f64,
     pub own: Vec<u32>,
+    pub own_vias: Vec<u32>,
+    pub hole_ring: Vec<(u32, u16)>,
     pub sources: &'a [usize],
     pub targets: &'a [usize],
 }
@@ -445,7 +452,27 @@ pub(crate) fn fits(board: &mut Board, grid: &RouteGrid, item: Item) -> bool {
 pub(crate) fn lay(board: &mut Board, grid: &RouteGrid, path: &GridPath, sources: &[Terminal], targets: &[Terminal]) -> Option<Vec<ItemId>> {
     let pieces = pieces(grid, path, sources, targets)?;
     let mut laid = Vec::new();
+    let holes = board.layers.len();
     for piece in pieces {
+        // Two routes of one net that change layer at the same cell share the via already there
+        // instead of drilling a second hole on top of the first.
+        if piece.kind == Kind::Via {
+            if let Shape::Capsule { a, r, .. } = piece.shape {
+                let hole_r = piece.hole.map_or(0, |h| h.1);
+                let reuse = board.near(holes, BBox::of([a])).into_iter().any(|id| {
+                    board.item(id).is_some_and(|it| {
+                        it.kind == Kind::Via
+                            && it.net == piece.net
+                            && (it.layers & piece.layers) == piece.layers
+                            && matches!(it.shape, Shape::Capsule { a: p, b: q, r: vr } if p == a && q == a && vr == r)
+                            && it.hole == Some((a, hole_r))
+                    })
+                });
+                if reuse {
+                    continue;
+                }
+            }
+        }
         let id = board.insert(piece);
         laid.push(id);
         if !grid.violations(board, id).is_empty() {

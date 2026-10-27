@@ -91,7 +91,8 @@ pub struct RouteGrid {
     pub via_blocked: Vec<bool>,
     /// Per routing layer and cell: extra cost of entering it; empty for none.
     pub penalty: Vec<u32>,
-    /// Per cell: extra cost of a via standing there, in a via-avoid area; empty for none.
+    /// Per cell: extra cost of a via standing there, in a via-avoid area, plus negotiation's price
+    /// for vias crowding there when it prices them; empty for none.
     pub via_penalty: Vec<u32>,
     /// Pours are planes to keep clear of, not copper refilled around the route.
     pub pours_block: bool,

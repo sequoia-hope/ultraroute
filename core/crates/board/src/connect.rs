@@ -45,8 +45,9 @@ impl Sets {
     }
 }
 
-/// Points of an item a connection may start from: a pad or via centre, a track's ends.
-fn anchors(board: &Board, id: ItemId) -> ([Point; 2], usize) {
+/// Points of an item a connection may start from: a pad or via centre, a track's ends; airlines
+/// run between them.
+pub fn anchors(board: &Board, id: ItemId) -> ([Point; 2], usize) {
     let z = Point::new(0, 0);
     let Some(item) = board.item(id) else { return ([z, z], 0) };
     match (&item.kind, &item.shape) {

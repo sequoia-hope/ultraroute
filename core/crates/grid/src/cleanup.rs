@@ -278,6 +278,23 @@ fn all_joined(board: &Board, ids: &[ItemId]) -> bool {
     wanted.is_empty()
 }
 
+/// Whether the round cap of radius `r` at `track_id`'s end `p` (other end `q`) connects to
+/// `other` as [`joined`] and KiCad judge it: strict copper overlap rather than two caps merely
+/// kissing at `2 * r` apart (except pours, which join wherever they touch).
+fn end_overlaps(board: &Board, track_id: ItemId, p: Point, q: Point, r: Nm, other_id: ItemId, other: &Item) -> bool {
+    if !joined(board, track_id, other_id) {
+        return false;
+    }
+    let touches = if matches!(other.kind, Kind::Pour { .. }) {
+        other.shape.gap_within(&Shape::Capsule { a: p, b: p, r }, 0.0) == 0.0
+    } else {
+        let reach = r as f64;
+        let gap = other.shape.gap_within(&Shape::Capsule { a: p, b: p, r: 0 }, reach);
+        gap == 0.0 || gap < reach - 0.5
+    };
+    touches && (other.shape.contains(p) || point_gap(&other.shape, p) <= point_gap(&other.shape, q))
+}
+
 /// When a track has one loose end because another track joined it mid-segment (such as a global
 /// route meeting a pre-fanout inner-layer stub before its tip), trims the overhanging tail back to
 /// the furthest neighbour joint so KiCad does not flag the unused tail as `track_dangling`.
@@ -291,7 +308,6 @@ fn trim_overhang(board: &mut Board, id: ItemId) -> Option<(Option<Span>, Vec<Ite
     let layer = item.layers.trailing_zeros() as usize;
     let near = board.near(layer, item.shape.bbox());
     let end_met = |p: Point, q: Point| {
-        let end = Shape::Capsule { a: p, b: p, r };
         near.iter().any(|&o| {
             o != id
                 && board.item(o).is_some_and(|it| {
@@ -299,8 +315,7 @@ fn trim_overhang(board: &mut Board, id: ItemId) -> Option<(Option<Span>, Vec<Ite
                         && it.is_copper()
                         && (!it.refilled() || board.is_plane(it))
                         && it.on(layer)
-                        && it.shape.gap_within(&end, 0.0) == 0.0
-                        && (it.shape.contains(p) || point_gap(&it.shape, p) <= point_gap(&it.shape, q))
+                        && end_overlaps(board, id, p, q, r, o, it)
                 })
         })
     };
@@ -516,13 +531,7 @@ fn dangles(board: &Board, id: ItemId) -> bool {
             let layer = item.layers.trailing_zeros() as usize;
             let near = board.near(layer, item.shape.bbox());
             let loose_end = [(*a, *b), (*b, *a)].iter().any(|&(p, q)| {
-                let end = Shape::Capsule { a: p, b: p, r: *r };
-                !near.iter().any(|&o| {
-                    ours(layer, o).is_some_and(|o| {
-                        o.shape.gap_within(&end, 0.0) == 0.0
-                            && (o.shape.contains(p) || point_gap(&o.shape, p) <= point_gap(&o.shape, q))
-                    })
-                })
+                !near.iter().any(|&o| ours(layer, o).is_some_and(|other| end_overlaps(board, id, p, q, *r, o, other)))
             });
             if loose_end {
                 return true;
@@ -794,6 +803,70 @@ mod tests {
         for &id in &soft {
             assert!(!dangles(&board, id), "remaining soft item {id} still dangles");
         }
+    }
+
+    #[test]
+    fn kissing_track_ends_count_as_dangling_and_are_pruned() {
+        let (pcb, copper) = kicad_pcb::parse_board(
+            "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal)) (net 0 \"\") (net 1 \"N1\"))",
+        )
+        .unwrap();
+        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+        let pad = |x, y| Item {
+            kind: Kind::Pad { footprint: 0, number: "1".into(), plated: false },
+            net: 1,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(x, y), b: Point::new(x, y), r: 150_000 },
+            hole: None,
+            locked: true,
+            span: None,
+        };
+        board.insert(pad(0, 0));
+        board.insert(pad(1_000_000, 0));
+        // Main run joins the two pads; a redundant 3-piece detour has a 0.15 mm middle bridge
+        // (`r = 75_000`, so removing the middle leaves two ends 0.15 mm = `2 * r` apart that
+        // merely kiss without overlapping). Both stubs must be recognised as dangling and pruned.
+        let main_run = board.insert(Item {
+            kind: Kind::Track,
+            net: 1,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(0, 0), b: Point::new(1_000_000, 0), r: 75_000 },
+            hole: None,
+            locked: false,
+            span: None,
+        });
+        let left_stub = board.insert(Item {
+            kind: Kind::Track,
+            net: 1,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(100_000, 0), b: Point::new(425_000, 300_000), r: 75_000 },
+            hole: None,
+            locked: false,
+            span: None,
+        });
+        let bridge = board.insert(Item {
+            kind: Kind::Track,
+            net: 1,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(425_000, 300_000), b: Point::new(575_000, 300_000), r: 75_000 },
+            hole: None,
+            locked: false,
+            span: None,
+        });
+        let right_stub = board.insert(Item {
+            kind: Kind::Track,
+            net: 1,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(575_000, 300_000), b: Point::new(900_000, 0), r: 75_000 },
+            hole: None,
+            locked: false,
+            span: None,
+        });
+        let mut soft = vec![main_run, left_stub, bridge, right_stub];
+        let (pruned, _) = prune_dangling(&mut board, &mut soft);
+        assert_eq!(pruned, 3, "bridge and both kissing-end stubs must be pruned");
+        assert_eq!(soft, vec![main_run]);
+        assert!(board::connectivity(&board).airlines.is_empty());
     }
 }
 

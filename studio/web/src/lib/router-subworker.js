@@ -32,6 +32,7 @@ struct Params {
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read_write> blocked: array<atomic<u32>>;
+// Per field and cell: UNREACHED where no via may stand, else the extra cost of one there.
 @group(0) @binding(2) var<storage, read> via_blocked: array<u32>;
 @group(0) @binding(3) var<storage, read_write> cost: array<atomic<u32>>;
 @group(0) @binding(4) var<storage, read_write> state: array<atomic<u32>>;
@@ -100,10 +101,11 @@ fn relax(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups)
         }
         offer(field, base + layer * cells + u32(nj) * params.nx + u32(ni), c + step[k]);
     }
-    if (params.via_allowed != 0u && via_blocked[field * cells + cell] == 0u) {
+    let vp = via_blocked[field * cells + cell];
+    if (params.via_allowed != 0u && vp != UNREACHED) {
         for (var l = 0u; l < params.layers; l++) {
             if (l != layer) {
-                offer(field, base + l * cells + cell, c + params.via_cost);
+                offer(field, base + l * cells + cell, c + params.via_cost + vp);
             }
         }
     }
@@ -166,12 +168,13 @@ fn trace_paths(@builtin(global_invocation_id) gid: vec3<u32>) {
                 break;
             }
         }
-        if (!found && via_blocked[field * cells + cell] == 0u) {
+        let vp = via_blocked[field * cells + cell];
+        if (!found && vp != UNREACHED) {
             for (var l = 0u; l < params.layers; l++) {
                 if (l != layer) {
                     let n = l * cells + cell;
                     let cn = atomicLoad(&cost[base + n]);
-                    if (cn != UNREACHED && cn + params.via_cost + pen_at == c_at) {
+                    if (cn != UNREACHED && cn + params.via_cost + vp + pen_at == c_at) {
                         prev = n;
                         found = true;
                         break;
@@ -305,6 +308,26 @@ function ensureGpuBuffers(ctx, nodes, cellsTotal, fields) {
   return ctx.buffers;
 }
 
+// Costs as the router packs them (pack_costs in core/crates/web): 0 for none, 1 and every
+// cost, or 2, a count and (index, cost) pairs. Written into out[base..base + len]; the position
+// after them.
+function unpackCosts(words, pos, out, base, len) {
+  const mode = words[pos++];
+  out.fill(0, base, base + len);
+  if (mode === 1) {
+    out.set(words.subarray(pos, pos + len), base);
+    pos += len;
+  } else if (mode === 2) {
+    const n = words[pos++];
+    for (let k = 0; k < n; k++) {
+      const idx = words[pos + k * 2];
+      if (idx < len) out[base + idx] = words[pos + k * 2 + 1];
+    }
+    pos += n * 2;
+  }
+  return pos;
+}
+
 async function runWebGpuBatch(ctx, words, u32) {
   const fields = words[0];
   const nx = words[1];
@@ -347,26 +370,15 @@ async function runWebGpuBatch(ctx, words, u32) {
     pos += blockedWords;
 
     const vbase = f * cells;
-    for (let i = 0; i < cells; i++) {
-      sVia[vbase + i] = (words[pos + (i >>> 5)] >>> (i & 31)) & 1;
-    }
+    const viaBits = pos;
     pos += viaWords;
 
-    const penMode = words[pos++];
-    if (penMode === 0) {
-      sPenalty.fill(0, base, base + perField);
-    } else if (penMode === 1) {
-      sPenalty.set(words.subarray(pos, pos + perField), base);
-      pos += perField;
-    } else if (penMode === 2) {
-      sPenalty.fill(0, base, base + perField);
-      const nz = words[pos++];
-      for (let k = 0; k < nz; k++) {
-        const idx = words[pos + k * 2];
-        const val = words[pos + k * 2 + 1];
-        if (idx < perField) sPenalty[base + idx] = val;
-      }
-      pos += nz * 2;
+    pos = unpackCosts(words, pos, sPenalty, base, perField);
+    // A via's extra cost where it may stand (its via-avoid areas, its congestion), UNREACHED
+    // where it may not.
+    pos = unpackCosts(words, pos, sVia, vbase, cells);
+    for (let i = 0; i < cells; i++) {
+      if ((words[viaBits + (i >>> 5)] >>> (i & 31)) & 1) sVia[vbase + i] = UNREACHED;
     }
 
     const sLen = words[pos++];

@@ -16,6 +16,7 @@ struct Params {
 @group(0) @binding(0) var<uniform> params: Params;
 // Bit 0: node is blocked. Bit 1: node is a target. Bit 2: node cost improved (active frontier).
 @group(0) @binding(1) var<storage, read_write> blocked: array<atomic<u32>>;
+// Per field and cell: UNREACHED where no via may stand, else the extra cost of one there.
 @group(0) @binding(2) var<storage, read> via_blocked: array<u32>;
 @group(0) @binding(3) var<storage, read_write> cost: array<atomic<u32>>;
 // state[0] is the changed flag; state[1 + field] is the best target cost reached so far.
@@ -88,10 +89,11 @@ fn relax(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups)
         }
         offer(field, base + layer * cells + u32(nj) * params.nx + u32(ni), c + step[k]);
     }
-    if (params.via_allowed != 0u && via_blocked[field * cells + cell] == 0u) {
+    let vp = via_blocked[field * cells + cell];
+    if (params.via_allowed != 0u && vp != UNREACHED) {
         for (var l = 0u; l < params.layers; l++) {
             if (l != layer) {
-                offer(field, base + l * cells + cell, c + params.via_cost);
+                offer(field, base + l * cells + cell, c + params.via_cost + vp);
             }
         }
     }
@@ -154,12 +156,13 @@ fn trace_paths(@builtin(global_invocation_id) gid: vec3<u32>) {
                 break;
             }
         }
-        if (!found && via_blocked[field * cells + cell] == 0u) {
+        let vp = via_blocked[field * cells + cell];
+        if (!found && vp != UNREACHED) {
             for (var l = 0u; l < params.layers; l++) {
                 if (l != layer) {
                     let n = l * cells + cell;
                     let cn = atomicLoad(&cost[base + n]);
-                    if (cn != UNREACHED && cn + params.via_cost + pen_at == c_at) {
+                    if (cn != UNREACHED && cn + params.via_cost + vp + pen_at == c_at) {
                         prev = n;
                         found = true;
                         break;

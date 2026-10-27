@@ -34,7 +34,7 @@ pub use planes::{join_planes, PlaneStats};
 pub use pairs::{diff_pairs, route_pairs, route_pairs_watch, shares_layer, Pair, PairOptions, PairRun, PairStats};
 pub use prefanout::{prefanout, prune_closed_escapes, EscapeMode, EscapeOrder, PrefanoutOptions, PrefanoutStats};
 pub use report::{item_name, Activity, Focus, Log};
-pub use negotiate::{price_into, route_negotiated, route_negotiated_rounds, NegotiationOptions, NegotiationStats, RoundView, Trial};
+pub use negotiate::{price_into, route_negotiated, route_negotiated_rounds, via_price_into, NegotiationOptions, NegotiationStats, RoundView, Trial};
 pub use ripup::{rip_up, rip_up_watch, RipAttempt, RipOptions, RipStats};
 pub use route::{edits, route_open, terminal_cells, CpuSolver, FieldSolver, Options, PricedJob, RoundPrices, Stats};
 pub use tune::{match_lengths, match_lengths_watch, pair_lengths, TuneBump, TuneStats};
