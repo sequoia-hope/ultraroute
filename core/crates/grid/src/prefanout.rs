@@ -467,7 +467,6 @@ pub fn prefanout(board: &mut Board, options: &PrefanoutOptions, watch: &mut dyn 
         };
 
         let win_bounds = aligned_window(frame.world_bbox.grow(options.ring + 650_000), options.local_cell);
-        let narrow_hw = (nm(board.rules.min_track_width) / 2).max(1);
         let mut local_maps: HashMap<(String, Nm), ObstacleMap> = HashMap::new();
 
         let escaped_kept_pours: Vec<(ItemId, u32, BBox)> = board
@@ -497,7 +496,7 @@ pub fn prefanout(board: &mut Board, options: &PrefanoutOptions, watch: &mut dyn 
                 continue;
             }
             let mut local_profile = Profile::for_net(board, p.net);
-            local_profile.half_width = narrow_hw.min(local_profile.half_width);
+            local_profile.half_width = local_profile.narrow_half_width;
             let key = (local_profile.class.clone(), local_profile.half_width);
             let lmap = local_maps
                 .entry(key)
@@ -554,7 +553,7 @@ pub fn prefanout(board: &mut Board, options: &PrefanoutOptions, watch: &mut dyn 
                     &frame,
                     &pad,
                     &profile,
-                    narrow_hw,
+                    profile.narrow_half_width,
                     win_bounds,
                     options,
                     &siblings,
@@ -666,7 +665,6 @@ fn bridge_inward(
     stats: &mut PrefanoutStats,
 ) -> usize {
     let bounds = aligned_window(frame.world_bbox.grow(350_000), options.local_cell);
-    let narrow_hw = (nm(board.rules.min_track_width) / 2).max(1);
     let max_steps = (1_800_000 / options.local_cell.max(1)) as usize;
     let mut maps: HashMap<(String, Nm), ObstacleMap> = HashMap::new();
     let mut bridged = 0;
@@ -703,8 +701,8 @@ fn bridge_inward(
         }
 
         let mut widths = vec![profile.half_width];
-        if narrow_hw < profile.half_width {
-            widths.push(narrow_hw);
+        if profile.narrow_half_width < profile.half_width {
+            widths.push(profile.narrow_half_width);
         }
         for hw in widths {
             let mut p = profile.clone();

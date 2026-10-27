@@ -854,7 +854,8 @@ fn shove_pass(
     let mut removed = Vec::new();
     let mut stalled = 0;
     let defaults = grid::ShoveOptions::default();
-    let mut reach = a.shove_reach.map_or(defaults.reach, |mm| (mm * 1e6).round() as Nm);
+    let reach = a.shove_reach.map_or(defaults.reach, |mm| (mm * 1e6).round() as Nm);
+    let mut reaches: HashMap<ItemId, Nm> = HashMap::new();
     for pass in 0..a.shove_passes.max(1) {
         let before = open_now(board);
         let fine: HashSet<usize> = morph::fine_pitch(board, 500_000).into_iter().collect();
@@ -868,6 +869,7 @@ fn shove_pass(
                 plough: a.shove_plough.unwrap_or(defaults.plough),
                 steps: a.shove_steps.unwrap_or(defaults.steps),
                 reach,
+                reaches: reaches.clone(),
                 repair_seconds: a.shove_repair.unwrap_or(defaults.repair_seconds),
                 accept_ties: a.shove_ties,
                 cascade: a.shove_cascade.unwrap_or(defaults.cascade),
@@ -892,19 +894,21 @@ fn shove_pass(
         eprintln!("shove pass {}: {} trapped tried, {routed} routed out, {kept} kept, {before} -> {after} open, {:.1} s", pass + 1, s.tries.len(), started.elapsed().as_secs_f64());
         // Passes go on, each in another order, until `--shove-patience` of them in a row free
         // nothing more.
-        stalled = if after < before { 0 } else { stalled + 1 };
-        if until.is_some_and(|t| started.elapsed().as_secs_f64() >= t) {
-            break;
+        // The region plough tries a connection it could not free twice as far round its path
+        // next time, up to the widest region; a pass that widened one is no stall.
+        let mut grew = false;
+        if a.shove_plough == Some(grid::Plough::Region) {
+            for t in &s.tries {
+                if t.kept {
+                    reaches.remove(&t.pad);
+                } else if t.reach < REGION_WIDEST {
+                    reaches.insert(t.pad, (t.reach * 2).min(REGION_WIDEST));
+                    grew = true;
+                }
+            }
         }
-        // The region plough, stalled, rips and renegotiates twice as far round each path, up
-        // to the widest region, before it gives up.
-        if stalled >= a.shove_patience.max(1) && a.shove_plough == Some(grid::Plough::Region) && reach < REGION_WIDEST {
-            reach = (reach * 2).min(REGION_WIDEST);
-            stalled = 0;
-            eprintln!("shove: the region plough now reaches {:.1} mm", reach as f64 * 1e-6);
-            continue;
-        }
-        if stalled >= a.shove_patience.max(1) {
+        stalled = if after < before || grew { 0 } else { stalled + 1 };
+        if stalled >= a.shove_patience.max(1) || until.is_some_and(|t| started.elapsed().as_secs_f64() >= t) {
             break;
         }
     }

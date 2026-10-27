@@ -17,3 +17,7 @@ With the region plough (`--cell 0.035 --prefanout-order round --shove-plough reg
 --shove-reach 0.5`, in place of `--shove-plough rip`): seed 1 leaves no signal net open, seeds
 0, 2, 3 leave 2, 1, 2 (lab planes-44); the one +3V3 open is joined by easy_pcb's outer pours,
 added after routing. job.json carries these flags and seed 1.
+
+input/easy2350.kicad_dru is easy_pcb's custom rule (uncommitted there on 2026-10-26): VBUS no
+narrower than 0.2 mm. With it, seeds 0-5 leave 0 1 0 2 1 2 signal nets open (lab planes-50).
+

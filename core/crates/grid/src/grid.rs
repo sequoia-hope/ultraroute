@@ -18,6 +18,9 @@ pub const SEVERAL: i32 = -1;
 pub struct Profile {
     pub class: String,
     pub half_width: Nm,
+    /// The narrowest a leg or escape of the net may neck to near a pad: the board's minimum
+    /// track, or the net's own from a custom rule; never above `half_width`.
+    pub narrow_half_width: Nm,
     pub clearance: Nm,
     pub via_radius: Nm,
     pub drill_radius: Nm,
@@ -28,9 +31,12 @@ impl Profile {
         let rules = &board.rules;
         let class = rules.class_of(board.net_name(net));
         let take = |v: Option<f64>, floor: f64| nm(v.unwrap_or(floor).max(floor));
+        let min_width = rules.min_track_width_of(board.net_name(net));
+        let half_width = take(class.map(|c| c.track_width), min_width) / 2;
         Profile {
             class: class.map_or_else(String::new, |c| c.name.clone()),
-            half_width: take(class.map(|c| c.track_width), rules.min_track_width) / 2,
+            half_width,
+            narrow_half_width: (nm(min_width) / 2).clamp(1, half_width.max(1)),
             clearance: take(class.map(|c| c.clearance), rules.min_clearance),
             via_radius: take(class.map(|c| c.via_diameter), rules.min_via_diameter) / 2,
             drill_radius: take(class.map(|c| c.via_drill), rules.min_via_drill) / 2,

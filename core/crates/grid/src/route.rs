@@ -324,7 +324,7 @@ pub fn terminal_cells(board: &mut Board, grid: &RouteGrid, id: ItemId) -> Vec<us
 /// Free cells on the item's local copper cluster, and free cells a short straight leg from its
 /// anchors reaches legally: how a path leaves a pad too small or too crowded to hold a free cell
 /// of its own, or picks up a pre-laid escape via. Where no full-width leg fits, a leg necked down
-/// to the board's narrowest track may reach further, as a designer would leave a fine-pitch pad.
+/// to the narrowest track the net may have may reach further, as a designer would leave a fine-pitch pad.
 pub(crate) fn terminals(board: &mut Board, grid: &RouteGrid, id: ItemId) -> Vec<Terminal> {
     let cluster = local_cluster(board, id);
     let gather = |board: &mut Board, hw: Nm, cells: Nm, tries: usize| -> Vec<Terminal> {
@@ -349,7 +349,7 @@ pub(crate) fn terminals(board: &mut Board, grid: &RouteGrid, id: ItemId) -> Vec<
     if !found.is_empty() {
         return found;
     }
-    let narrow = (board::nm(board.rules.min_track_width) / 2).max(1);
+    let narrow = Profile::for_net(board, grid.net).narrow_half_width;
     if narrow >= grid.half_width {
         return found;
     }

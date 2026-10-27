@@ -1,7 +1,7 @@
 //! Design rules and net classes from a `.kicad_pro`, in metres, and the custom rules of a
 //! `.kicad_dru` beside it that the router understands: the stricter clearances a fab sets for
-//! through-hole pad holes and between SMD pads. [`Rules::read`] warns of any other custom rule,
-//! which is not applied.
+//! through-hole pad holes and between SMD pads, and the narrowest track a net or net class may
+//! have. [`Rules::read`] warns of any other custom rule, which is not applied.
 
 use std::path::Path;
 
@@ -35,6 +35,9 @@ pub struct Rules {
     pub pth_hole_to_hole: f64,
     #[serde(default)]
     pub smd_pad_clearance: f64,
+    /// From custom rules: the narrowest track of a net (`Net`) or of a class's nets (`Class`).
+    #[serde(default)]
+    pub min_widths: Vec<(Select, f64)>,
     pub warnings: Vec<String>,
 }
 
@@ -51,6 +54,13 @@ pub struct NetClass {
     pub diff_pair_via_gap: f64,
     /// Lower wins when several classes match one net.
     pub priority: i64,
+}
+
+/// The nets a custom rule holds for: one by name, or every net of a class.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Select {
+    Net(String),
+    Class(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -128,6 +138,7 @@ impl Rules {
             pth_hole_clearance: 0.0,
             pth_hole_to_hole: 0.0,
             smd_pad_clearance: 0.0,
+            min_widths: Vec::new(),
             warnings: Vec::new(),
         })
     }
@@ -137,7 +148,8 @@ impl Rules {
     /// these, spaces aside, with a `min` constraint of that kind:
     /// `A.Pad_Type == 'Through-hole'` with `hole_clearance`;
     /// `A.Pad_Type == 'Through-hole' && B.Pad_Type == 'Through-hole'` with `hole_to_hole`;
-    /// `A.Pad_Type == 'SMD' && B.Pad_Type == 'SMD'` with `clearance`.
+    /// `A.Pad_Type == 'SMD' && B.Pad_Type == 'SMD'` with `clearance`;
+    /// `A.NetName == 'X'` or `A.NetClass == 'X'`, or several joined by `||`, with `track_width`.
     /// KiCad tries a rule both ways round, so the first holds wherever either item is a
     /// through-hole pad.
     pub fn apply_custom(&mut self, text: &str, source: &str) {
@@ -150,6 +162,13 @@ impl Rules {
             for constraint in &constraints {
                 let kind = constraint.trim_start_matches("(constraint").split_whitespace().next().unwrap_or("").to_string();
                 let min = forms(constraint, "min").first().and_then(|m| length(m.trim_start_matches("(min").trim_end_matches(')')));
+                if kind == "track_width" {
+                    match (selects(&condition), min) {
+                        (Some(nets), Some(v)) => self.min_widths.extend(nets.into_iter().map(|n| (n, v))),
+                        _ => understood = false,
+                    }
+                    continue;
+                }
                 let slot = match (condition.as_str(), kind.as_str()) {
                     ("A.Pad_Type=='Through-hole'", "hole_clearance") => Some(&mut self.pth_hole_clearance),
                     ("A.Pad_Type=='Through-hole'&&B.Pad_Type=='Through-hole'", "hole_to_hole") => Some(&mut self.pth_hole_to_hole),
@@ -182,12 +201,38 @@ impl Rules {
             .or_else(|| named("Default"))
     }
 
+    /// The narrowest track `net` may have: the board minimum, or a custom rule's for the net or
+    /// its class where that is wider.
+    pub fn min_track_width_of(&self, net: &str) -> f64 {
+        let class = self.class_of(net).map(|c| c.name.as_str());
+        self.min_widths
+            .iter()
+            .filter(|(s, _)| match s {
+                Select::Net(n) => n == net,
+                Select::Class(c) => Some(c.as_str()) == class,
+            })
+            .map(|(_, v)| *v)
+            .fold(self.min_track_width, f64::max)
+    }
+
     /// The clearance the router must keep between two nets' copper: the larger of their
     /// classes' clearances, and never less than the board minimum.
     pub fn clearance(&self, a: &str, b: &str) -> f64 {
         let of = |net: &str| self.class_of(net).map_or(0.0, |c| c.clearance);
         of(a).max(of(b)).max(self.min_clearance)
     }
+}
+
+/// The nets a condition (spaces removed) selects: `A.NetName=='X'` and `A.NetClass=='X'` terms
+/// joined by `||`; `None` for any other condition.
+fn selects(condition: &str) -> Option<Vec<Select>> {
+    condition
+        .split("||")
+        .map(|term| {
+            let quoted = |prefix: &str| term.strip_prefix(prefix)?.strip_prefix('\'')?.strip_suffix('\'').map(String::from);
+            quoted("A.NetName==").map(Select::Net).or_else(|| quoted("A.NetClass==").map(Select::Class))
+        })
+        .collect()
 }
 
 /// `*` matches any run of characters, `?` any one.
@@ -315,9 +360,15 @@ mod tests {
 (rule "JLC SMD pad to pad"
   (condition "A.Pad_Type == 'SMD' && B.Pad_Type == 'SMD'")
   (constraint clearance (min 0.15mm)))
-(rule "Something else"
+(rule "Power width"
   (condition "A.NetClass == 'Power'")
-  (constraint track_width (min 0.3mm)))"#,
+  (constraint track_width (min 0.3mm)))
+(rule "VBUS current width"
+  (condition "A.NetName == 'VBUS' || A.NetName == 'VSYS'")
+  (constraint track_width (min 0.2mm)))
+(rule "Something else"
+  (condition "A.NetName == 'X'")
+  (constraint length (max 10mm)))"#,
         )
         .unwrap();
         let r = Rules::read(&pro).unwrap();
@@ -327,6 +378,10 @@ mod tests {
         near(r.smd_pad_clearance, 0.15e-3);
         assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
         assert!(r.warnings[0].contains("Something else"));
+        assert_eq!(r.min_widths.len(), 3);
+        near(r.min_track_width_of("VBUS"), 0.2e-3);
+        near(r.min_track_width_of("VSYS"), 0.2e-3);
+        near(r.min_track_width_of("OTHER"), 0.0);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

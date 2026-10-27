@@ -297,4 +297,14 @@ second pass over undone tries.
   plough 2-6 (planes-40/41), region at a fixed reach 1-3 (planes-42), widening 1-3 over 8 runs
   (planes-43), on every connection 2 0 1 2 over seeds 0-3 (planes-44): the first board with no
   signal net open. QSPI_SD0 (U1-57), open on nearly every rip-plough run, is freed in most.
+- easy2350, after the region plough: the plough's `parts: None` ("every open connection") still
+  skipped a connection whose ends were bare track, so GPIO0 was never tried; fixed. The reach
+  now doubles per connection after each undone try (to 4 mm) rather than for every connection
+  after a stalled pass. Per-net minimum widths from the .kicad_dru (`track_width (min X)` with
+  `A.NetName` or `A.NetClass` conditions, or several joined by `||`) are honoured: a net's legs
+  and escapes neck no narrower than its own minimum (`Profile::narrow_half_width`). easy_pcb's
+  dru holds VBUS to 0.2 mm, which the router had necked to 0.09 mm at pads. Signal opens on
+  seeds 0-5: 0 1 0 2 1 2, no track_width errors (planes-50). Tried without gain: --shove-cascade
+  2 (planes-45), region negotiation patience 12 or the trapped net at full weight (planes-47,
+  -48). On 37 PCBench boards the region plough is never worse than rip (pcbench-*).
 

@@ -39,6 +39,8 @@ pub struct ShoveOptions {
     pub plough: Plough,
     /// How far from the path the plough still moves copper, in nanometres.
     pub reach: Nm,
+    /// The reach for the connections of particular pads, where it is not `reach`.
+    pub reaches: HashMap<ItemId, Nm>,
     /// Steps of a gentle plough or dipole before it gives way to ripping.
     pub steps: usize,
     /// Clearance kept beyond the rules, so the grid router's cell centres fit.
@@ -75,6 +77,7 @@ impl Default for ShoveOptions {
             plough: Plough::Warp,
             steps: 8,
             reach: 2_000_000,
+            reaches: HashMap::new(),
             margin: 50_000,
             soft_cost: 3 * STRAIGHT,
             cross_cost: 40 * STRAIGHT,
@@ -147,6 +150,8 @@ pub struct ShoveTry {
     /// The pad on the part, and where it was trying to reach.
     pub pad: ItemId,
     pub to: Point,
+    /// How far from the path the plough reached.
+    pub reach: Nm,
     pub rounds: Vec<ShoveRound>,
     pub routed: bool,
     pub open_before: usize,
@@ -178,6 +183,9 @@ fn open_now(board: &Board, pours_block: bool) -> Vec<Airline> {
 }
 
 fn on_parts(board: &Board, id: ItemId, parts: &Option<HashSet<usize>>) -> bool {
+    if parts.is_none() {
+        return board.item(id).is_some_and(|it| matches!(it.kind, Kind::Pad { .. } | Kind::Track | Kind::Via));
+    }
     let wanted = |f: usize| parts.as_ref().is_none_or(|p| p.contains(&f));
     match board.item(id).map(|it| &it.kind) {
         Some(Kind::Pad { footprint, .. }) => wanted(*footprint),
@@ -240,7 +248,9 @@ pub fn shove_escape_steps(
         };
         tried.insert(pad);
         let to = if pad == airline.from_item { airline.to } else { airline.from };
-        let mut t = ShoveTry { net: airline.net, pad, to, rounds: Vec::new(), routed: false, open_before: open.len(), open_after: 0, kept: false };
+        let reach = options.reaches.get(&pad).copied().unwrap_or(options.reach);
+        let options = &ShoveOptions { reach, ..options.clone() };
+        let mut t = ShoveTry { net: airline.net, pad, to, reach, rounds: Vec::new(), routed: false, open_before: open.len(), open_after: 0, kept: false };
         tell(&options.log, "shoving", || format!("{}: {} is trapped; ploughing a way out", board.net_name(airline.net), item_name(board, pad)), Some(Focus::Connection { net: airline.net, from: airline.from, to: airline.to }));
         watch(board, ShoveEvent::Start(&t));
         let snapshot = (board.clone(), soft.clone());

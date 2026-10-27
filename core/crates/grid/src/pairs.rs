@@ -93,7 +93,7 @@ pub fn diff_pairs(board: &Board) -> Vec<Pair> {
                 let profile = Profile::for_net(board, p as u32);
                 let width = class.map(|c| nm(c.diff_pair_width)).filter(|w| *w > 0).unwrap_or(2 * profile.half_width);
                 let gap = class.map(|c| nm(c.diff_pair_gap)).filter(|g| *g > 0).unwrap_or(profile.clearance);
-                pairs.push(Pair { p: p as u32, n: n as u32, width: width.max(nm(board.rules.min_track_width)), gap: gap.max(profile.clearance) });
+                pairs.push(Pair { p: p as u32, n: n as u32, width: width.max(nm(board.rules.min_track_width_of(pn))), gap: gap.max(profile.clearance) });
             }
         }
     }

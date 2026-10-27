@@ -1,0 +1,7 @@
+(version 1)
+
+# VBUS carries 0.5 A, 0.75 A peak (design/nets.csv). IPC-2221, outer 1 oz,
+# 10 C rise: 0.75 A needs 11 mil2, 0.20 mm wide. No neck below it, even at a pad.
+(rule "VBUS current width"
+  (condition "A.NetName == 'VBUS'")
+  (constraint track_width (min 0.2mm)))
