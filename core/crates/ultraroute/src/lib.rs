@@ -1790,6 +1790,7 @@ pub fn run_with_solver(
         laid.retain(|id| board.item(*id).is_some() && seen_laid.insert(*id));
     }
     let replace = moved_parts(&board, &original_at);
+    grid::keep_orphans(&board, &removed, &mut laid);
     let (tracks, vias) = grid::edits(&board, &laid);
     let routed = apply(text, &Edit { remove: removed, replace, tracks, vias });
     let mut live = live.lock().unwrap_or_else(|e| e.into_inner());

@@ -411,3 +411,24 @@ fn shared_cell_without_copper_refuses_instead_of_looping() {
     assert_eq!(stats.failed, 1, "{stats:?}");
     assert_eq!(stats.refused, 1, "{stats:?}");
 }
+
+#[test]
+fn an_arcs_other_chords_are_written_when_one_goes() {
+    let text = "(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))
+        (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user))
+        (net 0 \"\") (net 1 \"A\")
+        (gr_rect (start 0 0) (end 30 30) (layer \"Edge.Cuts\") (width 0.1))
+        (arc (start 5 15) (mid 15 5) (end 25 15) (width 0.2) (layer \"F.Cu\") (net 1) (uuid \"0b10c000-0000-4000-8000-0000000000c1\")))";
+    let (pcb, copper) = kicad_pcb::parse_board(text).unwrap();
+    let mut b = board::Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+    let chords: Vec<board::ItemId> = b.items().filter(|(_, it)| it.kind == board::Kind::Track).map(|(id, _)| id).collect();
+    assert!(chords.len() > 2, "an arc is several chords");
+    // A stage rips one chord: its span, the arc's, goes from the file.
+    let gone = b.remove(chords[0]).unwrap();
+    let removed = vec![gone.span.unwrap()];
+    let mut laid = Vec::new();
+    keep_orphans(&b, &removed, &mut laid);
+    assert_eq!(laid.len(), chords.len() - 1, "every other chord is written anew");
+    let (tracks, _) = edits(&b, &laid);
+    assert_eq!(tracks.len(), chords.len() - 1);
+}

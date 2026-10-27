@@ -530,6 +530,21 @@ fn flush(pieces: &mut Vec<Item>, run: &[Point], grid: &RouteGrid, layer: usize) 
 }
 
 /// The routed copper as edits for the board file.
+/// Adds to `laid` the file's copper still on the board whose text is going (its span is in
+/// `removed`), so that it is written back as the router's own: a KiCad arc is several chords
+/// sharing one span, and when one chord was ripped or moved the arc's whole text goes, the other
+/// chords with it unless written anew. Call before [`edits`].
+pub fn keep_orphans(board: &Board, removed: &[kicad_pcb::Span], laid: &mut Vec<ItemId>) {
+    let gone: std::collections::HashSet<(usize, usize)> = removed.iter().map(|s| (s.start, s.end)).collect();
+    let mine: std::collections::HashSet<ItemId> = laid.iter().copied().collect();
+    let orphans: Vec<ItemId> = board
+        .items()
+        .filter(|(id, it)| matches!(it.kind, Kind::Track | Kind::Via) && it.span.is_some_and(|s| gone.contains(&(s.start, s.end))) && !mine.contains(id))
+        .map(|(id, _)| id)
+        .collect();
+    laid.extend(orphans);
+}
+
 pub fn edits(board: &Board, laid: &[ItemId]) -> (Vec<kicad_pcb::NewTrack>, Vec<kicad_pcb::NewVia>) {
     let metres = |p: Point| [p.x as f64 * 1e-9, p.y as f64 * 1e-9];
     let mut tracks = Vec::new();

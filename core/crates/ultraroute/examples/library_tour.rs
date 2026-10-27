@@ -129,7 +129,9 @@ fn main() {
     }
 
     // 7. Write. The router's copper becomes new segments and vias appended to the file; the
-    // spans collected above are deleted. Every other byte of the file is kept.
+    // spans collected above are deleted. Every other byte of the file is kept. File copper
+    // that shares a deleted span (the other chords of an arc) is written anew.
+    grid::keep_orphans(&board, &removed, &mut laid);
     let (tracks, vias) = grid::edits(&board, &laid);
     let routed = apply(&text, &Edit { remove: removed, replace: Vec::new(), tracks, vias });
     std::fs::write(output, routed).expect("write the routed board");

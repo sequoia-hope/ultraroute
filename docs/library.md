@@ -35,7 +35,8 @@ A run goes like this:
    rip, move and tighten, and what is written back.
 4. Whatever leaves the board that came from the file (stripped, ripped, moved) has a `Span`, the
    byte range of its text. Keep every such span in a `removed` list.
-5. `grid::edits(&board, &laid)` turns the router's copper into `NewTrack`s and `NewVia`s, and
+5. `grid::keep_orphans(&board, &removed, &mut laid)` adds file copper that shares a removed span
+   (an arc's other chords), then `grid::edits(&board, &laid)` turns the router's copper into `NewTrack`s and `NewVia`s, and
    `kicad_pcb::apply(&text, &Edit { remove, replace, tracks, vias })` returns the new file text:
    spans deleted, new copper appended before the final paren, every other byte as it was.
 
@@ -93,7 +94,9 @@ clearance two nets' copper must keep, in nanometres, from their classes.
 **Kinds.** `Kind::Pad { footprint, number, plated }`, `Track`, `Via`,
 `Pour { zone, kept }` and `Keepout { forbids, footprint }`. Tracks and vias are
 `Shape::Capsule { a, b, r }` (a via has `a == b`); pads, pours and keepouts are capsules or
-`Shape::Polygon`. A KiCad arc becomes several straight track items.
+`Shape::Polygon`. A KiCad arc becomes several straight track items that share the arc's one
+span; call `grid::keep_orphans(&board, &removed, &mut laid)` before `edits` so that, when a stage
+ripped or moved one chord (taking the arc's text with it), the others are written anew.
 
 **Pours.** A pour that KiCad refills (`kept: false`) is normally not an obstacle: the routers
 route through it and leave KiCad to pour round the new copper. Every stage's `pours_block` option

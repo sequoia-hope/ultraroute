@@ -36,7 +36,7 @@ pub use prefanout::{prefanout, prune_closed_escapes, EscapeMode, EscapeOrder, Pr
 pub use report::{item_name, Activity, Focus, Log};
 pub use negotiate::{price_into, route_negotiated, route_negotiated_rounds, NegotiationOptions, NegotiationStats, RoundView, Trial};
 pub use ripup::{rip_up, rip_up_watch, RipAttempt, RipOptions, RipStats};
-pub use route::{edits, route_open, terminal_cells, CpuSolver, FieldSolver, Options, PricedJob, RoundPrices, Stats};
+pub use route::{edits, keep_orphans, route_open, terminal_cells, CpuSolver, FieldSolver, Options, PricedJob, RoundPrices, Stats};
 pub use tune::{match_lengths, match_lengths_watch, pair_lengths, TuneBump, TuneStats};
 pub use shove::{plough_fields, shove_escape, shove_escape_steps, Plough, ShoveEvent, ShoveOptions, ShoveRound, ShoveStats, ShoveTry};
 #[cfg(feature = "gpu")]
