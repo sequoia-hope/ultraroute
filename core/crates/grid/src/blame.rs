@@ -441,6 +441,7 @@ mod tests {
             via_blocked: vec![false; 400],
             penalty: Vec::new(),
             via_penalty: Vec::new(),
+            region_cost: Vec::new(),
             pours_block: false,
         };
         let p = pad(Shape::Capsule { a: Point::new(1000, 1000), b: Point::new(1000, 1000), r: 100 }, 300.0);

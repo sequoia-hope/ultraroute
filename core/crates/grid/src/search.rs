@@ -477,6 +477,7 @@ mod tests {
             via_blocked: vec![false; nx * ny],
             penalty: Vec::new(),
             via_penalty: Vec::new(),
+            region_cost: Vec::new(),
             pours_block: false,
         };
         let via_at = |path: &GridPath| path.windows(2).find(|w| w[0].0 != w[1].0).map(|w| w[1].1);
@@ -517,6 +518,7 @@ mod tests {
             via_blocked: (0..nx * ny).map(|_| next() % 3 == 0).collect(),
             penalty: (0..nodes).map(|_| (next() % 5) as u32).collect(),
             via_penalty: (0..nx * ny).map(|_| (next() % 7) as u32).collect(),
+            region_cost: Vec::new(),
             pours_block: false,
         }
     }

@@ -112,6 +112,7 @@ pub fn rip_up_watch(
         via_blocked: Vec::new(),
         penalty: Vec::new(),
         via_penalty: Vec::new(),
+        region_cost: Vec::new(),
         pours_block: options.pours_block,
     };
     let mut tried: HashSet<(ItemId, ItemId)> = HashSet::new();

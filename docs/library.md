@@ -586,3 +586,19 @@ size and a dispatch function so negotiation's rounds go out to a pool of workers
 `set_round`, `route_priced_job` or `route_packed_job` on their own copies of the module.
 `last_panic()` returns the message of a panic, which WebAssembly reports only as
 `unreachable`. A run cannot be stopped from inside; the page terminates the worker.
+
+## Routing regions and length limits
+
+`--regions FILE` (or `board.regions` from a program) takes a planner's areas with rules for which
+nets may run there: circuit-composer's `routing.json`, version 1. Each region is a polygon in mm
+(KiCad's frame), its copper layers (all by default) and rules: `never` (keep out), `must` (stay
+inside, on the region's layers), `avoid` / `prefer` with a `weight` (a track pays `weight` times
+its length inside, or outside; a via pays `weight` mm of track), for tracks or, with `"vias":
+true`, for vias. A rule holds for the nets and classes it names, `"*"` for all. The board keeps
+them as `board::Region`; each obstacle map rasterises them once (`grid::regions`) and every net's
+view gets the rules that hold for it: hard rules as blocked cells, costs in
+`RouteGrid::region_cost` and `via_penalty`, which the CPU searches add to every step (the GPU
+and the studio's worker pool do not see the costs yet). `max_lengths` entries
+(`{"nets": [...], "max_length_mm": N}`) are checked and reported at the end, with copper that
+breaks a region's hard rule, by region name; they are not yet routed to.
+

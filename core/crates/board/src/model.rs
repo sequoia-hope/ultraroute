@@ -184,6 +184,8 @@ pub struct Board {
     /// What a via in a via-avoid area costs the router beyond any other, in its search's units
     /// (10 a grid cell): a long way round, but never a wall.
     pub via_avoid_cost: u32,
+    /// Routing regions a planner set, with rules for which nets may run where.
+    pub regions: Vec<crate::regions::Region>,
     /// Clearances per net number, in nanometres, so `clearance(a, b)` is two array lookups.
     net_clearances: Vec<Nm>,
     min_clearance_nm: Nm,
@@ -264,6 +266,7 @@ impl Board {
             pad_clearances: HashMap::new(),
             via_avoid: Vec::new(),
             via_avoid_cost: 3_000,
+            regions: Vec::new(),
             net_clearances,
             min_clearance_nm,
             items: Vec::new(),

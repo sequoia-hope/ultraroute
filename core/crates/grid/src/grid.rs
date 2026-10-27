@@ -94,6 +94,9 @@ pub struct RouteGrid {
     /// Per cell: extra cost of a via standing there, in a via-avoid area, plus negotiation's price
     /// for vias crowding there when it prices them; empty for none.
     pub via_penalty: Vec<u32>,
+    /// Per routing layer and cell: what the board's routing regions charge for entering it, on
+    /// top of `penalty`, which the stages set for their own ends; empty for none.
+    pub region_cost: Vec<u32>,
     /// Pours are planes to keep clear of, not copper refilled around the route.
     pub pours_block: bool,
 }
@@ -107,7 +110,7 @@ impl RouteGrid {
 
 impl RouteGrid {
     pub fn penalty_at(&self, index: usize) -> u32 {
-        self.penalty.get(index).copied().unwrap_or(0)
+        self.penalty.get(index).copied().unwrap_or(0) + self.region_cost.get(index).copied().unwrap_or(0)
     }
 
     pub fn via_penalty_at(&self, cell: usize) -> u32 {
@@ -143,11 +146,13 @@ pub struct ObstacleMap {
     pub h: Nm,
     pub nx: usize,
     pub ny: usize,
-    layers: usize,
+    pub(crate) layers: usize,
     owner: Vec<i32>,
     via_owner: Vec<i32>,
     /// Per cell: the extra cost of a via there, in the board's via-avoid areas; empty for none.
     via_avoid: Vec<u32>,
+    /// The board's routing regions on these cells, applied to each net's view.
+    pub(crate) regions: Vec<crate::regions::RegionRaster>,
 }
 
 
@@ -177,9 +182,11 @@ impl ObstacleMap {
             owner: vec![FREE; layers * nx * ny],
             via_owner: vec![FREE; nx * ny],
             via_avoid: Vec::new(),
+            regions: Vec::new(),
         };
         map.stamp_outline(board);
         map.stamp_via_avoid(board);
+        map.regions = map.region_rasters(board);
         map.stamp_mask_areas(board);
         let max_clr = (0..board.nets.len() as u32)
             .map(|n| map.clearance_to(board, n))
@@ -226,9 +233,11 @@ impl ObstacleMap {
             owner: vec![FREE; layers * nx * ny],
             via_owner: vec![FREE; nx * ny],
             via_avoid: Vec::new(),
+            regions: Vec::new(),
         };
         map.stamp_outline(board);
         map.stamp_via_avoid(board);
+        map.regions = map.region_rasters(board);
         map.stamp_mask_areas(board);
         let ids: Vec<ItemId> = board.items().map(|(id, _)| id).filter(|id| !skip(*id)).collect();
         for id in ids {
@@ -277,7 +286,7 @@ impl ObstacleMap {
         (self.h as f64 * STEP_REACH).ceil() as Nm
     }
 
-    fn centre(&self, i: usize, j: usize) -> Point {
+    pub(crate) fn centre(&self, i: usize, j: usize) -> Point {
         Point::new(self.x0 + (2 * i as Nm + 1) * self.h / 2, self.y0 + (2 * j as Nm + 1) * self.h / 2)
     }
 
@@ -291,7 +300,7 @@ impl ObstacleMap {
     }
 
     /// Calls `f` for every cell whose centre lies closer than `margin` to `shape`.
-    fn cells_near(&self, shape: &Shape, margin: Nm, f: &mut dyn FnMut(usize)) {
+    pub(crate) fn cells_near(&self, shape: &Shape, margin: Nm, f: &mut dyn FnMut(usize)) {
         let range = |lo: Nm, hi: Nm, origin: Nm, n: usize| {
             let a = ((lo - origin) as f64 / self.h as f64 - 0.5).floor().max(0.0) as usize;
             let b = (((hi - origin) as f64 / self.h as f64 - 0.5).ceil().max(0.0) as usize).min(n.saturating_sub(1));
@@ -594,12 +603,14 @@ impl ObstacleMap {
         grid.via_blocked.extend(self.via_owner.iter().map(|&o| !free(o)));
         grid.penalty.clear();
         grid.via_penalty.clone_from(&self.via_avoid);
+        grid.region_cost.clear();
         grid.pours_block = self.pours_block;
+        self.apply_regions(net, grid);
     }
 
     pub fn view(&self, net: u32) -> RouteGrid {
         let free = |o: i32| o == FREE || o == net as i32;
-        RouteGrid {
+        let mut grid = RouteGrid {
             net,
             x0: self.x0,
             y0: self.y0,
@@ -613,8 +624,11 @@ impl ObstacleMap {
             via_blocked: self.via_owner.iter().map(|&o| !free(o)).collect(),
             penalty: Vec::new(),
             via_penalty: self.via_avoid.clone(),
+            region_cost: Vec::new(),
             pours_block: self.pours_block,
-        }
+        };
+        self.apply_regions(net, &mut grid);
+        grid
     }
 }
 

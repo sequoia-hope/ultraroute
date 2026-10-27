@@ -24,9 +24,11 @@ use board::{connectivity, connectivity_without_pours, Board, Item, ItemId, Kind,
 use kicad_pcb::{apply, mm, Edit};
 use serde_json::{json, Value};
 
+mod regions;
+
 pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--no-negotiate-vias] [--no-negotiate-rip] [--no-negotiate-tree] [--negotiate-legacy] [--diff-pairs] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--gpu] \
 [--timeout SECONDS] [--cell MM] [--first NET,...] [--first-negotiate] [--first-weight W] [--restart N] [--topo-first REF,...|auto] [--topo-trapped] [--topo-trapped-rip] [--topo-sample MM] \
-[--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--push-decay D] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough warp|linear|rip|gentle|dipole|region] [--shove-steps N] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-late] [--shove-seconds S] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
+[--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--push-decay D] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough warp|linear|rip|gentle|dipole|region] [--shove-steps N] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-late] [--shove-seconds S] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
 [--live PATH|-] [--live-fps N] [--live-step MS] [--blame]
 --push and --place take millimetres with y pointing up: give KiCad's y negated (KiCad y 127.5 is -127.5).";
 
@@ -133,6 +135,8 @@ pub struct Args {
     /// Boxes, in millimetres, where vias cost dearly but are allowed.
     pub via_avoid: Vec<[f64; 4]>,
     pub via_avoid_cost: Option<u32>,
+    /// A planner's routing regions and length limits (JSON), see `regions`.
+    pub regions: Option<String>,
     /// Take inner layers that one net's pour all but fills as planes, as --planes would.
     pub auto_planes: bool,
     /// Treat the board's unlocked tracks and vias as the router's own: free to rip, move and
@@ -219,6 +223,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         rip_regions: Vec::new(),
         via_avoid: Vec::new(),
         via_avoid_cost: None,
+        regions: None,
         auto_planes: false,
         adopt: false,
         chase: false,
@@ -402,6 +407,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                 a.via_avoid.push([x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)]);
             }
             "--auto-planes" => a.auto_planes = true,
+            "--regions" => a.regions = Some(value()?),
             "--via-avoid-cost" => a.via_avoid_cost = Some(value()?.parse().map_err(|e| format!("--via-avoid-cost: {e}"))?),
             "--rip-region" => {
                 let v = value()?;
@@ -1091,6 +1097,10 @@ pub fn run_with_solver(
     if let Some(c) = a.via_avoid_cost {
         board.via_avoid_cost = c;
     }
+    let lengths = match &a.regions {
+        Some(path) => regions::load(path, &mut board).unwrap_or_else(|e| panic!("{e}")),
+        None => Vec::new(),
+    };
     for &[x0, y0, x1, y1] in &a.via_avoid {
         let p = |x: f64, y: f64| Point::new((x * 1e6).round() as i64, (y * 1e6).round() as i64);
         board.via_avoid.push(Shape::Polygon(vec![p(x0, y0), p(x1, y0), p(x1, y1), p(x0, y1)]));
@@ -1853,6 +1863,10 @@ pub fn run_with_solver(
         // Escapes may have joined `laid` twice over, or been ripped since.
         let mut seen_laid = HashSet::new();
         laid.retain(|id| board.item(*id).is_some() && seen_laid.insert(*id));
+    }
+    for line in regions::report(&board, &lengths, &laid) {
+        eprintln!("regions: {line}");
+        say("regions", line);
     }
     let replace = moved_parts(&board, &original_at);
     grid::keep_orphans(&board, &removed, &mut laid);

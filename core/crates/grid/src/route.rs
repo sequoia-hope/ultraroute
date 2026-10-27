@@ -159,6 +159,7 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
         via_blocked: Vec::new(),
         penalty: Vec::new(),
         via_penalty: Vec::new(),
+        region_cost: Vec::new(),
         pours_block: options.pours_block,
     };
     let mut given_up: BTreeSet<(ItemId, ItemId)> = BTreeSet::new();

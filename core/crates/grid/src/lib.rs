@@ -18,6 +18,7 @@ pub mod planes;
 pub mod push;
 pub mod ripup;
 pub mod route;
+mod regions;
 pub mod search;
 pub mod shove;
 pub mod tune;
