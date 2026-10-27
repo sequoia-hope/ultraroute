@@ -26,7 +26,7 @@ use serde_json::{json, Value};
 
 mod regions;
 
-pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--no-negotiate-vias] [--no-negotiate-rip] [--no-negotiate-tree] [--negotiate-legacy] [--diff-pairs] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--gpu] \
+pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--no-negotiate-vias] [--no-negotiate-rip] [--no-negotiate-tree] [--negotiate-legacy] [--diff-pairs] [--diff-pairs-legacy] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--gpu] \
 [--timeout SECONDS] [--cell MM] [--first NET,...] [--first-negotiate] [--first-weight W] [--restart N] [--topo-first REF,...|auto] [--topo-trapped] [--topo-trapped-rip] [--topo-sample MM] \
 [--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--push-decay D] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough warp|linear|rip|gentle|dipole|region] [--shove-steps N] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-late] [--shove-seconds S] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
 [--live PATH|-] [--live-fps N] [--live-step MS] [--blame]
@@ -42,6 +42,8 @@ pub struct Args {
     /// pads are first bridged inward to their pours.
     /// Route differential pairs (USB D+ and D-) coupled, before anything else.
     pub diff_pairs: bool,
+    /// Use the legacy single-layer, legless differential pair stage, for comparison.
+    pub diff_pairs_legacy: bool,
     /// Layers given whole to a plane (`In1.Cu,In2.Cu`): no tracks on them, vias through them, and
     /// their pours join their nets.
     pub planes: Vec<String>,
@@ -165,6 +167,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         strip: false,
         strip_all: false,
         diff_pairs: false,
+        diff_pairs_legacy: false,
         planes: Vec::new(),
         negotiate_rounds: None,
         negotiate_patience: None,
@@ -247,6 +250,10 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             "--strip" => a.strip = true,
             "--strip-all" => a.strip_all = true,
             "--diff-pairs" => a.diff_pairs = true,
+            "--diff-pairs-legacy" => {
+                a.diff_pairs = true;
+                a.diff_pairs_legacy = true;
+            }
             "--negotiate-rounds" => a.negotiate_rounds = Some(value()?.parse().map_err(|e| format!("--negotiate-rounds: {e}"))?),
             "--negotiate-patience" => a.negotiate_patience = Some(value()?.parse().map_err(|e| format!("--negotiate-patience: {e}"))?),
             "--negotiate-growth" => {
@@ -1008,6 +1015,30 @@ fn shove_pass(
     removed
 }
 
+/// Footprints that may not be nudged or pushed: the board's own locked parts, plus any part
+/// joined to locked differential-pair copper so moving a part never tears its pair legs loose.
+fn locked_footprints(board: &Board, pair_laid: &[ItemId], legacy_pairs: bool) -> HashSet<usize> {
+    let mut out: HashSet<usize> = board.footprints.iter().enumerate().filter(|(_, f)| f.locked).map(|(i, _)| i).collect();
+    if legacy_pairs || pair_laid.is_empty() {
+        return out;
+    }
+    let pair_set: HashSet<ItemId> = pair_laid.iter().copied().filter(|&id| board.item(id).is_some()).collect();
+    for (id, it) in board.items() {
+        let Kind::Pad { footprint, .. } = it.kind else { continue };
+        if out.contains(&footprint) || it.net == 0 {
+            continue;
+        }
+        let bb = board.bbox(id).unwrap_or_else(|| it.shape.bbox());
+        let touches_pair = (0..board.layers.len()).filter(|&l| it.on(l)).any(|l| {
+            board.near(l, bb).into_iter().any(|o| pair_set.contains(&o) && board::joined(board, id, o))
+        });
+        if touches_pair {
+            out.insert(footprint);
+        }
+    }
+    out
+}
+
 /// Routes `board`, read from `text`, as `a` asks, and returns the routed board's text. `live`
 /// receives the run as frames; setting `cancel` stops it at the next connection.
 pub fn run(a: &Args, board: Board, text: &str, live: Option<Live>, cancel: Arc<AtomicBool>) -> String {
@@ -1184,9 +1215,16 @@ pub fn run_with_solver(
     if a.prefanout {
         let parts = morph::fine_pitch(&board, 500_000);
         let defaults = grid::PrefanoutOptions::default();
-        // A pair whose ends share a layer is left for its coupled run to reach straight.
-        let skip_nets: HashSet<u32> = if a.diff_pairs {
+        // Open differential pairs are held back from pre-fanout so `route_pairs` can fan out and
+        // couple their pads together; any pair pad still open afterwards is escaped below.
+        let skip_nets: HashSet<u32> = if a.diff_pairs && a.diff_pairs_legacy {
             grid::diff_pairs(&board).iter().filter(|p| grid::shares_layer(&board, p)).flat_map(|p| [p.p, p.n]).collect()
+        } else if a.diff_pairs {
+            grid::diff_pairs(&board)
+                .iter()
+                .filter(|p| grid::shares_layer(&board, p) && grid::pair_has_open_runs(&board, p, a.pours_block))
+                .flat_map(|p| [p.p, p.n])
+                .collect()
         } else {
             HashSet::new()
         };
@@ -1252,6 +1290,7 @@ pub fn run_with_solver(
             &grid::PairOptions {
                 cell: a.cell.unwrap_or(grid::PairOptions::default().cell),
                 pours_block: a.pours_block,
+                legacy: a.diff_pairs_legacy,
                 log: log.clone(),
             },
             &mut watch,
@@ -1259,6 +1298,48 @@ pub fn run_with_solver(
         eprintln!("pairs: {} pairs, {} of {} runs coupled, {:.1} mm, {:.1} s", p.pairs, p.coupled, p.runs, p.coupled_mm, started.elapsed().as_secs_f64());
         step(&board);
         pair_laid.extend(p.laid);
+        fanout_laid.retain(|&id| board.item(id).is_some_and(|it| !it.locked));
+        if a.prefanout && !a.diff_pairs_legacy {
+            let fine: HashSet<usize> = morph::fine_pitch(&board, 500_000).into_iter().collect();
+            let pair_nets: HashSet<u32> = grid::diff_pairs(&board).iter().flat_map(|pr| [pr.p, pr.n]).collect();
+            let open = if a.pours_block { connectivity(&board) } else { connectivity_without_pours(&board) }.airlines;
+            let open_fine_pair_nets: HashSet<u32> = open
+                .iter()
+                .filter(|air| pair_nets.contains(&air.net))
+                .filter(|air| {
+                    [air.from_item, air.to_item].iter().any(|&id| {
+                        board.item(id).is_some_and(|it| matches!(it.kind, Kind::Pad { footprint, .. } if fine.contains(&footprint)))
+                    })
+                })
+                .map(|air| air.net)
+                .collect();
+            if !open_fine_pair_nets.is_empty() {
+                let skip_others: HashSet<u32> = (1..board.nets.len() as u32).filter(|n| !open_fine_pair_nets.contains(n)).collect();
+                let defaults = grid::PrefanoutOptions::default();
+                let f = grid::prefanout(
+                    &mut board,
+                    &grid::PrefanoutOptions {
+                        global_cell: a.cell.unwrap_or(defaults.global_cell),
+                        ring: a.prefanout_ring.unwrap_or(defaults.ring),
+                        mode: a.prefanout_mode.unwrap_or(defaults.mode),
+                        order: a.prefanout_order.unwrap_or(defaults.order),
+                        inward: false,
+                        parts: fine.into_iter().collect(),
+                        skip_nets: skip_others,
+                        pours_block: a.pours_block,
+                        cancel: Some(cancel.clone()),
+                        log: log.clone(),
+                        ..defaults
+                    },
+                    &mut watch,
+                );
+                if a.prefanout_soft {
+                    laid.extend(f.laid);
+                } else {
+                    fanout_laid.extend(f.laid);
+                }
+            }
+        }
     }
     let cores = std::thread::available_parallelism().map_or(1, |n| n.get() / 2).max(1);
     let threads = a.threads.unwrap_or(cores);
@@ -1579,7 +1660,7 @@ pub fn run_with_solver(
                 decay: a.push_decay,
             };
             say("pushing", format!("flowing everything free to move away from ({x}, {y}) mm"));
-            let locked = board.footprints.iter().enumerate().filter(|(_, f)| f.locked).map(|(i, _)| i).collect();
+            let locked = locked_footprints(&board, &pair_laid, a.diff_pairs_legacy);
             let p = grid::push(
                 &mut board,
                 &field,
@@ -1826,7 +1907,7 @@ pub fn run_with_solver(
         }
     }
     if a.nudge {
-        let locked = board.footprints.iter().enumerate().filter(|(_, f)| f.locked).map(|(i, _)| i).collect();
+        let locked = locked_footprints(&board, &pair_laid, a.diff_pairs_legacy);
         let n = grid::nudge(
             &mut board,
             solver.as_mut(),
@@ -2051,6 +2132,11 @@ mod tests {
         assert!(!custom.negotiate_rip);
         assert!(!custom.negotiate_tree);
         assert!(parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--negotiate-repasses", "nope"])).is_err());
+
+        let dp = parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--diff-pairs"])).unwrap();
+        assert!(dp.diff_pairs && !dp.diff_pairs_legacy);
+        let dpl = parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--diff-pairs-legacy"])).unwrap();
+        assert!(dpl.diff_pairs && dpl.diff_pairs_legacy);
     }
 }
 

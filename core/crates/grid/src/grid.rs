@@ -147,10 +147,10 @@ pub struct ObstacleMap {
     pub nx: usize,
     pub ny: usize,
     pub(crate) layers: usize,
-    owner: Vec<i32>,
-    via_owner: Vec<i32>,
+    pub(crate) owner: Vec<i32>,
+    pub(crate) via_owner: Vec<i32>,
     /// Per cell: the extra cost of a via there, in the board's via-avoid areas; empty for none.
-    via_avoid: Vec<u32>,
+    pub(crate) via_avoid: Vec<u32>,
     /// The board's routing regions on these cells, applied to each net's view.
     pub(crate) regions: Vec<crate::regions::RegionRaster>,
 }
@@ -166,6 +166,19 @@ impl ObstacleMap {
     /// A map covering only `bounds`, for fine-grid work such as escaping a single package without
     /// paying for a fine grid over the whole board.
     pub fn window(board: &Board, profile: Profile, h: Nm, bounds: board::BBox, pours_block: bool) -> ObstacleMap {
+        ObstacleMap::window_without(board, profile, h, bounds, pours_block, &|_| false)
+    }
+
+    /// A windowed map with the items `skip` names left out, as [`ObstacleMap::without`] does on
+    /// the whole board.
+    pub fn window_without(
+        board: &Board,
+        profile: Profile,
+        h: Nm,
+        bounds: board::BBox,
+        pours_block: bool,
+        skip: &dyn Fn(ItemId) -> bool,
+    ) -> ObstacleMap {
         let (x0, y0) = (bounds.min.x, bounds.min.y);
         let nx = ((bounds.max.x - x0) / h).max(1) as usize;
         let ny = ((bounds.max.y - y0) / h).max(1) as usize;
@@ -203,7 +216,7 @@ impl ObstacleMap {
         .grow(copper_margin.max(hole_margin) + h);
         let ids: Vec<ItemId> = board
             .items()
-            .filter_map(|(id, _)| board.bbox(id).filter(|b| b.overlaps(reach_box)).map(|_| id))
+            .filter_map(|(id, _)| (!skip(id)).then(|| board.bbox(id).filter(|b| b.overlaps(reach_box)).map(|_| id)).flatten())
             .collect();
         for id in ids {
             map.stamp(board, id);
