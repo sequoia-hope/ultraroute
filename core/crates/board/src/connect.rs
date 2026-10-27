@@ -70,12 +70,13 @@ fn cluster_member(board: &Board, item: &crate::model::Item, with_pours: bool) ->
 /// its whole disc, any other pad at its centre; two items join where an anchor of one overlaps
 /// the other's copper, so copper that merely overlaps a pad's corner or crosses a track does not
 /// connect. Overlap means more than touching: KiCad leaves two collinear pieces of track whose
-/// round ends only touch (0.15 mm wide, their ends 0.15 mm apart) unconnected. Pours join
-/// wherever they touch.
+/// round ends only touch (0.15 mm wide, their ends 0.15 mm apart) unconnected. Polygon pads, and
+/// pours, join wherever they touch.
 pub fn joined(board: &Board, a: ItemId, b: ItemId) -> bool {
     let (Some(x), Some(y)) = (board.item(a), board.item(b)) else { return false };
     let pour = |it: &crate::model::Item| matches!(it.kind, Kind::Pour { .. });
-    if pour(x) || pour(y) {
+    let poly_pad = |it: &crate::model::Item| matches!(it.kind, Kind::Pad { .. }) && matches!(it.shape, Shape::Polygon(_));
+    if pour(x) || pour(y) || (poly_pad(x) && poly_pad(y)) {
         return x.shape.gap_within(&y.shape, 0.0) == 0.0;
     }
     let reaches = |from: &crate::model::Item, from_id: ItemId, into: &crate::model::Item| {

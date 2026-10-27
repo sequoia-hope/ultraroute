@@ -505,7 +505,9 @@ pub(crate) fn pieces(grid: &RouteGrid, path: &GridPath, sources: &[Terminal], ta
     }
     flush(&mut pieces, &run, grid, run_layer);
     pieces.extend(neck);
-    Some(pieces)
+    // A one-cell path where start and end share a free cell without legs lays no copper and
+    // leaves disconnected items disconnected; refusing it keeps callers from counting a no-op.
+    (!pieces.is_empty()).then_some(pieces)
 }
 
 fn cross(a: Point, b: Point, c: Point) -> i128 {

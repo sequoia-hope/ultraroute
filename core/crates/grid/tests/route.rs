@@ -371,3 +371,43 @@ fn route_open_and_negotiate_respect_net_filter_and_weights() {
     assert!(n.committed > 0, "{n:?}");
     assert_clean_and_on_nets(&before2, &b2, &n.laid, &only_tree);
 }
+
+#[test]
+fn shared_cell_without_copper_refuses_instead_of_looping() {
+    // A locked track crossing a pad's corner without ending in it is unjoined in the board model
+    // yet shares free cells inside the overlap; if every other cell around them is walled off so
+    // only the shared one-cell path exists, `route_open` must refuse the zero-piece path and stop.
+    let src = r#"(kicad_pcb
+      (version 20241229)
+      (generator "pcbnew")
+      (general (thickness 1.6))
+      (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+      (net 0 "")
+      (net 1 "SIG")
+      (net 2 "WALL")
+      (net 3 "WALL_B")
+      (gr_rect (start 0 0) (end 40 40) (stroke (width 0.1) (type default)) (fill none) (layer "Edge.Cuts"))
+      (footprint "Test:FP" (layer "F.Cu") (uuid "00000000-0000-0000-0000-000000000010") (at 20 20)
+        (pad "1" smd rect (at 0 0) (size 2.0 2.0) (layers "F.Cu") (net 1 "SIG"))
+        (pad "2" smd rect (at 0 0) (size 10.0 10.0) (layers "B.Cu") (net 3 "WALL_B"))
+      )
+      (segment (start 18.0 20.85) (end 22.0 20.85) (width 0.25) (locked yes) (layer "F.Cu") (net 1))
+      (segment (start 17.5 18.5) (end 22.5 18.5) (width 1.2) (locked yes) (layer "F.Cu") (net 2))
+      (segment (start 17.5 22.0) (end 22.5 22.0) (width 1.2) (locked yes) (layer "F.Cu") (net 2))
+      (segment (start 17.5 18.5) (end 17.5 22.0) (width 1.2) (locked yes) (layer "F.Cu") (net 2))
+      (segment (start 22.5 18.5) (end 22.5 22.0) (width 1.2) (locked yes) (layer "F.Cu") (net 2))
+    )"#;
+    let (pcb, copper) = kicad_pcb::parse_board(src).unwrap();
+    let pro = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/earring.kicad_pro");
+    let mut b = Board::new(&pcb, &copper, kicad_pcb::Rules::read(&pro).unwrap());
+    assert_eq!(connectivity_without_pours(&b).airlines.len(), 1);
+    let stats = route_open(
+        &mut b,
+        &mut CpuSolver,
+        &Options { cell: 50_000, max_seconds: Some(2.0), ..Default::default() },
+        &mut |_| {},
+    );
+    assert_eq!(stats.routed, 0, "{stats:?}");
+    assert_eq!(stats.failed, 1, "{stats:?}");
+    assert_eq!(stats.refused, 1, "{stats:?}");
+}
