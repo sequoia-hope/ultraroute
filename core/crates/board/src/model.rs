@@ -332,7 +332,8 @@ impl Board {
             }
             ids.push(board.insert(base));
             // A slot's hole is longer than the circle `hole` holds: an unplated one keeps tracks
-            // and vias the hole clearance from all of it. (A plated one's copper covers it.)
+            // and vias clear of all of it, by the edge clearance, as KiCad takes an unplated slot
+            // for board edge. (A plated one's copper covers it.)
             if let (Some(d), false) = (model.drill, plated) {
                 if (d[0] - d[1]).abs() > 1e-6 {
                     let (s, c) = model.rotation_deg.to_radians().sin_cos();
@@ -343,7 +344,7 @@ impl Board {
                         kind: Kind::Keepout { forbids: Keepout { tracks: true, vias: true, ..Keepout::default() }, footprint: Some(pad.footprint) },
                         net: 0,
                         layers: (1u64 << board.layers.len()) - 1,
-                        shape: Shape::Capsule { a: end(-1.0), b: end(1.0), r: nm(d[0].min(d[1]) / 2.0 + board.rules.min_hole_clearance) },
+                        shape: Shape::Capsule { a: end(-1.0), b: end(1.0), r: nm(d[0].min(d[1]) / 2.0 + board.rules.min_hole_clearance.max(board.rules.min_copper_edge_clearance)) },
                         hole: None,
                         locked: true,
                         span: None,
@@ -476,6 +477,33 @@ impl Board {
             }
         }
         board
+    }
+
+    /// Inner copper layers that are planes in all but name: one net's pours cover at least
+    /// `share` of the board there. The layer index and the net, for each.
+    pub fn plane_layers(&self, share: f64) -> Vec<(usize, u32)> {
+        let area = |p: &[Point]| {
+            (0..p.len()).map(|i| (p[i].x as f64) * (p[(i + 1) % p.len()].y as f64) - (p[(i + 1) % p.len()].x as f64) * (p[i].y as f64)).sum::<f64>().abs() / 2.0
+        };
+        let Some(outer) = self.outline.first() else { return Vec::new() };
+        let board_area = area(outer) - self.outline.iter().skip(1).map(|h| area(h)).sum::<f64>();
+        let mut out = Vec::new();
+        for l in 1..self.layers.len().saturating_sub(1) {
+            let mut by_net: HashMap<u32, f64> = HashMap::new();
+            for (_, it) in self.items() {
+                if let (Kind::Pour { .. }, Shape::Polygon(p)) = (&it.kind, &it.shape) {
+                    if it.net != 0 && it.on(l) && !it.drawn() {
+                        *by_net.entry(it.net).or_default() += area(p);
+                    }
+                }
+            }
+            if let Some((&net, &a)) = by_net.iter().max_by(|x, y| x.1.total_cmp(y.1)) {
+                if board_area > 0.0 && a >= share * board_area {
+                    out.push((l, net));
+                }
+            }
+        }
+        out
     }
 
     /// Whether a via of radius `r` at `p` would reach into a via-avoid area.

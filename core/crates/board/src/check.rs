@@ -71,6 +71,17 @@ impl Limits {
         if through_hole(a) || through_hole(b) { self.pth_hole_clearance } else { self.hole_clearance }
     }
 
+    /// How far copper keeps from the hole of `hole` (item `id`): its hole clearance, and for a
+    /// track or via near an unplated hole, the hole's pad's own clearance where wider. (An
+    /// unplated slot is board edge to KiCad; its keepout holds the edge clearance.)
+    fn hole_keep(&self, board: &Board, id: ItemId, hole: &Item, other: &Item) -> Nm {
+        let base = self.hole_clearance(hole, other);
+        if hole.plated_hole() || !matches!(other.kind, Kind::Track | Kind::Via) {
+            return base;
+        }
+        base.max(board.pad_clearances.get(&id).copied().unwrap_or(0))
+    }
+
     fn hole_to_hole(&self, a: &Item, b: &Item) -> Nm {
         if through_hole(a) && through_hole(b) { self.pth_hole_to_hole } else { self.hole_to_hole }
     }
@@ -229,10 +240,10 @@ fn item_checks(
         }
         // Copper against the plated holes of others, when they are not walked themselves.
         if everyone {
-            for other in board.near(holes, item_bbox.grow(limits.pth_hole_clearance)) {
+            for other in board.near(holes, item_bbox.grow(limits.pth_hole_clearance.max(limits.edge).max(limits.max_clearance))) {
                 let Some(o) = board.item(other) else { continue };
                 let Some(h) = o.hole else { continue };
-                let required = limits.hole_clearance(o, item);
+                let required = limits.hole_keep(board, other, o, item);
                 if other == id || !holds_clear(o, item) || same_pad(item, o) || (o.plated_hole() && o.net == item.net && item.net != 0) {
                     continue;
                 }
@@ -248,7 +259,7 @@ fn item_checks(
     }
     if let Some(hole) = item.hole {
         let shape = hole_shape(hole);
-        let reach = shape.bbox().grow(limits.pth_hole_clearance.max(limits.pth_hole_to_hole));
+        let reach = shape.bbox().grow(limits.pth_hole_clearance.max(limits.pth_hole_to_hole).max(limits.edge).max(limits.max_clearance));
         for other in board.near(holes, reach) {
             let Some(o) = board.item(other) else { continue };
             if !partner(other) || same_pad(item, o) {
@@ -279,7 +290,7 @@ fn item_checks(
                 {
                     continue;
                 }
-                let required = limits.hole_clearance(item, o);
+                let required = limits.hole_keep(board, id, item, o);
                 let gap = shape.gap_within(&o.shape, required as f64);
                 if gap + SLACK < required as f64 {
                     failed_pairs.insert((id.min(other), id.max(other)));

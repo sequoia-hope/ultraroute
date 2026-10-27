@@ -74,3 +74,45 @@ fn an_edge_line_inside_the_board_keeps_copper_off_too() {
     let t = track(&mut b, 5.0);
     assert!(!check_item(&b, t).is_empty(), "a slot drawn as an open line is board edge");
 }
+
+#[test]
+fn an_edge_arc_keeps_copper_off_along_the_arc_not_its_other_half() {
+    // The arc's upper half: from (5, 15) over (15, 5) to (25, 15), y down.
+    let mut b = board("(gr_arc (start 5 15) (mid 15 5) (end 25 15) (layer \"Edge.Cuts\") (width 0.1))");
+    let across = |b: &mut Board, y: f64| {
+        b.insert(Item {
+            kind: Kind::Track,
+            net: 2,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(nm(12e-3), nm(y * 1e-3)), b: Point::new(nm(18e-3), nm(y * 1e-3)), r: nm(0.1e-3) },
+            hole: None,
+            locked: false,
+            span: None,
+        })
+    };
+    let on_arc = across(&mut b, 5.0);
+    assert!(!check_item(&b, on_arc).is_empty(), "a track over the arc's top");
+    let other_half = across(&mut b, 25.0);
+    assert!(check_item(&b, other_half).is_empty(), "nothing where the circle's other half would be");
+}
+
+#[test]
+fn an_unplated_slot_is_board_edge_to_copper_and_a_round_hole_is_not() {
+    // 0.25 mm from the hole's edge: clear of the 0.2 mm clearance, not of the 0.3 mm edge rule.
+    for (drill, edge) in [("(drill oval 2 2.6)", true), ("(drill 2)", false)] {
+        let mut b = board(&format!(
+            "(footprint \"H\" (layer \"F.Cu\") (uuid \"0b10c000-0000-4000-8000-0000000000b3\") (at 15 15) (property \"Reference\" \"H1\")
+               (pad \"\" np_thru_hole oval (at 0 0) (size 2 2.6) {drill} (layers \"*.Cu\" \"*.Mask\")))"
+        ));
+        let t = track(&mut b, 15.0 + 1.0 + 0.1 + 0.25);
+        assert_eq!(!check_item(&b, t).is_empty(), edge, "{drill}");
+    }
+}
+
+#[test]
+fn an_edge_arc_that_ends_where_it_starts_is_a_whole_circle() {
+    // KiCad 5 left full circles as arcs from a point back to itself through the far side.
+    let mut b = board("(gr_arc (start 15 10) (mid 15 20) (end 15 10) (layer \"Edge.Cuts\") (width 0.1))");
+    let t = track(&mut b, 10.0);
+    assert!(!check_item(&b, t).is_empty(), "the circle's left side crosses x = 10");
+}

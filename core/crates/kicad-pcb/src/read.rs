@@ -416,7 +416,12 @@ fn arc_or_line(
     n: &Node,
     warnings: &mut Vec<String>,
 ) -> OutlineShape {
-    if circumcenter(s, m, e).is_some() {
+    // KiCad 5 left whole circles as arcs ending where they start, start and mid a diameter apart.
+    let closed = (s[0] - e[0]).hypot(s[1] - e[1]) < 1e-9 && (s[0] - m[0]).hypot(s[1] - m[1]) > 1e-9;
+    if closed {
+        let center = [(s[0] + m[0]) / 2.0, (s[1] + m[1]) / 2.0];
+        OutlineShape::Circle { center, radius: (s[0] - center[0]).hypot(s[1] - center[1]) }
+    } else if circumcenter(s, m, e).is_some() {
         OutlineShape::Arc {
             start: s,
             mid: m,

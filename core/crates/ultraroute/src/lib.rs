@@ -24,7 +24,7 @@ use board::{connectivity, connectivity_without_pours, Board, Item, ItemId, Kind,
 use kicad_pcb::{apply, mm, Edit};
 use serde_json::{json, Value};
 
-pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--diff-pairs] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--gpu] \
+pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--diff-pairs] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--gpu] \
 [--timeout SECONDS] [--cell MM] [--first NET,...] [--first-negotiate] [--first-weight W] [--restart N] [--topo-first REF,...|auto] [--topo-trapped] [--topo-trapped-rip] [--topo-sample MM] \
 [--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--push-decay D] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough warp|linear|rip|gentle|dipole|region] [--shove-steps N] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-late] [--shove-seconds S] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
 [--live PATH|-] [--live-fps N] [--live-step MS] [--blame]
@@ -126,6 +126,8 @@ pub struct Args {
     /// Boxes, in millimetres, where vias cost dearly but are allowed.
     pub via_avoid: Vec<[f64; 4]>,
     pub via_avoid_cost: Option<u32>,
+    /// Take inner layers that one net's pour all but fills as planes, as --planes would.
+    pub auto_planes: bool,
     /// Treat the board's unlocked tracks and vias as the router's own: free to rip, move and
     /// rewrite, as if this run had laid them.
     pub adopt: bool,
@@ -206,6 +208,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         rip_regions: Vec::new(),
         via_avoid: Vec::new(),
         via_avoid_cost: None,
+        auto_planes: false,
         adopt: false,
         chase: false,
         verbose: false,
@@ -377,6 +380,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                 let [x0, y0, x1, y1] = n[..] else { return Err(format!("--via-avoid {v}: X0,Y0,X1,Y1 in mm")) };
                 a.via_avoid.push([x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)]);
             }
+            "--auto-planes" => a.auto_planes = true,
             "--via-avoid-cost" => a.via_avoid_cost = Some(value()?.parse().map_err(|e| format!("--via-avoid-cost: {e}"))?),
             "--rip-region" => {
                 let v = value()?;
@@ -852,6 +856,10 @@ type Restart = (Board, Vec<ItemId>, Vec<kicad_pcb::Span>, grid::Stats);
 /// The widest region the region plough rips round a trapped connection's path.
 const REGION_WIDEST: Nm = 4_000_000;
 
+/// The share of the board one net's pour must cover on an inner layer for the layer to be taken
+/// as that net's plane.
+const PLANE_SHARE: f64 = 0.6;
+
 /// The plough for connections trapped at fine-pitch parts, up to `--shove-passes` times, each in
 /// another order, stopping `until` seconds into the run: the board file's spans of copper it moved
 /// or ripped.
@@ -974,9 +982,24 @@ pub fn run_with_solver(
             }
         }
     }
-    if !a.planes.is_empty() {
+    // An inner layer one net's pour all but fills is a plane in all but name: signals routed
+    // across it cut its return paths. With --auto-planes it is taken as one; otherwise said.
+    // (Reserving every such layer costs some boards connections: bluebuzz has three.)
+    let mut a_planes_found: Vec<String> = Vec::new();
+    if a.planes.is_empty() {
+        for (l, net) in board.plane_layers(PLANE_SHARE) {
+            if a.auto_planes {
+                eprintln!("planes: {} taken as {}'s plane, its pour covering most of the board", board.layers[l], board.net_name(net));
+                a_planes_found.push(board.layers[l].clone());
+            } else {
+                eprintln!("planes: {} looks like {}'s plane (its pour covers most of the board); --planes or --auto-planes keeps signals off it", board.layers[l], board.net_name(net));
+            }
+        }
+    }
+    let planes: Vec<String> = if a.planes.is_empty() { a_planes_found } else { a.planes.clone() };
+    if !planes.is_empty() {
         let mut mask = 0u64;
-        for name in &a.planes {
+        for name in &planes {
             match board.layers.iter().position(|l| l == name) {
                 Some(l) => mask |= 1 << l,
                 None => panic!("--planes: the board has no copper layer {name} (it has {})", board.layers.join(", ")),

@@ -12,3 +12,11 @@ Locked there: LED1-45, J1, SW2, BT1, Q1, U1, U2, U5, R14, L1, C11, C12, C13, R13
 to the input as a KiCad group by `tools/add_block.py --job jobs/<this job>`. The router keeps
 those pours as planes other nets stay clear of and holds the block's parts still. Run that
 again after pulling a new input.
+
+## Planes
+
+In1.Cu is the board's GND reference plane. Routed freely, 250-340 mm of signal ran on it, the USB
+pair included, and cut it into pieces; with `--planes In1.Cu` (now in `job.json`) nothing routes
+there and seeds 1 and 2 still route completely (lab `earring-planes-in1`, from the simple-earring
+session, whose board is that P-s1 route). `--auto-planes` finds such layers by their pours.
+

@@ -551,6 +551,8 @@ impl ObstacleMap {
         }
         if let Some((centre, r)) = item.hole {
             let hole = Shape::Capsule { a: centre, b: centre, r };
+            // An unplated hole's pad may carry a clearance of its own, wider than the rule's.
+            let hole_clearance = if item.plated_hole() { hole_clearance } else { hole_clearance.max(board.pad_clearances.get(&id).copied().unwrap_or(0)) };
             let margin = (drill_radius + nm(rules.min_hole_to_hole)).max(via_radius + hole_clearance);
             let mut hit = Vec::new();
             self.cells_near(&hole, margin, &mut |c| hit.push(c));

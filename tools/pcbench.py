@@ -8,9 +8,10 @@ baselines (FreeRouting, PcbRouter, RL-MCTS; PCBench/Baselines/Results_all.csv).
                                              route every prepared board (wrap in reserve: it
                                              runs $RESERVED_CORES routes at once)
     pcbench.py report RUN [RUN ...]          success, wirelength and vias against the baselines
+    pcbench.py rescore RUN [RUN ...]         judge saved reports again (after the rules change)
 
-A board succeeds when KiCad finds nothing unconnected after a zone refill and no DRC error of a
-type the bare board did not have as often: routed copper that breaks the board's own rules is a
+A board succeeds when KiCad finds nothing unconnected after a zone refill and no DRC error that
+involves routed copper (a track, arc or via) of a type the bare board did not have as often: routed copper that breaks the board's own rules is a
 failure, not a success. Wirelength is the routed tracks' length and vias their count, as the
 baselines report them. Everything lives in ~/Software/ultraroute-lab/pcbench/: boards/ID/ holds
 board.kicad_pcb (+ .kicad_pro), bare.kicad_pcb and bare.json, runs/RUN/ID/ each run's output.
@@ -73,8 +74,22 @@ def drc(pcb, out_dir, stem):
     if not report.exists():
         return None
     d = json.loads(report.read_text())
+    return tally(d)
+
+
+def routed(v):
+    """Whether a violation involves routed copper (a track, arc or via), not only the board's own
+    parts, edges and drawings: a pad too near the edge is the designer's, whatever KiCad reports."""
+    return any(re.match(r"(Track|Via|Arc) \[", i.get("description", "")) for i in v.get("items", []))
+
+
+def tally(d):
+    """(unconnected, {error type: count}, {warning type: count}) of a KiCad report, counting only
+    violations that involve routed copper."""
     errors, warnings = {}, {}
     for v in d.get("violations", []):
+        if not routed(v):
+            continue
         into = errors if v["severity"] == "error" else warnings
         into[v["type"]] = into.get(v["type"], 0) + 1
     return len(d.get("unconnected_items", [])), errors, warnings
@@ -165,16 +180,34 @@ def route_one(b, run_dir, recipe, timeout, seed):
             if (src / "board").with_suffix(suffix).exists():
                 shutil.copy((src / "board").with_suffix(suffix), out.with_suffix(suffix))
         res["wirelength"], res["vias"] = lengths(out)
-        v = drc(out, d, "out")
-        if v is not None:
-            bare = json.loads((src / "bare.json").read_text())
-            res["unconnected"], errors, warnings = v
-            res["new_errors"] = {t: n - bare.get("errors", {}).get(t, 0) for t, n in errors.items() if n > bare.get("errors", {}).get(t, 0)}
-            # Bare boards judged before warnings were kept have none recorded: then all count.
-            res["new_warnings"] = {t: n - bare.get("warnings", {}).get(t, 0) for t, n in warnings.items() if n > bare.get("warnings", {}).get(t, 0)}
-            res["success"] = res["unconnected"] == 0 and not res["new_errors"]
+        if drc(out, d, "out") is not None:
+            score(res, run_dir, b)
     (d / "result.json").write_text(json.dumps(res, indent=1))
     return res
+
+
+def score(res, run_dir, b):
+    """Fills a result's verdict from the run's KiCad report, against the bare board's."""
+    d = run_dir / b
+    src = HOME / "boards" / b
+    report = d / "out.drc.json"
+    if not report.exists():
+        return res
+    res["unconnected"], errors, warnings = tally(json.loads(report.read_text()))
+    _, bare_errors, bare_warnings = tally(json.loads((src / "bare.drc.json").read_text()))
+    res["new_errors"] = {t: n - bare_errors.get(t, 0) for t, n in errors.items() if n > bare_errors.get(t, 0)}
+    res["new_warnings"] = {t: n - bare_warnings.get(t, 0) for t, n in warnings.items() if n > bare_warnings.get(t, 0)}
+    res["success"] = res["unconnected"] == 0 and not res["new_errors"]
+    return res
+
+
+def rescore(a):
+    """Judges a run's results again from their saved reports, as `score` judges now."""
+    for name in a.runs:
+        run_dir = HOME / "runs" / name
+        for f in run_dir.glob("*/result.json"):
+            res = score(json.loads(f.read_text()), run_dir, f.parent.name)
+            f.write_text(json.dumps(res, indent=1))
 
 
 def prepare(a):
@@ -274,8 +307,10 @@ def main():
     s.add_argument("--sample-seed", type=int, default=1)
     s = sub.add_parser("report")
     s.add_argument("runs", nargs="+")
+    s = sub.add_parser("rescore")
+    s.add_argument("runs", nargs="+")
     a = p.parse_args()
-    {"prepare": prepare, "run": run, "report": report}[a.cmd](a)
+    {"prepare": prepare, "run": run, "report": report, "rescore": rescore}[a.cmd](a)
 
 
 if __name__ == "__main__":
