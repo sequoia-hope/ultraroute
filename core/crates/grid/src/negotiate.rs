@@ -91,21 +91,22 @@ struct Connection {
     from: ItemId,
     to: ItemId,
     path: Option<GridPath>,
-    /// The nodes its path claims, as each class of route sees them.
-    zone: Vec<(String, Vec<u32>)>,
     /// Whether its path ran into another net's claim in the last round.
     colliding: bool,
 }
 
 /// Every route's claims as each class of route sees them: a wide trace keeps further from a
-/// path than a thin one needs to.
+/// path than a thin one needs to. Classes that see alike (the same width and clearance) share
+/// one set of claims, through `alias`: on a board of many classes, most of the memory.
 struct Claims {
     by_viewer: HashMap<String, Zones>,
+    alias: HashMap<String, String>,
 }
 
 impl Claims {
-    fn new(classes: impl Iterator<Item = String>, nodes: usize) -> Claims {
-        Claims { by_viewer: classes.map(|c| (c, Zones::new(nodes))).collect() }
+    fn new(alias: &HashMap<String, String>, nodes: usize) -> Claims {
+        let viewers: BTreeSet<&String> = alias.values().collect();
+        Claims { by_viewer: viewers.into_iter().map(|c| (c.clone(), Zones::new(nodes))).collect(), alias: alias.clone() }
     }
 
     fn add(&mut self, net: u32, zone: &[(String, Vec<u32>)]) {
@@ -134,7 +135,7 @@ impl Claims {
     }
 
     fn seen_by(&self, viewer: &str) -> &Zones {
-        &self.by_viewer[viewer]
+        &self.by_viewer[&self.alias[viewer]]
     }
 }
 
@@ -240,7 +241,6 @@ pub fn route_negotiated_rounds(
             from: a.from_item,
             to: a.to_item,
             path: None,
-            zone: Vec::new(),
             colliding: false,
         })
         .collect();
@@ -268,8 +268,20 @@ pub fn route_negotiated_rounds(
         }
     }
     let classes: Vec<String> = maps.keys().cloned().collect();
+    // Each class sees claims as the first class of its width and clearance does.
+    let mut alias: HashMap<String, String> = HashMap::new();
+    let mut sorted = classes.clone();
+    sorted.sort();
+    for c in &sorted {
+        let p = &maps[c].profile;
+        let like = sorted.iter().find(|o| maps[*o].profile.half_width == p.half_width && maps[*o].profile.clearance == p.clearance).unwrap_or(c);
+        alias.insert(c.clone(), like.clone());
+    }
+    let viewers: Vec<String> = alias.values().cloned().collect::<BTreeSet<_>>().into_iter().collect();
+    // A route's claims are worked out again from its path whenever they are needed, rather than
+    // kept: kept, every route's claims for every viewer were hundreds of megabytes.
     let claims_of = |path: &GridPath, owner: &str| -> Vec<(String, Vec<u32>)> {
-        classes
+        viewers
             .iter()
             .map(|viewer| {
                 let (trace, via) = &discs[&(owner.to_string(), viewer.clone())];
@@ -277,7 +289,7 @@ pub fn route_negotiated_rounds(
             })
             .collect()
     };
-    let mut zones = Claims::new(classes.iter().cloned(), layers * cells);
+    let mut zones = Claims::new(&alias, layers * cells);
     let mut history = vec![0u32; layers * cells];
     let mut present = options.present;
     let mut grid_buf = sample.clone();
@@ -304,16 +316,18 @@ pub fn route_negotiated_rounds(
         if solver.batch_size() > 1 {
             route_round_in_batches(&mut connections, &maps, &ends, &zones, &history, present, options, solver);
             zones.clear();
-            for c in connections.iter_mut() {
-                c.zone = c.path.as_ref().map(|p| claims_of(p, &c.class)).unwrap_or_default();
-                zones.add(c.net, &c.zone);
+            for c in &connections {
+                if let Some(p) = &c.path {
+                    zones.add(c.net, &claims_of(p, &c.class));
+                }
             }
         } else if options.threads > 1 {
             route_round_in_parallel(&mut connections, &maps, &ends, &zones, &history, present, options, round, &sample, trials);
             zones.clear();
-            for c in connections.iter_mut() {
-                c.zone = c.path.as_ref().map(|p| claims_of(p, &c.class)).unwrap_or_default();
-                zones.add(c.net, &c.zone);
+            for c in &connections {
+                if let Some(p) = &c.path {
+                    zones.add(c.net, &claims_of(p, &c.class));
+                }
             }
         } else {
             for k in 0..connections.len() {
@@ -322,13 +336,16 @@ pub fn route_negotiated_rounds(
                 }
                 let c = &mut connections[k];
                 tell(&options.log, "negotiating", || format!("round {}: rerouting {}", round + 1, board.net_name(c.net)), None);
-                zones.remove(c.net, &c.zone);
+                if let Some(p) = &c.path {
+                    zones.remove(c.net, &claims_of(p, &c.class));
+                }
                 maps[&c.class].view_into(c.net, &mut grid_buf);
                 penalties_into(zones.seen_by(&c.class), &history, present, c.net, weight_of(c.net), &mut grid_buf.penalty);
                 let (sources, targets) = &ends[k];
                 c.path = solver.route(&grid_buf, &cells_of(sources), &cells_of(targets), options.via_cost);
-                c.zone = c.path.as_ref().map(|p| claims_of(p, &c.class)).unwrap_or_default();
-                zones.add(c.net, &c.zone);
+                if let Some(p) = &c.path {
+                    zones.add(c.net, &claims_of(p, &c.class));
+                }
                 if shown.elapsed() > TRIAL_INTERVAL {
                     trials(round, &trial_list(&connections, &sample));
                     shown = crate::clock::Instant::now();
@@ -380,7 +397,7 @@ pub fn route_negotiated_rounds(
 
     // Commit greedily: a route whose cells lie in no committed net's zone is legal against
     // everything committed so far, converged or not; each piece is still checked exactly.
-    let mut committed = Claims::new(classes.iter().cloned(), layers * cells);
+    let mut committed = Claims::new(&alias, layers * cells);
     for (k, c) in connections.iter().enumerate() {
         let Some(path) = &c.path else {
             stats.unroutable += 1;
@@ -392,7 +409,7 @@ pub fn route_negotiated_rounds(
         maps[&c.class].view_into(c.net, &mut grid_buf);
         let (sources, targets) = &ends[k];
         let Some(items) = lay(board, &grid_buf, path, sources, targets) else { continue };
-        committed.add(c.net, &c.zone);
+        committed.add(c.net, &claims_of(path, &c.class));
         stats.committed += 1;
         tell(&options.log, "committing", || format!("{}: laid its negotiated route", board.net_name(c.net)), None);
         stats.vias += items.iter().filter(|id| board.item(**id).is_some_and(|it| it.kind == Kind::Via)).count();
