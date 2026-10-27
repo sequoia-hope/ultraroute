@@ -20,14 +20,14 @@
 
 use std::collections::{HashMap, HashSet};
 
-use board::{connectivity, connectivity_without_pours, Airline, Board, Item, ItemId, Kind, Nm, Point};
+use board::{connectivity, connectivity_without_pours, Airline, Board, Connectivity, Item, ItemId, Kind, Nm, Point};
 use kicad_pcb::Span;
 
-use crate::grid::{ObstacleMap, Profile};
+use crate::grid::{ObstacleMap, Profile, RouteGrid};
 use crate::push::rip_broken;
 use crate::report::{item_name, tell, Focus, Log};
-use crate::route::{lay, local_cluster, pieces, route_open, terminals, FieldSolver, Options};
-use crate::search::STRAIGHT;
+use crate::route::{cluster_pads, ends_with_pads, lay, local_cluster, pieces, route_open, terminals, FieldSolver, Options, Terminal};
+use crate::search::{GridPath, STRAIGHT};
 
 #[derive(Debug, Clone)]
 pub struct ShoveOptions {
@@ -128,9 +128,12 @@ pub enum Plough {
     /// As `Gentle`, but the push is a dipole's: copper is repelled from the trapped pad, straight
     /// away from it, fading over the reach.
     Dipole,
-    /// No plough: every other net's movable copper within the reach of the path is ripped, and
-    /// the trapped connection and every connection that opened negotiate their ways together,
-    /// the trapped one favoured. Later rounds lay the path outright, as `Rip`.
+    /// No plough: other nets' movable copper is ripped within the reach of where the path is
+    /// pinched, and the trapped connection and every connection that opened negotiate their ways
+    /// together, the trapped one favoured; when that leaves a ripped net worse off, it is tried
+    /// again ripping round what still blocks it (see `renegotiate`). Later rounds lay the path
+    /// outright, as `Rip`. On a board with planes, plane nets' connections are tried last and
+    /// count after signal ones, and their copper is cheap to rip, joined to the planes again.
     Region,
 }
 
@@ -244,25 +247,39 @@ pub fn shove_escape_steps(
         options.max_seconds.is_some_and(|limit| started.elapsed().as_secs_f64() > limit)
             || options.cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
     };
+    let region = options.plough == Plough::Region;
     let mut stats = ShoveStats::default();
-    let mut fixed_maps: Vec<ObstacleMap> = Vec::new();
+    let mut cache = PassCache::of(board, options);
+    if region {
+        stats.removed_spans.extend(settle(board, soft, options.pours_block, &cache.plane_nets, None));
+    }
     let mut tried: HashSet<ItemId> = HashSet::new();
+    let (mut reaches, mut net_reaches) = (options.reaches.clone(), options.net_reaches.clone());
+    // Ties the region plough kept since a try last freed anything, by net: past a few, nets only
+    // swap a lane back and forth.
+    let mut ties: HashMap<u32, usize> = HashMap::new();
     loop {
         if out_of_time() {
             break;
         }
         let mut open = open_now(board, options.pours_block);
         crate::jitter::shuffle(&mut open, options.seed.wrapping_add(stats.tries.len() as u64));
+        // Plane nets last: `join_planes` makes most of their connections, not a plough.
+        open.sort_by_key(|a| cache.plane_nets.contains(&a.net));
+        let is_pad = |id: ItemId| board.item(id).is_some_and(|it| matches!(it.kind, Kind::Pad { .. }));
         let Some((pad, airline)) = open.iter().find_map(|a| {
-            [a.from_item, a.to_item].into_iter().find(|id| !tried.contains(id) && on_parts(board, *id, &options.parts)).map(|p| (p, a.clone()))
+            // A region try routes between its two ends alike, and starts from a pad where it can.
+            let ends = if region && is_pad(a.to_item) && !is_pad(a.from_item) { [a.to_item, a.from_item] } else { [a.from_item, a.to_item] };
+            ends.into_iter().find(|id| !tried.contains(id) && on_parts(board, *id, &options.parts)).map(|p| (p, a.clone()))
         }) else {
             break;
         };
         tried.insert(pad);
         let to = if pad == airline.from_item { airline.to } else { airline.from };
-        let widened = options.reaches.get(&pad).into_iter().chain(options.net_reaches.get(&airline.net)).copied().max();
+        let widened = reaches.get(&pad).into_iter().chain(net_reaches.get(&airline.net)).copied().max();
         let reach = widened.unwrap_or(options.reach);
         let options = &ShoveOptions { reach, ..options.clone() };
+        let score_before = score(&open, &cache.plane_nets);
         let mut t = ShoveTry { net: airline.net, pad, to, reach, rounds: Vec::new(), routed: false, open_before: open.len(), open_after: 0, kept: false };
         tell(&options.log, "shoving", || format!("{}: {} is trapped; ploughing a way out", board.net_name(airline.net), item_name(board, pad)), Some(Focus::Connection { net: airline.net, from: airline.from, to: airline.to }));
         watch(board, ShoveEvent::Start(&t));
@@ -271,12 +288,20 @@ pub fn shove_escape_steps(
         // Copper of the net that reaches no pad is no part of the rest of the net: a way out to
         // it would join nothing, so it goes first.
         spans.extend(rip_floating(board, soft, t.net, options.pours_block));
-        for _ in 0..options.rounds.max(1) {
+        let mut far = if pad == airline.from_item { airline.to_item } else { airline.from_item };
+        let mut rounds = options.rounds.max(1);
+        if region {
+            match unzip(board, soft, &airline, pad, &open, options.pours_block, &mut spans) {
+                Some(end) => (t.pad, far, t.to) = end,
+                None => rounds = 0,
+            }
+        }
+        for _ in 0..rounds {
             if out_of_time() {
                 break;
             }
             let first = t.rounds.is_empty();
-            let round = plough_round(board, solver, options, soft, pad, first, Some(&mut fixed_maps), &mut spans, &mut |b, r, step| on_step(b, &t, r, step));
+            let round = plough_round(board, solver, options, soft, &mut cache, t.pad, first, &out_of_time, &mut spans, &mut |b, r, step| on_step(b, &t, r, step));
             let (done, walled) = (round.routed, round.path.is_empty());
             t.rounds.push(round);
             watch(board, ShoveEvent::Round(&t, t.rounds.last().unwrap()));
@@ -287,36 +312,52 @@ pub fn shove_escape_steps(
         t.routed = t.rounds.last().is_some_and(|r| r.routed);
         let changed = t.routed || !spans.is_empty() || soft.len() != snapshot.1.len() || t.rounds.iter().any(|r| !r.ripped_items.is_empty() || r.moved > 0);
         if t.routed {
-            cascade(board, solver, options, soft, &mut t, &open, &snapshot.1, &mut spans, &out_of_time, watch);
+            cascade(board, solver, options, soft, &mut cache, &mut t, &open, &snapshot.1, &mut spans, &out_of_time, watch);
         }
         if changed {
             let again = route_open(
                 board,
                 solver,
-                &Options { cell: options.cell, via_cost: options.via_cost, max_seconds: Some(options.reroute_seconds), nets: None, pours_block: options.pours_block, seed: 0, cancel: options.cancel.clone(), log: None },
+                &Options { cell: options.cell, via_cost: options.via_cost, max_seconds: Some(options.reroute_seconds), nets: None, pours_block: options.pours_block, directional: false, seed: 0, cancel: options.cancel.clone(), log: None },
                 &mut |_| {},
             );
             soft.extend(again.laid.iter().copied());
-            if t.routed && options.repair_seconds > 0.0 && open_now(board, options.pours_block).len() >= t.open_before {
-                let held = hold(board, soft, &snapshot.1, t.net);
-                crate::ripup::rip_up(
-                    board,
-                    solver,
-                    &crate::ripup::RipOptions {
-                        cell: options.cell,
-                        via_cost: options.via_cost,
-                        max_seconds: Some(options.repair_seconds),
-                        pours_block: options.pours_block,
-                        cancel: options.cancel.clone(),
-                        ..Default::default()
-                    },
-                    soft,
-                    &mut |_| {},
-                );
-                release(board, held);
+            if region {
+                spans.extend(settle(board, soft, options.pours_block, &cache.plane_nets, None));
             }
-            t.open_after = open_now(board, options.pours_block).len();
-            t.kept = t.open_after < t.open_before || (options.accept_ties && t.routed && t.open_after == t.open_before && connection_of(board, t.pad, options.pours_block).is_none());
+            let worse = |board: &Board| score(&open_now(board, options.pours_block), &cache.plane_nets) >= score_before;
+            if t.routed && options.repair_seconds > 0.0 && worse(board) {
+                // Rip-up and reroute with the freed connection held still; for the region plough,
+                // then again with it free, for two nets in one mouth that must swap lanes.
+                let held = hold(board, soft, &snapshot.1, &|n| n == t.net);
+                repair(board, solver, options, soft, if region { 0.55 } else { 1.0 });
+                release(board, held);
+                if region && worse(board) && !out_of_time() {
+                    repair(board, solver, options, soft, 0.45);
+                    t.routed = connection_of(board, t.pad, options.pours_block).is_none();
+                }
+                if region {
+                    spans.extend(settle(board, soft, options.pours_block, &cache.plane_nets, None));
+                }
+            }
+            let after = open_now(board, options.pours_block);
+            let score_after = score(&after, &cache.plane_nets);
+            t.open_after = after.len();
+            let tie = options.accept_ties
+                && t.routed
+                && score_after == score_before
+                && connection_of(board, t.pad, options.pours_block).is_none()
+                && (!region || (ties.get(&t.net).copied().unwrap_or(0) < TIES_PER_NET && ties.values().sum::<usize>() < TIES));
+            t.kept = score_after < score_before || tie;
+            if region && score_after < score_before {
+                // The board has changed: every connection may be tried again, at the narrowest reach.
+                ties.clear();
+                tried.clear();
+                reaches.clear();
+                net_reaches.clear();
+            } else if region && tie {
+                *ties.entry(t.net).or_default() += 1;
+            }
         } else {
             t.open_after = t.open_before;
             t.kept = false;
@@ -330,12 +371,135 @@ pub fn shove_escape_steps(
         watch(board, ShoveEvent::Done(&t));
         if t.kept {
             stats.removed_spans.extend(spans);
-        } else if changed {
-            (*board, *soft) = snapshot;
+        } else {
+            if changed {
+                (*board, *soft) = snapshot;
+            }
+            if region {
+                // The region plough routes between both ends alike: from the far end, on the
+                // board as it was, it would do the same again.
+                tried.extend([airline.from_item, airline.to_item, far]);
+            }
         }
         stats.tries.push(t);
     }
     stats
+}
+
+/// Ties the region plough keeps in a row for one net, and for all, before it keeps none.
+const TIES_PER_NET: usize = 2;
+const TIES: usize = 6;
+
+/// What a pass of tries keeps: the map of what never moves in a pass, per profile, the items
+/// in it, and the plane nets, whose connections the region plough tries last and counts after
+/// signal connections.
+struct PassCache {
+    fixed: HashSet<ItemId>,
+    maps: Vec<ObstacleMap>,
+    plane_nets: HashSet<u32>,
+}
+
+impl PassCache {
+    fn of(board: &Board, options: &ShoveOptions) -> PassCache {
+        let fixed = board.items().filter(|(_, it)| !matches!(it.kind, Kind::Track | Kind::Via) || it.locked).map(|(id, _)| id).collect();
+        let plane_nets = if options.plough == Plough::Region && !options.pours_block && board.planes != 0 {
+            board.items().filter(|(_, it)| board.is_plane(it) && it.net != 0).map(|(_, it)| it.net).collect()
+        } else {
+            HashSet::new()
+        };
+        PassCache { fixed, maps: Vec::new(), plane_nets }
+    }
+
+    /// What a path cannot cross: the fixed items, from the map kept for `profile`, and what has
+    /// come to hold still since, which `movable` refuses (its own net's copper, copper held).
+    fn walls(&mut self, board: &Board, profile: &Profile, options: &ShoveOptions, movable: &dyn Fn(&Item) -> bool) -> ObstacleMap {
+        let fixed = &self.fixed;
+        let idx = match self.maps.iter().position(|m| m.profile == *profile) {
+            Some(i) => i,
+            None => {
+                self.maps.push(ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| !fixed.contains(&id)));
+                self.maps.len() - 1
+            }
+        };
+        let mut walls = self.maps[idx].clone();
+        let still: Vec<ItemId> = board.items().filter(|(id, it)| !fixed.contains(id) && !movable(it)).map(|(id, _)| id).collect();
+        for id in still {
+            walls.stamp(board, id);
+        }
+        walls
+    }
+}
+
+fn joined(board: &Board, pours_block: bool) -> Connectivity {
+    if pours_block { connectivity(board) } else { connectivity_without_pours(board) }
+}
+
+/// Signal connections open, then all: what a try must leave fewer of.
+fn score(open: &[Airline], plane_nets: &HashSet<u32>) -> (usize, usize) {
+    (open.iter().filter(|a| !plane_nets.contains(&a.net)).count(), open.len())
+}
+
+/// Rip-up and reroute after a try, for `share` of the repair time.
+fn repair(board: &mut Board, solver: &mut dyn FieldSolver, options: &ShoveOptions, soft: &mut Vec<ItemId>, share: f64) {
+    crate::ripup::rip_up(
+        board,
+        solver,
+        &crate::ripup::RipOptions {
+            cell: options.cell,
+            via_cost: options.via_cost,
+            max_seconds: Some(options.repair_seconds * share),
+            pours_block: options.pours_block,
+            region_repair: options.plough == Plough::Region,
+            cancel: options.cancel.clone(),
+            ..Default::default()
+        },
+        soft,
+        &mut |_| {},
+    );
+}
+
+/// Tidies up in the middle of a try, as the end of the run would: duplicate tracks go, and the
+/// dangling stubs of the closed nets `only` names (all when `None`), while an open net keeps the
+/// copper of a cut to join again; plane nets are joined to their planes again. The board file's
+/// spans among what went.
+fn settle(board: &mut Board, soft: &mut Vec<ItemId>, pours_block: bool, plane_nets: &HashSet<u32>, only: Option<&HashSet<u32>>) -> Vec<Span> {
+    let (_, mut spans) = crate::cleanup::drop_duplicates(board, soft);
+    let open: HashSet<u32> = open_now(board, pours_block).into_iter().map(|a| a.net).collect();
+    let pick = |it: &Item| !it.locked && !open.contains(&it.net) && only.is_none_or(|o| o.contains(&it.net));
+    spans.extend(crate::cleanup::prune_dangling_of(board, soft, &pick, &mut |_, _| {}).1);
+    if !plane_nets.is_empty() {
+        soft.extend(crate::planes::join_planes(board, &None).laid);
+    }
+    spans
+}
+
+/// Prunes the trapped net's stubs left dangling where an earlier try cut it: they would lead the
+/// way out back across the net that cut it. The connection as it stands after, as `pad`, its far
+/// end and that end's point: `pad`'s own if it is still open, else one the pruning opened, or one
+/// with an end on either side, from a pad where it can; `None` when the net has none open.
+fn unzip(board: &mut Board, soft: &mut Vec<ItemId>, airline: &Airline, pad: ItemId, open: &[Airline], pours_block: bool, spans: &mut Vec<Span>) -> Option<(ItemId, ItemId, Point)> {
+    let ends = |a: &Airline, from: ItemId| if a.from_item == from { (a.from_item, a.to_item, a.to) } else { (a.to_item, a.from_item, a.from) };
+    let (_, far, _) = ends(airline, pad);
+    let net = airline.net;
+    let pair = |a: &Airline| (a.from_item.min(a.to_item), a.from_item.max(a.to_item));
+    let others: HashSet<(ItemId, ItemId)> = open.iter().filter(|a| a.net == net && pair(a) != pair(airline)).map(pair).collect();
+    let sides: Vec<ItemId> = local_cluster(board, pad).into_iter().chain(local_cluster(board, far)).collect();
+    let (pruned, gone) = crate::cleanup::prune_dangling_of(board, soft, &|it| it.net == net && !it.locked, &mut |_, _| {});
+    spans.extend(gone);
+    if pruned == 0 {
+        return Some(ends(airline, pad));
+    }
+    let conn = joined(board, pours_block);
+    if let Some(a) = conn.airlines.iter().find(|a| a.from_item == pad || a.to_item == pad) {
+        return Some(ends(a, pad));
+    }
+    let near: HashSet<usize> = sides.iter().filter_map(|id| conn.cluster.get(id).copied()).collect();
+    let mine = || conn.airlines.iter().filter(|a| a.net == net);
+    let a = mine()
+        .find(|a| !others.contains(&pair(a)))
+        .or_else(|| mine().find(|a| [a.from_item, a.to_item].iter().any(|id| conn.cluster.get(id).is_some_and(|c| near.contains(c)))))?;
+    let is_pad = |id: ItemId| board.item(id).is_some_and(|it| matches!(it.kind, Kind::Pad { .. }));
+    Some(ends(a, if is_pad(a.to_item) && !is_pad(a.from_item) { a.to_item } else { a.from_item }))
 }
 
 /// Ploughs out, in turn, the connections the try knocked open, holding still the copper laid for
@@ -346,6 +510,7 @@ fn cascade(
     solver: &mut dyn FieldSolver,
     options: &ShoveOptions,
     soft: &mut Vec<ItemId>,
+    cache: &mut PassCache,
     t: &mut ShoveTry,
     open_before: &[Airline],
     soft_before: &[ItemId],
@@ -354,7 +519,7 @@ fn cascade(
     watch: &mut dyn FnMut(&Board, ShoveEvent),
 ) {
     let before: HashSet<(ItemId, ItemId)> = open_before.iter().map(|a| (a.from_item, a.to_item)).collect();
-    let mut held = hold(board, soft, soft_before, t.net);
+    let mut held = hold(board, soft, soft_before, &|n| n == t.net);
     let mut tried: HashSet<ItemId> = HashSet::new();
     for _ in 0..options.cascade {
         if out_of_time() {
@@ -365,7 +530,7 @@ fn cascade(
         let (end, net) = (next.from_item, next.net);
         tried.insert(end);
         for k in 0..options.rounds.max(1) {
-            let round = plough_round(board, solver, options, soft, end, k == 0, None, spans, &mut |_, _, _| {});
+            let round = plough_round(board, solver, options, soft, cache, end, k == 0, out_of_time, spans, &mut |_, _, _| {});
             let (done, walled) = (round.routed, round.path.is_empty());
             t.rounds.push(round);
             watch(board, ShoveEvent::Round(t, t.rounds.last().unwrap()));
@@ -373,18 +538,18 @@ fn cascade(
                 break;
             }
         }
-        held.extend(hold(board, soft, soft_before, net));
+        held.extend(hold(board, soft, soft_before, &|n| n == net));
     }
     release(board, held);
 }
 
-/// Locks the copper of `net` laid since `soft_before`, so nothing after rips or moves it: the
-/// pieces locked, for `release`.
-fn hold(board: &mut Board, soft: &[ItemId], soft_before: &[ItemId], net: u32) -> Vec<ItemId> {
+/// Locks the copper of the nets `nets` picks laid since `soft_before`, so nothing after rips or
+/// moves it: the pieces locked, for `release`.
+fn hold(board: &mut Board, soft: &[ItemId], soft_before: &[ItemId], nets: &dyn Fn(u32) -> bool) -> Vec<ItemId> {
     let was: HashSet<ItemId> = soft_before.iter().copied().collect();
     let mut held = Vec::new();
     for &id in soft.iter().filter(|id| !was.contains(id)) {
-        if board.item(id).is_some_and(|it| it.net == net && !it.locked) {
+        if board.item(id).is_some_and(|it| nets(it.net) && !it.locked) {
             if let Some(mut it) = board.remove(id) {
                 it.locked = true;
                 board.restore(id, it);
@@ -450,14 +615,16 @@ fn plough_round(
     solver: &mut dyn FieldSolver,
     options: &ShoveOptions,
     soft: &mut Vec<ItemId>,
+    cache: &mut PassCache,
     pad: ItemId,
     first: bool,
-    fixed_maps: Option<&mut Vec<ObstacleMap>>,
+    out_of_time: &dyn Fn() -> bool,
     spans: &mut Vec<Span>,
     on_step: &mut dyn FnMut(&Board, &ShoveRound, usize),
 ) -> ShoveRound {
     let mut round = ShoveRound::default();
-    let Some(airline) = connection_of(board, pad, options.pours_block) else {
+    let conn = joined(board, options.pours_block);
+    let Some(airline) = conn.airlines.iter().find(|a| a.from_item == pad || a.to_item == pad).cloned() else {
         round.routed = true;
         return round;
     };
@@ -465,67 +632,10 @@ fn plough_round(
     round.net = net;
     let movable = |it: &Item| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked && it.net != net;
     let profile = Profile::for_net(board, net);
-    let walls = match fixed_maps {
-        Some(maps) => {
-            let idx = match maps.iter().position(|m| m.profile == profile) {
-                Some(i) => i,
-                None => {
-                    maps.push(ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| {
-                        board.item(id).is_some_and(|it| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked)
-                    }));
-                    maps.len() - 1
-                }
-            };
-            let mut w = maps[idx].clone();
-            let own_soft: Vec<ItemId> = board
-                .items()
-                .filter(|(_, it)| it.net == net && !it.locked && matches!(it.kind, Kind::Track | Kind::Via))
-                .map(|(id, _)| id)
-                .collect();
-            for id in own_soft {
-                w.stamp(board, id);
-            }
-            w
-        }
-        None => ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| board.item(id).is_none_or(|it| movable(it))),
-    };
-    let mut grid = walls.view(net);
-    let sources = terminals(board, &grid, pad);
-    let targets = terminals(board, &grid, far);
-    if sources.is_empty() || targets.is_empty() {
-        return round;
-    }
-    let (src, tgt): (Vec<usize>, Vec<usize>) = (sources.iter().map(|t| t.0).collect(), targets.iter().map(|t| t.0).collect());
-    if solver.route(&grid, &src, &tgt, options.via_cost).is_none() {
-        return round;
-    }
-    let others = ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| !board.item(id).is_some_and(|it| movable(it)));
-    let soft_grid = others.view(net);
-    grid.penalty = soft_grid.blocked.iter().map(|b| if *b { options.soft_cost } else { 0 }).collect();
-    // On the copper itself, a path can only cross by ripping it.
-    for (_, it) in board.items().filter(|(_, it)| movable(it)) {
-        let board::Shape::Capsule { a, b, r } = it.shape else { continue };
-        let reach = (r + grid.half_width) as f64;
-        let bb = board::BBox::of([a, b]).grow(r + grid.half_width);
-        let top = Point::new(bb.max.x.min(grid.x0 + grid.h * (grid.nx as Nm - 1)), bb.max.y.min(grid.y0 + grid.h * (grid.ny as Nm - 1)));
-        let (Some(lo), Some(hi)) = (grid.cell_at(Point::new(bb.min.x.max(grid.x0), bb.min.y.max(grid.y0))), grid.cell_at(top)) else { continue };
-        for (k, &layer) in grid.layers.iter().enumerate() {
-            if !it.on(layer) {
-                continue;
-            }
-            for j in lo.1..=hi.1 {
-                for i in lo.0..=hi.0 {
-                    if board::point_segment(grid.centre(i, j), a, b) < reach {
-                        let n = grid.index(k, i, j);
-                        grid.penalty[n] = grid.penalty[n].max(options.cross_cost);
-                    }
-                }
-            }
-        }
-    }
-    let Some(path) = solver.route(&grid, &src, &tgt, options.via_cost) else {
+    let Some(SoftPath { grid, soft: soft_grid, sources, targets, path, pinch }) = soft_path(board, solver, options, cache, &conn, net, pad, far) else {
         return round;
     };
+    drop(conn);
     round.path = path.iter().map(|&(l, i, j)| (grid.layers[l], grid.centre(i, j))).collect();
     // A via needs more room than a trace: a via site counts when other copper is within its reach.
     let via_sites = path.windows(2).filter(|w| w[0].0 != w[1].0 && soft_grid.via_blocked[w[1].2 * grid.nx + w[1].1]).count();
@@ -534,8 +644,9 @@ fn plough_round(
         gentle(board, solver, options, soft, pad, net, &movable, spans, &mut round, on_step);
         return round;
     }
-    if first && round.soft_cells > 0 && options.plough == Plough::Region {
-        renegotiate(board, solver, options, soft, pad, net, &movable, spans, &mut round);
+    // Clear on the grid is not always clear: the region plough goes by the copper itself.
+    if first && (round.soft_cells > 0 || !pinch.is_empty()) && options.plough == Plough::Region {
+        renegotiate(board, solver, options, soft, cache, pad, far, net, &pinch, out_of_time, spans, &mut round);
         return round;
     }
     if round.soft_cells == 0 || !first || matches!(options.plough, Plough::Rip | Plough::Region) {
@@ -543,13 +654,17 @@ fn plough_round(
         // already, or a later round, where ploughing again did not move that copper off it.
         let laid = force_lay(board, &grid, &path, &sources, &targets, &movable, spans, &mut round.ripped_items);
         round.crossed = round.ripped_items.len();
+        soft.retain(|id| board.item(*id).is_some());
         if let Some(items) = laid {
-            soft.retain(|id| board.item(*id).is_some());
             soft.extend(items);
             round.routed = true;
+        }
+        if !round.ripped_items.is_empty() && !cache.plane_nets.is_empty() {
+            soft.extend(crate::planes::join_planes(board, &None).laid);
+        }
+        if round.routed {
             return round;
         }
-        soft.retain(|id| board.item(*id).is_some());
     }
 
     let corridor = Corridor::of(&round.path);
@@ -638,72 +753,391 @@ fn plough_round(
     round
 }
 
-/// The region plough: other nets' movable copper within the reach of the round's path ripped,
-/// with whatever of those nets it leaves reaching no pad, and the connections of the trapped net
-/// and of every net ripped negotiated together, the trapped net's congestion priced at half.
+/// The cheapest way from one end of a connection to the other with other nets' movable copper
+/// passable at a price, and what it runs through.
+struct SoftPath {
+    grid: RouteGrid,
+    /// The grid of other nets' movable copper alone (signal nets' only, on a board with planes).
+    soft: RouteGrid,
+    sources: Vec<Terminal>,
+    targets: Vec<Terminal>,
+    path: GridPath,
+    /// For the region plough, where other nets' signal copper pinches the path: its cells and
+    /// via sites in that copper's reach, and the ends and middle of each piece it would lay that
+    /// breaks a rule against it, which the grid's cells can miss.
+    pinch: Vec<Point>,
+}
+
+/// The way from `pad` to `far` with movable copper passable at a price; `None` when what cannot
+/// move walls it in. For the region plough, an end crowded by copper about to be ripped is
+/// found as if that copper were gone, and either end may also be a pad of its cluster near it.
+#[allow(clippy::too_many_arguments)]
+fn soft_path(
+    board: &mut Board,
+    solver: &mut dyn FieldSolver,
+    options: &ShoveOptions,
+    cache: &mut PassCache,
+    conn: &Connectivity,
+    net: u32,
+    pad: ItemId,
+    far: ItemId,
+) -> Option<SoftPath> {
+    let region = options.plough == Plough::Region;
+    let movable = |it: &Item| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked && it.net != net;
+    let profile = Profile::for_net(board, net);
+    let mut grid = cache.walls(board, &profile, options, &movable).view(net);
+    let (sources, targets) = if region {
+        let pads = cluster_pads(board, conn);
+        let lift = |board: &mut Board, grid: &RouteGrid, id: ItemId| terminals_lifting(board, grid, id, &movable);
+        let mut end = |id: ItemId| {
+            let pads = conn.cluster.get(&id).and_then(|k| pads.get(k)).map_or(&[][..], Vec::as_slice);
+            ends_with_pads(board, &grid, id, pads, &lift)
+        };
+        (end(pad), end(far))
+    } else {
+        (terminals(board, &grid, pad), terminals(board, &grid, far))
+    };
+    if sources.is_empty() || targets.is_empty() {
+        return None;
+    }
+    let (src, tgt): (Vec<usize>, Vec<usize>) = (sources.iter().map(|t| t.0).collect(), targets.iter().map(|t| t.0).collect());
+    solver.route(&grid, &src, &tgt, options.via_cost)?;
+    let planes = &cache.plane_nets;
+    let signal = |it: &Item| movable(it) && !planes.contains(&it.net);
+    let soft = ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| !board.item(id).is_some_and(signal)).view(net);
+    // A plane net's movable copper is mostly vias joining pads to the planes, which
+    // `join_planes` puts back wherever there is room: cheap to clear out of the way.
+    let plane = (!planes.is_empty()).then(|| {
+        ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| !board.item(id).is_some_and(|it| movable(it) && planes.contains(&it.net))).view(net)
+    });
+    let cheap = (STRAIGHT / 2).max(1);
+    let price = |soft: bool, plane: bool| if soft { options.soft_cost } else if plane { cheap } else { 0 };
+    grid.penalty = (0..soft.blocked.len()).map(|n| price(soft.blocked[n], plane.as_ref().is_some_and(|g| g.blocked[n]))).collect();
+    if region {
+        // A via needs more room than a trace: it is priced where other copper is in its reach.
+        grid.via_penalty.resize(soft.via_blocked.len(), 0);
+        for (c, p) in grid.via_penalty.iter_mut().enumerate() {
+            *p += price(soft.via_blocked[c], plane.as_ref().is_some_and(|g| g.via_blocked[c]));
+        }
+    }
+    drop(plane);
+    // On the copper itself, a path can only cross by ripping it.
+    for (_, it) in board.items().filter(|(_, it)| movable(it)) {
+        let board::Shape::Capsule { a, b, r } = it.shape else { continue };
+        let cross = if planes.contains(&it.net) { STRAIGHT } else { options.cross_cost };
+        let reach = (r + grid.half_width) as f64;
+        let bb = board::BBox::of([a, b]).grow(r + grid.half_width);
+        let top = Point::new(bb.max.x.min(grid.x0 + grid.h * (grid.nx as Nm - 1)), bb.max.y.min(grid.y0 + grid.h * (grid.ny as Nm - 1)));
+        let (Some(lo), Some(hi)) = (grid.cell_at(Point::new(bb.min.x.max(grid.x0), bb.min.y.max(grid.y0))), grid.cell_at(top)) else { continue };
+        for (k, &layer) in grid.layers.iter().enumerate() {
+            if !it.on(layer) {
+                continue;
+            }
+            for j in lo.1..=hi.1 {
+                for i in lo.0..=hi.0 {
+                    if board::point_segment(grid.centre(i, j), a, b) < reach {
+                        let n = grid.index(k, i, j);
+                        grid.penalty[n] = grid.penalty[n].max(cross);
+                    }
+                }
+            }
+        }
+    }
+    let path = solver.route(&grid, &src, &tgt, options.via_cost)?;
+    let mut pinch = Vec::new();
+    if region {
+        pinch.extend(path.iter().filter(|&&(l, i, j)| soft.blocked[grid.index(l, i, j)]).map(|&(_, i, j)| grid.centre(i, j)));
+        pinch.extend(path.windows(2).filter(|w| w[0].0 != w[1].0 && soft.via_blocked[w[1].2 * grid.nx + w[1].1]).map(|w| grid.centre(w[1].1, w[1].2)));
+        let margin = profile.clearance.max(board::nm(board.rules.min_clearance)) + profile.via_radius;
+        for piece in pieces(&grid, &path, &sources, &targets).unwrap_or_default() {
+            let near = piece.shape.bbox().grow(margin);
+            let breaks = |id: ItemId| {
+                board.item(id).is_some_and(|it| signal(it) && piece.shape.gap(&it.shape) < profile.clearance.max(Profile::for_net(board, it.net).clearance) as f64)
+            };
+            if (0..board.layers.len()).filter(|l| piece.on(*l)).any(|l| board.near(l, near).into_iter().any(breaks)) {
+                if let board::Shape::Capsule { a, b, .. } = piece.shape {
+                    pinch.extend([a, b, Point::new((a.x + b.x) / 2, (a.y + b.y) / 2)]);
+                }
+            }
+        }
+    }
+    Some(SoftPath { grid, soft, sources, targets, path, pinch })
+}
+
+/// The terminals of `end`; where it has none, those it has with the movable copper round it
+/// lifted for the moment. A fine-pitch pad's mouth crowded by a neighbour's track the plough is
+/// about to rip would otherwise refuse every leg out of it.
+fn terminals_lifting(board: &mut Board, grid: &RouteGrid, end: ItemId, movable: &dyn Fn(&Item) -> bool) -> Vec<Terminal> {
+    let found = terminals(board, grid, end);
+    let Some(bb) = board.bbox(end).filter(|_| found.is_empty()) else { return found };
+    let around = bb.grow((grid.h * 12).max(450_000));
+    let near: HashSet<ItemId> = (0..board.layers.len()).flat_map(|l| board.near(l, around)).filter(|id| board.item(*id).is_some_and(movable)).collect();
+    if near.is_empty() {
+        return found;
+    }
+    let lifted: Vec<(ItemId, Item)> = near.into_iter().filter_map(|id| Some((id, board.remove(id)?))).collect();
+    let found = terminals(board, grid, end);
+    for (id, it) in lifted {
+        board.restore(id, it);
+    }
+    found
+}
+
+/// Rips `ids`, and whatever of their nets is left reaching no pad: the nets ripped.
+fn rip_near(board: &mut Board, ids: Vec<ItemId>, pours_block: bool, soft: &mut Vec<ItemId>, spans: &mut Vec<Span>, round: &mut ShoveRound) -> HashSet<u32> {
+    let mut nets = HashSet::new();
+    for id in ids {
+        if let Some(it) = board.remove(id) {
+            nets.insert(it.net);
+            spans.extend(it.span);
+            round.ripped_items.push(it);
+        }
+    }
+    for &n in &nets {
+        let had: Vec<(ItemId, Item)> = board.items().filter(|(_, it)| it.net == n).map(|(id, it)| (id, it.clone())).collect();
+        spans.extend(rip_floating(board, soft, n, pours_block));
+        round.ripped_items.extend(had.into_iter().filter(|(id, _)| board.item(*id).is_none()).map(|(_, it)| it));
+    }
+    soft.retain(|id| board.item(*id).is_some());
+    round.crossed = round.ripped_items.len();
+    nets
+}
+
+/// How far round the pinch points the region plough's first stage rips at most, however wide
+/// the reach has grown, and how near a pinch the path's cells must come to be ripped round.
+const STAGE_ONE_REACH: Nm = 2_200_000;
+const PINCH_WINDOW: Nm = 450_000;
+/// The second stage: at most so many nets negotiated, so many connections it opened traced
+/// for their blockers, and so many nets repacked when nothing more is found to rip.
+const STAGE_TWO_NETS: usize = 12;
+const DISPLACED: usize = 3;
+const REPACK_NETS: usize = 8;
+
+/// The region plough. Other nets' movable copper within the reach (at most `STAGE_ONE_REACH`)
+/// of the stretches of the path near where it is pinched is ripped, with whatever of those nets
+/// it leaves reaching no pad: round a pinch, not along clear stretches of a long path, which
+/// would scramble buses that were never in the way. The trapped net and every signal net ripped
+/// are negotiated together, the trapped net's congestion priced at half; what is still open of
+/// them is routed, closed nets' stubs are pruned and plane nets joined to the planes again.
+///
+/// When that leaves the nets ripped with more open than they had, or the trapped connection
+/// open, a second stage starts again from the rip, and also rips round the cells where the
+/// first stage's routes kept colliding and round whatever blocks the connections it opened (or,
+/// finding none, just negotiates a few nets again as equals). It is kept when better.
 #[allow(clippy::too_many_arguments)]
 fn renegotiate(
     board: &mut Board,
     solver: &mut dyn FieldSolver,
     options: &ShoveOptions,
     soft: &mut Vec<ItemId>,
+    cache: &mut PassCache,
     pad: ItemId,
+    far: ItemId,
     net: u32,
-    movable: &dyn Fn(&Item) -> bool,
+    pinch: &[Point],
+    out_of_time: &dyn Fn() -> bool,
     spans: &mut Vec<Span>,
     round: &mut ShoveRound,
 ) {
-    let corridor = Corridor::of(&round.path);
-    let reach = options.reach as f64;
+    let plane_nets = cache.plane_nets.clone();
+    let signal = |n: u32| !plane_nets.contains(&n);
+    let pair = |a: &Airline| (a.from_item.min(a.to_item), a.from_item.max(a.to_item));
+    let open_at_start = open_now(board, options.pours_block);
+    let pairs_at_start: HashSet<(ItemId, ItemId)> = open_at_start.iter().map(pair).collect();
+
+    // The path from anchor to anchor, cut into the stretches near a pinch.
+    let mut path = Vec::with_capacity(round.path.len() + 2);
+    if let (Some(&(l, p)), Some(it)) = (round.path.first(), board.item(pad)) {
+        path.push((l, crate::route::anchor(it, p)));
+    }
+    path.extend_from_slice(&round.path);
+    if let (Some(&(l, p)), Some(it)) = (round.path.last(), board.item(far)) {
+        path.push((l, crate::route::anchor(it, p)));
+    }
+    let reach = options.reach.min(STAGE_ONE_REACH);
+    let window = (reach + PINCH_WINDOW) as f64;
+    let mut stretches: Vec<Corridor> = Vec::new();
+    for near in path.chunk_by(|a, b| pinch.iter().any(|q| a.1.distance(*q) <= window) == pinch.iter().any(|q| b.1.distance(*q) <= window)) {
+        if pinch.iter().any(|q| near[0].1.distance(*q) <= window) {
+            stretches.push(Corridor::of(near));
+        }
+    }
+    if stretches.is_empty() {
+        stretches.push(Corridor::of(&path));
+    }
+    let movable = |it: &Item| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked && it.net != net;
+    let reach = reach as f64;
     let near: Vec<ItemId> = board
         .items()
         .filter(|(_, it)| movable(it))
         .filter(|(_, it)| match (&it.kind, &it.shape) {
-            (Kind::Via, board::Shape::Capsule { a, .. }) => corridor.distance(*a, *a, None) < reach,
-            (Kind::Track, board::Shape::Capsule { a, b, .. }) => corridor.distance(*a, *b, Some(it.layers.trailing_zeros() as usize)) < reach,
+            (Kind::Via, board::Shape::Capsule { a, .. }) => {
+                stretches.iter().any(|c| c.distance(*a, *a, None) < reach) || pinch.iter().any(|q| q.distance(*a) < reach)
+            }
+            (Kind::Track, board::Shape::Capsule { a, b, .. }) => {
+                let layer = Some(it.layers.trailing_zeros() as usize);
+                stretches.iter().any(|c| c.distance(*a, *b, layer) < reach) || pinch.iter().any(|q| board::point_segment(*q, *a, *b) < reach)
+            }
             _ => false,
         })
         .map(|(id, _)| id)
         .collect();
-    let mut nets: HashSet<u32> = HashSet::from([net]);
-    for id in near {
-        if let Some(it) = board.remove(id) {
-            nets.insert(it.net);
-            spans.extend(it.span.clone());
-            round.ripped_items.push(it);
+    let ripped = rip_near(board, near, options.pours_block, soft, spans, round);
+    let mut nets: HashSet<u32> = ripped.iter().copied().filter(|&n| signal(n)).collect();
+    nets.insert(net);
+    tell(&options.log, "shoving", || format!("{}: {} pieces of {} nets ripped round the way out; negotiating them again", board.net_name(net), round.crossed, ripped.len()), None);
+
+    let ripped_state = (board.clone(), soft.clone(), spans.clone(), round.clone());
+    // The cells shared by most routes, in the negotiation's least-colliding round.
+    let mut hotspots: Vec<Point> = Vec::new();
+    let mut fewest = usize::MAX;
+    let mut watch_round = |view: crate::negotiate::RoundView| {
+        if view.colliding == 0 || view.colliding > fewest {
+            return;
+        }
+        fewest = view.colliding;
+        hotspots.clear();
+        let (nx, cells) = (view.grid.nx, view.grid.nx * view.grid.ny);
+        for c in 0..cells {
+            if (0..view.grid.layers.len()).any(|l| view.overlap[l * cells + c] >= 2) {
+                hotspots.push(view.grid.centre(c % nx, c / nx));
+            }
+        }
+    };
+    negotiate(board, solver, options, soft, &nets, HashMap::from([(net, 0.5)]), options.seed, Some(&mut watch_round), &plane_nets, spans);
+    let open = open_now(board, options.pours_block);
+    let open_ripped = |open: &[Airline]| open.iter().filter(|a| nets.contains(&a.net) && signal(a.net)).count();
+    let trapped = |board: &Board| connection_of(board, pad, options.pours_block).is_some();
+    let first_score = (trapped(board), score(&open, &plane_nets));
+    if !(open_ripped(&open) >= open_ripped(&open_at_start) || first_score.0) || nets.len() > STAGE_TWO_NETS || out_of_time() {
+        round.routed = !first_score.0;
+        return;
+    }
+
+    // The connections the first stage left open that it opened, or that are the trapped one's:
+    // the copper still in their way, outside what was ripped.
+    let ends_here = |a: &Airline| [a.from_item, a.to_item].iter().any(|id| *id == pad || *id == far);
+    let mut displaced: Vec<Airline> =
+        open.into_iter().filter(|a| nets.contains(&a.net) && signal(a.net) && (!pairs_at_start.contains(&pair(a)) || ends_here(a))).collect();
+    displaced.sort_by_key(|a| !ends_here(a));
+    displaced.truncate(DISPLACED);
+    let mut blockers: Vec<Point> = Vec::new();
+    if !displaced.is_empty() {
+        // With the first stage's routes held still, then, where they fill the only way out, free.
+        for hold_first in [true, false] {
+            let held = if hold_first { hold(board, soft, &ripped_state.1, &|n| signal(n)) } else { Vec::new() };
+            for a in &displaced {
+                if out_of_time() {
+                    break;
+                }
+                let conn = joined(board, options.pours_block);
+                if let Some(found) = soft_path(board, solver, options, cache, &conn, a.net, a.from_item, a.to_item) {
+                    blockers.extend(found.pinch);
+                }
+            }
+            release(board, held);
+            if !blockers.is_empty() {
+                break;
+            }
         }
     }
-    round.crossed = round.ripped_items.len();
-    for &n in &nets {
-        let had: Vec<(ItemId, Item)> = board.items().filter(|(_, it)| it.net == n).map(|(id, it)| (id, it.clone())).collect();
-        spans.extend(rip_floating(board, soft, n, options.pours_block));
-        round.ripped_items.extend(had.into_iter().filter(|(id, _)| board.item(*id).is_none()).map(|(_, it)| it));
+    let repack = !displaced.is_empty() && nets.len() <= REPACK_NETS;
+    if hotspots.is_empty() && blockers.is_empty() && !repack {
+        round.routed = !first_score.0;
+        return;
     }
-    soft.retain(|id| board.item(*id).is_some());
-    tell(&options.log, "shoving", || format!("{}: {} pieces of {} nets ripped round the way out; negotiating them again", board.net_name(net), round.crossed, nets.len() - 1), None);
-    let n = crate::negotiate::route_negotiated(
+    let first_state = (board.clone(), soft.clone(), spans.clone(), round.clone());
+    (*board, *soft, *spans, *round) = ripped_state;
+    let (by_hotspot, by_blocker) = ((options.cell * 12).max(400_000) as f64, options.reach.clamp(450_000, 1_200_000) as f64);
+    let more: Vec<ItemId> = board
+        .items()
+        .filter(|(_, it)| movable(it))
+        .filter(|(_, it)| match (&it.kind, &it.shape) {
+            (Kind::Via, board::Shape::Capsule { a, .. }) => {
+                hotspots.iter().any(|p| p.distance(*a) < by_hotspot) || blockers.iter().any(|p| p.distance(*a) < by_blocker)
+            }
+            (Kind::Track, board::Shape::Capsule { a, b, .. }) => {
+                hotspots.iter().any(|p| board::point_segment(*p, *a, *b) < by_hotspot) || blockers.iter().any(|p| board::point_segment(*p, *a, *b) < by_blocker)
+            }
+            _ => false,
+        })
+        .map(|(id, _)| id)
+        .collect();
+    let widened = !more.is_empty();
+    if !widened && !repack {
+        (*board, *soft, *spans, *round) = first_state;
+        round.routed = !first_score.0;
+        return;
+    }
+    nets.extend(rip_near(board, more, options.pours_block, soft, spans, round).into_iter().filter(|&n| signal(n)));
+    // Ripped wider, the trapped net is still favoured, less; repacked, all are equals.
+    let weights = if widened { HashMap::from([(net, 0.7)]) } else { HashMap::new() };
+    negotiate(board, solver, options, soft, &nets, weights, options.seed.wrapping_add(31), None, &plane_nets, spans);
+    let second_score = (trapped(board), score(&open_now(board, options.pours_block), &plane_nets));
+    if second_score >= first_score {
+        (*board, *soft, *spans, *round) = first_state;
+    }
+    round.routed = !trapped(board);
+}
+
+/// The region plough's negotiation of `nets`, then routing what is still open of them, pruning
+/// closed nets' stubs and joining plane nets to the planes again.
+#[allow(clippy::too_many_arguments)]
+fn negotiate(
+    board: &mut Board,
+    solver: &mut dyn FieldSolver,
+    options: &ShoveOptions,
+    soft: &mut Vec<ItemId>,
+    nets: &HashSet<u32>,
+    net_weight: HashMap<u32, f64>,
+    seed: u64,
+    on_round: Option<&mut dyn FnMut(crate::negotiate::RoundView)>,
+    plane_nets: &HashSet<u32>,
+    spans: &mut Vec<Span>,
+) {
+    let n = crate::negotiate::route_negotiated_rounds(
         board,
         solver,
         &crate::negotiate::NegotiationOptions {
             cell: options.cell,
             via_cost: options.via_cost,
             max_seconds: Some(options.reroute_seconds),
-            nets: Some(nets),
-            net_weight: HashMap::from([(net, 0.5)]),
+            nets: Some(nets.clone()),
+            net_weight,
             pours_block: options.pours_block,
             via_zones: options.negotiate_vias,
             repasses: options.negotiate_repasses,
             rip_blocked: false,
             reachable_tree: options.negotiate_tree,
-            seed: options.seed,
+            pad_ends: true,
+            directional: false,
+            seed,
             cancel: options.cancel.clone(),
             ..Default::default()
         },
         &mut |_| {},
         &mut |_, _| {},
+        on_round,
     );
     soft.extend(n.laid);
-    round.routed = connection_of(board, pad, options.pours_block).is_none();
+    let again = route_open(
+        board,
+        solver,
+        &Options {
+            cell: options.cell,
+            via_cost: options.via_cost,
+            max_seconds: Some(options.reroute_seconds.min(5.0)),
+            nets: Some(nets.clone()),
+            pours_block: options.pours_block,
+            directional: false,
+            seed,
+            cancel: options.cancel.clone(),
+            log: None,
+        },
+        &mut |_| {},
+    );
+    soft.extend(again.laid);
+    spans.extend(settle(board, soft, options.pours_block, plane_nets, Some(nets)));
 }
 
 /// The gentle plough: `steps` small pushes, each followed by a try at the route, with any net a
@@ -1206,8 +1640,55 @@ mod tests {
             ..Default::default()
         };
         let stats = shove_escape(&mut board, &mut crate::route::CpuSolver, &options, &mut soft, &mut |_, _| {});
-        assert_eq!(stats.tries.len(), 2);
+        // One try: the far end, tried on the board put back, would find the same wall.
+        assert_eq!(stats.tries.len(), 1);
         assert!(stats.tries.iter().all(|t| !t.routed && !t.kept && t.rounds[0].path.is_empty()));
         assert!(soft.is_empty());
+    }
+
+    #[test]
+    fn the_region_plough_frees_a_pad_behind_two_nets() {
+        let (pcb, copper) = kicad_pcb::parse_board(
+            "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal)) (net 0 \"\") (net 1 \"A\") (net 2 \"B\") (net 3 \"C\")
+             (gr_rect (start 0 0) (end 20 20) (layer \"Edge.Cuts\") (width 0.1)))",
+        )
+        .unwrap();
+        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+        let mm = |v: f64| (v * 1e6) as Nm;
+        let pad = |net, x, y| Item {
+            kind: Kind::Pad { footprint: 0, number: "1".into(), plated: false },
+            net,
+            layers: 1,
+            shape: board::Shape::Capsule { a: Point::new(mm(x), mm(y)), b: Point::new(mm(x), mm(y)), r: mm(0.25) },
+            hole: None,
+            locked: true,
+            span: None,
+        };
+        // A is walled in on one layer by B's track at x = 6.3 mm and C's at 7.05 mm, closer
+        // together than the reach: B cannot step aside unless C does too.
+        for (net, x, y) in [(1, 5.0, 10.0), (1, 15.0, 10.0), (2, 2.0, 3.0), (2, 2.0, 17.0), (3, 2.0, 1.5), (3, 2.0, 18.5)] {
+            board.insert(pad(net, x, y));
+        }
+        let mut soft = Vec::new();
+        for (net, x, y0, y1) in [(2, 6.3, 3.0, 17.0), (3, 7.05, 1.5, 18.5)] {
+            for (a, b) in [((2.0, y0), (x, y0)), ((x, y0), (x, y1)), ((x, y1), (2.0, y1))] {
+                soft.push(board.insert(Item {
+                    kind: Kind::Track,
+                    net,
+                    layers: 1,
+                    shape: board::Shape::Capsule { a: Point::new(mm(a.0), mm(a.1)), b: Point::new(mm(b.0), mm(b.1)), r: mm(0.1) },
+                    hole: None,
+                    locked: false,
+                    span: None,
+                }));
+            }
+        }
+        let options = ShoveOptions { cell: 35_000, plough: Plough::Region, reach: mm(0.5), ..Default::default() };
+        let stats = shove_escape(&mut board, &mut crate::route::CpuSolver, &options, &mut soft, &mut |_, _| {});
+        assert!(stats.tries.iter().any(|t| t.kept && t.routed), "{stats:?}");
+        assert!(connectivity_without_pours(&board).airlines.is_empty());
+        for &id in &soft {
+            assert!(board::check_item(&board, id).is_empty(), "{:?}", board.item(id));
+        }
     }
 }

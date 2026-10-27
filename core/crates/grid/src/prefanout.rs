@@ -770,6 +770,7 @@ fn single_layer_view(map: &ObstacleMap, net: u32, board_layer: usize) -> RouteGr
         via_penalty: Vec::new(),
         region_cost: Vec::new(),
         pours_block: full.pours_block,
+        directional: false,
     }
 }
 
@@ -1345,8 +1346,12 @@ fn lay_grid_escape(
 
     let gmap = &global_maps[&profile.class];
     let gcells = gmap.nx * gmap.ny;
+    let two_layer = board.layers.len() == 2;
     // The layers an escape heads for: the inner signal layers, planes left out; with none, as on
-    // a two-layer board, the other signal layer, so each escape drops to it by a via.
+    // a two-layer board or a four-layer board whose inner layers are planes, the other signal
+    // layer. On a plain two-layer board without dedicated inner signal layers, unblocked perimeter
+    // pads try a zero-via surface escape on `pad.layer` first and drill a dogbone via only when
+    // their surface lane is blocked.
     let signal = |l: &usize| board.planes & (1 << l) == 0;
     let mut inner_layers: Vec<usize> = (1..board.layers.len().saturating_sub(1)).filter(signal).collect();
     if inner_layers.is_empty() {
@@ -1395,7 +1400,7 @@ fn lay_grid_escape(
                 let lat_inner = (lat / 80_000.0) as u32;
                 if let Some(rl) = rl_pad {
                     let mut pen = lat_outer;
-                    if multi_layer && base_grid.layers.len() > 1 {
+                    if multi_layer && !two_layer && base_grid.layers.len() > 1 {
                         let depth = frame.ring_depth(p);
                         if depth > 500_000.0 {
                             pen += 3;
@@ -1463,9 +1468,13 @@ fn lay_grid_escape(
         };
 
         let target_sets: Vec<Vec<usize>> = if multi_layer && inner_layers != vec![pad.layer] {
-            let mut other_outer: Vec<usize> = (0..board.layers.len()).filter(|l| !inner_layers.contains(l)).collect();
-            other_outer.sort_by_key(|&l| l == pad.layer);
-            vec![inner_layers.clone(), other_outer]
+            if two_layer {
+                vec![vec![pad.layer], inner_layers.clone()]
+            } else {
+                let mut other_outer: Vec<usize> = (0..board.layers.len()).filter(|l| !inner_layers.contains(l)).collect();
+                other_outer.sort_by_key(|&l| l == pad.layer);
+                vec![inner_layers.clone(), other_outer]
+            }
         } else {
             vec![vec![pad.layer]]
         };
@@ -1500,6 +1509,7 @@ fn lay_grid_escape(
             for (b_idx, &(r_lo, r_hi)) in ring_bands.iter().enumerate() {
                 for (s_idx, layers) in target_sets.iter().enumerate() {
                     let with_pours = b_idx == 0 && s_idx == 0 && !pour_targets.is_empty();
+                    let saved_via = if two_layer && layers.as_slice() == [pad.layer] { grid.via.take() } else { None };
                     for _attempt in 0..4 {
                         let targets = collect_targets(&grid, layers, r_lo, r_hi, with_pours);
                         if targets.is_empty() {
@@ -1527,6 +1537,9 @@ fn lay_grid_escape(
                             let bidx = grid.index(rl, ti, tj);
                             grid.blocked[bidx] = true;
                         }
+                    }
+                    if saved_via.is_some() {
+                        grid.via = saved_via;
                     }
                 }
             }
@@ -1734,5 +1747,79 @@ mod tests {
         let src: Vec<usize> = crate::route::terminals(&mut board, &grid, pad_a).into_iter().map(|t| t.0).collect();
         let tgt: Vec<usize> = crate::route::terminals(&mut board, &grid, pad_b).into_iter().map(|t| t.0).collect();
         assert!(route_astar(&grid, &src, &tgt, 60).is_some(), "LEDC_D5 between LED42-2 and LED43-4 stays routable after U2/U7 fanout");
+    }
+
+    #[test]
+    fn two_layer_fine_pitch_perimeter_pads_escape_on_their_surface_without_vias() {
+        let src = r#"(kicad_pcb
+          (version 20241229)
+          (generator "pcbnew")
+          (general (thickness 1.6))
+          (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+          (net 0 "")
+          (net 1 "S1") (net 2 "S2") (net 3 "S3") (net 4 "S4")
+          (net 5 "S5") (net 6 "S6") (net 7 "S7") (net 8 "S8")
+          (net 9 "WALL")
+          (gr_rect (start 0 0) (end 30 30) (stroke (width 0.1) (type default)) (fill none) (layer "Edge.Cuts"))
+          (footprint "Test:QFP8" (layer "F.Cu") (uuid "00000000-0000-0000-0000-000000000001") (at 15 15)
+            (pad "1" smd rect (at -0.75 -1.6) (size 0.25 0.7) (layers "F.Cu") (net 1 "S1"))
+            (pad "2" smd rect (at -0.25 -1.6) (size 0.25 0.7) (layers "F.Cu") (net 2 "S2"))
+            (pad "3" smd rect (at 0.25 -1.6) (size 0.25 0.7) (layers "F.Cu") (net 3 "S3"))
+            (pad "4" smd rect (at 0.75 -1.6) (size 0.25 0.7) (layers "F.Cu") (net 4 "S4"))
+            (pad "5" smd rect (at -0.75 1.6) (size 0.25 0.7) (layers "F.Cu") (net 5 "S5"))
+            (pad "6" smd rect (at -0.25 1.6) (size 0.25 0.7) (layers "F.Cu") (net 6 "S6"))
+            (pad "7" smd rect (at 0.25 1.6) (size 0.25 0.7) (layers "F.Cu") (net 7 "S7"))
+            (pad "8" smd rect (at 0.75 1.6) (size 0.25 0.7) (layers "F.Cu") (net 8 "S8"))
+          )
+          (footprint "Test:Sink" (layer "F.Cu") (uuid "00000000-0000-0000-0000-000000000002") (at 15 4)
+            (pad "1" smd rect (at -3 0) (size 0.8 0.8) (layers "F.Cu") (net 1 "S1"))
+            (pad "2" smd rect (at -1 0) (size 0.8 0.8) (layers "F.Cu") (net 2 "S2"))
+            (pad "3" smd rect (at 1 0) (size 0.8 0.8) (layers "F.Cu") (net 3 "S3"))
+            (pad "4" smd rect (at 3 0) (size 0.8 0.8) (layers "F.Cu") (net 4 "S4"))
+          )
+          (footprint "Test:Sink2" (layer "F.Cu") (uuid "00000000-0000-0000-0000-000000000003") (at 15 26)
+            (pad "5" smd rect (at -3 0) (size 0.8 0.8) (layers "F.Cu") (net 5 "S5"))
+            (pad "6" smd rect (at -1 0) (size 0.8 0.8) (layers "F.Cu") (net 6 "S6"))
+            (pad "7" smd rect (at 1 0) (size 0.8 0.8) (layers "F.Cu") (net 7 "S7"))
+            (pad "8" smd rect (at 3 0) (size 0.8 0.8) (layers "F.Cu") (net 8 "S8"))
+          )
+        )"#;
+        let (pcb, copper) = kicad_pcb::parse_board(src).unwrap();
+        let pro = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/earring.kicad_pro");
+        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::read(&pro).unwrap());
+        let open = prefanout(
+            &mut board,
+            &PrefanoutOptions { parts: vec![0], mode: EscapeMode::GridInner, order: EscapeOrder::Round, ..Default::default() },
+            &mut |_| {},
+        );
+        assert_eq!(open.escaped, 8, "{open:?}");
+        assert_eq!(open.vias, 0, "unblocked two-layer perimeter pads escape on F.Cu with 0 vias: {open:?}");
+
+        // Box the north row in tightly on F.Cu (within 0.3 mm of the pad box so no ring cell lies
+        // inside the enclosure on F.Cu); those 4 pads must drop dogbone vias inside the package to B.Cu.
+        let mut walled = Board::new(&pcb, &copper, kicad_pcb::Rules::read(&pro).unwrap());
+        for (a, b) in [
+            (Point::new(13_850_000, 12_750_000), Point::new(16_150_000, 12_750_000)),
+            (Point::new(13_850_000, 15_200_000), Point::new(16_150_000, 15_200_000)),
+            (Point::new(13_850_000, 12_750_000), Point::new(13_850_000, 15_200_000)),
+            (Point::new(16_150_000, 12_750_000), Point::new(16_150_000, 15_200_000)),
+        ] {
+            walled.insert(Item {
+                kind: Kind::Track,
+                net: 9,
+                layers: 1,
+                shape: Shape::Capsule { a, b, r: 100_000 },
+                hole: None,
+                locked: true,
+                span: None,
+            });
+        }
+        let blocked = prefanout(
+            &mut walled,
+            &PrefanoutOptions { parts: vec![0], mode: EscapeMode::GridInner, order: EscapeOrder::Round, ..Default::default() },
+            &mut |_| {},
+        );
+        assert_eq!(blocked.escaped, 8, "{blocked:?}");
+        assert!(blocked.vias >= 4 && blocked.vias <= 5, "walled north row falls back to dogbone vias while south row stays on F.Cu: {blocked:?}");
     }
 }

@@ -96,20 +96,26 @@ pub fn joined(board: &Board, a: ItemId, b: ItemId) -> bool {
 }
 
 pub fn connectivity(board: &Board) -> Connectivity {
-    joined_copper(board, true)
+    joined_copper(board, true, None)
 }
 
 /// Connectivity as it will stand whatever the pours are refilled to: poured copper joins nothing,
 /// except a block's kept pours, which are not refilled, and planes, whose layer nothing else
 /// may take.
 pub fn connectivity_without_pours(board: &Board) -> Connectivity {
-    joined_copper(board, false)
+    joined_copper(board, false, None)
 }
 
-fn joined_copper(board: &Board, with_pours: bool) -> Connectivity {
+/// One net's part of [`connectivity`] (`with_pours`) or [`connectivity_without_pours`], found
+/// without looking at the other nets' copper.
+pub fn net_connectivity(board: &Board, net: u32, with_pours: bool) -> Connectivity {
+    joined_copper(board, with_pours, Some(net))
+}
+
+fn joined_copper(board: &Board, with_pours: bool, only: Option<u32>) -> Connectivity {
     let ids: Vec<ItemId> = board
         .items()
-        .filter(|(_, it)| it.is_copper() && it.net != 0 && cluster_member(board, it, with_pours))
+        .filter(|(_, it)| it.is_copper() && it.net != 0 && only.is_none_or(|n| it.net == n) && cluster_member(board, it, with_pours))
         .map(|(id, _)| id)
         .collect();
     let max = ids.iter().copied().max().map_or(0, |m| m + 1);

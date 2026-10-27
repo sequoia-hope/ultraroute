@@ -273,14 +273,19 @@ pub fn shift_copper(board: &mut Board, soft: &mut Vec<ItemId>, piece: f64, rule:
     (first, second, spans)
 }
 
-/// Footprints whose closest pads of different nets sit no further apart than `pitch`, centre to
-/// centre: the parts whose escapes are worth combing.
+/// Footprints whose closest pads of different nets on a shared copper layer sit no further apart
+/// than `pitch`, centre to centre: the parts whose escapes are worth combing. Pads on opposite
+/// sides of the board, such as the front and back fingers of a card-edge connector at the same
+/// `(x, y)`, do not crowd each other's layer.
 pub fn fine_pitch(board: &Board, pitch: Nm) -> Vec<usize> {
-    let mut centres: HashMap<usize, Vec<(Point, u32)>> = HashMap::new();
+    let mut centres: HashMap<usize, Vec<(Point, u32, u64)>> = HashMap::new();
     for (_, it) in board.items() {
         if let Kind::Pad { footprint, .. } = it.kind {
             let bb = it.shape.bbox();
-            centres.entry(footprint).or_default().push((Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2), it.net));
+            centres
+                .entry(footprint)
+                .or_default()
+                .push((Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2), it.net, it.layers));
         }
     }
     let mut out: Vec<usize> = centres
@@ -288,7 +293,9 @@ pub fn fine_pitch(board: &Board, pitch: Nm) -> Vec<usize> {
         // Chip-scale parts count too: a four-ball load switch at 0.4 mm escapes as hard as a QFN.
         .filter(|(_, pads)| pads.len() >= 4)
         .filter(|(_, pads)| {
-            pads.iter().enumerate().any(|(i, (p, n))| pads[i + 1..].iter().any(|(q, m)| m != n && p.distance(*q) <= pitch as f64))
+            pads.iter()
+                .enumerate()
+                .any(|(i, (p, n, la))| pads[i + 1..].iter().any(|(q, m, lb)| m != n && la & lb != 0 && p.distance(*q) <= pitch as f64))
         })
         .map(|(f, _)| f)
         .collect();
@@ -409,5 +416,39 @@ mod tests {
             .max()
             .unwrap_or(0);
         assert!(max_y > 150_000, "middle of the track bowed away from the repulsor: {max_y}");
+    }
+
+    #[test]
+    fn fine_pitch_ignores_opposite_side_edge_connector_fingers_at_the_same_xy() {
+        let (pcb, copper) = kicad_pcb::parse_board(
+            "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal)) (net 0 \"\") (net 1 \"A\") (net 2 \"B\") (net 3 \"C\") (net 4 \"D\"))",
+        )
+        .unwrap();
+        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+        // Footprint 0: wide-pitch (2.54 mm) card-edge fingers paired on F.Cu and B.Cu at identical (x, y).
+        for (k, (x, layer, net)) in [(0, 1u64, 1u32), (0, 2, 2), (2_540_000, 1, 3), (2_540_000, 2, 4)].into_iter().enumerate() {
+            board.insert(Item {
+                kind: Kind::Pad { footprint: 0, number: format!("{}", k + 1), plated: false },
+                net,
+                layers: layer,
+                shape: Shape::Capsule { a: Point::new(x, 0), b: Point::new(x, 0), r: 300_000 },
+                hole: None,
+                locked: true,
+                span: None,
+            });
+        }
+        // Footprint 1: four 0.4 mm pitch pads all on F.Cu.
+        for k in 0..4 {
+            board.insert(Item {
+                kind: Kind::Pad { footprint: 1, number: format!("{}", k + 1), plated: false },
+                net: (k + 1) as u32,
+                layers: 1,
+                shape: Shape::Capsule { a: Point::new(k * 400_000, 5_000_000), b: Point::new(k * 400_000, 5_000_000), r: 100_000 },
+                hole: None,
+                locked: true,
+                span: None,
+            });
+        }
+        assert_eq!(fine_pitch(&board, 500_000), vec![1]);
     }
 }

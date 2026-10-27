@@ -24,6 +24,28 @@ pub const NEIGHBOURS: [(i32, i32, u32); 8] = [
 /// A route as (routing layer, i, j) cells from a source cell to a target cell.
 pub type GridPath = Vec<(usize, usize, usize)>;
 
+/// Cost of a layer change equivalent to `mm` millimetres of straight trace on a grid of step `cell`.
+pub fn via_cost_mm(cell: board::Nm, mm: f64) -> u32 {
+    ((mm * 1e6 / cell.max(1) as f64) * f64::from(STRAIGHT)).round().max(f64::from(STRAIGHT)) as u32
+}
+
+/// Step cost on `layer` along `(di, dj)`. When `directional` is set, even routing layers prefer
+/// horizontal travel (`10` vs `12`) and odd routing layers prefer vertical travel (`10` vs `12`),
+/// with `15` on diagonals so 45-degree turns still beat staircasing, diagonal zig-zags never beat
+/// off-axis straights (`30 > 24`), and the octile A* heuristic remains admissible.
+#[inline]
+fn step_cost(directional: bool, layer: usize, di: i32, dj: i32, base: u32) -> u32 {
+    if !directional {
+        base
+    } else if di != 0 && dj != 0 {
+        15
+    } else if (layer & 1 == 0) == (dj == 0) {
+        10
+    } else {
+        12
+    }
+}
+
 /// Cost from the nearest source to every cell (`UNREACHED` where none).
 pub fn cost_field(grid: &RouteGrid, sources: &[usize], via_cost: u32) -> Vec<u32> {
     let cells = grid.cell_count();
@@ -54,7 +76,7 @@ pub fn cost_field(grid: &RouteGrid, sources: &[usize], via_cost: u32) -> Vec<u32
             if ni < 0 || nj < 0 || ni >= grid.nx as i32 || nj >= grid.ny as i32 {
                 continue;
             }
-            relax(grid.index(layer, ni as usize, nj as usize), step);
+            relax(grid.index(layer, ni as usize, nj as usize), step_cost(grid.directional, layer, di, dj, step));
         }
         if grid.via.is_some() && !grid.via_blocked[cell] {
             for other in 0..grid.layers.len() {
@@ -92,7 +114,8 @@ pub fn trace_back(
                 continue;
             }
             let n = grid.index(layer, ni as usize, nj as usize);
-            if cost[n] != UNREACHED && cost[n] + step + grid.penalty_at(at) == cost[at] {
+            let actual = step_cost(grid.directional, layer, di, dj, step);
+            if cost[n] != UNREACHED && cost[n] + actual + grid.penalty_at(at) == cost[at] {
                 previous = Some(n);
                 break;
             }
@@ -291,7 +314,7 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
                 }
                 let next = grid.index(layer, ni as usize, nj as usize);
                 if !grid.blocked[next] {
-                    let candidate = c + step + grid.penalty_at(next);
+                    let candidate = c + step_cost(grid.directional, layer, di, dj, step) + grid.penalty_at(next);
                     let cur = if b.gen[next] == epoch { b.cost[next] } else { UNREACHED };
                     if candidate < cur {
                         b.gen[next] = epoch;
@@ -333,7 +356,8 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
                 }
                 let n = grid.index(layer, ni as usize, nj as usize);
                 let cn = cost_at(&b, n);
-                if cn != UNREACHED && cn + step + grid.penalty_at(at) == c_at {
+                let actual = step_cost(grid.directional, layer, di, dj, step);
+                if cn != UNREACHED && cn + actual + grid.penalty_at(at) == c_at {
                     previous = Some(n);
                     break;
                 }
@@ -479,6 +503,7 @@ mod tests {
             via_penalty: Vec::new(),
             region_cost: Vec::new(),
             pours_block: false,
+            directional: false,
         };
         let via_at = |path: &GridPath| path.windows(2).find(|w| w[0].0 != w[1].0).map(|w| w[1].1);
         let (src, tgt) = (vec![0], vec![nx + nx - 1]);
@@ -520,6 +545,7 @@ mod tests {
             via_penalty: (0..nx * ny).map(|_| (next() % 7) as u32).collect(),
             region_cost: Vec::new(),
             pours_block: false,
+            directional: false,
         }
     }
 
@@ -527,7 +553,13 @@ mod tests {
         path.windows(2)
             .map(|w| {
                 let (a, b) = (w[0], w[1]);
-                let step = if a.0 != b.0 { via_cost + grid.via_penalty_at(b.2 * grid.nx + b.1) } else if a.1 != b.1 && a.2 != b.2 { DIAGONAL } else { STRAIGHT };
+                let step = if a.0 != b.0 {
+                    via_cost + grid.via_penalty_at(b.2 * grid.nx + b.1)
+                } else {
+                    let (di, dj) = (b.1 as i32 - a.1 as i32, b.2 as i32 - a.2 as i32);
+                    let base = if di != 0 && dj != 0 { DIAGONAL } else { STRAIGHT };
+                    step_cost(grid.directional, b.0, di, dj, base)
+                };
                 step + grid.penalty_at(grid.index(b.0, b.1, b.2))
             })
             .sum()
@@ -544,6 +576,47 @@ mod tests {
             assert_eq!(full.is_some(), quick.is_some(), "seed {seed}");
             if let (Some(f), Some(q)) = (full, quick) {
                 assert_eq!(path_cost(&grid, &f, 50), path_cost(&grid, &q, 50), "seed {seed}");
+            }
+        }
+    }
+
+    #[test]
+    fn directional_two_layer_grid_separates_axes_and_matches_full_field() {
+        let (nx, ny) = (25, 25);
+        let grid = RouteGrid {
+            net: 1,
+            x0: 0,
+            y0: 0,
+            h: 50_000,
+            nx,
+            ny,
+            layers: vec![0, 1],
+            half_width: 50_000,
+            via: Some(ViaSpec { radius: 100_000, drill_radius: 50_000 }),
+            blocked: vec![false; 2 * nx * ny],
+            via_blocked: vec![false; nx * ny],
+            penalty: Vec::new(),
+            via_penalty: Vec::new(),
+            region_cost: Vec::new(),
+            pours_block: false,
+            directional: true,
+        };
+        let pth = |i: usize, j: usize| vec![grid.index(0, i, j), grid.index(1, i, j)];
+        let horiz = route_astar(&grid, &pth(2, 12), &pth(22, 12), 500).unwrap();
+        assert!(horiz.iter().all(|&(l, _, _)| l == 0), "horizontal PTH run stays on layer 0: {horiz:?}");
+        let vert = route_astar(&grid, &pth(12, 2), &pth(12, 22), 500).unwrap();
+        assert!(vert.iter().all(|&(l, _, _)| l == 1), "vertical PTH run stays on layer 1: {vert:?}");
+
+        for seed in 1..60u64 {
+            let mut g = random_grid(seed * 6151);
+            g.directional = true;
+            let sources = vec![g.index(0, 1, 1), g.index(1, 2, 1)];
+            let targets = vec![g.index(0, 37, 27), g.index(1, 30, 5)];
+            let full = trace_back(&g, &cost_field(&g, &sources, 50), &targets, 50);
+            let quick = route_astar(&g, &sources, &targets, 50);
+            assert_eq!(full.is_some(), quick.is_some(), "directional seed {seed}");
+            if let (Some(f), Some(q)) = (full, quick) {
+                assert_eq!(path_cost(&g, &f, 50), path_cost(&g, &q, 50), "directional seed {seed}");
             }
         }
     }

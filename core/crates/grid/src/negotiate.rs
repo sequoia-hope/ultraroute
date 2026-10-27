@@ -19,7 +19,7 @@ use board::{anchors, connectivity, connectivity_without_pours, nm, Airline, Boar
 
 use crate::grid::{ObstacleMap, Profile, RouteGrid};
 use crate::report::{tell, Log};
-use crate::route::{lay, pieces, terminals, FieldSolver, PricedJob, RoundPrices, Terminal};
+use crate::route::{cluster_pads, ends_with_pads, lay, pieces, terminals, FieldSolver, PricedJob, RoundPrices, Terminal};
 use crate::search::{route_astar, GridPath};
 
 /// How often the trial routes are shown while a round runs one connection after another.
@@ -73,6 +73,12 @@ pub struct NegotiationOptions {
     /// Span a net of several clusters by pairs that can meet before pairs that cannot, so that a
     /// pin walled into a pocket in the middle does not keep the open pins either side apart.
     pub reachable_tree: bool,
+    /// A connection may also end at the pads of its ends' clusters nearest them, as the region
+    /// plough has it (see [`crate::route::ends_with_pads`]).
+    pub pad_ends: bool,
+    /// Routes on a two-layer board prefer each layer's own direction (`RouteGrid::directional`),
+    /// on the CPU; the GPU's fields and the browser's pool know nothing of directions.
+    pub directional: bool,
     /// Reorders the connections, for a search over many runs; 0 keeps the board's order.
     pub seed: u64,
     pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
@@ -98,6 +104,8 @@ impl Default for NegotiationOptions {
             repasses: 2,
             rip_blocked: true,
             reachable_tree: true,
+            pad_ends: false,
+            directional: true,
             seed: 0,
             cancel: None,
             log: None,
@@ -608,6 +616,7 @@ fn run_pass(
 
     let (nx, ny, layers) = (sample.nx, sample.ny, sample.layers.len());
     let cells = nx * ny;
+    let directional = options.directional && layers == 2 && solver.batch_size() <= 1;
     // A via stands on every layer: crowding at its site is priced, and remembered, as often.
     let via_scale = layers.max(2) as f64;
     let via_step = options.history_step * layers.max(2) as u32;
@@ -617,13 +626,26 @@ fn run_pass(
     let mut via_history = if options.via_zones { vec![0u32; cells] } else { Vec::new() };
     let mut present = options.present;
 
+    let near = options.pad_ends.then(|| {
+        let conn = joined(board, options.pours_block);
+        let pads = cluster_pads(board, &conn);
+        (conn, pads)
+    });
     let ends: Vec<(Vec<Terminal>, Vec<Terminal>)> = connections
         .iter()
         .map(|c| {
             maps[&c.class].view_into(c.net, grid_buf);
-            (terminals(board, grid_buf, c.from), terminals(board, grid_buf, c.to))
+            let mut end = |id: ItemId| match &near {
+                Some((conn, pads)) => {
+                    let pads = conn.cluster.get(&id).and_then(|k| pads.get(k)).map_or(&[][..], Vec::as_slice);
+                    ends_with_pads(board, grid_buf, id, pads, &terminals)
+                }
+                None => terminals(board, grid_buf, id),
+            };
+            (end(c.from), end(c.to))
         })
         .collect();
+    drop(near);
     let cells_of = |t: &[Terminal]| t.iter().map(|t| t.0).collect::<Vec<usize>>();
     // A path must start and end on its own pads, however near a neighbour's route runs: those
     // cells are the footprint's doing and not counted as collisions.
@@ -680,6 +702,7 @@ fn run_pass(
                     zones.remove(claimer, r);
                 }
                 maps[&c.class].view_into(c.net, grid_buf);
+                grid_buf.directional = directional;
                 let w = weight_of(c.net);
                 penalties_into(zones.trace.seen_by(&c.class), &history, present, c.net, w, &mut grid_buf.penalty);
                 if options.via_zones {
@@ -1070,7 +1093,7 @@ type Anchor = (Point, ItemId);
 /// airlines with it, and the clusters either side, which could meet past it, stay apart. Where
 /// an airline of such a net has no way on the grid, its tree is spanned again by pairs that have
 /// one first, nearest first, the pocketed clusters joined last: as many airlines as before.
-fn reachable_airlines(
+pub(crate) fn reachable_airlines(
     board: &mut Board,
     conn: &Connectivity,
     mut open: Vec<Airline>,
@@ -1414,6 +1437,7 @@ fn route_round_in_parallel(
                         }
                         None => grid.insert(maps[class].view(net)),
                     };
+                    grid.directional = options.directional && grid.layers.len() == 2;
                     penalties_into(zones.trace.seen_by(class), history, present, net, weight, &mut grid.penalty);
                     if options.via_zones {
                         via_penalties_into(zones, class, own_ring, via_history, present * via_scale, net, weight, &mut grid.via_penalty);

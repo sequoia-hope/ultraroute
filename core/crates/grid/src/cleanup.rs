@@ -153,9 +153,16 @@ pub fn prune_dangling(board: &mut Board, soft: &mut Vec<ItemId>) -> (usize, Vec<
 
 /// As [`prune_dangling`], showing `watch` each dangling track or via removed.
 pub fn prune_dangling_watch(board: &mut Board, soft: &mut Vec<ItemId>, watch: &mut dyn FnMut(&Board, &Item)) -> (usize, Vec<Span>) {
+    prune_dangling_of(board, soft, &|_| true, watch)
+}
+
+/// As [`prune_dangling`], for the copper `which` picks only: the shove prunes the nets it is
+/// done with mid-run, and leaves an open net's cut copper for the net to join again.
+pub(crate) fn prune_dangling_of(board: &mut Board, soft: &mut Vec<ItemId>, which: &dyn Fn(&Item) -> bool, watch: &mut dyn FnMut(&Board, &Item)) -> (usize, Vec<Span>) {
     let (mut pruned, mut spans) = (0, Vec::new());
     loop {
-        let loose: Vec<ItemId> = soft.iter().copied().filter(|&id| dangles(board, id) || redundant(board, id)).collect();
+        let loose: Vec<ItemId> =
+            soft.iter().copied().filter(|&id| board.item(id).is_some_and(which) && (dangles(board, id) || redundant(board, id))).collect();
         let before = pruned;
         // One at a time, judged again: two stubs covering each other must not both go. What
         // carries a connection stays however it looks, so a round may take nothing out.
@@ -515,7 +522,7 @@ fn redundant(board: &Board, id: ItemId) -> bool {
 /// (a stub that adds nothing); a via that meets its net's copper on fewer than two layers. Ends
 /// meet as [`joined`] has them, by the track's round end. Pours do not count as covering a
 /// track, as a refill may draw them back from it.
-fn dangles(board: &Board, id: ItemId) -> bool {
+pub(crate) fn dangles(board: &Board, id: ItemId) -> bool {
     let Some(item) = board.item(id) else { return false };
     if item.net == 0 {
         return false;
@@ -868,5 +875,40 @@ mod tests {
         assert_eq!(soft, vec![main_run]);
         assert!(board::connectivity(&board).airlines.is_empty());
     }
-}
 
+    #[test]
+    fn prune_dangling_of_takes_only_the_copper_picked() {
+        let (pcb, copper) = kicad_pcb::parse_board(
+            "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal)) (net 0 \"\") (net 1 \"N1\") (net 2 \"N2\"))",
+        )
+        .unwrap();
+        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+        let mut soft = Vec::new();
+        for (net, y) in [(1, 0), (2, 1_000_000)] {
+            board.insert(Item {
+                kind: Kind::Pad { footprint: 0, number: "1".into(), plated: false },
+                net,
+                layers: 1,
+                shape: Shape::Capsule { a: Point::new(0, y), b: Point::new(0, y), r: 100_000 },
+                hole: None,
+                locked: true,
+                span: None,
+            });
+            soft.push(board.insert(Item {
+                kind: Kind::Track,
+                net,
+                layers: 1,
+                shape: Shape::Capsule { a: Point::new(0, y), b: Point::new(800_000, y), r: 50_000 },
+                hole: None,
+                locked: false,
+                span: None,
+            }));
+        }
+        let (s1, s2) = (soft[0], soft[1]);
+        let (pruned, _) = prune_dangling_of(&mut board, &mut soft, &|it| it.net != 2, &mut |_, _| {});
+        assert_eq!(pruned, 1);
+        assert!(board.item(s1).is_none(), "net 1's stub goes");
+        assert!(board.item(s2).is_some(), "net 2's stub was not picked");
+        assert_eq!(soft, vec![s2]);
+    }
+}
