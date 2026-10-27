@@ -290,7 +290,13 @@ impl Board {
             let hole = model.drill.map(|d| (Point::from_m(model.position), nm(d[0].min(d[1]) / 2.0)));
             let plated = !matches!(model.kind, PadKind::NpThruHole);
             let bigger_than_hole = model.drill.is_none_or(|d| model.size[0] > d[0] || model.size[1] > d[1]);
-            let layers = if plated || bigger_than_hole { mask(&pad.layers) } else { 0 };
+            let mut layers = if plated || bigger_than_hole { mask(&pad.layers) } else { 0 };
+            // A pad with no hole that lists every copper layer has copper on its footprint's
+            // side alone, as KiCad takes it: nothing joins the layers through it.
+            if model.drill.is_none() && pad.layers.iter().any(|l| l == "*.Cu") {
+                let side = if matches!(pcb.footprints[pad.footprint].side, kicad_pcb::Side::Back) { one("B.Cu") } else { one("F.Cu") };
+                layers &= side;
+            }
             let shape = match &pad.outline {
                 Outline::Circle { centre, radius } => {
                     let c = Point::from_m(*centre);

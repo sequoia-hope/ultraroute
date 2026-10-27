@@ -116,3 +116,13 @@ fn an_edge_arc_that_ends_where_it_starts_is_a_whole_circle() {
     let t = track(&mut b, 10.0);
     assert!(!check_item(&b, t).is_empty(), "the circle's left side crosses x = 10");
 }
+
+#[test]
+fn a_pad_without_a_hole_on_every_layer_has_copper_on_its_side_alone() {
+    let b = board(
+        "(footprint \"J\" (layer \"F.Cu\") (uuid \"0b10c000-0000-4000-8000-0000000000b4\") (at 15 15) (property \"Reference\" \"J1\")
+           (pad \"1\" smd rect (at 0 0) (size 2 1) (layers \"*.Cu\" \"*.Mask\") (net 1 \"A\")))",
+    );
+    let (_, pad) = b.items().find(|(_, it)| matches!(it.kind, Kind::Pad { .. })).unwrap();
+    assert_eq!(pad.layers, 1, "F.Cu only");
+}

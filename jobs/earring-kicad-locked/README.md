@@ -20,3 +20,8 @@ pair included, and cut it into pieces; with `--planes In1.Cu` (now in `job.json`
 there and seeds 1 and 2 still route completely (lab `earring-planes-in1`, from the simple-earring
 session, whose board is that P-s1 route). `--auto-planes` finds such layers by their pours.
 
+Input refreshed 2026-10-27 from the simple-earring session (route.py fix): the 8 free-standing
+assist vias it had left (their tracks unlocked, so stripped, so the vias dangled), USB_C_DP's
+B.Cu stub past B6, the VBUS trunk's end and R14's 3V3 via-in-pad are gone or fixed; pre-route
+KiCad DRC 0 errors. Their seed 3 with this job's recipe routes clean (lab earring-noassist).
+
