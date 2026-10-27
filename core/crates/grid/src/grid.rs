@@ -38,7 +38,10 @@ impl Profile {
             half_width,
             narrow_half_width: (nm(min_width) / 2).clamp(1, half_width.max(1)),
             clearance: take(class.map(|c| c.clearance), rules.min_clearance),
-            via_radius: take(class.map(|c| c.via_diameter), rules.min_via_diameter) / 2,
+            // A class's via may leave a thinner ring round its drill than the board allows; the
+            // via grows to keep the ring, the drill as the class has it.
+            via_radius: (take(class.map(|c| c.via_diameter), rules.min_via_diameter) / 2)
+                .max(take(class.map(|c| c.via_drill), rules.min_via_drill) / 2 + nm(rules.min_via_annular_width)),
             drill_radius: take(class.map(|c| c.via_drill), rules.min_via_drill) / 2,
         }
     }
@@ -68,6 +71,8 @@ pub struct RouteGrid {
     pub via_blocked: Vec<bool>,
     /// Per routing layer and cell: extra cost of entering it; empty for none.
     pub penalty: Vec<u32>,
+    /// Per cell: extra cost of a via standing there, in a via-avoid area; empty for none.
+    pub via_penalty: Vec<u32>,
     /// Pours are planes to keep clear of, not copper refilled around the route.
     pub pours_block: bool,
 }
@@ -82,6 +87,10 @@ impl RouteGrid {
 impl RouteGrid {
     pub fn penalty_at(&self, index: usize) -> u32 {
         self.penalty.get(index).copied().unwrap_or(0)
+    }
+
+    pub fn via_penalty_at(&self, cell: usize) -> u32 {
+        self.via_penalty.get(cell).copied().unwrap_or(0)
     }
 
     pub fn cell_count(&self) -> usize {
@@ -116,7 +125,10 @@ pub struct ObstacleMap {
     layers: usize,
     owner: Vec<i32>,
     via_owner: Vec<i32>,
+    /// Per cell: the extra cost of a via there, in the board's via-avoid areas; empty for none.
+    via_avoid: Vec<u32>,
 }
+
 
 impl ObstacleMap {
     /// With `pours_block`, poured copper is kept like any other copper; otherwise it claims
@@ -143,8 +155,11 @@ impl ObstacleMap {
             layers,
             owner: vec![FREE; layers * nx * ny],
             via_owner: vec![FREE; nx * ny],
+            via_avoid: Vec::new(),
         };
         map.stamp_outline(board);
+        map.stamp_via_avoid(board);
+        map.stamp_mask_areas(board);
         let max_clr = (0..board.nets.len() as u32)
             .map(|n| map.clearance_to(board, n))
             .max()
@@ -189,13 +204,52 @@ impl ObstacleMap {
             layers,
             owner: vec![FREE; layers * nx * ny],
             via_owner: vec![FREE; nx * ny],
+            via_avoid: Vec::new(),
         };
         map.stamp_outline(board);
+        map.stamp_via_avoid(board);
+        map.stamp_mask_areas(board);
         let ids: Vec<ItemId> = board.items().map(|(id, _)| id).filter(|id| !skip(*id)).collect();
         for id in ids {
             map.stamp(board, id);
         }
         map
+    }
+
+    /// Openings drawn in the mask: only the net they bare may run there; none where they bare
+    /// none or several.
+    fn stamp_mask_areas(&mut self, board: &Board) {
+        let cells = self.nx * self.ny;
+        let (track, via) = (self.profile.half_width + board::MASK_MARGIN + self.reach(), self.profile.via_radius + board::MASK_MARGIN);
+        for (shape, layers, net) in &board.mask_areas {
+            let mut hit = Vec::new();
+            self.cells_near(shape, track, &mut |c| hit.push(c));
+            for l in (0..self.layers).filter(|l| layers & (1 << l) != 0) {
+                for &c in &hit {
+                    ObstacleMap::claim(&mut self.owner[l * cells + c], *net);
+                }
+            }
+            hit.clear();
+            self.cells_near(shape, via, &mut |c| hit.push(c));
+            for c in hit {
+                ObstacleMap::claim(&mut self.via_owner[c], *net);
+            }
+        }
+    }
+
+    /// Marks the cells where a via would reach into one of the board's via-avoid areas.
+    fn stamp_via_avoid(&mut self, board: &Board) {
+        if board.via_avoid.is_empty() {
+            return;
+        }
+        self.via_avoid = vec![0; self.nx * self.ny];
+        let mut hit = Vec::new();
+        for area in &board.via_avoid {
+            self.cells_near(area, self.profile.via_radius, &mut |c| hit.push(c));
+        }
+        for c in hit {
+            self.via_avoid[c] = board.via_avoid_cost;
+        }
     }
 
     pub(crate) fn reach(&self) -> Nm {
@@ -308,7 +362,10 @@ impl ObstacleMap {
     fn stamp_outline(&mut self, board: &Board) {
         let rules = &board.rules;
         let edge = nm(rules.min_copper_edge_clearance);
-        let Some(outer) = board.outline.first() else { return };
+        if board.outline.is_empty() && board.outline_edges.is_empty() {
+            return;
+        }
+        let outer = board.outline.first();
         let trace_margin = self.profile.half_width + edge + self.reach();
         let via_margin = self.profile.via_radius + edge;
         type OutlineKey = (Nm, Nm, Nm, usize, usize, usize, Nm, Nm, usize, Option<Point>, Option<Point>);
@@ -321,9 +378,9 @@ impl ObstacleMap {
             self.layers,
             trace_margin,
             via_margin,
-            board.outline.iter().map(Vec::len).sum(),
-            outer.first().copied(),
-            outer.last().copied(),
+            board.outline.iter().map(Vec::len).sum::<usize>() + board.outline_edges.len(),
+            outer.and_then(|o| o.first().copied()),
+            outer.and_then(|o| o.last().copied()),
         );
         thread_local! {
             static CACHE: std::cell::RefCell<Option<(OutlineKey, Vec<i32>, Vec<i32>)>> = const { std::cell::RefCell::new(None) };
@@ -343,8 +400,11 @@ impl ObstacleMap {
             return;
         }
         let cells = self.nx * self.ny;
-        let mut inside = vec![false; cells];
-        self.cells_near(&Shape::Polygon(outer.clone()), 0, &mut |c| inside[c] = true);
+        // Without a closed outline there is no inside to keep to, only the edges.
+        let mut inside = vec![outer.is_none(); cells];
+        if let Some(outer) = outer {
+            self.cells_near(&Shape::Polygon(outer.clone()), 0, &mut |c| inside[c] = true);
+        }
         for hole in board.outline.iter().skip(1) {
             self.cells_near(&Shape::Polygon(hole.clone()), 0, &mut |c| inside[c] = false);
         }
@@ -354,9 +414,9 @@ impl ObstacleMap {
                 self.owner[l * cells + c] = SEVERAL;
             }
         }
-        for poly in &board.outline {
-            for k in 0..poly.len() {
-                let edge_shape = Shape::Capsule { a: poly[k], b: poly[(k + 1) % poly.len()], r: 0 };
+        for &(a, b, _) in &board.outline_edges {
+            {
+                let edge_shape = Shape::Capsule { a, b, r: 0 };
                 let mut hit = Vec::new();
                 self.cells_near(&edge_shape, trace_margin, &mut |c| hit.push(c));
                 for c in hit {
@@ -410,7 +470,7 @@ impl ObstacleMap {
             return;
         }
         if item.is_copper() && (self.pours_block || !item.refilled()) {
-            let clearance = self.clearance_to(board, item.net);
+            let clearance = self.clearance_to(board, item.net).max(board.pad_clearances.get(&id).copied().unwrap_or(0));
             let mut hit = Vec::new();
             self.cells_near(&item.shape, half_width + clearance + reach, &mut |c| hit.push(c));
             for l in (0..self.layers).filter(|l| item.on(*l)) {
@@ -422,6 +482,40 @@ impl ObstacleMap {
             self.cells_near(&item.shape, via_radius + clearance, &mut |c| hit.push(c));
             for c in hit {
                 ObstacleMap::claim(&mut self.via_owner[c], item.net);
+            }
+            // Where the mask leaves vias bare, a via of this net may not open over this copper:
+            // it keeps the opening's reach from it.
+            let (bare, by) = board.via_openings;
+            if bare & item.layers != 0 && by + board::MASK_MARGIN > clearance {
+                let mut hit = Vec::new();
+                self.cells_near(&item.shape, via_radius + by + board::MASK_MARGIN, &mut |c| hit.push(c));
+                for c in hit {
+                    ObstacleMap::claim(&mut self.via_owner[c], item.net);
+                }
+            }
+            // A pad's solder mask opening, or a bare via's, where wider than the clearance:
+            // other nets' tracks and vias stay out of it on the layers it opens.
+            let opening = match item.kind {
+                Kind::Pad { .. } => board.mask_openings.get(&id).copied(),
+                Kind::Via if bare != 0 => Some((bare, by)),
+                _ => None,
+            };
+            if let Some((layers, by)) = opening {
+                let keep = by + board::MASK_MARGIN;
+                if keep > clearance {
+                    let mut hit = Vec::new();
+                    self.cells_near(&item.shape, half_width + keep + reach, &mut |c| hit.push(c));
+                    for l in (0..self.layers).filter(|l| layers & (1 << l) != 0) {
+                        for &c in &hit {
+                            ObstacleMap::claim(&mut self.owner[l * cells + c], item.net);
+                        }
+                    }
+                    hit.clear();
+                    self.cells_near(&item.shape, via_radius + keep, &mut |c| hit.push(c));
+                    for c in hit {
+                        ObstacleMap::claim(&mut self.via_owner[c], item.net);
+                    }
+                }
             }
         }
         // A through-hole pad may carry a stricter hole clearance from custom rules, both ways
@@ -476,6 +570,7 @@ impl ObstacleMap {
         grid.via_blocked.clear();
         grid.via_blocked.extend(self.via_owner.iter().map(|&o| !free(o)));
         grid.penalty.clear();
+        grid.via_penalty.clone_from(&self.via_avoid);
         grid.pours_block = self.pours_block;
     }
 
@@ -494,6 +589,7 @@ impl ObstacleMap {
             blocked: self.owner.iter().map(|&o| !free(o)).collect(),
             via_blocked: self.via_owner.iter().map(|&o| !free(o)).collect(),
             penalty: Vec::new(),
+            via_penalty: self.via_avoid.clone(),
             pours_block: self.pours_block,
         }
     }

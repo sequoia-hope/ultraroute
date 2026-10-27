@@ -13,17 +13,48 @@ const CELL: Nm = 1_000_000;
 /// Chord error allowed when arcs become straight pieces, as KiCad's own default.
 const MAX_ERROR_M: f64 = 0.005e-3;
 
+/// An outline primitive as a polyline, within `MAX_ERROR_M` of it, in metres.
+fn edge_points(shape: &kicad_pcb::OutlineShape) -> Vec<[f64; 2]> {
+    use kicad_pcb::OutlineShape;
+    let around = |c: [f64; 2], r: f64, from: f64, sweep: f64| -> Vec<[f64; 2]> {
+        let step = 2.0 * (1.0 - (MAX_ERROR_M / r.max(MAX_ERROR_M)).min(1.0)).acos();
+        let n = ((sweep.abs() / step.max(1e-3)).ceil() as usize).clamp(1, 4096);
+        (0..=n).map(|k| from + sweep * k as f64 / n as f64).map(|t| [c[0] + r * t.cos(), c[1] + r * t.sin()]).collect()
+    };
+    match shape {
+        OutlineShape::Line { start, end } => vec![*start, *end],
+        OutlineShape::Circle { center, radius } => around(*center, *radius, 0.0, std::f64::consts::TAU),
+        OutlineShape::Arc { start, mid, end } => {
+            let Some(c) = kicad_pcb::outline::circumcenter(*start, *mid, *end) else { return vec![*start, *end] };
+            let angle = |p: [f64; 2]| (p[1] - c[1]).atan2(p[0] - c[0]);
+            let (a0, am, a1) = (angle(*start), angle(*mid), angle(*end));
+            let tau = std::f64::consts::TAU;
+            // The sweep from start to end that passes mid.
+            let ccw = (am - a0).rem_euclid(tau) < (a1 - a0).rem_euclid(tau);
+            let sweep = if ccw { (a1 - a0).rem_euclid(tau) } else { -(a0 - a1).rem_euclid(tau) };
+            around(c, (start[0] - c[0]).hypot(start[1] - c[1]), a0, sweep)
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Kind {
     Pad { footprint: usize, number: String, plated: bool },
     Track,
     Via,
     /// Copper a zone poured, one item per filled polygon. A kept pour belongs to a block: it is
-    /// a plane other nets keep clear of, not copper refilled around them.
+    /// a plane other nets keep clear of, not copper refilled around them. Copper drawn on a
+    /// copper layer is a kept pour of zone [`DRAWN`].
     Pour { zone: usize, kept: bool },
     /// A rule area, and the footprint it belongs to, whose own pads it does not keep out.
     Keepout { forbids: Keepout, footprint: Option<usize> },
 }
+
+/// How a rule area's name begins when it is an area for vias to avoid rather than a keepout.
+pub const SOFT_NO_VIA: &str = "soft-novia";
+
+/// The zone of drawn copper: lines, shapes and text on a copper layer, which stay as drawn.
+pub const DRAWN: usize = usize::MAX;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Item {
@@ -51,6 +82,11 @@ impl Item {
     }
 
     /// Poured copper that is refilled around new copper, so routing may treat it as absent.
+    /// Copper drawn on a copper layer, which nothing refills.
+    pub fn drawn(&self) -> bool {
+        matches!(self.kind, Kind::Pour { zone: DRAWN, .. })
+    }
+
     pub fn refilled(&self) -> bool {
         matches!(self.kind, Kind::Pour { kept: false, .. })
     }
@@ -130,6 +166,24 @@ pub struct Board {
     /// Plane layers, one bit per index into `layers`: whole layers given to one net's pour,
     /// which no track crosses, other nets' vias pass through and which joins its net.
     pub planes: u64,
+    /// Pads' solder mask openings: the outer copper layers a pad's opening is on, one bit per
+    /// index into `layers`, and how far it reaches beyond the pad's copper. Another net's track
+    /// or via there would be bared beside the pad, for solder to bridge.
+    pub mask_openings: HashMap<ItemId, (u64, Nm)>,
+    /// Where the mask leaves vias bare (one bit per outer copper layer it does), and how far
+    /// beyond a via its opening reaches.
+    pub via_openings: (u64, Nm),
+    /// Openings drawn in the solder mask: the shape, the copper layer it bares, and the one net
+    /// whose pads it bares, which alone may run there; 0 where it bares none or several.
+    pub mask_areas: Vec<(Shape, u64, u32)>,
+    /// Pads' own clearances, where wider than their nets' (KiCad's local clearance).
+    pub pad_clearances: HashMap<ItemId, Nm>,
+    /// Areas where a via costs the router dearly but is allowed, on every layer: rule areas
+    /// whose name starts `soft-novia`, and boxes given on the command line. Room kept for silk.
+    pub via_avoid: Vec<Shape>,
+    /// What a via in a via-avoid area costs the router beyond any other, in its search's units
+    /// (10 a grid cell): a long way round, but never a wall.
+    pub via_avoid_cost: u32,
     /// Clearances per net number, in nanometres, so `clearance(a, b)` is two array lookups.
     net_clearances: Vec<Nm>,
     min_clearance_nm: Nm,
@@ -204,6 +258,12 @@ impl Board {
             outline_edges: Vec::new(),
             rules,
             planes: 0,
+            mask_openings: HashMap::new(),
+            via_openings: (0, 0),
+            mask_areas: Vec::new(),
+            pad_clearances: HashMap::new(),
+            via_avoid: Vec::new(),
+            via_avoid_cost: 3_000,
             net_clearances,
             min_clearance_nm,
             items: Vec::new(),
@@ -215,11 +275,13 @@ impl Board {
             for l in std::iter::once(&loops.outer).chain(&loops.holes) {
                 board.outline.push(l.points(MAX_ERROR_M).into_iter().map(Point::from_m).collect());
             }
-            for poly in &board.outline {
-                for i in 0..poly.len() {
-                    let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
-                    board.outline_edges.push((a, b, BBox::of([a, b])));
-                }
+        }
+        // Copper keeps clear of every Edge.Cuts and Margin primitive, whether it closes into the
+        // board's loops or not: a slot drawn as an open line, or a cutout the loops missed.
+        for p in pcb.outline.iter().chain(&pcb.margin) {
+            let points: Vec<Point> = edge_points(&p.shape).into_iter().map(Point::from_m).collect();
+            for w in points.windows(2) {
+                board.outline_edges.push((w[0], w[1], BBox::of([w[0], w[1]])));
             }
         }
 
@@ -248,16 +310,56 @@ impl Board {
                 locked: true,
                 span: None,
             };
+            // The outer copper layers whose mask the pad opens, and by how much.
+            let opened = |side: &str| pad.layers.iter().any(|l| l == side || l == "*.Mask");
+            let mut openings = 0u64;
+            if opened("F.Mask") {
+                openings |= one("F.Cu");
+            }
+            if opened("B.Mask") {
+                openings |= one("B.Cu");
+            }
+            let opening = (openings & layers != 0).then(|| (openings & layers, nm(pad.mask_margin.unwrap_or(copper.pad_to_mask_clearance).max(0.0))));
+            let mut ids = Vec::new();
             if let Outline::Polygons(polys) = &pad.outline {
                 for extra in polys.iter().skip(1) {
-                    board.insert(Item {
+                    ids.push(board.insert(Item {
                         shape: Shape::Polygon(extra.iter().copied().map(Point::from_m).collect()),
                         hole: None,
                         ..base.clone()
+                    }));
+                }
+            }
+            ids.push(board.insert(base));
+            // A slot's hole is longer than the circle `hole` holds: an unplated one keeps tracks
+            // and vias the hole clearance from all of it. (A plated one's copper covers it.)
+            if let (Some(d), false) = (model.drill, plated) {
+                if (d[0] - d[1]).abs() > 1e-6 {
+                    let (s, c) = model.rotation_deg.to_radians().sin_cos();
+                    let half = (d[0].max(d[1]) - d[0].min(d[1])) / 2.0;
+                    let along = if d[0] > d[1] { [c, -s] } else { [s, c] };
+                    let end = |k: f64| Point::from_m([model.position[0] + k * half * along[0], model.position[1] + k * half * along[1]]);
+                    board.insert(Item {
+                        kind: Kind::Keepout { forbids: Keepout { tracks: true, vias: true, ..Keepout::default() }, footprint: Some(pad.footprint) },
+                        net: 0,
+                        layers: (1u64 << board.layers.len()) - 1,
+                        shape: Shape::Capsule { a: end(-1.0), b: end(1.0), r: nm(d[0].min(d[1]) / 2.0 + board.rules.min_hole_clearance) },
+                        hole: None,
+                        locked: true,
+                        span: None,
                     });
                 }
             }
-            board.insert(base);
+            let net = board.items.get(*ids.last().unwrap()).and_then(Option::as_ref).map_or(0, |it| it.net);
+            let own = pad.clearance.map(nm).filter(|c| *c > board.net_clearances.get(net as usize).copied().unwrap_or(0));
+            for id in ids {
+                if let Some(o) = opening.filter(|o| o.1 > 0) {
+                    board.mask_openings.insert(id, o);
+                }
+                if let Some(c) = own {
+                    board.pad_clearances.insert(id, c);
+                }
+            }
         }
         for t in &copper.tracks {
             board.insert(Item {
@@ -302,6 +404,13 @@ impl Board {
             });
         }
         for (z, zone) in copper.zones.iter().enumerate() {
+            // A soft via keepout forbids nothing; the router only avoids putting vias in it.
+            if zone.name.to_ascii_lowercase().starts_with(SOFT_NO_VIA) {
+                if zone.outline.len() >= 3 {
+                    board.via_avoid.push(Shape::Polygon(zone.outline.iter().copied().map(Point::from_m).collect()));
+                }
+                continue;
+            }
             if let Some(keepout) = zone.keepout {
                 if zone.outline.len() >= 3 {
                     board.insert(Item {
@@ -330,7 +439,49 @@ impl Board {
                 }
             }
         }
+        let bare = |front: bool, back: bool| (if front { one("F.Cu") } else { 0 }) | (if back { one("B.Cu") } else { 0 });
+        board.via_openings = (bare(copper.vias_bare[0], copper.vias_bare[1]), nm(copper.pad_to_mask_clearance.max(0.0)));
+        for g in &copper.mask_graphics {
+            let layer = bare(g.layer == "F.Mask", g.layer == "B.Mask");
+            let l = layer.trailing_zeros() as usize;
+            let shapes: Vec<Shape> = g.polygons.iter().map(|poly| Shape::Polygon(poly.iter().copied().map(Point::from_m).collect())).collect();
+            // The nets of the pads the drawing bares, judged over the whole of it (its outline's
+            // stroke is drawn in pieces): a pad is bared when its centre lies in the drawing.
+            let mut nets: Vec<u32> = Vec::new();
+            for shape in &shapes {
+                for id in board.near(l, shape.bbox()) {
+                    let Some(it) = board.item(id) else { continue };
+                    let b = it.shape.bbox();
+                    if matches!(it.kind, Kind::Pad { .. }) && it.on(l) && shape.contains(Point::new((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2)) {
+                        nets.push(it.net);
+                    }
+                }
+            }
+            nets.sort_unstable();
+            nets.dedup();
+            let net = if let [n] = nets[..] { n } else { 0 };
+            board.mask_areas.extend(shapes.into_iter().map(|shape| (shape, layer, net)));
+        }
+        for g in &copper.graphics {
+            for poly in &g.polygons {
+                board.insert(Item {
+                    kind: Kind::Pour { zone: DRAWN, kept: true },
+                    net: g.net,
+                    layers: one(&g.layer),
+                    shape: Shape::Polygon(poly.iter().copied().map(Point::from_m).collect()),
+                    hole: None,
+                    locked: true,
+                    span: None,
+                });
+            }
+        }
         board
+    }
+
+    /// Whether a via of radius `r` at `p` would reach into a via-avoid area.
+    pub fn in_via_avoid(&self, p: Point, r: Nm) -> bool {
+        let via = Shape::Capsule { a: p, b: p, r };
+        self.via_avoid.iter().any(|area| area.gap_within(&via, 1.0) <= 0.0)
     }
 
     pub fn item(&self, id: ItemId) -> Option<&Item> {

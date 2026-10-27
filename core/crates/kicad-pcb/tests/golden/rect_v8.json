@@ -88,6 +88,7 @@
         "footprint": null
       }
     ],
+    "margin": [],
     "footprints": [
       {
         "uuid": "0a1b2c3d-0000-4000-8000-000000000001",

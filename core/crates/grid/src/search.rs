@@ -59,7 +59,7 @@ pub fn cost_field(grid: &RouteGrid, sources: &[usize], via_cost: u32) -> Vec<u32
         if grid.via.is_some() && !grid.via_blocked[cell] {
             for other in 0..grid.layers.len() {
                 if other != layer {
-                    relax(other * cells + cell, via_cost);
+                    relax(other * cells + cell, via_cost + grid.via_penalty_at(cell));
                 }
             }
         }
@@ -102,7 +102,7 @@ pub fn trace_back(
                 .filter(|&other| other != layer)
                 .map(|other| other * cells + cell)
                 .find(|&n| {
-                    cost[n] != UNREACHED && cost[n] + via_cost + grid.penalty_at(at) == cost[at]
+                    cost[n] != UNREACHED && cost[n] + via_cost + grid.via_penalty_at(cell) + grid.penalty_at(at) == cost[at]
                 });
         }
         at = previous?;
@@ -305,7 +305,7 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
                     if other != layer {
                         let next = other * cells + cell;
                         if !grid.blocked[next] {
-                            let candidate = c + via_cost + grid.penalty_at(next);
+                            let candidate = c + via_cost + grid.via_penalty_at(cell) + grid.penalty_at(next);
                             let cur = if b.gen[next] == epoch { b.cost[next] } else { UNREACHED };
                             if candidate < cur {
                                 b.gen[next] = epoch;
@@ -344,7 +344,7 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
                     .map(|other| other * cells + cell)
                     .find(|&n| {
                         let cn = cost_at(&b, n);
-                        cn != UNREACHED && cn + via_cost + grid.penalty_at(at) == c_at
+                        cn != UNREACHED && cn + via_cost + grid.via_penalty_at(cell) + grid.penalty_at(at) == c_at
                     });
             }
             at = previous?;
@@ -459,6 +459,40 @@ mod tests {
     use super::*;
     use crate::grid::ViaSpec;
 
+    #[test]
+    fn a_via_avoids_a_dear_area_but_may_stand_in_it() {
+        // Two layers, 20 by 1 cells: from the left end on layer 0 to the right end on layer 1.
+        let (nx, ny) = (20, 1);
+        let mut grid = RouteGrid {
+            net: 1,
+            x0: 0,
+            y0: 0,
+            h: 50_000,
+            nx,
+            ny,
+            layers: vec![0, 1],
+            half_width: 50_000,
+            via: Some(ViaSpec { radius: 100_000, drill_radius: 50_000 }),
+            blocked: vec![false; 2 * nx * ny],
+            via_blocked: vec![false; nx * ny],
+            penalty: Vec::new(),
+            via_penalty: Vec::new(),
+            pours_block: false,
+        };
+        let via_at = |path: &GridPath| path.windows(2).find(|w| w[0].0 != w[1].0).map(|w| w[1].1);
+        let (src, tgt) = (vec![0], vec![nx + nx - 1]);
+        let free = route_astar(&grid, &src, &tgt, 50).unwrap();
+        assert_eq!(via_at(&free), Some(0), "with no area the via goes first, at the source");
+        // Vias cost dearly on the left half: the via moves right of it.
+        grid.via_penalty = (0..nx).map(|i| if i < 10 { 10_000 } else { 0 }).collect();
+        let path = route_astar(&grid, &src, &tgt, 50).unwrap();
+        assert!(via_at(&path).is_some_and(|i| i >= 10), "{path:?}");
+        assert_eq!(cost_field(&grid, &src, 50)[tgt[0]], path_cost(&grid, &path, 50), "the field and the search agree");
+        // Where every via site is dear, one still stands.
+        grid.via_penalty = vec![10_000; nx];
+        assert!(route_astar(&grid, &src, &tgt, 50).is_some());
+    }
+
     fn random_grid(seed: u64) -> RouteGrid {
         let (nx, ny, layers) = (40, 30, 2);
         let mut state = seed;
@@ -482,6 +516,7 @@ mod tests {
             blocked: (0..nodes).map(|_| next() % 4 == 0).collect(),
             via_blocked: (0..nx * ny).map(|_| next() % 3 == 0).collect(),
             penalty: (0..nodes).map(|_| (next() % 5) as u32).collect(),
+            via_penalty: Vec::new(),
             pours_block: false,
         }
     }
@@ -490,7 +525,7 @@ mod tests {
         path.windows(2)
             .map(|w| {
                 let (a, b) = (w[0], w[1]);
-                let step = if a.0 != b.0 { via_cost } else if a.1 != b.1 && a.2 != b.2 { DIAGONAL } else { STRAIGHT };
+                let step = if a.0 != b.0 { via_cost + grid.via_penalty_at(b.2 * grid.nx + b.1) } else if a.1 != b.1 && a.2 != b.2 { DIAGONAL } else { STRAIGHT };
                 step + grid.penalty_at(grid.index(b.0, b.1, b.2))
             })
             .sum()

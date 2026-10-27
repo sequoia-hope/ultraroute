@@ -34,6 +34,10 @@ pub struct Pcb {
     /// Every primitive on `Edge.Cuts`, board frame, metres, in file order:
     /// board-level `gr_*` first, then each footprint's `fp_*` placed.
     pub outline: Vec<OutlinePrimitive>,
+    /// Every primitive on the `Margin` layer, which KiCad keeps copper clear of as it does the
+    /// board edge; placed as `outline` is.
+    #[serde(default)]
+    pub margin: Vec<OutlinePrimitive>,
     pub footprints: Vec<Footprint>,
     /// Never one line per skipped form: a count per category.
     pub warnings: Vec<String>,

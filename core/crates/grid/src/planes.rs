@@ -173,7 +173,8 @@ fn drop_via(board: &mut Board, net: u32, layer: usize, at: Point, reach: Nm, fil
                 continue;
             }
             let Some(laid) = lay(board, net, layer, at, p, profile) else { continue };
-            let room = room_round(board, p, net);
+            // A via-avoid area counts as no room at all: a site there is the last resort.
+            let room = if board.in_via_avoid(p, profile.via_radius) { -1.0 } else { room_round(board, p, net) };
             for id in laid.into_iter().rev() {
                 board.discard(id);
             }

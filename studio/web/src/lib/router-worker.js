@@ -23,6 +23,19 @@ const TOO_LONG = 0xffffffff;
 const ready = init();
 let poolPromise = null;
 
+// Sub-workers the device's memory allows. Each holds its own copy of the router, whose memory
+// grows with the board and never shrinks, all in the page's one renderer process: on bluebuzz
+// eight of them took the tab to 1.4 GB, more than a phone lets a tab keep. `deviceMemory` is in
+// GB, at most 8 in Chrome; absent elsewhere.
+function memoryCap() {
+  if (typeof navigator === 'undefined') return 4;
+  const gb = navigator.deviceMemory;
+  const mobile = navigator.userAgentData?.mobile || /Android|iPhone|iPad/.test(navigator.userAgent || '');
+  let cap = gb ? Math.max(1, Math.floor(gb / 2)) : 4;
+  if (mobile) cap = Math.min(cap, 2);
+  return Math.min(8, cap);
+}
+
 async function getWorkerPool(wantGpu) {
   if (typeof SharedArrayBuffer === 'undefined' || !self.crossOriginIsolated) {
     return null;
@@ -34,7 +47,7 @@ async function getWorkerPool(wantGpu) {
         const ctrl = new Int32Array(sab, 0, 64);
         const u32 = new Uint32Array(sab);
         const hw = typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency || 4) : 4;
-        const numWorkers = Math.max(1, Math.min(8, hw));
+        const numWorkers = Math.max(1, Math.min(memoryCap(), hw));
         const workers = [];
         const readyPromises = [];
         for (let i = 0; i < numWorkers; i++) {

@@ -766,6 +766,7 @@ fn single_layer_view(map: &ObstacleMap, net: u32, board_layer: usize) -> RouteGr
         blocked: full.blocked[start..start + cells].to_vec(),
         via_blocked: vec![true; cells],
         penalty: Vec::new(),
+        via_penalty: Vec::new(),
         pours_block: full.pours_block,
     }
 }
@@ -1266,7 +1267,11 @@ fn lay_dogbone(
     depths.extend_from_slice(&depths_base[3..]);
     let offsets = [0.0, 100_000.0, -100_000.0, 200_000.0, -200_000.0];
 
-    for hw in widths {
+    // Sites clear of the board's via-avoid areas first; one in them only where none else fits.
+    for (avoid, hw) in [true, false].into_iter().flat_map(|avoid| widths.iter().map(move |&hw| (avoid, hw))) {
+        if !avoid && board.via_avoid.is_empty() {
+            continue;
+        }
         for &lat in &offsets {
             for &depth in &depths {
                 let d = pad.edge_gap + depth.max(420_000.0);
@@ -1274,6 +1279,9 @@ fn lay_dogbone(
                     pad.centre.x + (pad.out.0 * d + pad.along.0 * lat).round() as Nm,
                     pad.centre.y + (pad.out.1 * d + pad.along.1 * lat).round() as Nm,
                 );
+                if avoid && board.in_via_avoid(via_pt, profile.via_radius) {
+                    continue;
+                }
                 let stub = track(pad.net, pad.layer, pad.centre, via_pt, hw);
                 let via = Item {
                     kind: Kind::Via,

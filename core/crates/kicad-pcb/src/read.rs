@@ -142,6 +142,7 @@ pub fn read(root: &Node) -> Result<Pcb, KicadParse> {
     }
 
     let mut outline = Vec::new();
+    let mut margin = Vec::new();
     let mut footprints = Vec::new();
     let mut seen_uuids = HashSet::new();
     let mut unknown: BTreeMap<String, usize> = BTreeMap::new();
@@ -154,10 +155,12 @@ pub fn read(root: &Node) -> Result<Pcb, KicadParse> {
             "gr_line" | "gr_arc" | "gr_circle" | "gr_rect" | "gr_poly" => {
                 if layer_of(child) == Some("Edge.Cuts") {
                     read_graphic(child, None, &mut outline, &mut warnings)?;
+                } else if layer_of(child) == Some("Margin") {
+                    read_graphic(child, None, &mut margin, &mut warnings)?;
                 }
             }
             "footprint" => {
-                let fp = read_footprint(child, &mut outline, &mut warnings)?;
+                let fp = read_footprint(child, &mut outline, &mut margin, &mut warnings)?;
                 if !seen_uuids.insert(fp.uuid.clone()) {
                     return Err(KicadParse::DuplicateFootprintUuid { uuid: fp.uuid });
                 }
@@ -197,6 +200,7 @@ pub fn read(root: &Node) -> Result<Pcb, KicadParse> {
         copper_layers,
         nets,
         outline,
+        margin,
         footprints,
         warnings,
     })
@@ -431,6 +435,7 @@ fn arc_or_line(
 fn read_footprint(
     n: &Node,
     outline: &mut Vec<OutlinePrimitive>,
+    margin: &mut Vec<OutlinePrimitive>,
     warnings: &mut Vec<String>,
 ) -> Result<Footprint, KicadParse> {
     let form = "footprint";
@@ -521,9 +526,12 @@ fn read_footprint(
         if matches!(
             child.head(),
             Some("fp_line" | "fp_arc" | "fp_circle" | "fp_rect" | "fp_poly")
-        ) && layer_of(child) == Some("Edge.Cuts")
-        {
-            read_graphic(child, Some((&placement, &uuid)), outline, warnings)?;
+        ) {
+            match layer_of(child) {
+                Some("Edge.Cuts") => read_graphic(child, Some((&placement, &uuid)), outline, warnings)?,
+                Some("Margin") => read_graphic(child, Some((&placement, &uuid)), margin, warnings)?,
+                _ => {}
+            }
         }
     }
 
@@ -572,7 +580,10 @@ fn read_pad(p: &Node, placement: &Placement) -> Result<Pad, KicadParse> {
     let drill = match p.find("drill") {
         Some(d) => {
             let args = d.args();
-            if args.first().and_then(|a| a.text()) == Some("oval") {
+            if args.first().and_then(|a| a.text()) == Some("oval") && !args.get(1).is_some_and(|a| a.number().is_ok()) {
+                // `(drill oval (offset ...))` with no size, as KiCad 5 left on some SMD pads.
+                None
+            } else if args.first().and_then(|a| a.text()) == Some("oval") {
                 let w = d.number_arg(1, "drill oval")? * MM;
                 let h = match args.get(2) {
                     Some(h) if h.text().is_some() && h.number().is_ok() => h.number()? * MM,

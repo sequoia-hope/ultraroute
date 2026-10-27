@@ -26,7 +26,7 @@ use serde_json::{json, Value};
 
 pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--diff-pairs] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--gpu] \
 [--timeout SECONDS] [--cell MM] [--first NET,...] [--first-negotiate] [--first-weight W] [--restart N] [--topo-first REF,...|auto] [--topo-trapped] [--topo-trapped-rip] [--topo-sample MM] \
-[--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough warp|linear|rip|gentle|dipole|region] [--shove-steps N] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-late] [--shove-seconds S] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
+[--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough warp|linear|rip|gentle|dipole|region] [--shove-steps N] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-late] [--shove-seconds S] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
 [--live PATH|-] [--live-fps N] [--live-step MS] [--blame]";
 
 pub struct Args {
@@ -120,6 +120,9 @@ pub struct Args {
     /// Discs, in mm as in the board file (y down), in which every unlocked track and via is ripped
     /// before routing: a large move for a search, rebuilding one region from scratch.
     pub rip_regions: Vec<(f64, f64, f64)>,
+    /// Boxes, in millimetres, where vias cost dearly but are allowed.
+    pub via_avoid: Vec<[f64; 4]>,
+    pub via_avoid_cost: Option<u32>,
     /// Treat the board's unlocked tracks and vias as the router's own: free to rip, move and
     /// rewrite, as if this run had laid them.
     pub adopt: bool,
@@ -197,6 +200,8 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         shove_cascade: None,
         shove_patience: 1,
         rip_regions: Vec::new(),
+        via_avoid: Vec::new(),
+        via_avoid_cost: None,
         adopt: false,
         chase: false,
         verbose: false,
@@ -361,6 +366,13 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             "--escape-zone" => a.escape_zone = Some(value()?.parse().map_err(|e| format!("--escape-zone: {e}"))?),
             "--push-steps" => a.push_steps = value()?.parse().map_err(|e| format!("--push-steps: {e}"))?,
             "--blame" => a.blame = true,
+            "--via-avoid" => {
+                let v = value()?;
+                let n: Vec<f64> = v.split(',').map(|x| x.trim().parse::<f64>()).collect::<Result<_, _>>().map_err(|e| format!("--via-avoid {v}: {e}"))?;
+                let [x0, y0, x1, y1] = n[..] else { return Err(format!("--via-avoid {v}: X0,Y0,X1,Y1 in mm")) };
+                a.via_avoid.push([x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)]);
+            }
+            "--via-avoid-cost" => a.via_avoid_cost = Some(value()?.parse().map_err(|e| format!("--via-avoid-cost: {e}"))?),
             "--rip-region" => {
                 let v = value()?;
                 let n: Vec<f64> = v.split(',').map(|x| x.trim().parse::<f64>()).collect::<Result<_, _>>().map_err(|e| format!("--rip-region {v}: {e}"))?;
@@ -1013,6 +1025,13 @@ pub fn run_with_solver(
                 laid.push(id);
             }
         }
+    }
+    if let Some(c) = a.via_avoid_cost {
+        board.via_avoid_cost = c;
+    }
+    for &[x0, y0, x1, y1] in &a.via_avoid {
+        let p = |x: f64, y: f64| Point::new((x * 1e6).round() as i64, (y * 1e6).round() as i64);
+        board.via_avoid.push(Shape::Polygon(vec![p(x0, y0), p(x1, y0), p(x1, y1), p(x0, y1)]));
     }
     for &(x, y, r) in &a.rip_regions {
         let disc = Shape::Capsule { a: Point::new((x * 1e6).round() as i64, (y * 1e6).round() as i64), b: Point::new((x * 1e6).round() as i64, (y * 1e6).round() as i64), r: (r * 1e6).round() as i64 };

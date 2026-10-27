@@ -83,12 +83,21 @@ impl Limits {
         let pth_hole_clearance = hole_clearance.max(nm(rules.pth_hole_clearance));
         let pth_hole_to_hole = hole_to_hole.max(nm(rules.pth_hole_to_hole));
         let smd_pad_clearance = nm(rules.smd_pad_clearance);
+        // The widest solder mask opening round a pad beyond its copper, or pad clearance.
+        let mask = board
+            .mask_openings
+            .values()
+            .chain([&board.via_openings])
+            .map(|o| o.1 + MASK_MARGIN)
+            .chain(board.pad_clearances.values().copied())
+            .max()
+            .unwrap_or(0);
         Limits {
             max_clearance: rules
                 .classes
                 .iter()
                 .map(|c| nm(c.clearance))
-                .chain([nm(rules.min_clearance), pth_hole_clearance, pth_hole_to_hole, smd_pad_clearance])
+                .chain([nm(rules.min_clearance), pth_hole_clearance, pth_hole_to_hole, smd_pad_clearance, mask])
                 .max()
                 .unwrap_or(0),
             edge: nm(rules.min_copper_edge_clearance),
@@ -98,6 +107,26 @@ impl Limits {
             pth_hole_to_hole,
             smd_pad_clearance,
         }
+    }
+}
+
+/// How far beyond a pad's solder mask opening other nets' copper keeps, so it lies clearly
+/// outside the opening, not on its edge.
+pub const MASK_MARGIN: Nm = 1_000;
+
+/// The gap copper of another net must keep on `layer` from `own` (item `id`) so as not to be
+/// bared in its solder mask opening, for solder to bridge the two: a pad's opening, or a bare
+/// via's; 0 where that does not apply. Two pads are the footprints' affair.
+pub fn mask_gap(board: &Board, id: ItemId, own: &Item, other: &Item, layer: usize) -> Nm {
+    let routed = matches!(other.kind, Kind::Track | Kind::Via);
+    let opening = match own.kind {
+        Kind::Pad { .. } if routed => board.mask_openings.get(&id).copied(),
+        Kind::Via if routed || matches!(other.kind, Kind::Pad { .. }) => Some(board.via_openings),
+        _ => None,
+    };
+    match opening {
+        Some((layers, by)) if layers & (1 << layer) != 0 => by + MASK_MARGIN,
+        _ => 0,
     }
 }
 
@@ -141,6 +170,14 @@ fn item_checks(
     let item_bbox = board.bbox(id).unwrap_or_else(|| item.shape.bbox());
     let partner = |other: ItemId| other != id && (everyone || other > id);
     let holes = board.layers.len();
+    // A track or via of another net bared in an opening drawn in the mask would bridge there.
+    if matches!(item.kind, Kind::Track | Kind::Via) {
+        for (shape, layers, net) in &board.mask_areas {
+            if layers & item.layers != 0 && (*net != item.net || *net == 0) && item.shape.gap_within(shape, MASK_MARGIN as f64) < MASK_MARGIN as f64 {
+                found.push(Violation { rule: Rule::Keepout, a: id, b: None, layer: Some(layers.trailing_zeros() as usize), gap: 0.0, required: MASK_MARGIN });
+            }
+        }
+    }
     if item.is_copper() {
         for layer in (0..board.layers.len()).filter(|l| item.on(*l)) {
             for other in board.near(layer, item_bbox.grow(limits.max_clearance)) {
@@ -165,6 +202,10 @@ fn item_checks(
                         let mut required = board.clearance(item.net, o.net);
                         if smd(item) && smd(o) {
                             required = required.max(limits.smd_pad_clearance);
+                        }
+                        required = required.max(mask_gap(board, id, item, o, layer)).max(mask_gap(board, other, o, item, layer));
+                        for p in [id, other] {
+                            required = required.max(board.pad_clearances.get(&p).copied().unwrap_or(0));
                         }
                         let other_bbox = board.bbox(other).unwrap_or_else(|| o.shape.bbox());
                         if !item_bbox.grow(required).overlaps(other_bbox) {

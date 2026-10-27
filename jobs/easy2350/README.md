@@ -21,3 +21,10 @@ added after routing. job.json carries these flags and seed 1.
 input/easy2350.kicad_dru is easy_pcb's custom rule (uncommitted there on 2026-10-26): VBUS no
 narrower than 0.2 mm. With it, seeds 0-5 leave 0 1 0 2 1 2 signal nets open (lab planes-50).
 
+
+Soft via-avoid areas (for easy_pcb's silk labels): rule areas named `soft-novia...`, or
+`--via-avoid X0,Y0,X1,Y1` boxes in mm, make a via there cost `--via-avoid-cost` (default 3000,
+in units of 10 per grid cell) but never forbid one. With the J2 label box
+`--via-avoid 104.4,122.4,106.5,126.4`, seeds 0-3 leave 1 1 2 3 signal nets open (0 1 1 3
+without it) and the only signal vias left in the box are U1's GPIO0-2 fan-out vias, which sit
+at U1's pins (lab planes-53).

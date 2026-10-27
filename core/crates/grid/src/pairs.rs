@@ -280,7 +280,7 @@ fn lay_line(board: &mut Board, line: &[Point], net: u32, layer: usize, r: Nm, la
         laid.push(id);
         // A pour is refilled round the pair, a block's kept plane too, as the designer's own
         // routes through it were.
-        let poured = |v: &board::Violation| v.b.and_then(|o| board.item(o)).is_some_and(|it| matches!(it.kind, Kind::Pour { .. }));
+        let poured = |v: &board::Violation| v.b.and_then(|o| board.item(o)).is_some_and(|it| matches!(it.kind, Kind::Pour { .. }) && !it.drawn());
         if !board::check_item(board, id).iter().all(poured) {
             return false;
         }
@@ -339,7 +339,7 @@ pub fn route_pairs_watch(board: &mut Board, options: &PairOptions, watch: &mut d
             // Pours are left off too, to be refilled round the run.
             let ours: HashSet<u32> = [pair.p, pair.n].into();
             let map = ObstacleMap::without(board, fat.clone(), options.cell, options.pours_block, &|id| {
-                board.item(id).is_some_and(|it| (ours.contains(&it.net) && !matches!(it.kind, Kind::Keepout { .. })) || matches!(it.kind, Kind::Pour { .. }))
+                board.item(id).is_some_and(|it| (ours.contains(&it.net) && !matches!(it.kind, Kind::Keepout { .. })) || (matches!(it.kind, Kind::Pour { .. }) && !it.drawn()))
             });
             let mut grid = map.view(pair.p);
             grid.via = None;

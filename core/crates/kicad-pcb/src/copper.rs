@@ -33,7 +33,31 @@ pub struct Copper {
     /// Each footprint's courtyard as the convex hull of its courtyard drawing, in board
     /// coordinates; `None` for a footprint without one. In the order of `Pcb::footprints`.
     pub courtyards: Vec<Option<Vec<[f64; 2]>>>,
+    /// `(setup (pad_to_mask_clearance X))`: how far a pad's solder mask opening reaches beyond
+    /// its copper, where neither the pad nor its footprint says; metres.
+    #[serde(default)]
+    pub pad_to_mask_clearance: f64,
+    /// Copper drawn rather than routed: lines, arcs, rectangles, circles, polygons and visible
+    /// text on copper layers, the board's and its footprints', as polygons in board coordinates.
+    #[serde(default)]
+    pub graphics: Vec<CopperGraphic>,
+    /// Openings drawn in the solder mask, on `F.Mask` or `B.Mask`, as `graphics` are read.
+    #[serde(default)]
+    pub mask_graphics: Vec<CopperGraphic>,
+    /// The outer copper sides whose vias the mask leaves bare (`(setup (tenting ...))` without
+    /// that side): `[front, back]`.
+    #[serde(default)]
+    pub vias_bare: [bool; 2],
     pub warnings: Vec<String>,
+}
+
+/// One drawn piece of copper; text as the box round it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CopperGraphic {
+    pub layer: String,
+    /// 0 for none, as most drawn copper has.
+    pub net: u32,
+    pub polygons: Vec<Vec<[f64; 2]>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,6 +168,14 @@ pub struct PadCopper {
     pub shape: PadShape,
     /// The pad's outline on the board, a polygon in board coordinates (circles as a circle).
     pub outline: Outline,
+    /// `(solder_mask_margin X)` of the pad, else of its footprint: how far its mask opening
+    /// reaches beyond its copper; `None` where the board's `pad_to_mask_clearance` holds.
+    #[serde(default)]
+    pub mask_margin: Option<f64>,
+    /// `(clearance X)` of the pad, else of its footprint: a clearance of its own, kept where it
+    /// is wider than its net class's.
+    #[serde(default)]
+    pub clearance: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -219,6 +251,20 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
         footprint_at: Vec::new(),
         groups: Vec::new(),
         courtyards: Vec::new(),
+        graphics: Vec::new(),
+        mask_graphics: Vec::new(),
+        vias_bare: match root.find("setup").and_then(|s| s.find("tenting")) {
+            Some(t) => {
+                let sides: Vec<&str> = t.args().iter().filter_map(Node::text).collect();
+                [!sides.contains(&"front"), !sides.contains(&"back")]
+            }
+            None => [false, false],
+        },
+        pad_to_mask_clearance: root
+            .find("setup")
+            .and_then(|s| s.find("pad_to_mask_clearance"))
+            .and_then(|c| c.number_arg(0, "pad_to_mask_clearance").ok())
+            .map_or(0.0, |mm| mm * MM),
         warnings: Vec::new(),
     };
     let mut copper_graphics = 0;
@@ -272,11 +318,12 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
                 uuid: uuid(child),
                 members: child.find("members").map(|m| m.args().iter().filter_map(Node::text).map(str::to_string).collect()).unwrap_or_default(),
             }),
-            Some("gr_line" | "gr_arc" | "gr_circle" | "gr_rect" | "gr_poly")
-                if child.find("layer").and_then(|l| l.args().first()).and_then(Node::text).is_some_and(|l| l.ends_with(".Cu")) =>
-            {
-                copper_graphics += 1;
-            }
+            Some("gr_line" | "gr_arc" | "gr_circle" | "gr_rect" | "gr_poly" | "gr_text") => match graphic(child, &|p| p, 0.0) {
+                Ok(Some(g)) if g.layer.ends_with(".Mask") => copper.mask_graphics.push(g),
+                Ok(Some(g)) => copper.graphics.push(g),
+                Ok(None) => {}
+                Err(_) => copper_graphics += 1,
+            },
             Some("footprint") => {
                 let Some(fp) = footprints.get(footprint) else {
                     return Err(syntax(child, "footprint the model read"));
@@ -284,8 +331,23 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
                 copper.locked_footprints.push(locked(child));
                 copper.footprint_at.push(child.find("at").map(|a| a.pos().into()));
                 copper.courtyards.push(courtyard(child, fp)?);
+                for g in child.args() {
+                    if matches!(g.head(), Some("fp_line" | "fp_arc" | "fp_circle" | "fp_rect" | "fp_poly" | "fp_text" | "property")) {
+                        match graphic(g, &|p| fp.place(p), fp.rotation_deg) {
+                            Ok(Some(g)) if g.layer.ends_with(".Mask") => copper.mask_graphics.push(g),
+                            Ok(Some(g)) => copper.graphics.push(g),
+                            Ok(None) => {}
+                            Err(_) => copper_graphics += 1,
+                        }
+                    }
+                }
+                let margin = child.find("solder_mask_margin").and_then(|m| m.number_arg(0, "solder_mask_margin").ok());
+                let clearance = child.find("clearance").and_then(|m| m.number_arg(0, "clearance").ok());
                 for (index, pad) in child.find_all("pad").enumerate() {
-                    copper.pads.push(read_pad(pad, footprint, index, fp)?);
+                    let mut pad_copper = read_pad(pad, footprint, index, fp)?;
+                    pad_copper.mask_margin = pad.find("solder_mask_margin").and_then(|m| m.number_arg(0, "solder_mask_margin").ok()).or(margin).map(|mm| mm * MM);
+                    pad_copper.clearance = pad.find("clearance").and_then(|m| m.number_arg(0, "clearance").ok()).or(clearance).map(|mm| mm * MM).filter(|c| *c > 0.0);
+                    copper.pads.push(pad_copper);
                 }
                 for zone in child.find_all("zone") {
                     copper.zones.push(read_zone(zone, Some(footprint))?);
@@ -304,6 +366,83 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
 }
 
 /// The convex hull of a footprint's courtyard drawing, placed on the board.
+/// A drawing or text on a copper or solder mask layer as polygons, `place` taking its points to the
+/// board, `rotation` the footprint's (0 on the board); `None` off copper or hidden. Text is the
+/// box its strokes stay within, a little generously, as the router needs no more than that.
+fn graphic(g: &Node, place: &dyn Fn([f64; 2]) -> [f64; 2], rotation: f64) -> Result<Option<CopperGraphic>, KicadParse> {
+    let Some(layer) = g.find("layer").and_then(|l| l.args().first()).and_then(Node::text).filter(|l| l.ends_with(".Cu") || *l == "F.Mask" || *l == "B.Mask") else {
+        return Ok(None);
+    };
+    let width = g.find("stroke").and_then(|s| s.find("width")).or_else(|| g.find("width")).and_then(|w| w.number_arg(0, "width").ok()).unwrap_or(0.0) * MM;
+    let filled = g.find("fill").and_then(|f| f.args().first()).and_then(Node::text).is_some_and(|f| f == "solid" || f == "yes");
+    let stroke = |points: &[[f64; 2]], closed: bool| -> Vec<Vec<[f64; 2]>> {
+        if width <= 0.0 {
+            return Vec::new();
+        }
+        let n = points.len();
+        (0..if closed { n } else { n.saturating_sub(1) }).map(|k| capsule(points[k], points[(k + 1) % n], width / 2.0)).collect()
+    };
+    let head = g.head().unwrap_or("");
+    let kind = head.split('_').nth(1).unwrap_or(head);
+    let local: Vec<Vec<[f64; 2]>> = match kind {
+        "line" => stroke(&[point(g, "start")?, point(g, "end")?], false),
+        "arc" => stroke(&arc_points(point(g, "start")?, point(g, "mid")?, point(g, "end")?), false),
+        "rect" => {
+            let (a, b) = (point(g, "start")?, point(g, "end")?);
+            let corners = vec![a, [b[0], a[1]], b, [a[0], b[1]]];
+            let mut out = stroke(&corners, true);
+            if filled {
+                out.push(corners);
+            }
+            out
+        }
+        "circle" => {
+            let (c, e) = (point(g, "center")?, point(g, "end")?);
+            let r = (e[0] - c[0]).hypot(e[1] - c[1]);
+            if filled { vec![circle(c, r + width / 2.0)] } else { stroke(&circle(c, r), true) }
+        }
+        // KiCad 5 polygons are always filled; later ones say, but an outline-only copper
+        // polygon is rare enough to take as filled.
+        "poly" => {
+            let Some(p) = g.find("pts") else { return Ok(None) };
+            let points = pts(p)?;
+            let mut out = stroke(&points, true);
+            out.push(points);
+            out
+        }
+        "text" | "property" => {
+            let hidden = |n: &Node| n.args().iter().any(|a| a.text() == Some("hide") || (a.head() == Some("hide") && a.args().first().and_then(Node::text) != Some("no")));
+            let effects = g.find("effects");
+            if hidden(g) || effects.is_some_and(hidden) {
+                return Ok(None);
+            }
+            let string = g.args().iter().filter_map(Node::text).filter(|t| !matches!(*t, "reference" | "value" | "user" | "hide")).last().unwrap_or("");
+            let font = effects.and_then(|e| e.find("font"));
+            let size = font.and_then(|f| f.find("size")).map(|s| point_of(s, "size")).transpose()?.unwrap_or([1e-3, 1e-3]);
+            let thick = font.and_then(|f| f.find("thickness")).and_then(|t| t.number_arg(0, "thickness").ok()).map_or(size[0] * 0.15, |t| t * MM);
+            let justify: Vec<&str> = effects.and_then(|e| e.find("justify")).map(|j| j.args().iter().filter_map(Node::text).collect()).unwrap_or_default();
+            let lines = string.split("\\n").collect::<Vec<_>>();
+            let chars = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as f64;
+            let (w, h) = (chars * size[1] * 1.1 + thick, lines.len() as f64 * size[0] * 1.6 + thick);
+            let x0 = if justify.contains(&"left") { 0.0 } else if justify.contains(&"right") { -w } else { -w / 2.0 };
+            let x0 = if justify.contains(&"mirror") { -x0 - w } else { x0 };
+            let Some(at) = g.find("at") else { return Ok(None) };
+            let anchor = point_of(at, "at")?;
+            // The file holds a footprint text's angle on the board, as with pads.
+            let angle = at.args().get(2).map(Node::number).transpose()?.unwrap_or(0.0) - rotation;
+            let corners = [[x0, -h / 2.0], [x0 + w, -h / 2.0], [x0 + w, h / 2.0], [x0, h / 2.0]];
+            vec![corners.iter().map(|&c| crate::model::place(anchor, angle, c)).collect()]
+        }
+        _ => return Ok(None),
+    };
+    let polygons: Vec<Vec<[f64; 2]>> = local.into_iter().filter(|p| p.len() >= 3).map(|p| p.into_iter().map(place).collect()).collect();
+    if polygons.is_empty() {
+        return Ok(None);
+    }
+    let net = g.find("net").and_then(|n| n.number_arg(0, "net").ok()).map_or(0, |n| n as u32);
+    Ok(Some(CopperGraphic { layer: layer.to_string(), net, polygons }))
+}
+
 fn courtyard(fp_node: &Node, fp: &Footprint) -> Result<Option<Vec<[f64; 2]>>, KicadParse> {
     let mut local: Vec<[f64; 2]> = Vec::new();
     for g in fp_node.args() {
@@ -463,16 +602,14 @@ fn read_pad(p: &Node, footprint: usize, index: usize, fp: &Footprint) -> Result<
             Some(polys)
         }
     };
+    // `(drill ... (offset x y))` moves the pad's copper off its hole, in the pad's own frame.
+    let offset = p.find("drill").and_then(|d| d.find("offset")).map(|o| point_of(o, "offset")).transpose()?.unwrap_or([0.0, 0.0]);
+    let shifted = |q: [f64; 2]| place(model.position, angle, [q[0] + offset[0], q[1] + offset[1]]);
     let outline = match local_outline {
-        None => Outline::Circle { centre: model.position, radius: size[0] / 2.0 },
-        Some(polys) => Outline::Polygons(
-            polys
-                .into_iter()
-                .map(|poly| poly.into_iter().map(|q| place(model.position, angle, q)).collect())
-                .collect(),
-        ),
+        None => Outline::Circle { centre: shifted([0.0, 0.0]), radius: size[0] / 2.0 },
+        Some(polys) => Outline::Polygons(polys.into_iter().map(|poly| poly.into_iter().map(shifted).collect()).collect()),
     };
-    Ok(PadCopper { footprint, pad: index, layers, shape, outline })
+    Ok(PadCopper { footprint, pad: index, layers, shape, outline, mask_margin: None, clearance: None })
 }
 
 /// A custom pad's extra shapes, in the pad's own frame. Lines and arcs with a width become their
