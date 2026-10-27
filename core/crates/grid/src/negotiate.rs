@@ -7,14 +7,14 @@
 //! Rounds repeat, the present price rising and history accumulating where nets still collide,
 //! until no path lies in another net's zone; then routes are committed, each checked exactly.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use board::{connectivity, connectivity_without_pours, nm, Board, ItemId, Kind, Nm};
 
 use crate::grid::{ObstacleMap, Profile, RouteGrid};
 use crate::report::{tell, Log};
-use crate::route::{lay, terminals, FieldSolver, PricedJob, RoundPrices, Terminal};
-use crate::search::{route_astar, GridPath};
+use crate::route::{lay, other_cluster_terminals, terminals, FieldSolver, PricedJob, RoundPrices, Terminal};
+use crate::search::{route_astar_via, GridPath};
 
 /// How often the trial routes are shown while a round runs one connection after another.
 const TRIAL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
@@ -44,6 +44,9 @@ pub struct NegotiationOptions {
     /// priced below `1.0` also route and commit before the rest, so a favoured escape keeps its
     /// way out of a pad while neighbours pay the full price to go round it.
     pub net_weight: HashMap<u32, f64>,
+    /// Match congestion zones to the obstacle map's own step reach, keep the least-conflicted
+    /// round's paths when patience runs out, and reroute against committed copper on commit clash.
+    pub tight_zones: bool,
     pub pours_block: bool,
     /// Reorders the connections, for a search over many runs; 0 keeps the board's order.
     pub seed: u64,
@@ -65,6 +68,7 @@ impl Default for NegotiationOptions {
             patience: 4,
             nets: None,
             net_weight: HashMap::new(),
+            tight_zones: false,
             pours_block: false,
             seed: 0,
             cancel: None,
@@ -90,9 +94,14 @@ struct Connection {
     class: String,
     from: ItemId,
     to: ItemId,
+    from_pt: board::Point,
+    to_pt: board::Point,
+    alt_targets: bool,
     path: Option<GridPath>,
-    /// The nodes its path claims, as each class of route sees them.
+    /// The nodes its path claims against viewer traces, as each class of route sees them.
     zone: Vec<(String, Vec<u32>)>,
+    /// The 2D cells its path claims against viewer vias, as each class sees them (`tight_zones`).
+    via_zone: Vec<(String, Vec<u32>)>,
     /// Whether its path ran into another net's claim in the last round.
     colliding: bool,
 }
@@ -227,7 +236,12 @@ pub fn route_negotiated_rounds(
             || options.cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
     };
     let mut stats = NegotiationStats::default();
-    let mut open = if options.pours_block { connectivity(board) } else { connectivity_without_pours(board) }.airlines;
+    let conn_info = if options.pours_block { connectivity(board) } else { connectivity_without_pours(board) };
+    let mut net_edges: HashMap<u32, usize> = HashMap::new();
+    for a in &conn_info.airlines {
+        *net_edges.entry(a.net).or_insert(0) += 1;
+    }
+    let mut open = conn_info.airlines;
     if let Some(only) = &options.nets {
         open.retain(|a| only.contains(&a.net));
     }
@@ -239,8 +253,12 @@ pub fn route_negotiated_rounds(
             class: Profile::for_net(board, a.net).class,
             from: a.from_item,
             to: a.to_item,
+            from_pt: a.from,
+            to_pt: a.to,
+            alt_targets: false,
             path: None,
             zone: Vec::new(),
+            via_zone: Vec::new(),
             colliding: false,
         })
         .collect();
@@ -262,9 +280,13 @@ pub fn route_negotiated_rounds(
     let (nx, ny, layers) = (sample.nx, sample.ny, sample.layers.len());
     let cells = nx * ny;
     let mut discs: HashMap<(String, String), Discs> = HashMap::new();
+    let mut via_discs: HashMap<(String, String), Discs> = HashMap::new();
     for (owner, a) in &maps {
         for (viewer, b) in &maps {
-            discs.insert((owner.clone(), viewer.clone()), zone_discs(board, &a.profile, &b.profile, options.cell));
+            discs.insert((owner.clone(), viewer.clone()), zone_discs(board, &a.profile, &b.profile, options.cell, options.tight_zones));
+            if options.tight_zones {
+                via_discs.insert((owner.clone(), viewer.clone()), via_zone_discs(board, &a.profile, &b.profile, options.cell));
+            }
         }
     }
     let classes: Vec<String> = maps.keys().cloned().collect();
@@ -277,31 +299,169 @@ pub fn route_negotiated_rounds(
             })
             .collect()
     };
+    let via_claims_of = |path: &GridPath, owner: &str| -> Vec<(String, Vec<u32>)> {
+        if !options.tight_zones {
+            return Vec::new();
+        }
+        classes
+            .iter()
+            .map(|viewer| {
+                let (trace_via, via_via) = &via_discs[&(owner.to_string(), viewer.clone())];
+                (viewer.clone(), via_zone_of(path, nx, ny, trace_via, via_via))
+            })
+            .collect()
+    };
     let mut zones = Claims::new(classes.iter().cloned(), layers * cells);
+    let mut via_zones = Claims::new(classes.iter().cloned(), if options.tight_zones { cells } else { 0 });
     let mut history = vec![0u32; layers * cells];
+    let mut via_history = vec![0u32; if options.tight_zones { cells } else { 0 }];
+    let mut via_pen_buf = Vec::new();
     let mut present = options.present;
     let mut grid_buf = sample.clone();
-    let ends: Vec<(Vec<Terminal>, Vec<Terminal>)> = connections
+    // When a neighbour track was cut locally by a region plough, its airline names the cut tip;
+    // including the cluster's pads as well lets PathFinder either bridge the short cut locally or
+    // detour round a full channel to the pad itself, with dangling stubs pruned afterwards.
+    let mut pads_by_cluster: HashMap<usize, Vec<ItemId>> = HashMap::new();
+    if options.tight_zones {
+        for (id, it) in board.items() {
+            if matches!(it.kind, Kind::Pad { .. }) {
+                if let Some(&cl) = conn_info.cluster.get(&id) {
+                    pads_by_cluster.entry(cl).or_default().push(id);
+                }
+            }
+        }
+    }
+    let cluster_terminals = |board: &mut Board, grid: &RouteGrid, root: ItemId| -> Vec<Terminal> {
+        let base = terminals(board, grid, root);
+        if !options.tight_zones {
+            return base;
+        }
+        let Some(pads) = conn_info.cluster.get(&root).and_then(|cl| pads_by_cluster.get(cl)) else {
+            return base;
+        };
+        let origin = board.item(root).map(|it| {
+            let b = it.shape.bbox();
+            board::Point::new((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2)
+        });
+        let mut near_pads: Vec<ItemId> = pads.iter().copied().filter(|&id| id != root).collect();
+        if let Some(o) = origin {
+            near_pads.sort_by(|&a, &b| {
+                let da = board.item(a).map_or(f64::INFINITY, |it| {
+                    let bb = it.shape.bbox();
+                    o.distance(board::Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2))
+                });
+                let db = board.item(b).map_or(f64::INFINITY, |it| {
+                    let bb = it.shape.bbox();
+                    o.distance(board::Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2))
+                });
+                da.total_cmp(&db)
+            });
+        }
+        near_pads.truncate(4);
+        let mut by_cell: BTreeMap<usize, Option<(board::Point, Nm)>> = base.into_iter().collect();
+        for pad_id in near_pads {
+            for (cell, leg) in terminals(board, grid, pad_id) {
+                match by_cell.get(&cell) {
+                    Some(None) => {}
+                    Some(Some(_)) if leg.is_none() => {
+                        by_cell.insert(cell, None);
+                    }
+                    None => {
+                        by_cell.insert(cell, leg);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        by_cell.into_iter().collect()
+    };
+    let mut ends: Vec<(Vec<Terminal>, Vec<Terminal>)> = connections
         .iter()
         .map(|c| {
             maps[&c.class].view_into(c.net, &mut grid_buf);
-            (terminals(board, &grid_buf, c.from), terminals(board, &grid_buf, c.to))
+            (cluster_terminals(board, &grid_buf, c.from), cluster_terminals(board, &grid_buf, c.to))
         })
         .collect();
     let cells_of = |t: &[Terminal]| t.iter().map(|t| t.0).collect::<Vec<usize>>();
+    // With tight zones, drop connections walled by fixed copper and rebind multi-component MST
+    // edges whose chosen hub is buried or locked behind fixed copper so two reachable components
+    // on either side of that hub still negotiate a path to each other.
+    if options.tight_zones {
+        let mut rebound: HashSet<(u32, usize)> = HashSet::new();
+        let mut kept_conns = Vec::with_capacity(connections.len());
+        let mut kept_ends = Vec::with_capacity(ends.len());
+        for (mut c, (s, t)) in connections.into_iter().zip(ends) {
+            maps[&c.class].view_into(c.net, &mut grid_buf);
+            let multi = net_edges.get(&c.net).copied().unwrap_or(0) >= 2;
+            let direct_ok = !s.is_empty()
+                && !t.is_empty()
+                && (!multi || solver.route(&grid_buf, &cells_of(&s), &cells_of(&t), options.via_cost).is_some());
+            if direct_ok {
+                kept_conns.push(c);
+                kept_ends.push((s, t));
+                continue;
+            }
+            let mut bridged = None;
+            if multi {
+                if let (Some(&cf), Some(&ct)) = (conn_info.cluster.get(&c.from), conn_info.cluster.get(&c.to)) {
+                    for (active_id, active_pt, active_terms, ca, cb) in [
+                        (!s.is_empty()).then_some((c.from, c.from_pt, &s, cf, ct)),
+                        (!t.is_empty()).then_some((c.to, c.to_pt, &t, ct, cf)),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        if rebound.contains(&(c.net, ca)) {
+                            continue;
+                        }
+                        let alt = other_cluster_terminals(board, &grid_buf, &conn_info.cluster, c.net, active_pt, &[ca, cb]);
+                        if !alt.is_empty() && solver.route(&grid_buf, &cells_of(active_terms), &cells_of(&alt), options.via_cost).is_some() {
+                            rebound.insert((c.net, ca));
+                            c.from = active_id;
+                            c.from_pt = active_pt;
+                            c.alt_targets = true;
+                            bridged = Some((active_terms.clone(), alt));
+                            break;
+                        }
+                    }
+                }
+            }
+            if let Some(pair) = bridged {
+                kept_conns.push(c);
+                kept_ends.push(pair);
+            } else {
+                stats.unroutable += 1;
+            }
+        }
+        connections = kept_conns;
+        ends = kept_ends;
+        if connections.is_empty() {
+            return stats;
+        }
+    }
     // A path must start and end on its own pads, however near a neighbour's route runs: those
     // cells are the footprint's doing and not counted as collisions.
     let own_ends: Vec<BTreeSet<usize>> =
         ends.iter().map(|(s, t)| s.iter().chain(t).filter(|t| t.1.is_none()).map(|t| t.0).collect()).collect();
 
+    let round_weight = |net: u32, round: usize| {
+        let w = weight_of(net);
+        if options.tight_zones && w < 1.0 && round >= 6 {
+            1.0 - (1.0 - w) * 0.72_f64.powi((round - 5) as i32)
+        } else {
+            w
+        }
+    };
+
     let mut shown = crate::clock::Instant::now();
     let (mut best_colliding, mut stale) = (usize::MAX, 0);
+    let mut best_paths: Vec<(Option<GridPath>, Vec<(String, Vec<u32>)>, Vec<(String, Vec<u32>)>, bool)> = Vec::new();
     for round in 0..options.max_rounds {
         if out_of_time() {
             break;
         }
         stats.rounds = round + 1;
-        if solver.batch_size() > 1 {
+        if solver.batch_size() > 1 && !options.tight_zones {
             route_round_in_batches(&mut connections, &maps, &ends, &zones, &history, present, options, solver);
             zones.clear();
             for c in connections.iter_mut() {
@@ -309,11 +469,14 @@ pub fn route_negotiated_rounds(
                 zones.add(c.net, &c.zone);
             }
         } else if options.threads > 1 {
-            route_round_in_parallel(&mut connections, &maps, &ends, &zones, &history, present, options, round, &sample, trials);
+            route_round_in_parallel(&mut connections, &maps, &ends, &zones, &via_zones, &history, &via_history, present, options, round, &sample, trials);
             zones.clear();
+            via_zones.clear();
             for c in connections.iter_mut() {
                 c.zone = c.path.as_ref().map(|p| claims_of(p, &c.class)).unwrap_or_default();
+                c.via_zone = c.path.as_ref().map(|p| via_claims_of(p, &c.class)).unwrap_or_default();
                 zones.add(c.net, &c.zone);
+                via_zones.add(c.net, &c.via_zone);
             }
         } else {
             for k in 0..connections.len() {
@@ -323,12 +486,21 @@ pub fn route_negotiated_rounds(
                 let c = &mut connections[k];
                 tell(&options.log, "negotiating", || format!("round {}: rerouting {}", round + 1, board.net_name(c.net)), None);
                 zones.remove(c.net, &c.zone);
+                via_zones.remove(c.net, &c.via_zone);
                 maps[&c.class].view_into(c.net, &mut grid_buf);
-                penalties_into(zones.seen_by(&c.class), &history, present, c.net, weight_of(c.net), &mut grid_buf.penalty);
+                let w = round_weight(c.net, round);
+                penalties_into(zones.seen_by(&c.class), &history, present, c.net, w, &mut grid_buf.penalty);
                 let (sources, targets) = &ends[k];
-                c.path = solver.route(&grid_buf, &cells_of(sources), &cells_of(targets), options.via_cost);
+                c.path = if options.tight_zones {
+                    penalties_into(via_zones.seen_by(&c.class), &via_history, present, c.net, w, &mut via_pen_buf);
+                    solver.route_with_via_penalty(&grid_buf, &cells_of(sources), &cells_of(targets), options.via_cost, &via_pen_buf)
+                } else {
+                    solver.route(&grid_buf, &cells_of(sources), &cells_of(targets), options.via_cost)
+                };
                 c.zone = c.path.as_ref().map(|p| claims_of(p, &c.class)).unwrap_or_default();
+                c.via_zone = c.path.as_ref().map(|p| via_claims_of(p, &c.class)).unwrap_or_default();
                 zones.add(c.net, &c.zone);
+                via_zones.add(c.net, &c.via_zone);
                 if shown.elapsed() > TRIAL_INTERVAL {
                     trials(round, &trial_list(&connections, &sample));
                     shown = crate::clock::Instant::now();
@@ -339,10 +511,15 @@ pub fn route_negotiated_rounds(
         for (k, c) in connections.iter_mut().enumerate() {
             let Some(path) = &c.path else { continue };
             let mut collides = false;
-            for &(layer, i, j) in path {
-                let n = layer * cells + j * nx + i;
+            for (step_idx, &(layer, i, j)) in path.iter().enumerate() {
+                let cell = j * nx + i;
+                let n = layer * cells + cell;
                 if !own_ends[k].contains(&n) && zones.seen_by(&c.class).others(c.net, n) > 0 {
                     history[n] += options.history_step;
+                    collides = true;
+                }
+                if options.tight_zones && step_idx > 0 && path[step_idx - 1].0 != layer && via_zones.seen_by(&c.class).others(c.net, cell) > 0 {
+                    via_history[cell] += options.history_step;
                     collides = true;
                 }
             }
@@ -358,6 +535,17 @@ pub fn route_negotiated_rounds(
                     *o = (*o).max(c);
                 }
             }
+            if options.tight_zones {
+                for z in via_zones.by_viewer.values() {
+                    for (cell, &c) in z.count.iter().enumerate() {
+                        if c >= 2 {
+                            for l in 0..layers {
+                                overlap[l * cells + cell] = overlap[l * cells + cell].max(c);
+                            }
+                        }
+                    }
+                }
+            }
             cb(RoundView { round, colliding, present, grid: &sample, overlap, history: &history, trials: &list });
         }
         shown = crate::clock::Instant::now();
@@ -369,6 +557,9 @@ pub fn route_negotiated_rounds(
         if colliding < best_colliding {
             best_colliding = colliding;
             stale = 0;
+            if options.tight_zones {
+                best_paths = connections.iter().map(|c| (c.path.clone(), c.zone.clone(), c.via_zone.clone(), c.colliding)).collect();
+            }
         } else {
             stale += 1;
             if stale >= options.patience {
@@ -378,21 +569,67 @@ pub fn route_negotiated_rounds(
         present *= options.present_growth;
     }
 
+    if options.tight_zones && stats.conflicted > best_colliding && best_paths.len() == connections.len() {
+        for (c, (path, zone, via_zone, colliding)) in connections.iter_mut().zip(best_paths) {
+            c.path = path;
+            c.zone = zone;
+            c.via_zone = via_zone;
+            c.colliding = colliding;
+        }
+        stats.conflicted = best_colliding;
+    }
+
     // Commit greedily: a route whose cells lie in no committed net's zone is legal against
     // everything committed so far, converged or not; each piece is still checked exactly.
+    // With tight zones, collision-free routes commit ahead of colliding ones so no colliding route
+    // steals a clean route's corridor, and any colliding loser reroutes against committed copper.
     let mut committed = Claims::new(classes.iter().cloned(), layers * cells);
-    for (k, c) in connections.iter().enumerate() {
+    let mut commit_order: Vec<usize> = (0..connections.len()).collect();
+    if options.tight_zones {
+        commit_order.sort_by_key(|&k| (connections[k].colliding, weight_of(connections[k].net) >= 1.0, k));
+    }
+    for k in commit_order {
+        let c = &connections[k];
         let Some(path) = &c.path else {
             stats.unroutable += 1;
             continue;
         };
-        if path.iter().map(|&(l, i, j)| l * cells + j * nx + i).any(|n| !own_ends[k].contains(&n) && committed.seen_by(&c.class).others(c.net, n) > 0) {
+        if !options.tight_zones
+            && path.iter().map(|&(l, i, j)| l * cells + j * nx + i).any(|n| !own_ends[k].contains(&n) && committed.seen_by(&c.class).others(c.net, n) > 0)
+        {
             continue;
         }
         maps[&c.class].view_into(c.net, &mut grid_buf);
         let (sources, targets) = &ends[k];
-        let Some(items) = lay(board, &grid_buf, path, sources, targets) else { continue };
-        committed.add(c.net, &c.zone);
+        let mut laid = lay(board, &grid_buf, path, sources, targets);
+        if laid.is_none() && options.tight_zones && !out_of_time() {
+            grid_buf.penalty.clear();
+            let (fresh_s, fresh_t) = if c.alt_targets {
+                let cur = if options.pours_block { connectivity(board) } else { connectivity_without_pours(board) };
+                let s = terminals(board, &grid_buf, c.from);
+                let skip = cur.cluster.get(&c.from).copied().into_iter().collect::<Vec<_>>();
+                let t = other_cluster_terminals(board, &grid_buf, &cur.cluster, c.net, c.from_pt, &skip);
+                (s, t)
+            } else {
+                (cluster_terminals(board, &grid_buf, c.from), cluster_terminals(board, &grid_buf, c.to))
+            };
+            if let Some(alt) = (!fresh_s.is_empty() && !fresh_t.is_empty())
+                .then(|| solver.route(&grid_buf, &cells_of(&fresh_s), &cells_of(&fresh_t), options.via_cost))
+                .flatten()
+            {
+                laid = lay(board, &grid_buf, &alt, &fresh_s, &fresh_t);
+            }
+        }
+        let Some(items) = laid else { continue };
+        if options.tight_zones {
+            for m in maps.values_mut() {
+                for &id in &items {
+                    m.stamp(board, id);
+                }
+            }
+        } else {
+            committed.add(c.net, &c.zone);
+        }
         stats.committed += 1;
         tell(&options.log, "committing", || format!("{}: laid its negotiated route", board.net_name(c.net)), None);
         stats.vias += items.iter().filter(|id| board.item(**id).is_some_and(|it| it.kind == Kind::Via)).count();
@@ -543,7 +780,9 @@ fn route_round_in_parallel(
     maps: &HashMap<String, ObstacleMap>,
     ends: &[(Vec<Terminal>, Vec<Terminal>)],
     zones: &Claims,
+    via_zones: &Claims,
     history: &[u32],
+    via_history: &[u32],
     present: f64,
     options: &NegotiationOptions,
     round: usize,
@@ -552,8 +791,18 @@ fn route_round_in_parallel(
 ) {
     let next = std::sync::atomic::AtomicUsize::new(0);
     let done = std::sync::atomic::AtomicUsize::new(0);
-    let jobs: Vec<(u32, &str, f64)> =
-        connections.iter().map(|c| (c.net, c.class.as_str(), options.net_weight.get(&c.net).copied().unwrap_or(1.0))).collect();
+    let jobs: Vec<(u32, &str, f64)> = connections
+        .iter()
+        .map(|c| {
+            let w = options.net_weight.get(&c.net).copied().unwrap_or(1.0);
+            let eff = if options.tight_zones && w < 1.0 && round >= 6 {
+                1.0 - (1.0 - w) * 0.72_f64.powi((round - 5) as i32)
+            } else {
+                w
+            };
+            (c.net, c.class.as_str(), eff)
+        })
+        .collect();
     let paths: Vec<std::sync::Mutex<Option<Option<GridPath>>>> = (0..connections.len()).map(|_| std::sync::Mutex::new(None)).collect();
     std::thread::scope(|scope| {
         for _ in 0..options.threads {
@@ -561,6 +810,7 @@ fn route_round_in_parallel(
                 // One grid per worker, refilled for each connection: a large board's views run
                 // to tens of megabytes, too much to allocate and free hundreds of times a round.
                 let mut grid: Option<RouteGrid> = None;
+                let mut via_pen = Vec::new();
                 loop {
                     let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     if k >= jobs.len() {
@@ -575,10 +825,13 @@ fn route_round_in_parallel(
                         None => grid.insert(maps[class].view(net)),
                     };
                     penalties_into(zones.seen_by(class), history, present, net, weight, &mut grid.penalty);
+                    if options.tight_zones {
+                        penalties_into(via_zones.seen_by(class), via_history, present, net, weight, &mut via_pen);
+                    }
                     let (sources, targets) = &ends[k];
                     let s: Vec<usize> = sources.iter().map(|t| t.0).collect();
                     let t: Vec<usize> = targets.iter().map(|t| t.0).collect();
-                    *paths[k].lock().expect("no worker panics") = Some(route_astar(grid, &s, &t, options.via_cost));
+                    *paths[k].lock().expect("no worker panics") = Some(route_astar_via(grid, &s, &t, options.via_cost, &via_pen));
                     done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
             });
@@ -612,20 +865,50 @@ type Discs = (Vec<(i32, i32)>, Vec<(i32, i32)>);
 /// Cell offsets within the zone radius of an owner's trace cell and via cell, as a viewer class
 /// sees them: the owner's trace or via against the viewer's trace, at the clearance between the
 /// two classes, plus each side's step reach.
-fn zone_discs(board: &Board, owner: &Profile, viewer: &Profile, h: Nm) -> Discs {
+fn zone_discs(board: &Board, owner: &Profile, viewer: &Profile, h: Nm, tight: bool) -> Discs {
     let (half_width, via, widest) = (owner.half_width as f64, owner.via_radius as f64, viewer.half_width as f64);
     let clearance = owner.clearance.max(viewer.clearance).max(nm(board.rules.min_clearance)) as f64;
+    let hole_clearance = nm(board.rules.min_hole_clearance) as f64;
     let h = h as f64;
-    let trace_reach = half_width + widest + clearance + 2.0 * STEP_REACH * h;
-    let via_reach = via + widest + clearance + 2.0 * STEP_REACH * h;
+    let step = if tight { STEP_REACH * h } else { 2.0 * STEP_REACH * h };
+    let pad = if tight { 0.0 } else { h };
+    let trace_reach = half_width + widest + clearance + step;
+    let via_core = if tight { (via + clearance).max(owner.drill_radius as f64 + hole_clearance) } else { via + clearance };
+    let via_reach = via_core + widest + step;
     let disc = |reach: f64| {
         let r = (reach / h).ceil() as i32;
         (-r..=r)
             .flat_map(|dj| (-r..=r).map(move |di| (di, dj)))
-            .filter(|&(di, dj)| f64::from(di).hypot(f64::from(dj)) * h < reach + h)
+            .filter(|&(di, dj)| f64::from(di).hypot(f64::from(dj)) * h < reach + pad)
             .collect()
     };
     (disc(trace_reach), disc(via_reach))
+}
+
+/// Cell offsets within the zone radius of an owner's trace cell and via cell against a viewer's
+/// via, matching [`ObstacleMap::stamp`]'s copper, hole-to-copper, and drill-to-drill margins so
+/// PathFinder prices trace-to-via and via-to-via collisions symmetrically.
+fn via_zone_discs(board: &Board, owner: &Profile, viewer: &Profile, h: Nm) -> Discs {
+    let clearance = owner.clearance.max(viewer.clearance).max(nm(board.rules.min_clearance)) as f64;
+    let hole_clearance = nm(board.rules.min_hole_clearance) as f64;
+    let hole_to_hole = nm(board.rules.min_hole_to_hole) as f64;
+    let h = h as f64;
+    let step = STEP_REACH * h;
+    let (ohw, ovia, odrill) = (owner.half_width as f64, owner.via_radius as f64, owner.drill_radius as f64);
+    let (vvia, vdrill) = (viewer.via_radius as f64, viewer.drill_radius as f64);
+    let trace_via_reach = ohw + (vvia + clearance).max(vdrill + hole_clearance) + step;
+    let via_via_reach = (ovia + vvia + clearance)
+        .max(odrill + vdrill + hole_to_hole)
+        .max(odrill + vvia + hole_clearance)
+        .max(vdrill + ovia + hole_clearance);
+    let disc = |reach: f64| {
+        let r = (reach / h).ceil() as i32;
+        (-r..=r)
+            .flat_map(|dj| (-r..=r).map(move |di| (di, dj)))
+            .filter(|&(di, dj)| f64::from(di).hypot(f64::from(dj)) * h < reach)
+            .collect()
+    };
+    (disc(trace_via_reach), disc(via_via_reach))
 }
 
 /// The nodes a path claims: a disc around each cell on its layer, and a via disc on every layer
@@ -647,6 +930,35 @@ fn zone_of(path: &GridPath, nx: usize, ny: usize, layers: usize, trace_disc: &[(
             for l in 0..layers {
                 stamp(l, i, j, via_disc);
             }
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out.shrink_to_fit();
+    out
+}
+
+/// The 2D cells a path claims against viewer vias: `trace_via_disc` once per visited `(i, j)` and
+/// `via_via_disc` at every layer transition.
+fn via_zone_of(path: &GridPath, nx: usize, ny: usize, trace_via_disc: &[(i32, i32)], via_via_disc: &[(i32, i32)]) -> Vec<u32> {
+    let mut out = Vec::new();
+    let mut stamp = |i: usize, j: usize, disc: &[(i32, i32)]| {
+        for &(di, dj) in disc {
+            let (a, b) = (i as i32 + di, j as i32 + dj);
+            if a >= 0 && b >= 0 && (a as usize) < nx && (b as usize) < ny {
+                out.push((b as usize * nx + a as usize) as u32);
+            }
+        }
+    };
+    let mut xy: Vec<(usize, usize)> = path.iter().map(|&(_, i, j)| (i, j)).collect();
+    xy.sort_unstable();
+    xy.dedup();
+    for (i, j) in xy {
+        stamp(i, j, trace_via_disc);
+    }
+    for (k, &(layer, i, j)) in path.iter().enumerate() {
+        if k > 0 && path[k - 1].0 != layer {
+            stamp(i, j, via_via_disc);
         }
     }
     out.sort_unstable();
@@ -730,5 +1042,44 @@ mod tests {
         // The via at (1, 0) claims its disc on both layers, the corner cell clipped to the grid.
         assert!(z.contains(&0) && z.contains(&((nx * ny) as u32)));
         assert!(z.contains(&((nx * ny + 5 * nx + 7) as u32)));
+    }
+
+    #[test]
+    fn tight_zones_price_via_zones_and_commit_clean_crossings() {
+        let (pcb, copper) = kicad_pcb::parse_board(
+            "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal))
+             (net 0 \"\") (net 1 \"A\") (net 2 \"B\")
+             (gr_rect (start 0 0) (end 10 10) (layer \"Edge.Cuts\") (width 0.1)))",
+        )
+        .unwrap();
+        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+        let mm = |v: f64| (v * 1e6) as Nm;
+        let smd = |net, layer: usize, x, y| board::Item {
+            kind: Kind::Pad { footprint: 0, number: "1".into(), plated: false },
+            net,
+            layers: 1u64 << layer,
+            shape: board::Shape::Capsule { a: board::Point::new(mm(x), mm(y)), b: board::Point::new(mm(x), mm(y)), r: mm(0.25) },
+            hole: None,
+            locked: true,
+            span: None,
+        };
+        // Both nets start on F.Cu and end on B.Cu across the same centre point, forcing two vias
+        // to separate cleanly under via-to-via and trace-to-via congestion zones.
+        board.insert(smd(1, 0, 2.0, 5.0));
+        board.insert(smd(1, 1, 8.0, 5.0));
+        board.insert(smd(2, 0, 5.0, 2.0));
+        board.insert(smd(2, 1, 5.0, 8.0));
+        let stats = route_negotiated(
+            &mut board,
+            &mut crate::route::CpuSolver,
+            &NegotiationOptions { cell: 35_000, tight_zones: true, ..Default::default() },
+            &mut |_| {},
+            &mut |_, _| {},
+        );
+        assert_eq!(stats.committed, 2, "{stats:?}");
+        assert!(connectivity_without_pours(&board).airlines.is_empty());
+        for &id in &stats.laid {
+            assert!(board::check_item(&board, id).is_empty(), "{:?}", board.item(id));
+        }
     }
 }

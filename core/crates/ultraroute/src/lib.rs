@@ -24,9 +24,9 @@ use board::{connectivity, connectivity_without_pours, Board, Item, ItemId, Kind,
 use kicad_pcb::{apply, mm, Edit};
 use serde_json::{json, Value};
 
-pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--diff-pairs] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--gpu] \
+pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-tight] [--diff-pairs] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--gpu] \
 [--timeout SECONDS] [--cell MM] [--first NET,...] [--first-negotiate] [--first-weight W] [--restart N] [--topo-first REF,...|auto] [--topo-trapped] [--topo-trapped-rip] [--topo-sample MM] \
-[--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough warp|linear|rip|gentle|dipole|region] [--shove-steps N] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-late] [--shove-seconds S] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
+[--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough warp|linear|rip|gentle|dipole|region] [--shove-steps N] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-whole] [--no-shove-whole] [--shove-late] [--shove-seconds S] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
 [--live PATH|-] [--live-fps N] [--live-step MS] [--blame]";
 
 pub struct Args {
@@ -47,6 +47,7 @@ pub struct Args {
     pub negotiate_rounds: Option<usize>,
     pub negotiate_patience: Option<usize>,
     pub negotiate_growth: Option<f64>,
+    pub negotiate_tight: bool,
     pub prefanout: bool,
     pub prefanout_mode: Option<grid::EscapeMode>,
     pub prefanout_order: Option<grid::EscapeOrder>,
@@ -108,6 +109,7 @@ pub struct Args {
     pub shove_repair: Option<f64>,
     pub shove_passes: usize,
     pub shove_ties: bool,
+    pub shove_whole: bool,
     pub shove_late: bool,
     /// Reorders the connections negotiation and the grid router take, for a search over runs.
     pub seed: u64,
@@ -148,6 +150,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         negotiate_rounds: None,
         negotiate_patience: None,
         negotiate_growth: None,
+        negotiate_tight: false,
         prefanout: false,
         prefanout_mode: None,
         prefanout_order: None,
@@ -191,6 +194,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         shove_repair: None,
         shove_passes: 1,
         shove_ties: false,
+        shove_whole: true,
         shove_late: false,
         seed: 0,
         shove_seconds: 30.0,
@@ -225,6 +229,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                 }
                 a.negotiate_growth = Some(g);
             }
+            "--negotiate-tight" => a.negotiate_tight = true,
             "--planes" => a.planes.extend(value()?.split(',').filter(|s| !s.is_empty()).map(String::from)),
             "--prefanout" => a.prefanout = true,
             "--prefanout-mode" => {
@@ -341,6 +346,8 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             "--shove-repair" => a.shove_repair = Some(value()?.parse().map_err(|e| format!("--shove-repair: {e}"))?),
             "--shove-passes" => a.shove_passes = value()?.parse().map_err(|e| format!("--shove-passes: {e}"))?,
             "--shove-ties" => a.shove_ties = true,
+            "--shove-whole" => a.shove_whole = true,
+            "--no-shove-whole" => a.shove_whole = false,
             "--shove-late" => a.shove_late = true,
             "--shove-seconds" => a.shove_seconds = value()?.parse().map_err(|e| format!("--shove-seconds: {e}"))?,
             "--shove-cascade" => a.shove_cascade = Some(value()?.parse().map_err(|e| format!("--shove-cascade: {e}"))?),
@@ -850,14 +857,28 @@ fn shove_pass(
     log: &Option<grid::Log>,
     step: &dyn Fn(&Board),
 ) -> Vec<kicad_pcb::Span> {
-    let open_now = |b: &Board| if a.pours_block { connectivity(b) } else { connectivity_without_pours(b) }.airlines.len();
+    let plane_nets: HashSet<u32> = if a.shove_whole && !a.pours_block && board.planes != 0 {
+        board.items().filter(|(_, it)| board.is_plane(it) && it.net != 0).map(|(_, it)| it.net).collect()
+    } else {
+        HashSet::new()
+    };
+    let counts_now = |b: &Board| -> (usize, usize) {
+        let open = if a.pours_block { connectivity(b) } else { connectivity_without_pours(b) }.airlines;
+        let sig = if plane_nets.is_empty() { open.len() } else { open.iter().filter(|x| !plane_nets.contains(&x.net)).count() };
+        (open.len(), sig)
+    };
     let mut removed = Vec::new();
     let mut stalled = 0;
     let defaults = grid::ShoveOptions::default();
     let reach = a.shove_reach.map_or(defaults.reach, |mm| (mm * 1e6).round() as Nm);
     let mut reaches: HashMap<ItemId, Nm> = HashMap::new();
+    let mut net_reaches: HashMap<u32, Nm> = HashMap::new();
+    let mut seen_reaches: HashSet<(u32, Nm)> = HashSet::new();
     for pass in 0..a.shove_passes.max(1) {
-        let before = open_now(board);
+        let (before, sig_before) = counts_now(board);
+        if a.shove_whole && sig_before == 0 {
+            break;
+        }
         let fine: HashSet<usize> = morph::fine_pitch(board, 500_000).into_iter().collect();
         let s = grid::shove_escape(
             board,
@@ -870,6 +891,8 @@ fn shove_pass(
                 steps: a.shove_steps.unwrap_or(defaults.steps),
                 reach,
                 reaches: reaches.clone(),
+                net_reaches: net_reaches.clone(),
+                region_whole: a.shove_whole,
                 repair_seconds: a.shove_repair.unwrap_or(defaults.repair_seconds),
                 accept_ties: a.shove_ties,
                 cascade: a.shove_cascade.unwrap_or(defaults.cascade),
@@ -890,24 +913,51 @@ fn shove_pass(
         removed.extend(s.removed_spans.iter().copied());
         let routed = s.tries.iter().filter(|t| t.routed).count();
         let kept = s.tries.iter().filter(|t| t.kept).count();
-        let after = open_now(board);
+        let (after, sig_after) = counts_now(board);
         eprintln!("shove pass {}: {} trapped tried, {routed} routed out, {kept} kept, {before} -> {after} open, {:.1} s", pass + 1, s.tries.len(), started.elapsed().as_secs_f64());
+        if a.shove_whole && sig_after == 0 {
+            break;
+        }
         // Passes go on, each in another order, until `--shove-patience` of them in a row free
         // nothing more.
         // The region plough tries a connection it could not free twice as far round its path
         // next time, up to the widest region; a pass that widened one is no stall.
         let mut grew = false;
+        let pass_improved = if a.shove_whole { sig_after < sig_before } else { after < before };
         if a.shove_plough == Some(grid::Plough::Region) {
-            for t in &s.tries {
-                if t.kept {
-                    reaches.remove(&t.pad);
-                } else if t.reach < REGION_WIDEST {
-                    reaches.insert(t.pad, (t.reach * 2).min(REGION_WIDEST));
-                    grew = true;
+            if a.shove_whole && pass_improved {
+                reaches.clear();
+                net_reaches.clear();
+                seen_reaches.clear();
+            } else {
+                for t in &s.tries {
+                    if a.shove_whole {
+                        if t.kept && t.open_after < t.open_before {
+                            reaches.remove(&t.pad);
+                            net_reaches.remove(&t.net);
+                        } else if !t.rounds.iter().all(|r| r.path.is_empty()) {
+                            if t.reach < REGION_WIDEST {
+                                let next = (t.reach * 2).min(REGION_WIDEST);
+                                reaches.insert(t.pad, next);
+                                net_reaches.insert(t.net, next);
+                                if seen_reaches.insert((t.net, next)) {
+                                    grew = true;
+                                }
+                            } else {
+                                reaches.insert(t.pad, reach);
+                                net_reaches.insert(t.net, reach);
+                            }
+                        }
+                    } else if t.kept {
+                        reaches.remove(&t.pad);
+                    } else if t.reach < REGION_WIDEST {
+                        reaches.insert(t.pad, (t.reach * 2).min(REGION_WIDEST));
+                        grew = true;
+                    }
                 }
             }
         }
-        stalled = if after < before || grew { 0 } else { stalled + 1 };
+        stalled = if pass_improved || grew { 0 } else { stalled + 1 };
         if stalled >= a.shove_patience.max(1) || until.is_some_and(|t| started.elapsed().as_secs_f64() >= t) {
             break;
         }
@@ -1339,6 +1389,7 @@ pub fn run_with_solver(
                     max_rounds: a.negotiate_rounds.unwrap_or(grid::NegotiationOptions::default().max_rounds),
                     patience: a.negotiate_patience.unwrap_or(grid::NegotiationOptions::default().patience),
                     present_growth: a.negotiate_growth.unwrap_or(grid::NegotiationOptions::default().present_growth),
+                    tight_zones: a.negotiate_tight,
                     ..Default::default()
                 },
                 &mut watch,
@@ -1878,5 +1929,25 @@ mod tests {
 
         assert!(parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--prefanout-mode", "bogus"])).is_err());
         assert!(parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--prefanout-ring", "9.0"])).is_err());
+    }
+
+    #[test]
+    fn shove_whole_defaults_on_and_can_be_disabled() {
+        let def = parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--shove-plough", "region"])).unwrap();
+        assert!(def.shove_whole);
+        let off = parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--shove-plough", "region", "--no-shove-whole"])).unwrap();
+        assert!(!off.shove_whole);
+        let re_on = parse(&vec_args(&[
+            "route",
+            "in.kicad_pcb",
+            "-o",
+            "out.kicad_pcb",
+            "--no-shove-whole",
+            "--shove-whole",
+            "--negotiate-tight",
+        ]))
+        .unwrap();
+        assert!(re_on.shove_whole);
+        assert!(re_on.negotiate_tight);
     }
 }

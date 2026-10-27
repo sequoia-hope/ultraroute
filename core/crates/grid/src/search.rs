@@ -26,6 +26,11 @@ pub type GridPath = Vec<(usize, usize, usize)>;
 
 /// Cost from the nearest source to every cell (`UNREACHED` where none).
 pub fn cost_field(grid: &RouteGrid, sources: &[usize], via_cost: u32) -> Vec<u32> {
+    cost_field_via(grid, sources, via_cost, &[])
+}
+
+/// As [`cost_field`], adding `via_penalty[cell]` whenever a route changes layer at 2D `cell`.
+pub fn cost_field_via(grid: &RouteGrid, sources: &[usize], via_cost: u32, via_penalty: &[u32]) -> Vec<u32> {
     let cells = grid.cell_count();
     let mut cost = vec![UNREACHED; grid.blocked.len()];
     let mut heap = BinaryHeap::new();
@@ -57,9 +62,10 @@ pub fn cost_field(grid: &RouteGrid, sources: &[usize], via_cost: u32) -> Vec<u32
             relax(grid.index(layer, ni as usize, nj as usize), step);
         }
         if grid.via.is_some() && !grid.via_blocked[cell] {
+            let v_pen = via_penalty.get(cell).copied().unwrap_or(0);
             for other in 0..grid.layers.len() {
                 if other != layer {
-                    relax(other * cells + cell, via_cost);
+                    relax(other * cells + cell, via_cost + v_pen);
                 }
             }
         }
@@ -74,6 +80,17 @@ pub fn trace_back(
     cost: &[u32],
     targets: &[usize],
     via_cost: u32,
+) -> Option<GridPath> {
+    trace_back_via(grid, cost, targets, via_cost, &[])
+}
+
+/// As [`trace_back`], matching [`cost_field_via`] layer-change prices.
+pub fn trace_back_via(
+    grid: &RouteGrid,
+    cost: &[u32],
+    targets: &[usize],
+    via_cost: u32,
+    via_penalty: &[u32],
 ) -> Option<GridPath> {
     let cells = grid.cell_count();
     let mut at = *targets
@@ -98,11 +115,12 @@ pub fn trace_back(
             }
         }
         if previous.is_none() && !grid.via_blocked[cell] {
+            let v_pen = via_penalty.get(cell).copied().unwrap_or(0);
             previous = (0..grid.layers.len())
                 .filter(|&other| other != layer)
                 .map(|other| other * cells + cell)
                 .find(|&n| {
-                    cost[n] != UNREACHED && cost[n] + via_cost + grid.penalty_at(at) == cost[at]
+                    cost[n] != UNREACHED && cost[n] + via_cost + v_pen + grid.penalty_at(at) == cost[at]
                 });
         }
         at = previous?;
@@ -123,6 +141,18 @@ pub fn trace_back(
 /// reached: the octile distance to the targets' box (never more than the true cost) steers it,
 /// so a short connection explores a small patch instead of the whole board.
 pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_cost: u32) -> Option<GridPath> {
+    route_astar_via(grid, sources, targets, via_cost, &[])
+}
+
+/// As [`route_astar`], charging `via_penalty[cell]` when changing layer at 2D `cell` so vias see
+/// congestion and rip-up costs beyond a trace's narrower footprint.
+pub fn route_astar_via(
+    grid: &RouteGrid,
+    sources: &[usize],
+    targets: &[usize],
+    via_cost: u32,
+    via_penalty: &[u32],
+) -> Option<GridPath> {
     struct Buffers {
         cost: Vec<u32>,
         gen: Vec<u32>,
@@ -301,11 +331,12 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
                 }
             }
             if grid.via.is_some() && !grid.via_blocked[cell] {
+                let v_pen = via_penalty.get(cell).copied().unwrap_or(0);
                 for other in 0..grid.layers.len() {
                     if other != layer {
                         let next = other * cells + cell;
                         if !grid.blocked[next] {
-                            let candidate = c + via_cost + grid.penalty_at(next);
+                            let candidate = c + via_cost + v_pen + grid.penalty_at(next);
                             let cur = if b.gen[next] == epoch { b.cost[next] } else { UNREACHED };
                             if candidate < cur {
                                 b.gen[next] = epoch;
@@ -339,12 +370,13 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
                 }
             }
             if previous.is_none() && !grid.via_blocked[cell] {
+                let v_pen = via_penalty.get(cell).copied().unwrap_or(0);
                 previous = (0..grid.layers.len())
                     .filter(|&other| other != layer)
                     .map(|other| other * cells + cell)
                     .find(|&n| {
                         let cn = cost_at(&b, n);
-                        cn != UNREACHED && cn + via_cost + grid.penalty_at(at) == c_at
+                        cn != UNREACHED && cn + via_cost + v_pen + grid.penalty_at(at) == c_at
                     });
             }
             at = previous?;
@@ -507,6 +539,46 @@ mod tests {
             assert_eq!(full.is_some(), quick.is_some(), "seed {seed}");
             if let (Some(f), Some(q)) = (full, quick) {
                 assert_eq!(path_cost(&grid, &f, 50), path_cost(&grid, &q, 50), "seed {seed}");
+            }
+        }
+    }
+
+    fn path_cost_via(grid: &RouteGrid, path: &GridPath, via_cost: u32, via_pen: &[u32]) -> u32 {
+        path.windows(2)
+            .map(|w| {
+                let (a, b) = (w[0], w[1]);
+                let step = if a.0 != b.0 {
+                    via_cost + via_pen.get(b.2 * grid.nx + b.1).copied().unwrap_or(0)
+                } else if a.1 != b.1 && a.2 != b.2 {
+                    DIAGONAL
+                } else {
+                    STRAIGHT
+                };
+                step + grid.penalty_at(grid.index(b.0, b.1, b.2))
+            })
+            .sum()
+    }
+
+    #[test]
+    fn a_star_via_respects_via_penalties_and_matches_the_full_field() {
+        for seed in 1..40u64 {
+            let grid = random_grid(seed * 104_729);
+            let mut state = seed * 31_337 + 1;
+            let via_pen: Vec<u32> = (0..grid.cell_count())
+                .map(|_| {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    (state % 120) as u32
+                })
+                .collect();
+            let sources = vec![grid.index(0, 1, 1), grid.index(1, 2, 1)];
+            let targets = vec![grid.index(0, 37, 27), grid.index(1, 30, 5)];
+            let full = trace_back_via(&grid, &cost_field_via(&grid, &sources, 50, &via_pen), &targets, 50, &via_pen);
+            let quick = route_astar_via(&grid, &sources, &targets, 50, &via_pen);
+            assert_eq!(full.is_some(), quick.is_some(), "seed {seed}");
+            if let (Some(f), Some(q)) = (full, quick) {
+                assert_eq!(path_cost_via(&grid, &f, 50, &via_pen), path_cost_via(&grid, &q, 50, &via_pen), "seed {seed}");
             }
         }
     }

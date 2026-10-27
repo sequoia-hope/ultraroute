@@ -153,9 +153,31 @@ pub fn prune_dangling(board: &mut Board, soft: &mut Vec<ItemId>) -> (usize, Vec<
 
 /// As [`prune_dangling`], showing `watch` each dangling track or via removed.
 pub fn prune_dangling_watch(board: &mut Board, soft: &mut Vec<ItemId>, watch: &mut dyn FnMut(&Board, &Item)) -> (usize, Vec<Span>) {
+    prune_dangling_filtered(board, soft, None, &HashSet::new(), watch)
+}
+
+/// Prunes dangling or redundant soft copper on `only_nets` (every net when `None`) while leaving
+/// `skip_nets` untouched so an open net's cut cross-board trunk stays available to bridge locally.
+pub(crate) fn prune_dangling_filtered(
+    board: &mut Board,
+    soft: &mut Vec<ItemId>,
+    only_nets: Option<&HashSet<u32>>,
+    skip_nets: &HashSet<u32>,
+    watch: &mut dyn FnMut(&Board, &Item),
+) -> (usize, Vec<Span>) {
     let (mut pruned, mut spans) = (0, Vec::new());
     loop {
-        let loose: Vec<ItemId> = soft.iter().copied().filter(|&id| dangles(board, id) || redundant(board, id)).collect();
+        let loose: Vec<ItemId> = soft
+            .iter()
+            .copied()
+            .filter(|&id| {
+                board.item(id).is_some_and(|it| {
+                    !it.locked
+                        && !skip_nets.contains(&it.net)
+                        && only_nets.is_none_or(|only| only.contains(&it.net))
+                }) && (dangles(board, id) || redundant(board, id))
+            })
+            .collect();
         let before = pruned;
         // One at a time, judged again: two stubs covering each other must not both go. What
         // carries a connection stays however it looks, so a round may take nothing out.
@@ -723,6 +745,56 @@ mod tests {
         for &id in &soft {
             assert!(!dangles(&board, id), "remaining soft item {id} still dangles");
         }
+    }
+
+    #[test]
+    fn prune_dangling_filtered_honours_only_and_skip_net_sets() {
+        let (pcb, copper) = kicad_pcb::parse_board(
+            "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal))
+             (net 0 \"\") (net 1 \"N1\") (net 2 \"N2\"))",
+        )
+        .unwrap();
+        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+        for (net, y) in [(1, 0), (2, 1_000_000)] {
+            board.insert(Item {
+                kind: Kind::Pad { footprint: 0, number: "1".into(), plated: false },
+                net,
+                layers: 1,
+                shape: Shape::Capsule { a: Point::new(0, y), b: Point::new(0, y), r: 100_000 },
+                hole: None,
+                locked: true,
+                span: None,
+            });
+        }
+        let s1 = board.insert(Item {
+            kind: Kind::Track,
+            net: 1,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(0, 0), b: Point::new(800_000, 0), r: 50_000 },
+            hole: None,
+            locked: false,
+            span: None,
+        });
+        let s2 = board.insert(Item {
+            kind: Kind::Track,
+            net: 2,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(0, 1_000_000), b: Point::new(800_000, 1_000_000), r: 50_000 },
+            hole: None,
+            locked: false,
+            span: None,
+        });
+        let mut soft = vec![s1, s2];
+        let skip = HashSet::from([2]);
+        let (pruned, _) = prune_dangling_filtered(&mut board, &mut soft, None, &skip, &mut |_, _| {});
+        assert_eq!(pruned, 1);
+        assert!(board.item(s1).is_none(), "unskipped dangling stub on net 1 is pruned");
+        assert!(board.item(s2).is_some(), "skipped open net 2 keeps its stub");
+
+        let only = HashSet::from([2]);
+        let (pruned2, _) = prune_dangling_filtered(&mut board, &mut soft, Some(&only), &HashSet::new(), &mut |_, _| {});
+        assert_eq!(pruned2, 1);
+        assert!(board.item(s2).is_none());
     }
 }
 

@@ -6,7 +6,7 @@ use board::{connectivity, connectivity_without_pours, joined, BBox, Board, Item,
 
 use crate::grid::{ObstacleMap, Profile, RouteGrid};
 use crate::report::{item_name, tell, Focus, Log};
-use crate::search::{cost_field, route_astar, trace_back, GridPath};
+use crate::search::{cost_field, cost_field_via, route_astar, route_astar_via, trace_back, trace_back_via, GridPath};
 
 /// How many nearby free cells are tried as the far end of a straight leg out of a terminal.
 const LEG_CANDIDATES: usize = 16;
@@ -32,6 +32,23 @@ pub trait FieldSolver {
     fn route(&mut self, grid: &RouteGrid, sources: &[usize], targets: &[usize], via_cost: u32) -> Option<GridPath> {
         let cost = self.solve(grid, sources, via_cost);
         trace_back(grid, &cost, targets, via_cost)
+    }
+
+    /// As [`FieldSolver::route`], charging `via_penalty[cell]` when changing layer at 2D `cell`.
+    fn route_with_via_penalty(
+        &mut self,
+        grid: &RouteGrid,
+        sources: &[usize],
+        targets: &[usize],
+        via_cost: u32,
+        via_penalty: &[u32],
+    ) -> Option<GridPath> {
+        if via_penalty.is_empty() {
+            self.route(grid, sources, targets, via_cost)
+        } else {
+            let cost = cost_field_via(grid, sources, via_cost, via_penalty);
+            trace_back_via(grid, &cost, targets, via_cost, via_penalty)
+        }
     }
 
     /// Cheapest routes for a batch of a negotiation round's connections, each priced by the
@@ -83,6 +100,17 @@ impl FieldSolver for CpuSolver {
 
     fn route(&mut self, grid: &RouteGrid, sources: &[usize], targets: &[usize], via_cost: u32) -> Option<GridPath> {
         route_astar(grid, sources, targets, via_cost)
+    }
+
+    fn route_with_via_penalty(
+        &mut self,
+        grid: &RouteGrid,
+        sources: &[usize],
+        targets: &[usize],
+        via_cost: u32,
+        via_penalty: &[u32],
+    ) -> Option<GridPath> {
+        route_astar_via(grid, sources, targets, via_cost, via_penalty)
     }
 }
 
@@ -157,7 +185,12 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
     loop {
         // Unless pours are kept as planes, they will be refilled around what is routed, and may
         // no longer join what they join now; so every connection is made in tracks.
-        let mut open = if options.pours_block { connectivity(board) } else { connectivity_without_pours(board) }.airlines;
+        let conn = if options.pours_block { connectivity(board) } else { connectivity_without_pours(board) };
+        let mut net_edges: HashMap<u32, usize> = HashMap::new();
+        for a in &conn.airlines {
+            *net_edges.entry(a.net).or_insert(0) += 1;
+        }
+        let mut open = conn.airlines;
         if let Some(only) = &options.nets {
             open.retain(|a| only.contains(&a.net));
         }
@@ -189,32 +222,75 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
             map.view_into(airline.net, &mut grid);
             let sources = terminals(board, &grid, airline.from_item);
             let targets = terminals(board, &grid, airline.to_item);
-            let laid = if sources.is_empty() || targets.is_empty() {
-                stats.no_terminal += 1;
-                stats.failures.push((airline.from_item, airline.to_item, if sources.is_empty() { "no terminal at the start" } else { "no terminal at the end" }));
-                None
+            let (mut laid, reason) = if sources.is_empty() || targets.is_empty() {
+                (None, if sources.is_empty() { "no terminal at the start" } else { "no terminal at the end" })
             } else {
                 let source_cells: Vec<usize> = sources.iter().map(|t| t.0).collect();
                 let target_cells: Vec<usize> = targets.iter().map(|t| t.0).collect();
                 match solver.route(&grid, &source_cells, &target_cells, options.via_cost) {
-                    None => {
-                        stats.no_path += 1;
-                        stats.failures.push((airline.from_item, airline.to_item, "no path"));
-                        None
-                    }
-                    Some(path) => {
-                        let laid = lay(board, &grid, &path, &sources, &targets);
-                        stats.refused += laid.is_none() as usize;
-                        laid
-                    }
+                    None => (None, "no path"),
+                    Some(path) => match lay(board, &grid, &path, &sources, &targets) {
+                        Some(items) => (Some(items), ""),
+                        None => (None, "refused"),
+                    },
                 }
             };
+            // Euclidean MST airlines on a multi-component net can step through a buried or
+            // locked-in island that no track can reach, hiding a clean path between two reachable
+            // components on either side of it. Bridge to any other component of the net instead.
+            if laid.is_none()
+                && net_edges.get(&airline.net).copied().unwrap_or(0) >= 2
+                && (!sources.is_empty() || !targets.is_empty())
+            {
+                let fresh = (stats.routed > routed_before)
+                    .then(|| if options.pours_block { connectivity(board) } else { connectivity_without_pours(board) });
+                let cl_map = fresh.as_ref().map_or(&conn.cluster, |c| &c.cluster);
+                if let (Some(&cf), Some(&ct)) = (cl_map.get(&airline.from_item), cl_map.get(&airline.to_item)) {
+                    if cf != ct {
+                        for (terms, pt, ca, cb) in [
+                            (!sources.is_empty()).then_some((&sources, airline.from, cf, ct)),
+                            (!targets.is_empty()).then_some((&targets, airline.to, ct, cf)),
+                        ]
+                        .into_iter()
+                        .flatten()
+                        {
+                            let alt = other_cluster_terminals(board, &grid, cl_map, airline.net, pt, &[ca, cb]);
+                            if alt.is_empty() {
+                                continue;
+                            }
+                            let s_cells: Vec<usize> = terms.iter().map(|t| t.0).collect();
+                            let t_cells: Vec<usize> = alt.iter().map(|t| t.0).collect();
+                            if let Some(path) = solver.route(&grid, &s_cells, &t_cells, options.via_cost) {
+                                if let Some(items) = lay(board, &grid, &path, terms, &alt) {
+                                    laid = Some(items);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if laid.is_none() {
+                match reason {
+                    "no path" => {
+                        stats.no_path += 1;
+                        stats.failures.push((airline.from_item, airline.to_item, reason));
+                    }
+                    "refused" => {
+                        stats.refused += 1;
+                    }
+                    _ => {
+                        stats.no_terminal += 1;
+                        stats.failures.push((airline.from_item, airline.to_item, reason));
+                    }
+                }
+            }
             match &laid {
                 Some(items) => tell(&options.log, "routed", || {
                     let vias = items.iter().filter(|id| board.item(**id).is_some_and(|it| it.kind == Kind::Via)).count();
                     format!("{net_name}: laid {} pieces, {vias} vias", items.len())
                 }, None),
-                None => tell(&options.log, "gave up", || format!("{net_name}: {}", stats.failures.last().map_or("refused", |f| f.2)), None),
+                None => tell(&options.log, "gave up", || format!("{net_name}: {}", if reason.is_empty() { "refused" } else { reason }), None),
             }
             match laid {
                 Some(items) => {
@@ -239,6 +315,85 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
         }
     }
     stats
+}
+
+/// Terminals across every connected component of `net` outside `skip_clusters`: unblocked grid
+/// centres inside all copper of those components, plus off-grid legs on the nearest items of each.
+pub(crate) fn other_cluster_terminals(
+    board: &mut Board,
+    grid: &RouteGrid,
+    clusters: &HashMap<ItemId, usize>,
+    net: u32,
+    near: Point,
+    skip_clusters: &[usize],
+) -> Vec<Terminal> {
+    let mut by_cluster: BTreeMap<usize, Vec<(f64, bool, ItemId, Shape, u64)>> = BTreeMap::new();
+    for (id, it) in board.items() {
+        if it.net != net || !it.is_copper() || (!grid.pours_block && it.refilled()) {
+            continue;
+        }
+        let Some(&cl) = clusters.get(&id) else { continue };
+        if skip_clusters.contains(&cl) {
+            continue;
+        }
+        let bb = it.shape.bbox();
+        let c = Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2);
+        let is_pad = matches!(it.kind, Kind::Pad { .. });
+        by_cluster.entry(cl).or_default().push((c.distance(near), is_pad, id, it.shape.clone(), it.layers));
+    }
+    if by_cluster.is_empty() || grid.nx == 0 || grid.ny == 0 {
+        return Vec::new();
+    }
+    let mut by_cell: BTreeMap<usize, Option<(Point, Nm)>> = BTreeMap::new();
+    let max_x = grid.x0 + grid.h * grid.nx as Nm - 1;
+    let max_y = grid.y0 + grid.h * grid.ny as Nm - 1;
+    for items in by_cluster.values_mut() {
+        for (_, _, _, shape, layers) in items.iter() {
+            let bb = shape.bbox();
+            let (Some(lo), Some(hi)) = (
+                grid.cell_at(Point::new(bb.min.x.max(grid.x0), bb.min.y.max(grid.y0))),
+                grid.cell_at(Point::new(bb.max.x.min(max_x), bb.max.y.min(max_y))),
+            ) else {
+                continue;
+            };
+            for (r, &board_layer) in grid.layers.iter().enumerate() {
+                if layers & (1u64 << board_layer) == 0 {
+                    continue;
+                }
+                for j in lo.1..=hi.1 {
+                    for i in lo.0..=hi.0 {
+                        let idx = grid.index(r, i, j);
+                        if !grid.blocked[idx] && shape.contains(grid.centre(i, j)) {
+                            by_cell.insert(idx, None);
+                        }
+                    }
+                }
+            }
+        }
+        items.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut reps = Vec::with_capacity(2);
+        if let Some(first) = items.first() {
+            reps.push(first.2);
+        }
+        if let Some(pad) = items.iter().find(|x| x.1 && !reps.contains(&x.2)) {
+            reps.push(pad.2);
+        }
+        for rep in reps {
+            for (cell, leg) in terminals(board, grid, rep) {
+                match by_cell.get(&cell) {
+                    Some(None) => {}
+                    Some(Some(_)) if leg.is_none() => {
+                        by_cell.insert(cell, None);
+                    }
+                    None => {
+                        by_cell.insert(cell, leg);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    by_cell.into_iter().collect()
 }
 
 /// How far around a connection's chosen anchor `terminals` walks joined copper to gather escape
@@ -545,4 +700,54 @@ pub fn edits(board: &Board, laid: &[ItemId]) -> (Vec<kicad_pcb::NewTrack>, Vec<k
         }
     }
     (tracks, vias)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn route_open_bridges_reachable_clusters_past_a_walled_middle_island() {
+        let (pcb, copper) = kicad_pcb::parse_board(
+            "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal)) (net 0 \"\") (net 1 \"A\")
+             (gr_rect (start 0 0) (end 20 20) (layer \"Edge.Cuts\") (width 0.1)))",
+        )
+        .unwrap();
+        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+        let mm = |v: f64| (v * 1e6) as Nm;
+        let pad = |x, y| Item {
+            kind: Kind::Pad { footprint: 0, number: "1".into(), plated: false },
+            net: 1,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(mm(x), mm(y)), b: Point::new(mm(x), mm(y)), r: mm(0.3) },
+            hole: None,
+            locked: true,
+            span: None,
+        };
+        let p_left = board.insert(pad(2.0, 10.0));
+        let _p_mid = board.insert(pad(10.0, 10.0));
+        let p_right = board.insert(pad(18.0, 10.0));
+        // Wall the middle pad inside locked copper so Euclidean MST airlines (left-mid, mid-right)
+        // both touch an unreachable island while left-right can detour below the box.
+        for (a, b) in [((8.5, 8.5), (11.5, 8.5)), ((11.5, 8.5), (11.5, 11.5)), ((11.5, 11.5), (8.5, 11.5)), ((8.5, 11.5), (8.5, 8.5))] {
+            board.insert(Item {
+                kind: Kind::Track,
+                net: 0,
+                layers: 1,
+                shape: Shape::Capsule { a: Point::new(mm(a.0), mm(a.1)), b: Point::new(mm(b.0), mm(b.1)), r: mm(0.2) },
+                hole: None,
+                locked: true,
+                span: None,
+            });
+        }
+        assert_eq!(connectivity_without_pours(&board).airlines.len(), 2);
+        let stats = route_open(&mut board, &mut CpuSolver, &Options::default(), &mut |_| {});
+        assert_eq!(stats.routed, 1);
+        let conn = connectivity_without_pours(&board);
+        assert_eq!(conn.airlines.len(), 1, "left and right join; only the walled middle island remains");
+        assert_eq!(conn.cluster[&p_left], conn.cluster[&p_right]);
+        for id in stats.laid {
+            assert!(board::check_item(&board, id).is_empty());
+        }
+    }
 }
