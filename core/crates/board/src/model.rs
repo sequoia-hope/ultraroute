@@ -186,6 +186,9 @@ pub struct Board {
     pub via_avoid_cost: u32,
     /// Routing regions a planner set, with rules for which nets may run where.
     pub regions: Vec<crate::regions::Region>,
+    /// What crossing another net's pour (one refilled round new copper, not a plane) costs, as a
+    /// multiple of the length inside: crossing cuts the pour into pieces. 0 for nothing.
+    pub pour_cost: f64,
     /// Clearances per net number, in nanometres, so `clearance(a, b)` is two array lookups.
     net_clearances: Vec<Nm>,
     min_clearance_nm: Nm,
@@ -267,6 +270,7 @@ impl Board {
             via_avoid: Vec::new(),
             via_avoid_cost: 3_000,
             regions: Vec::new(),
+            pour_cost: 0.0,
             net_clearances,
             min_clearance_nm,
             items: Vec::new(),

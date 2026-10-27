@@ -28,7 +28,7 @@ mod regions;
 
 pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--no-negotiate-vias] [--no-negotiate-rip] [--no-negotiate-tree] [--negotiate-legacy] [--diff-pairs] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--gpu] \
 [--timeout SECONDS] [--cell MM] [--first NET,...] [--first-negotiate] [--first-weight W] [--restart N] [--topo-first REF,...|auto] [--topo-trapped] [--topo-trapped-rip] [--topo-sample MM] \
-[--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--push-decay D] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough warp|linear|rip|gentle|dipole|region] [--shove-steps N] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-late] [--shove-seconds S] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
+[--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--push-decay D] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough warp|linear|rip|gentle|dipole|region] [--shove-steps N] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-late] [--shove-seconds S] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
 [--live PATH|-] [--live-fps N] [--live-step MS] [--blame]
 --push and --place take millimetres with y pointing up: give KiCad's y negated (KiCad y 127.5 is -127.5).";
 
@@ -137,6 +137,8 @@ pub struct Args {
     pub via_avoid_cost: Option<u32>,
     /// A planner's routing regions and length limits (JSON), see `regions`.
     pub regions: Option<String>,
+    /// What crossing another net's pour costs, as a multiple of the length inside.
+    pub pour_cost: Option<f64>,
     /// Take inner layers that one net's pour all but fills as planes, as --planes would.
     pub auto_planes: bool,
     /// Treat the board's unlocked tracks and vias as the router's own: free to rip, move and
@@ -224,6 +226,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         via_avoid: Vec::new(),
         via_avoid_cost: None,
         regions: None,
+        pour_cost: None,
         auto_planes: false,
         adopt: false,
         chase: false,
@@ -408,6 +411,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             }
             "--auto-planes" => a.auto_planes = true,
             "--regions" => a.regions = Some(value()?),
+            "--pour-cost" => a.pour_cost = Some(value()?.parse().map_err(|e| format!("--pour-cost: {e}"))?),
             "--via-avoid-cost" => a.via_avoid_cost = Some(value()?.parse().map_err(|e| format!("--via-avoid-cost: {e}"))?),
             "--rip-region" => {
                 let v = value()?;
@@ -1120,6 +1124,9 @@ pub fn run_with_solver(
     }
     if let Some(c) = a.via_avoid_cost {
         board.via_avoid_cost = c;
+    }
+    if let Some(w) = a.pour_cost {
+        board.pour_cost = w;
     }
     let lengths = match &a.regions {
         Some(path) => regions::load(path, &mut board).unwrap_or_else(|e| panic!("{e}")),

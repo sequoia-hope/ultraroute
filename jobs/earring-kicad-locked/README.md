@@ -25,3 +25,8 @@ assist vias it had left (their tracks unlocked, so stripped, so the vias dangled
 B.Cu stub past B6, the VBUS trunk's end and R14's 3V3 via-in-pad are gone or fixed; pre-route
 KiCad DRC 0 errors. Their seed 3 with this job's recipe routes clean (lab earring-noassist).
 
+`--pour-cost 3` (in `job.json`): crossing another net's pour on In2 (VLED_L/C/R, 3V3) costs three
+times the length inside, so routes keep the pours whole where they can: In2's poured area
+425-433 mm2 against 361-395 without, VLED_C in 2-4 pieces against 5-8, all seeds 0-2 still
+complete, about 10% more track (lab pours-1).
+

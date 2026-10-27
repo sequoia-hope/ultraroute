@@ -18,6 +18,8 @@ pub(crate) struct RegionRaster {
     pub vias: bool,
     /// The nets it holds for; every net when `None`.
     pub nets: Option<std::collections::HashSet<u32>>,
+    /// A net it never holds for: a pour's own.
+    pub except: Option<u32>,
     /// Cells where copper of this kind (a track's or a via's) would reach into the region.
     pub near: Vec<u32>,
     /// Cells where copper of this kind lies wholly inside it.
@@ -47,7 +49,19 @@ impl ObstacleMap {
                     RegionKind::Avoid(w) | RegionKind::Prefer(w) => (w * STRAIGHT as f64).round() as u32,
                     _ => 0,
                 };
-                out.push(RegionRaster { layers: region.layers, kind: rule.kind, vias: rule.vias, nets: rule.nets.clone(), near, inside, cost });
+                out.push(RegionRaster { layers: region.layers, kind: rule.kind, vias: rule.vias, nets: rule.nets.clone(), except: None, near, inside, cost });
+            }
+        }
+        // Another net's pour on a layer that is not a plane is refilled round what crosses it,
+        // and cut into pieces by it: crossing it costs `pour_cost` times the length inside.
+        if board.pour_cost > 0.0 {
+            let cost = (board.pour_cost * STRAIGHT as f64).round() as u32;
+            for (_, it) in board.items().filter(|(_, it)| it.refilled() && it.net != 0 && !board.is_plane(it)) {
+                let mut near = Vec::new();
+                self.cells_near(&it.shape, self.profile.half_width, &mut |c| near.push(c as u32));
+                if !near.is_empty() {
+                    out.push(RegionRaster { layers: it.layers, kind: RegionKind::Avoid(board.pour_cost), vias: false, nets: None, except: Some(it.net), near, inside: Vec::new(), cost });
+                }
             }
         }
         out
@@ -57,7 +71,7 @@ impl ObstacleMap {
     pub(crate) fn apply_regions(&self, net: u32, grid: &mut RouteGrid) {
         let cells = self.nx * self.ny;
         for raster in &self.regions {
-            if raster.nets.as_ref().is_some_and(|n| !n.contains(&net)) {
+            if raster.nets.as_ref().is_some_and(|n| !n.contains(&net)) || raster.except == Some(net) {
                 continue;
             }
             let on = |l: usize| raster.layers & (1 << l) != 0;
@@ -92,16 +106,21 @@ impl ObstacleMap {
                     }
                 }
                 (RegionKind::Avoid(_) | RegionKind::Prefer(_), vias) => {
-                    let inside = matches!(raster.kind, RegionKind::Avoid(_));
-                    let mut hit = vec![!inside; cells];
-                    for &c in &raster.near {
-                        hit[c as usize] = inside;
-                    }
+                    // The cells charged: the region's own for avoid, every other for prefer.
+                    let charged: Vec<usize> = if matches!(raster.kind, RegionKind::Avoid(_)) {
+                        raster.near.iter().map(|&c| c as usize).collect()
+                    } else {
+                        let mut out = vec![true; cells];
+                        for &c in &raster.near {
+                            out[c as usize] = false;
+                        }
+                        (0..cells).filter(|c| out[*c]).collect()
+                    };
                     if vias {
                         if grid.via_penalty.len() != cells {
                             grid.via_penalty = vec![0; cells];
                         }
-                        for c in (0..cells).filter(|c| hit[*c]) {
+                        for &c in &charged {
                             grid.via_penalty[c] = grid.via_penalty[c].saturating_add(raster.cost);
                         }
                     } else {
@@ -109,11 +128,9 @@ impl ObstacleMap {
                             grid.region_cost = vec![0; self.layers * cells];
                         }
                         for l in (0..self.layers).filter(|l| on(*l)) {
-                            for (c, h) in hit.iter().enumerate() {
-                                if *h {
-                                    let n = l * cells + c;
-                                    grid.region_cost[n] = grid.region_cost[n].saturating_add(raster.cost);
-                                }
+                            for &c in &charged {
+                                let n = l * cells + c;
+                                grid.region_cost[n] = grid.region_cost[n].saturating_add(raster.cost);
                             }
                         }
                     }
