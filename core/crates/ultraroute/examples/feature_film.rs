@@ -1876,6 +1876,7 @@ fn run_shove(cli: &Cli) {
         "rip" => grid::Plough::Rip,
         "gentle" => grid::Plough::Gentle,
         "dipole" => grid::Plough::Dipole,
+        "region" => grid::Plough::Region,
         other => panic!("unknown --plough {other}"),
     };
     let cascade: usize = cli.flag("--cascade").map_or(0, |s| s.parse().expect("--cascade"));

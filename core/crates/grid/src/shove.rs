@@ -114,6 +114,10 @@ pub enum Plough {
     /// As `Gentle`, but the push is a dipole's: copper is repelled from the trapped pad, straight
     /// away from it, fading over the reach.
     Dipole,
+    /// No plough: every other net's movable copper within the reach of the path is ripped, and
+    /// the trapped connection and every connection that opened negotiate their ways together,
+    /// the trapped one favoured. Later rounds lay the path outright, as `Rip`.
+    Region,
 }
 
 /// One round of one try: the path ploughed along, and what it did.
@@ -471,7 +475,11 @@ fn plough_round(
         gentle(board, solver, options, soft, pad, net, &movable, spans, &mut round, on_step);
         return round;
     }
-    if round.soft_cells == 0 || !first || options.plough == Plough::Rip {
+    if first && round.soft_cells > 0 && options.plough == Plough::Region {
+        renegotiate(board, solver, options, soft, pad, net, &movable, spans, &mut round);
+        return round;
+    }
+    if round.soft_cells == 0 || !first || matches!(options.plough, Plough::Rip | Plough::Region) {
         // Lay the path as it stands, ripping exactly the other copper it runs into: clear
         // already, or a later round, where ploughing again did not move that copper off it.
         let laid = force_lay(board, &grid, &path, &sources, &targets, &movable, spans, &mut round.ripped_items);
@@ -500,7 +508,7 @@ fn plough_round(
                 // shoves them, unless one sits on the path itself.
                 let room = match options.plough {
                     Plough::Warp | Plough::Gentle | Plough::Dipole => (profile.half_width + board.clearance(net, it.net) + r) as f64,
-                    Plough::Linear | Plough::Rip => options.cell as f64,
+                    Plough::Linear | Plough::Rip | Plough::Region => options.cell as f64,
                 };
                 corridor.nearest(*a, None).is_none_or(|(d, _)| d < room)
             }
@@ -542,7 +550,7 @@ fn plough_round(
         Some((Point::new((ux * by).round() as i64, (uy * by).round() as i64), false))
     };
     let fields = match options.plough {
-        Plough::Linear | Plough::Rip | Plough::Gentle | Plough::Dipole => HashMap::new(),
+        Plough::Linear | Plough::Rip | Plough::Gentle | Plough::Dipole | Plough::Region => HashMap::new(),
         Plough::Warp => plough_fields(board, &round.path, clear.values().copied().fold(0.0, f64::max), reach, net),
     };
     let warped = |p: Point, n: u32, layer: Option<usize>| -> Option<(Point, bool)> {
@@ -554,7 +562,7 @@ fn plough_round(
         (dx.hypot(dy) >= 1_000.0).then(|| (Point::new(dx.round() as i64, dy.round() as i64), false))
     };
     let rule: &dyn Fn(Point, u32, Option<usize>) -> Option<(Point, bool)> = match options.plough {
-        Plough::Linear | Plough::Rip | Plough::Gentle | Plough::Dipole => &linear,
+        Plough::Linear | Plough::Rip | Plough::Gentle | Plough::Dipole | Plough::Region => &linear,
         Plough::Warp => &warped,
     };
     let (_, moved, moved_spans) = morph::shift_copper(board, soft, 150_000.0, rule);
@@ -569,6 +577,70 @@ fn plough_round(
     // The trapped connection first, before anything else takes the room made for it.
     round.routed = route_one(board, solver, options, soft, pad);
     round
+}
+
+/// The region plough: other nets' movable copper within the reach of the round's path ripped,
+/// with whatever of those nets it leaves reaching no pad, and the connections of the trapped net
+/// and of every net ripped negotiated together, the trapped net's congestion priced at half.
+#[allow(clippy::too_many_arguments)]
+fn renegotiate(
+    board: &mut Board,
+    solver: &mut dyn FieldSolver,
+    options: &ShoveOptions,
+    soft: &mut Vec<ItemId>,
+    pad: ItemId,
+    net: u32,
+    movable: &dyn Fn(&Item) -> bool,
+    spans: &mut Vec<Span>,
+    round: &mut ShoveRound,
+) {
+    let corridor = Corridor::of(&round.path);
+    let reach = options.reach as f64;
+    let near: Vec<ItemId> = board
+        .items()
+        .filter(|(_, it)| movable(it))
+        .filter(|(_, it)| match (&it.kind, &it.shape) {
+            (Kind::Via, board::Shape::Capsule { a, .. }) => corridor.distance(*a, *a, None) < reach,
+            (Kind::Track, board::Shape::Capsule { a, b, .. }) => corridor.distance(*a, *b, Some(it.layers.trailing_zeros() as usize)) < reach,
+            _ => false,
+        })
+        .map(|(id, _)| id)
+        .collect();
+    let mut nets: HashSet<u32> = HashSet::from([net]);
+    for id in near {
+        if let Some(it) = board.remove(id) {
+            nets.insert(it.net);
+            spans.extend(it.span.clone());
+            round.ripped_items.push(it);
+        }
+    }
+    round.crossed = round.ripped_items.len();
+    for &n in &nets {
+        let had: Vec<(ItemId, Item)> = board.items().filter(|(_, it)| it.net == n).map(|(id, it)| (id, it.clone())).collect();
+        spans.extend(rip_floating(board, soft, n, options.pours_block));
+        round.ripped_items.extend(had.into_iter().filter(|(id, _)| board.item(*id).is_none()).map(|(_, it)| it));
+    }
+    soft.retain(|id| board.item(*id).is_some());
+    tell(&options.log, "shoving", || format!("{}: {} pieces of {} nets ripped round the way out; negotiating them again", board.net_name(net), round.crossed, nets.len() - 1), None);
+    let n = crate::negotiate::route_negotiated(
+        board,
+        solver,
+        &crate::negotiate::NegotiationOptions {
+            cell: options.cell,
+            via_cost: options.via_cost,
+            max_seconds: Some(options.reroute_seconds),
+            nets: Some(nets),
+            net_weight: HashMap::from([(net, 0.5)]),
+            pours_block: options.pours_block,
+            seed: options.seed,
+            cancel: options.cancel.clone(),
+            ..Default::default()
+        },
+        &mut |_| {},
+        &mut |_, _| {},
+    );
+    soft.extend(n.laid);
+    round.routed = connection_of(board, pad, options.pours_block).is_none();
 }
 
 /// The gentle plough: `steps` small pushes, each followed by a try at the route, with any net a
@@ -864,6 +936,20 @@ impl Corridor {
         best.filter(|b| b.0 > 0.0)
     }
 
+    /// How near the segment `a`–`b` on `layer` (any layer for `None`) comes to the path.
+    fn distance(&self, a: Point, b: Point, layer: Option<usize>) -> f64 {
+        let to = |p: Point, c: Point, d: Point| {
+            let q = closest(p, c, d);
+            (p.x as f64 - q.0).hypot(p.y as f64 - q.1)
+        };
+        let between = |c: Point, d: Point| if intersects(a, b, c, d) { 0.0 } else { to(a, c, d).min(to(b, c, d)).min(to(c, a, b)).min(to(d, a, b)) };
+        let segments: Box<dyn Iterator<Item = &(Point, Point)>> = match layer {
+            Some(l) => Box::new(self.segments.get(&l).into_iter().flatten()),
+            None => Box::new(self.segments.values().flatten()),
+        };
+        segments.map(|&(c, d)| between(c, d)).chain(self.vias.iter().map(|&v| to(v, a, b))).fold(f64::INFINITY, f64::min)
+    }
+
     /// Whether the segment `a`–`b` on `layer` crosses the path there, or runs through a via site.
     fn crosses(&self, a: Point, b: Point, layer: usize) -> bool {
         let through_via = self.vias.iter().any(|v| {
@@ -916,5 +1002,52 @@ mod tests {
         assert!(c.nearest(Point::new(500, 0), Some(0)).is_none(), "a point on the path has nowhere to go");
         assert!(c.crosses(Point::new(500, -100), Point::new(500, 100), 0));
         assert!(!c.crosses(Point::new(500, -100), Point::new(500, 100), 1));
+        assert_eq!(c.distance(Point::new(500, -100), Point::new(500, 100), Some(0)), 0.0);
+        assert!((c.distance(Point::new(0, 400), Point::new(600, 400), Some(0)) - 400.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_region_plough_routes_the_wall_round_a_trapped_pad_on_one_layer() {
+        let (pcb, copper) = kicad_pcb::parse_board(
+            "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal)) (net 0 \"\") (net 1 \"A\") (net 2 \"B\")
+             (gr_rect (start 0 0) (end 20 20) (layer \"Edge.Cuts\") (width 0.1)))",
+        )
+        .unwrap();
+        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+        let mm = |v: f64| (v * 1e6) as Nm;
+        let pad = |net, x, y| Item {
+            kind: Kind::Pad { footprint: 0, number: "1".into(), plated: false },
+            net,
+            layers: 1,
+            shape: board::Shape::Capsule { a: Point::new(mm(x), mm(y)), b: Point::new(mm(x), mm(y)), r: mm(0.3) },
+            hole: None,
+            locked: true,
+            span: None,
+        };
+        board.insert(pad(1, 5.0, 10.0));
+        board.insert(pad(1, 15.0, 10.0));
+        board.insert(pad(2, 2.0, 2.0));
+        board.insert(pad(2, 2.0, 18.0));
+        // B's track runs out round A's first pad, a wall between A's two pads on the only layer.
+        let mut soft = Vec::new();
+        for (a, b) in [((2.0, 2.0), (8.0, 2.0)), ((8.0, 2.0), (8.0, 18.0)), ((8.0, 18.0), (2.0, 18.0))] {
+            soft.push(board.insert(Item {
+                kind: Kind::Track,
+                net: 2,
+                layers: 1,
+                shape: board::Shape::Capsule { a: Point::new(mm(a.0), mm(a.1)), b: Point::new(mm(b.0), mm(b.1)), r: mm(0.1) },
+                hole: None,
+                locked: false,
+                span: None,
+            }));
+        }
+        assert_eq!(connectivity_without_pours(&board).airlines.len(), 1, "A is open, B routed");
+        let options = ShoveOptions { plough: Plough::Region, reach: mm(1.0), ..Default::default() };
+        let stats = shove_escape(&mut board, &mut crate::route::CpuSolver, &options, &mut soft, &mut |_, _| {});
+        assert!(stats.tries.iter().any(|t| t.kept && t.routed), "{stats:?}");
+        assert!(connectivity_without_pours(&board).airlines.is_empty(), "A and B both routed");
+        for &id in &soft {
+            assert!(board::check_item(&board, id).is_empty(), "{:?}", board.item(id));
+        }
     }
 }

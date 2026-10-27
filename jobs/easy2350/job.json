@@ -1,1 +1,1 @@
-{"studio": true, "strip": true, "order": 6, "args": "--planes In1.Cu,In2.Cu"}
+{"studio": true, "strip": true, "order": 6, "args": "--planes In1.Cu,In2.Cu --cell 0.035 --prefanout-order round --shove-plough region --shove-reach 0.5 --seed 1"}

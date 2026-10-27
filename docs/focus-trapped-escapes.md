@@ -285,3 +285,16 @@ second pass over undone tries.
   35 um. The +3V3 open left on every run is not the router's: easy_pcb's pre-route board lacks
   the release's 'transplant 0 +3V3' and 'plane 3V3 L1 around U1' F.Cu pours, which join U1-49's
   piece there, and has keepouts the release does not (U1 ring, regulator corner); reported.
+- easy2350, the region plough (`--shove-plough region`). The rip plough laid a trapped
+  connection's path ripping what it crossed, then rerouted the ripped nets one by one; mostly
+  they no longer fit, the try was undone, and each try cost 8-20 s of rerouting and repair. Now
+  every other net's movable copper within the reach of the path is ripped (and whatever of those
+  nets is left reaching no pad), and the trapped net and the ripped nets negotiate their ways
+  together, the trapped one's congestion priced at half. A try takes about a second. When
+  `--shove-patience` passes in a row free nothing, the reach doubles (to 4 mm) instead of the
+  plough stopping, and the region plough tries every open connection, not only escapes from
+  fine-pitch parts (VBUS, D2 to C1, was never tried). Signal opens, 240 s on one thread: rip
+  plough 2-6 (planes-40/41), region at a fixed reach 1-3 (planes-42), widening 1-3 over 8 runs
+  (planes-43), on every connection 2 0 1 2 over seeds 0-3 (planes-44): the first board with no
+  signal net open. QSPI_SD0 (U1-57), open on nearly every rip-plough run, is freed in most.
+

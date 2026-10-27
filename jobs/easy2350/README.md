@@ -12,3 +12,8 @@ examples/easy2350/hw/easy2350/a/easy2350.kicad_pcb, Freerouting with both inner 
 planes): 0 unconnected, 0 errors, 545 F.Cu and 274 B.Cu segments. Ours: 7 to 10 unconnected,
 all signal nets, no new errors (the 20 items_not_allowed are the board's own vendor copper in
 its routing keepouts); lab experiments planes-28 to planes-33.
+
+With the region plough (`--cell 0.035 --prefanout-order round --shove-plough region
+--shove-reach 0.5`, in place of `--shove-plough rip`): seed 1 leaves no signal net open, seeds
+0, 2, 3 leave 2, 1, 2 (lab planes-44); the one +3V3 open is joined by easy_pcb's outer pours,
+added after routing. job.json carries these flags and seed 1.

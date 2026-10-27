@@ -26,7 +26,7 @@ use serde_json::{json, Value};
 
 pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--diff-pairs] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--gpu] \
 [--timeout SECONDS] [--cell MM] [--first NET,...] [--first-negotiate] [--first-weight W] [--restart N] [--topo-first REF,...|auto] [--topo-trapped] [--topo-trapped-rip] [--topo-sample MM] \
-[--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough warp|linear|rip|gentle|dipole] [--shove-steps N] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-late] [--shove-seconds S] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
+[--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough warp|linear|rip|gentle|dipole|region] [--shove-steps N] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-late] [--shove-seconds S] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
 [--live PATH|-] [--live-fps N] [--live-step MS] [--blame]";
 
 pub struct Args {
@@ -332,7 +332,8 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
                     "rip" => grid::Plough::Rip,
                     "gentle" => grid::Plough::Gentle,
                     "dipole" => grid::Plough::Dipole,
-                    other => return Err(format!("--shove-plough {other}: warp, linear, rip, gentle or dipole")),
+                    "region" => grid::Plough::Region,
+                    other => return Err(format!("--shove-plough {other}: warp, linear, rip, gentle, dipole or region")),
                 });
             }
             "--shove-steps" => a.shove_steps = Some(value()?.parse().map_err(|e| format!("--shove-steps: {e}"))?),
@@ -831,6 +832,9 @@ fn resolve_topo_only(board: &Board, specs: &[String], pours_block: bool) -> Hash
 /// grid pass's stats, kept while it is the best so far.
 type Restart = (Board, Vec<ItemId>, Vec<kicad_pcb::Span>, grid::Stats);
 
+/// The widest region the region plough rips round a trapped connection's path.
+const REGION_WIDEST: Nm = 4_000_000;
+
 /// The plough for connections trapped at fine-pitch parts, up to `--shove-passes` times, each in
 /// another order, stopping `until` seconds into the run: the board file's spans of copper it moved
 /// or ripped.
@@ -849,19 +853,21 @@ fn shove_pass(
     let open_now = |b: &Board| if a.pours_block { connectivity(b) } else { connectivity_without_pours(b) }.airlines.len();
     let mut removed = Vec::new();
     let mut stalled = 0;
+    let defaults = grid::ShoveOptions::default();
+    let mut reach = a.shove_reach.map_or(defaults.reach, |mm| (mm * 1e6).round() as Nm);
     for pass in 0..a.shove_passes.max(1) {
         let before = open_now(board);
         let fine: HashSet<usize> = morph::fine_pitch(board, 500_000).into_iter().collect();
-        let defaults = grid::ShoveOptions::default();
         let s = grid::shove_escape(
             board,
             solver,
             &grid::ShoveOptions {
                 cell: a.cell.unwrap_or(defaults.cell),
-                parts: Some(fine),
+                // Ripping and renegotiating round a path frees any connection, not only an escape.
+                parts: (a.shove_plough != Some(grid::Plough::Region)).then_some(fine),
                 plough: a.shove_plough.unwrap_or(defaults.plough),
                 steps: a.shove_steps.unwrap_or(defaults.steps),
-                reach: a.shove_reach.map_or(defaults.reach, |mm| (mm * 1e6).round() as Nm),
+                reach,
                 repair_seconds: a.shove_repair.unwrap_or(defaults.repair_seconds),
                 accept_ties: a.shove_ties,
                 cascade: a.shove_cascade.unwrap_or(defaults.cascade),
@@ -887,7 +893,18 @@ fn shove_pass(
         // Passes go on, each in another order, until `--shove-patience` of them in a row free
         // nothing more.
         stalled = if after < before { 0 } else { stalled + 1 };
-        if stalled >= a.shove_patience.max(1) || until.is_some_and(|t| started.elapsed().as_secs_f64() >= t) {
+        if until.is_some_and(|t| started.elapsed().as_secs_f64() >= t) {
+            break;
+        }
+        // The region plough, stalled, rips and renegotiates twice as far round each path, up
+        // to the widest region, before it gives up.
+        if stalled >= a.shove_patience.max(1) && a.shove_plough == Some(grid::Plough::Region) && reach < REGION_WIDEST {
+            reach = (reach * 2).min(REGION_WIDEST);
+            stalled = 0;
+            eprintln!("shove: the region plough now reaches {:.1} mm", reach as f64 * 1e-6);
+            continue;
+        }
+        if stalled >= a.shove_patience.max(1) {
             break;
         }
     }
