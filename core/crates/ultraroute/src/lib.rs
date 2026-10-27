@@ -2011,6 +2011,11 @@ pub fn run_with_solver(
         let mut seen_laid = HashSet::new();
         laid.retain(|id| board.item(*id).is_some() && seen_laid.insert(*id));
     }
+    let (split, spans) = grid::split_at_joins(&mut board, &mut laid);
+    removed.extend(spans);
+    if split > 0 {
+        eprintln!("split {split} tracks where others end on them");
+    }
     for line in regions::report(&board, &lengths, &laid) {
         eprintln!("regions: {line}");
         say("regions", line);

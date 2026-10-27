@@ -28,7 +28,7 @@ pub mod sweep;
 
 pub use blame::{blame, Blame, BlameOptions, BlameReport};
 pub use chase::{chase, ChaseOptions, ChaseStats};
-pub use cleanup::{drop_duplicates, drop_duplicates_watch, prune_dangling, prune_dangling_watch, pull_tight, pull_tight_watch, CleanStats};
+pub use cleanup::{drop_duplicates, drop_duplicates_watch, prune_dangling, prune_dangling_watch, pull_tight, pull_tight_watch, split_at_joins, CleanStats};
 pub use grid::{ObstacleMap, Profile, RouteGrid, ViaSpec};
 pub use nudge::{nudge, nudge_watch, NudgeEvent, NudgeOptions, NudgeStats};
 pub use push::{push, push_watch, rip_broken, rip_broken_items, Field, PushOptions, PushStats, PushStep};

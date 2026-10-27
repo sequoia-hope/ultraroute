@@ -361,3 +361,59 @@ mod tests {
         assert!(matches!(e, KicadParse::Syntax { expected, .. } if expected == "number"));
     }
 }
+
+/// KiCad 10 names a net wherever it is used, `(net "GND")`, and keeps no numbered table. Each
+/// such form becomes `(net N "GND")` and the board gets the table KiCad 9 wrote: net 0 the empty
+/// name, then each other name numbered as first met in the file. A board with a table is left
+/// as it is. Whether the board named its nets so.
+pub fn number_nets(root: &mut Node) -> bool {
+    let named = |n: &Node| n.head() == Some("net") && n.args().len() == 1 && matches!(n.args()[0], Node::Str(..));
+    fn any(n: &Node, named: &dyn Fn(&Node) -> bool) -> bool {
+        named(n) || matches!(n, Node::List(items, _) if items.iter().any(|c| any(c, named)))
+    }
+    if !any(root, &named) || root.args().iter().any(|n| n.head() == Some("net") && n.args().first().is_some_and(|a| a.number().is_ok())) {
+        return false;
+    }
+    let names = net_names(root);
+    fn renumber(n: &mut Node, names: &[String]) {
+        let Node::List(items, pos) = n else { return };
+        if items.len() == 2 && matches!(&items[0], Node::Atom(h, _) if h == "net") {
+            if let Node::Str(name, at) = &items[1] {
+                let number = names.iter().position(|x| x == name).unwrap_or(0);
+                *items = vec![Node::Atom("net".into(), *pos), Node::Atom(number.to_string(), *at), Node::Str(name.clone(), *at)];
+                return;
+            }
+        }
+        for c in items.iter_mut() {
+            renumber(c, names);
+        }
+    }
+    renumber(root, &names);
+    if let Node::List(items, pos) = root {
+        let at = 1.min(items.len());
+        let table = names.iter().enumerate().map(|(i, name)| Node::List(vec![Node::Atom("net".into(), *pos), Node::Atom(i.to_string(), *pos), Node::Str(name.clone(), *pos)], *pos));
+        items.splice(at..at, table);
+    }
+    true
+}
+
+/// The names of a board that names its nets in place, numbered as [`number_nets`] numbers them.
+pub fn net_names(root: &Node) -> Vec<String> {
+    fn walk(n: &Node, out: &mut Vec<String>) {
+        let Node::List(items, _) = n else { return };
+        if items.len() == 2 && matches!(&items[0], Node::Atom(h, _) if h == "net") {
+            if let Node::Str(name, _) = &items[1] {
+                if !out.contains(name) {
+                    out.push(name.clone());
+                }
+                return;
+            }
+        }
+        for c in items {
+            walk(c, out);
+        }
+    }
+    let mut out = vec![String::new()];
+    walk(root, &mut out);
+    out
+}

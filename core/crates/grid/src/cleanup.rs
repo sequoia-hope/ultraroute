@@ -205,6 +205,55 @@ pub(crate) fn prune_dangling_of(board: &mut Board, soft: &mut Vec<ItemId>, which
     (pruned, spans)
 }
 
+/// Splits each of the router's tracks where another track of its net ends on its middle, so the
+/// two meet end to end. KiCad joins such a T by the track's body only sometimes: a short piece
+/// from it at an angle is found with an unconnected end (`track_dangling`), and split, never.
+/// The tracks split are taken out of `soft` and their halves put in; the spans of what went.
+pub fn split_at_joins(board: &mut Board, soft: &mut Vec<ItemId>) -> (usize, Vec<Span>) {
+    let (mut split, mut spans) = (0, Vec::new());
+    let mut queue: Vec<ItemId> = soft.clone();
+    while let Some(id) = queue.pop() {
+        let Some(item) = board.item(id).cloned() else { continue };
+        let (Kind::Track, Shape::Capsule { a, b, r }) = (&item.kind, &item.shape) else { continue };
+        let (a, b, r) = (*a, *b, *r);
+        if a == b || item.net == 0 || item.locked {
+            continue;
+        }
+        let layer = item.layers.trailing_zeros() as usize;
+        // An end of another track of the net on the centre line, away from this track's ends:
+        // within a quarter of the width, so the halves bend by no more than that.
+        let lean = (r / 2).max(1);
+        let at = board.near(layer, item.shape.bbox()).into_iter().filter(|&o| o != id).find_map(|o| {
+            let other = board.item(o)?;
+            let (Kind::Track, Shape::Capsule { a: p, b: q, .. }) = (&other.kind, &other.shape) else { return None };
+            if other.net != item.net || !other.on(layer) {
+                return None;
+            }
+            [*p, *q].into_iter().find(|&e| {
+                let (_, foot) = closest_on_segment(a, b, e);
+                foot.distance(e) <= lean as f64 && e.distance(a) > lean as f64 && e.distance(b) > lean as f64
+            })
+        });
+        let Some(at) = at else { continue };
+        let was_dangling = dangles(board, id);
+        let old = board.remove(id).expect("present");
+        let halves = [board.insert(Item { shape: Shape::Capsule { a, b: at, r }, span: None, ..old.clone() }), board.insert(Item { shape: Shape::Capsule { a: at, b, r }, span: None, ..old.clone() })];
+        if halves.iter().any(|&h| !check_item(board, h).is_empty() || (!was_dangling && dangles(board, h))) {
+            for h in halves.into_iter().rev() {
+                board.discard(h);
+            }
+            board.restore(id, old);
+            continue;
+        }
+        spans.extend(old.span);
+        soft.retain(|s| *s != id);
+        soft.extend(halves);
+        queue.extend(halves);
+        split += 1;
+    }
+    (split, spans)
+}
+
 fn closest_on_segment(a: Point, b: Point, p: Point) -> (f64, Point) {
     let (dx, dy) = ((b.x - a.x) as f64, (b.y - a.y) as f64);
     let len_sq = dx * dx + dy * dy;
@@ -369,10 +418,9 @@ fn trim_overhang(board: &mut Board, id: ItemId) -> Option<(Option<Span>, Vec<Ite
             candidates.push(vec![(keep, proj)]);
         } else {
             candidates.push(vec![(keep, proj), (proj, target)]);
-            // The joint already inside the track: cut back to it, with no piece across.
-            if proj.distance(target) <= r as f64 {
-                candidates.push(vec![(keep, proj)]);
-            }
+            // Cut back level with the joint, with no piece across: enough when the joint's copper
+            // reaches the cut track there, as a via or another track's end beside it may.
+            candidates.push(vec![(keep, proj)]);
         }
     }
     if candidates.is_empty() {
@@ -381,7 +429,7 @@ fn trim_overhang(board: &mut Board, id: ItemId) -> Option<(Option<Span>, Vec<Ite
     let removed = board.remove(id)?;
     for segs in candidates {
         let mut new_ids = Vec::with_capacity(segs.len());
-        for (p, q) in segs {
+        for &(p, q) in &segs {
             new_ids.push(board.insert(Item {
                 kind: Kind::Track,
                 net: item.net,
@@ -810,6 +858,42 @@ mod tests {
         for &id in &soft {
             assert!(!dangles(&board, id), "remaining soft item {id} still dangles");
         }
+    }
+
+    #[test]
+    fn a_track_another_ends_on_is_split_there() {
+        let (pcb, copper) = kicad_pcb::parse_board(
+            "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal)) (net 0 \"\") (net 1 \"N1\"))",
+        )
+        .unwrap();
+        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+        let track = |a: (i64, i64), b: (i64, i64)| Item {
+            kind: Kind::Track,
+            net: 1,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(a.0, a.1), b: Point::new(b.0, b.1), r: 75_000 },
+            hole: None,
+            locked: false,
+            span: None,
+        };
+        // A short piece at 45 degrees from the long track's middle, 6 um off its centre line
+        // (KiCad calls it dangling), and one from its end (already end to end).
+        let long = board.insert(track((0, 0), (10_000_000, 0)));
+        let t = board.insert(track((5_000_000, 6_000), (5_100_000, 106_000)));
+        let e = board.insert(track((10_000_000, 0), (10_000_000, 1_000_000)));
+        let mut soft = vec![long, t, e];
+        assert_eq!(split_at_joins(&mut board, &mut soft).0, 1);
+        assert!(board.item(long).is_none());
+        let mut ends: Vec<(Point, Point)> = soft
+            .iter()
+            .filter(|&&id| id != t && id != e)
+            .filter_map(|&id| match board.item(id)?.shape {
+                Shape::Capsule { a, b, .. } => Some((a, b)),
+                _ => None,
+            })
+            .collect();
+        ends.sort_by_key(|(a, _)| a.x);
+        assert_eq!(ends, vec![(Point::new(0, 0), Point::new(5_000_000, 6_000)), (Point::new(5_000_000, 6_000), Point::new(10_000_000, 0))]);
     }
 
     #[test]

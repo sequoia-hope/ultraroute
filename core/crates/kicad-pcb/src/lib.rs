@@ -52,13 +52,15 @@ pub enum KicadParse {
 
 /// Read a `.kicad_pcb` text.
 pub fn parse_kicad_pcb(text: &str) -> Result<Pcb, KicadParse> {
-    let root = sexpr::parse(text)?;
+    let mut root = sexpr::parse(text)?;
+    sexpr::number_nets(&mut root);
     read::read(&root)
 }
 
 /// The board and the copper a router works with, from one parse.
 pub fn parse_board(text: &str) -> Result<(Pcb, Copper), KicadParse> {
-    let root = sexpr::parse(text)?;
+    let mut root = sexpr::parse(text)?;
+    sexpr::number_nets(&mut root);
     let pcb = read::read(&root)?;
     let copper = copper::read_copper(&root, &pcb.footprints)?;
     Ok((pcb, copper))

@@ -62,6 +62,17 @@ pub fn apply(text: &str, edit: &Edit) -> String {
         return out;
     }
     out.push_str(&text[kept..close]);
+    // A board that names its nets in place (KiCad 10) is written the same way, by the names its
+    // nets were numbered from when read.
+    let names = text
+        .find("(net ")
+        .filter(|&i| text[i + 5..].starts_with('"'))
+        .and_then(|_| crate::sexpr::parse(text).ok())
+        .map(|root| crate::sexpr::net_names(&root));
+    let net = |n: u32| match &names {
+        Some(names) => format!("\"{}\"", names.get(n as usize).map_or("", String::as_str).replace('\\', "\\\\").replace('"', "\\\"")),
+        None => n.to_string(),
+    };
     for t in &edit.tracks {
         out.push_str(&format!(
             "\t(segment\n\t\t(start {} {})\n\t\t(end {} {})\n\t\t(width {})\n\t\t(layer \"{}\")\n\t\t(net {})\n\t\t(uuid \"{}\")\n\t)\n",
@@ -71,7 +82,7 @@ pub fn apply(text: &str, edit: &Edit) -> String {
             mm(t.end[1]),
             mm(t.width),
             t.layer,
-            t.net,
+            net(t.net),
             uuid()
         ));
     }
@@ -84,7 +95,7 @@ pub fn apply(text: &str, edit: &Edit) -> String {
             mm(v.drill),
             v.layers[0],
             v.layers[1],
-            v.net,
+            net(v.net),
             uuid()
         ));
     }
@@ -161,5 +172,21 @@ mod tests {
         assert!(out.starts_with("(kicad_pcb\n\t(a 1)\n\t(b 2)\n\t(segment\n\t\t(start 1 2)\n\t\t(end 3 2)\n\t\t(width 0.2)\n"));
         assert!(out.ends_with("\t)\n)\n"));
         crate::sexpr::parse(&out).unwrap();
+    }
+
+    #[test]
+    fn a_board_that_names_its_nets_is_read_numbered_and_written_by_name() {
+        // KiCad 10: no net table, each pad and track names its net.
+        let text = "(kicad_pcb\n\t(version 20260206)\n\t(general (thickness 1.6))\n\t(layers (0 \"F.Cu\" signal) (2 \"B.Cu\" signal))\n\t(footprint \"R\" (layer \"F.Cu\") (uuid \"f1\") (at 10 10)\n\t\t(pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\") (net \"GND\") (uuid \"p1\"))\n\t\t(pad \"2\" smd rect (at 2 0) (size 1 1) (layers \"F.Cu\") (net \"VCC\") (uuid \"p2\")))\n\t(segment (start 10 10) (end 10 12) (width 0.2) (layer \"F.Cu\") (net \"GND\") (uuid \"s1\"))\n)\n";
+        let (pcb, copper) = crate::parse_board(text).unwrap();
+        let names: Vec<&str> = pcb.nets.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, ["", "GND", "VCC"]);
+        assert_eq!(pcb.footprints[0].pads.iter().map(|p| p.net.as_ref().unwrap().number).collect::<Vec<_>>(), [1, 2]);
+        assert_eq!(copper.tracks[0].net, 1);
+        let edit = Edit { tracks: vec![NewTrack { start: [12e-3, 10e-3], end: [12e-3, 12e-3], width: 0.2e-3, layer: "F.Cu".into(), net: 2 }], ..Edit::default() };
+        let out = apply(text, &edit);
+        assert!(out.contains("(net \"VCC\")\n\t\t(uuid"), "{out}");
+        let (again, _) = crate::parse_board(&out).unwrap();
+        assert_eq!(again.nets.len(), 3);
     }
 }
