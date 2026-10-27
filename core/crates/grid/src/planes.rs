@@ -76,7 +76,7 @@ pub fn join_planes(board: &mut Board, log: &Option<Log>) -> PlaneStats {
             // A track's end takes a via on itself, with nothing more to lay.
             if item.kind == Kind::Track {
                 let at_end = anchors.iter().find_map(|&(at, _)| {
-                    if !fills.iter().any(|f| f.contains(at)) {
+                    if !fills.iter().any(|f| f.depth(at) >= profile.via_radius as f64) {
                         return None;
                     }
                     let via = board.insert(Item {
@@ -169,7 +169,7 @@ fn drop_via(board: &mut Board, net: u32, layer: usize, at: Point, reach: Nm, fil
         for k in 0..DIRECTIONS {
             let t = std::f64::consts::TAU * k as f64 / DIRECTIONS as f64;
             let p = Point::new(at.x + (r * t.cos()).round() as Nm, at.y + (r * t.sin()).round() as Nm);
-            if !fills.iter().any(|f| f.contains(p)) {
+            if !fills.iter().any(|f| f.depth(p) >= profile.via_radius as f64) {
                 continue;
             }
             let Some(laid) = lay(board, net, layer, at, p, profile) else { continue };

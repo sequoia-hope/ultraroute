@@ -63,21 +63,21 @@ def board_ids(only=None):
 
 
 def drc(pcb, out_dir, stem):
-    """Refill the zones and ask KiCad: (unconnected, {error type: count}, report path)."""
+    """Refill the zones and ask KiCad: (unconnected, {error type: count}, {warning type: count})."""
     filled, report = out_dir / f"{stem}.filled.kicad_pcb", out_dir / f"{stem}.drc.json"
     for suffix in (".kicad_pro", ".kicad_dru"):
         if pcb.with_suffix(suffix).exists():
             shutil.copy(pcb.with_suffix(suffix), filled.with_suffix(suffix))
     subprocess.run([sys.executable, ROOT / "tools/refill_zones.py", pcb, filled], capture_output=True, timeout=900)
-    subprocess.run(["kicad-cli", "pcb", "drc", "--format", "json", "--severity-error", "-o", report, filled], capture_output=True, timeout=900)
+    subprocess.run(["kicad-cli", "pcb", "drc", "--format", "json", "--severity-all", "-o", report, filled], capture_output=True, timeout=900)
     if not report.exists():
         return None
     d = json.loads(report.read_text())
-    errors = {}
+    errors, warnings = {}, {}
     for v in d.get("violations", []):
-        if v["severity"] == "error":
-            errors[v["type"]] = errors.get(v["type"], 0) + 1
-    return len(d.get("unconnected_items", [])), errors
+        into = errors if v["severity"] == "error" else warnings
+        into[v["type"]] = into.get(v["type"], 0) + 1
+    return len(d.get("unconnected_items", [])), errors, warnings
 
 
 def convert(src, dst):
@@ -124,7 +124,7 @@ def prepare_one(b):
             if v is None:
                 info["error"] = "drc failed on the bare board"
             else:
-                info["unconnected"], info["errors"] = v
+                info["unconnected"], info["errors"], info["warnings"] = v
     (d / "bare.json").write_text(json.dumps(info, indent=1))
     return b, info
 
@@ -168,8 +168,10 @@ def route_one(b, run_dir, recipe, timeout, seed):
         v = drc(out, d, "out")
         if v is not None:
             bare = json.loads((src / "bare.json").read_text())
-            res["unconnected"], errors = v
+            res["unconnected"], errors, warnings = v
             res["new_errors"] = {t: n - bare.get("errors", {}).get(t, 0) for t, n in errors.items() if n > bare.get("errors", {}).get(t, 0)}
+            # Bare boards judged before warnings were kept have none recorded: then all count.
+            res["new_warnings"] = {t: n - bare.get("warnings", {}).get(t, 0) for t, n in warnings.items() if n > bare.get("warnings", {}).get(t, 0)}
             res["success"] = res["unconnected"] == 0 and not res["new_errors"]
     (d / "result.json").write_text(json.dumps(res, indent=1))
     return res
@@ -249,6 +251,12 @@ def report(a):
             for t, c in (results[b].get("new_errors") or {}).items():
                 errs[t] = errs.get(t, 0) + 1
         print(f"   failures: {kinds}; boards with new errors by type: {dict(sorted(errs.items(), key=lambda e: -e[1]))}")
+        warns = {}
+        for b in ids:
+            for t in results[b].get("new_warnings") or {}:
+                warns[t] = warns.get(t, 0) + 1
+        dangling = sum(1 for b in ours if set(results[b].get("new_warnings") or {}) & {"via_dangling", "track_dangling"})
+        print(f"   boards with new warnings by type: {dict(sorted(warns.items(), key=lambda e: -e[1]))}; clean boards with dangling copper: {dangling}")
 
 
 def main():

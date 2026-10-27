@@ -496,7 +496,7 @@ pub fn prefanout(board: &mut Board, options: &PrefanoutOptions, watch: &mut dyn 
                 continue;
             }
             let mut local_profile = Profile::for_net(board, p.net);
-            local_profile.half_width = local_profile.narrow_half_width;
+            local_profile.half_width = local_profile.neck_into(board.item(p.id));
             let key = (local_profile.class.clone(), local_profile.half_width);
             let lmap = local_maps
                 .entry(key)
@@ -553,7 +553,7 @@ pub fn prefanout(board: &mut Board, options: &PrefanoutOptions, watch: &mut dyn 
                     &frame,
                     &pad,
                     &profile,
-                    profile.narrow_half_width,
+                    profile.neck_into(board.item(pad.id)),
                     win_bounds,
                     options,
                     &siblings,
@@ -701,8 +701,9 @@ fn bridge_inward(
         }
 
         let mut widths = vec![profile.half_width];
-        if profile.narrow_half_width < profile.half_width {
-            widths.push(profile.narrow_half_width);
+        let neck = profile.neck_into(board.item(pad.id));
+        if neck < profile.half_width {
+            widths.push(neck);
         }
         for hw in widths {
             let mut p = profile.clone();

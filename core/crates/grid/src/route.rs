@@ -350,7 +350,7 @@ pub(crate) fn terminals(board: &mut Board, grid: &RouteGrid, id: ItemId) -> Vec<
     if !found.is_empty() {
         return found;
     }
-    let narrow = Profile::for_net(board, grid.net).narrow_half_width;
+    let narrow = Profile::for_net(board, grid.net).neck_into(board.item(id));
     if narrow >= grid.half_width {
         return found;
     }
@@ -373,10 +373,17 @@ pub(crate) fn item_terminals(board: &mut Board, grid: &RouteGrid, id: ItemId, le
         ) else {
             continue;
         };
+        // A route ends in a pour deep enough that its end, or a via there, joins it
+        // (`board::joined`), not at the pour's edge.
+        let deep = match item.kind {
+            Kind::Pour { .. } => grid.half_width.max(grid.via.as_ref().map_or(0, |v| v.radius)) as f64 + grid.h as f64,
+            _ => 0.0,
+        };
         for j in lo.1..=hi.1 {
             for i in lo.0..=hi.0 {
                 let index = grid.index(layer, i, j);
-                if !grid.blocked[index] && item.shape.contains(grid.centre(i, j)) {
+                let centre = grid.centre(i, j);
+                if !grid.blocked[index] && item.shape.contains(centre) && (deep == 0.0 || item.shape.depth(centre) >= deep) {
                     out.push((index, None));
                 }
             }

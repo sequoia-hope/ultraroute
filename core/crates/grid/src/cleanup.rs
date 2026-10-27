@@ -171,6 +171,12 @@ pub fn prune_dangling_watch(board: &mut Board, soft: &mut Vec<ItemId>, watch: &m
                 continue;
             }
             if !bridges_nothing(board, id) {
+                if let Some((gone, new_ids)) = collapse_via(board, id) {
+                    spans.extend(gone);
+                    soft.extend(new_ids);
+                    pruned += 1;
+                    continue;
+                }
                 if let Some((span, new_ids)) = trim_overhang(board, id) {
                     spans.extend(span);
                     soft.extend(new_ids);
@@ -205,6 +211,71 @@ fn closest_on_segment(a: Point, b: Point, p: Point) -> (f64, Point) {
 
 fn point_gap(shape: &Shape, p: Point) -> f64 {
     shape.gap(&Shape::Capsule { a: p, b: p, r: 0 })
+}
+
+/// A via that meets copper on one layer only, yet joins pieces there (a track ending in a via
+/// that stands on a pad): KiCad finds it dangling all the same. The tracks ending in it are drawn
+/// on to its centre and it goes, when that leaves everything it joined joined and breaks no rule.
+/// The spans of what went, and the tracks drawn on.
+fn collapse_via(board: &mut Board, id: ItemId) -> Option<(Vec<Span>, Vec<ItemId>)> {
+    let via = board.item(id)?.clone();
+    let (Kind::Via, Shape::Capsule { a: centre, .. }) = (&via.kind, &via.shape) else { return None };
+    let centre = *centre;
+    let around = neighbours(board, id);
+    let layers: HashSet<usize> = around.iter().filter_map(|&o| board.item(o)).flat_map(|o| (0..board.layers.len()).filter(|l| o.on(*l) && via.on(*l)).collect::<Vec<_>>()).collect();
+    if layers.len() != 1 || around.len() < 2 {
+        return None;
+    }
+    let mut moved: Vec<(ItemId, Item)> = Vec::new();
+    let mut drawn: Vec<ItemId> = Vec::new();
+    for &o in &around {
+        let Some(it) = board.item(o).cloned() else { continue };
+        let (Kind::Track, Shape::Capsule { a, b, r }) = (&it.kind, &it.shape) else { continue };
+        let inside = |p: Point| via.shape.gap_within(&Shape::Capsule { a: p, b: p, r: 0 }, 0.0) == 0.0;
+        let (a2, b2) = (if inside(*a) { centre } else { *a }, if inside(*b) { centre } else { *b });
+        if (a2, b2) == (*a, *b) || a2 == b2 {
+            continue;
+        }
+        board.remove(o);
+        moved.push((o, it.clone()));
+        drawn.push(board.insert(Item { shape: Shape::Capsule { a: a2, b: b2, r: *r }, span: None, locked: false, ..it }));
+    }
+    board.remove(id);
+    let kept: Vec<ItemId> = around.iter().copied().filter(|o| board.item(*o).is_some()).chain(drawn.iter().copied()).collect();
+    let legal = drawn.iter().all(|&d| check_item(board, d).is_empty());
+    if legal && all_joined(board, &kept) {
+        let mut gone: Vec<Span> = via.span.into_iter().collect();
+        gone.extend(moved.into_iter().filter_map(|(_, it)| it.span));
+        return Some((gone, drawn));
+    }
+    for d in drawn {
+        board.discard(d);
+    }
+    for (o, it) in moved {
+        board.restore(o, it);
+    }
+    board.restore(id, via);
+    None
+}
+
+/// Whether the pieces are all joined to one another, by a short search through their net's copper.
+fn all_joined(board: &Board, ids: &[ItemId]) -> bool {
+    let Some((&first, rest)) = ids.split_first() else { return true };
+    let mut wanted: HashSet<ItemId> = rest.iter().copied().collect();
+    let mut seen: HashSet<ItemId> = HashSet::from([first]);
+    let mut stack = vec![first];
+    while let Some(at) = stack.pop() {
+        if wanted.is_empty() || seen.len() > DETOUR_LIMIT {
+            break;
+        }
+        for next in neighbours(board, at) {
+            if seen.insert(next) {
+                wanted.remove(&next);
+                stack.push(next);
+            }
+        }
+    }
+    wanted.is_empty()
 }
 
 /// When a track has one loose end because another track joined it mid-segment (such as a global

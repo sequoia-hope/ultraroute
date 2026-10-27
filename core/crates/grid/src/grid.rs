@@ -19,24 +19,44 @@ pub struct Profile {
     pub class: String,
     pub half_width: Nm,
     /// The narrowest a leg or escape of the net may neck to near a pad: the board's minimum
-    /// track, or the net's own from a custom rule; never above `half_width`.
+    /// track, or the net's own from a custom rule; `half_width` itself for a net of a class wider
+    /// than the default, which necks only as [`Profile::neck_into`] allows.
     pub narrow_half_width: Nm,
+    /// The board's minimum track, or the net's own from a custom rule: no neck goes below it.
+    pub min_half_width: Nm,
     pub clearance: Nm,
     pub via_radius: Nm,
     pub drill_radius: Nm,
 }
 
 impl Profile {
+    /// How narrow a leg into `pad` may neck. A signal necks to its narrowest; a net that carries
+    /// current only to the pad's own width, as a designer would draw it, where the pad is
+    /// narrower than the net's track: never thinner than the copper it feeds.
+    pub fn neck_into(&self, pad: Option<&board::Item>) -> Nm {
+        if self.narrow_half_width < self.half_width {
+            return self.narrow_half_width;
+        }
+        let Some(pad) = pad.filter(|p| matches!(p.kind, board::Kind::Pad { .. })) else { return self.half_width };
+        let b = pad.shape.bbox();
+        ((b.max.x - b.min.x).min(b.max.y - b.min.y) / 2).clamp(self.min_half_width, self.half_width)
+    }
+
     pub fn for_net(board: &Board, net: u32) -> Profile {
         let rules = &board.rules;
         let class = rules.class_of(board.net_name(net));
         let take = |v: Option<f64>, floor: f64| nm(v.unwrap_or(floor).max(floor));
         let min_width = rules.min_track_width_of(board.net_name(net));
         let half_width = take(class.map(|c| c.track_width), min_width) / 2;
+        // A net whose class is wider than the board's default carries current: it keeps its
+        // width all the way into its pads, however tight; only signals neck to the minimum.
+        let signal = rules.classes.iter().find(|c| c.name == "Default").map_or(0.0, |c| c.track_width).max(rules.min_track_width);
+        let power = class.is_some_and(|c| c.track_width > signal + 1e-9);
         Profile {
             class: class.map_or_else(String::new, |c| c.name.clone()),
             half_width,
-            narrow_half_width: (nm(min_width) / 2).clamp(1, half_width.max(1)),
+            narrow_half_width: if power { half_width } else { (nm(min_width) / 2).clamp(1, half_width.max(1)) },
+            min_half_width: (nm(min_width) / 2).clamp(1, half_width.max(1)),
             clearance: take(class.map(|c| c.clearance), rules.min_clearance),
             // A class's via may leave a thinner ring round its drill than the board allows; the
             // via grows to keep the ring, the drill as the class has it.

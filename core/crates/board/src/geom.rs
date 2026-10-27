@@ -161,6 +161,15 @@ impl Shape {
             Shape::Polygon(p) => BBox::of(p.iter().copied()).contains(pt) && inside(pt, p),
         }
     }
+
+    /// How far inside the shape a point lies, to its nearest edge; 0 outside.
+    pub fn depth(&self, pt: Point) -> f64 {
+        match self {
+            Shape::Capsule { a, b, r } => (*r as f64 - point_segment(pt, *a, *b)).max(0.0),
+            Shape::Polygon(p) if self.contains(pt) => edges(p).map(|(c, d)| point_segment(pt, c, d)).fold(f64::INFINITY, f64::min),
+            Shape::Polygon(_) => 0.0,
+        }
+    }
 }
 
 pub fn point_segment(p: Point, a: Point, b: Point) -> f64 {
