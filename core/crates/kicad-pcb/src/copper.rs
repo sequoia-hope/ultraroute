@@ -424,7 +424,9 @@ fn graphic(g: &Node, place: &dyn Fn([f64; 2]) -> [f64; 2], rotation: f64) -> Res
             let size = font.and_then(|f| f.find("size")).map(|s| point_of(s, "size")).transpose()?.unwrap_or([1e-3, 1e-3]);
             let thick = font.and_then(|f| f.find("thickness")).and_then(|t| t.number_arg(0, "thickness").ok()).map_or(size[0] * 0.15, |t| t * MM);
             let justify: Vec<&str> = effects.and_then(|e| e.find("justify")).map(|j| j.args().iter().filter_map(Node::text).collect()).unwrap_or_default();
-            let lines = string.split("\\n").collect::<Vec<_>>();
+            // The parser has turned the file's `\n` into a newline; KiCad sizes the text without a
+            // trailing empty line.
+            let lines = string.trim_end_matches('\n').split('\n').collect::<Vec<_>>();
             let chars = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as f64;
             let (w, h) = (chars * size[1] * 1.1 + thick, lines.len() as f64 * size[0] * 1.6 + thick);
             let x0 = if justify.contains(&"left") { 0.0 } else if justify.contains(&"right") { -w } else { -w / 2.0 };
@@ -799,4 +801,38 @@ fn uuid(n: &Node) -> String {
         .and_then(Node::text)
         .unwrap_or("")
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn copper_text_of_several_lines_is_as_wide_as_its_longest() {
+        let (_, copper) = crate::parse_board(
+            "(kicad_pcb (version 20240108) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal) (2 \"B.Cu\" signal)) (net 0 \"\")
+	(gr_text \"Jan\\nMrázek\\n9-2016\" (at 180.25 123.5 0) (layer \"F.Cu\") (effects (font (size 1.8 1.8) (thickness 0.3)) (justify right))))",
+        )
+        .unwrap();
+        let xs: Vec<f64> = copper.graphics.iter().flat_map(|g| g.polygons.iter().flatten().map(|p| p[0])).collect();
+        let (left, right) = (xs.iter().copied().fold(f64::MAX, f64::min), xs.iter().copied().fold(f64::MIN, f64::max));
+        // Six characters of 1.8 mm, right-justified at 180.25 mm: about 12 mm wide, not the 34 mm
+        // of all seventeen on one line.
+        assert!((right - 180.25e-3).abs() < 1e-6, "right edge at the anchor: {right}");
+        assert!(right - left < 14e-3, "width {} m", right - left);
+        let ys: Vec<f64> = copper.graphics.iter().flat_map(|g| g.polygons.iter().flatten().map(|p| p[1])).collect();
+        let tall = ys.iter().copied().fold(f64::MIN, f64::max) - ys.iter().copied().fold(f64::MAX, f64::min);
+        assert!((tall - (3.0 * 1.8 * 1.6 + 0.3) * 1e-3).abs() < 1e-6, "three lines tall: {tall}");
+    }
+
+    #[test]
+    fn a_trailing_newline_adds_no_line() {
+        let (_, copper) = crate::parse_board(
+            "(kicad_pcb (version 20240108) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal) (2 \"B.Cu\" signal)) (net 0 \"\")
+	(gr_text \"PLAYSTATION2\\nVECTREX\\n2013\\nSVO\\n\" (at 167.894 66.294 0) (layer \"F.Cu\") (effects (font (size 1.3 1.1) (thickness 0.25)) (justify left))))",
+        )
+        .unwrap();
+        let ys: Vec<f64> = copper.graphics.iter().flat_map(|g| g.polygons.iter().flatten().map(|p| p[1])).collect();
+        let (top, bottom) = (ys.iter().copied().fold(f64::MAX, f64::min), ys.iter().copied().fold(f64::MIN, f64::max));
+        // KiCad's own box runs from 61.96 to 70.63 mm.
+        assert!(top > 61.9e-3 && bottom < 70.7e-3, "{top} .. {bottom}");
+    }
 }

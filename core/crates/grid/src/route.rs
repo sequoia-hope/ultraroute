@@ -423,6 +423,12 @@ pub(crate) fn terminals(board: &mut Board, grid: &RouteGrid, id: ItemId) -> Vec<
     if !found.is_empty() {
         return found;
     }
+    // A fine-pitch pad whose neighbours' mask openings, with the grid's margins, take every cell
+    // round it may still have room for an exactly checked leg out past them.
+    let found = gather(board, grid.half_width, NECK_CELLS, 2 * LEG_CANDIDATES);
+    if !found.is_empty() {
+        return found;
+    }
     let narrow = Profile::for_net(board, grid.net).neck_into(board.item(id));
     if narrow >= grid.half_width {
         return found;
