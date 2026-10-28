@@ -106,7 +106,7 @@ impl Limits {
                 .chain([nm(rules.min_clearance), pth_hole_clearance, pth_hole_to_hole, smd_pad_clearance, mask])
                 .max()
                 .unwrap_or(0),
-            edge: nm(rules.min_copper_edge_clearance),
+            edge: board.outline_edges.iter().map(|e| e.3).fold(nm(rules.min_copper_edge_clearance), Nm::max),
             hole_clearance,
             hole_to_hole,
             pth_hole_clearance,
@@ -241,9 +241,9 @@ fn item_checks(
             }
         }
         if limits.edge > 0 {
-            let gap = edge_gap(board, limits.edge, &item.shape, item_bbox);
-            if gap + SLACK < limits.edge as f64 {
-                found.push(Violation { rule: Rule::EdgeClearance, a: id, b: None, layer: None, gap, required: limits.edge });
+            let (gap, required) = edge_gap(board, limits.edge, &item.shape, item_bbox);
+            if gap + SLACK < required as f64 {
+                found.push(Violation { rule: Rule::EdgeClearance, a: id, b: None, layer: None, gap, required });
             }
         }
         // Copper against the plated holes of others, when they are not walked themselves.
@@ -332,19 +332,26 @@ pub fn intrudes(copper: &Shape, keepout: &Shape) -> bool {
     }
 }
 
-/// The shortest distance from a shape to the board edge; 0 when it crosses it.
-fn edge_gap(board: &Board, limit: Nm, shape: &Shape, b: crate::geom::BBox) -> f64 {
+/// The distance from a shape to the board edge it falls furthest short of, and the clearance
+/// that edge asks: the shortest distance and `limit` where no edge is short; 0 when it crosses
+/// one.
+fn edge_gap(board: &Board, limit: Nm, shape: &Shape, b: crate::geom::BBox) -> (f64, Nm) {
     let mut best = (limit + 1) as f64;
     if !board.outline_edges.is_empty() {
-        for &(p, q, eb) in &board.outline_edges {
+        // How far short of its clearance the shape is of the worst edge, and that edge's.
+        let mut worst = (best - limit as f64, best, limit);
+        for &(p, q, eb, clearance) in &board.outline_edges {
             let far = (eb.min.x - b.max.x).max(b.min.x - eb.max.x).max(eb.min.y - b.max.y).max(b.min.y - eb.max.y);
-            if far as f64 >= best {
+            if far as f64 >= worst.0 + clearance as f64 {
                 continue;
             }
             let edge = Shape::Capsule { a: p, b: q, r: 0 };
-            best = best.min(shape.gap_within(&edge, best));
+            let gap = shape.gap_within(&edge, worst.0 + clearance as f64);
+            if gap - (clearance as f64) < worst.0 {
+                worst = (gap - clearance as f64, gap, clearance);
+            }
         }
-        return best;
+        return (worst.1, worst.2);
     }
     for poly in &board.outline {
         for i in 0..poly.len() {
@@ -358,7 +365,7 @@ fn edge_gap(board: &Board, limit: Nm, shape: &Shape, b: crate::geom::BBox) -> f6
             best = best.min(shape.gap_within(&edge, best));
         }
     }
-    best
+    (best, limit)
 }
 
 /// The distance from a point to the board edge, for anything that needs it without a shape.
