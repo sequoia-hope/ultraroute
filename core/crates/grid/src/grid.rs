@@ -152,10 +152,10 @@ pub struct ObstacleMap {
     pub nx: usize,
     pub ny: usize,
     pub(crate) layers: usize,
-    owner: Vec<i32>,
-    via_owner: Vec<i32>,
+    pub(crate) owner: Vec<i32>,
+    pub(crate) via_owner: Vec<i32>,
     /// Per cell: the extra cost of a via there, in the board's via-avoid areas; empty for none.
-    via_avoid: Vec<u32>,
+    pub(crate) via_avoid: Vec<u32>,
     /// The board's routing regions on these cells, applied to each net's view.
     pub(crate) regions: Vec<crate::regions::RegionRaster>,
 }
@@ -423,6 +423,18 @@ impl ObstacleMap {
         for area in &board.via_avoid {
             self.cells_near(area, self.profile.via_radius, &mut |c| hit.push(c));
         }
+        for c in hit {
+            self.via_avoid[c] = board.via_avoid_cost;
+        }
+    }
+
+    /// One more via-avoid area on a map already built, as if it had been among the board's.
+    pub(crate) fn add_via_avoid(&mut self, board: &Board, area: &Shape) {
+        if self.via_avoid.is_empty() {
+            self.via_avoid = vec![0; self.nx * self.ny];
+        }
+        let mut hit = Vec::new();
+        self.cells_near(area, self.profile.via_radius, &mut |c| hit.push(c));
         for c in hit {
             self.via_avoid[c] = board.via_avoid_cost;
         }
