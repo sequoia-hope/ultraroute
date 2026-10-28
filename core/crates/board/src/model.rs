@@ -13,28 +13,133 @@ const CELL: Nm = 1_000_000;
 /// Chord error allowed when arcs become straight pieces, as KiCad's own default.
 const MAX_ERROR_M: f64 = 0.005e-3;
 
-/// An outline primitive as a polyline, within `MAX_ERROR_M` of it, in metres.
-fn edge_points(shape: &kicad_pcb::OutlineShape) -> Vec<[f64; 2]> {
+/// Points every `step` radians round a circle, from `from` through `sweep`: on the circle, so the
+/// chords between them pass inside it, or (`outside`) far enough out that the chords touch it and
+/// pass outside it.
+fn around(c: [f64; 2], r: f64, from: f64, sweep: f64, outside: bool) -> Vec<[f64; 2]> {
+    let step = 2.0 * (1.0 - (MAX_ERROR_M / r.max(MAX_ERROR_M)).min(1.0)).acos();
+    let n = ((sweep.abs() / step.max(1e-3)).ceil() as usize).clamp(1, 4096);
+    let r = if outside { r / (sweep.abs() / n as f64 / 2.0).cos().max(0.5) } else { r };
+    (0..=n).map(|k| from + sweep * k as f64 / n as f64).map(|t| [c[0] + r * t.cos(), c[1] + r * t.sin()]).collect()
+}
+
+/// An arc as two polylines, one whose chords pass inside it and one whose chords pass outside it,
+/// so that copper on either side is judged no farther from the arc than it is.
+fn arc_both_ways(c: [f64; 2], r: f64, from: f64, sweep: f64) -> [Vec<[f64; 2]>; 2] {
+    [around(c, r, from, sweep, false), around(c, r, from, sweep, true)]
+}
+
+/// An outline primitive as polylines in metres, which copper keeps the edge clearance from as
+/// KiCad keeps it from the primitive: its centre line where it has no width (an Edge.Cuts line),
+/// else the boundary of its stroke (a Margin line). Arcs are followed both inside and outside.
+fn edge_polylines(shape: &kicad_pcb::OutlineShape, width: f64) -> Vec<Vec<[f64; 2]>> {
     use kicad_pcb::OutlineShape;
-    let around = |c: [f64; 2], r: f64, from: f64, sweep: f64| -> Vec<[f64; 2]> {
-        let step = 2.0 * (1.0 - (MAX_ERROR_M / r.max(MAX_ERROR_M)).min(1.0)).acos();
-        let n = ((sweep.abs() / step.max(1e-3)).ceil() as usize).clamp(1, 4096);
-        (0..=n).map(|k| from + sweep * k as f64 / n as f64).map(|t| [c[0] + r * t.cos(), c[1] + r * t.sin()]).collect()
-    };
-    match shape {
-        OutlineShape::Line { start, end } => vec![*start, *end],
-        OutlineShape::Circle { center, radius } => around(*center, *radius, 0.0, std::f64::consts::TAU),
-        OutlineShape::Arc { start, mid, end } => {
-            let Some(c) = kicad_pcb::outline::circumcenter(*start, *mid, *end) else { return vec![*start, *end] };
+    let tau = std::f64::consts::TAU;
+    let h = width / 2.0;
+    // Centre, radius, start angle and sweep of an arc or circle.
+    let arc = match shape {
+        OutlineShape::Line { .. } => None,
+        OutlineShape::Circle { center, radius } => Some((*center, *radius, 0.0, tau)),
+        OutlineShape::Arc { start, mid, end } => kicad_pcb::outline::circumcenter(*start, *mid, *end).map(|c| {
             let angle = |p: [f64; 2]| (p[1] - c[1]).atan2(p[0] - c[0]);
             let (a0, am, a1) = (angle(*start), angle(*mid), angle(*end));
-            let tau = std::f64::consts::TAU;
             // The sweep from start to end that passes mid.
             let ccw = (am - a0).rem_euclid(tau) < (a1 - a0).rem_euclid(tau);
             let sweep = if ccw { (a1 - a0).rem_euclid(tau) } else { -(a0 - a1).rem_euclid(tau) };
-            around(c, (start[0] - c[0]).hypot(start[1] - c[1]), a0, sweep)
+            (c, (start[0] - c[0]).hypot(start[1] - c[1]), a0, sweep)
+        }),
+    };
+    let ends: [[f64; 2]; 2] = match shape {
+        OutlineShape::Line { start, end } | OutlineShape::Arc { start, end, .. } => [*start, *end],
+        OutlineShape::Circle { .. } => return match arc {
+            Some((c, r, from, sweep)) if h > 0.0 => {
+                let mut out = arc_both_ways(c, r + h, from, sweep).to_vec();
+                if r > h {
+                    out.extend(arc_both_ways(c, r - h, from, sweep));
+                }
+                out
+            }
+            Some((c, r, from, sweep)) => arc_both_ways(c, r, from, sweep).to_vec(),
+            None => Vec::new(),
+        },
+    };
+    let mut out = Vec::new();
+    match arc {
+        None if h <= 0.0 => out.push(ends.to_vec()),
+        None => {
+            let (dx, dy) = (ends[1][0] - ends[0][0], ends[1][1] - ends[0][1]);
+            let len = dx.hypot(dy);
+            if len > 0.0 {
+                let n = [-dy / len * h, dx / len * h];
+                for k in [-1.0, 1.0] {
+                    out.push(ends.iter().map(|p| [p[0] + k * n[0], p[1] + k * n[1]]).collect());
+                }
+            }
+        }
+        Some((c, r, from, sweep)) if h <= 0.0 => out.extend(arc_both_ways(c, r, from, sweep)),
+        Some((c, r, from, sweep)) => {
+            out.extend(arc_both_ways(c, r + h, from, sweep));
+            if r > h {
+                out.extend(arc_both_ways(c, r - h, from, sweep));
+            }
         }
     }
+    // The stroke's round ends: whole circles, whose inner halves lie within the stroke anyway.
+    if h > 0.0 {
+        for e in ends {
+            out.extend(arc_both_ways(e, h, 0.0, tau));
+        }
+    }
+    out
+}
+
+/// `shape` grown by `by` all round: a capsule's radius, or a polygon's convex hull with every
+/// corner rounded (a little outside the true offset, never inside it).
+fn grown(shape: &Shape, by: Nm) -> Shape {
+    match shape {
+        Shape::Capsule { a, b, r } => Shape::Capsule { a: *a, b: *b, r: r + by },
+        Shape::Polygon(p) if by <= 0 => Shape::Polygon(p.clone()),
+        Shape::Polygon(p) => {
+            const N: usize = 16;
+            let r = by as f64 / (std::f64::consts::PI / N as f64).cos();
+            let mut pts: Vec<Point> = Vec::with_capacity(p.len() * N);
+            for q in p {
+                for k in 0..N {
+                    let t = std::f64::consts::TAU * k as f64 / N as f64;
+                    pts.push(Point::new(q.x + (r * t.cos()).round() as Nm, q.y + (r * t.sin()).round() as Nm));
+                }
+            }
+            Shape::Polygon(hull(pts))
+        }
+    }
+}
+
+/// The convex hull of points, by Andrew's monotone chain.
+fn hull(mut points: Vec<Point>) -> Vec<Point> {
+    points.sort_by_key(|p| (p.x, p.y));
+    points.dedup();
+    if points.len() < 3 {
+        return points;
+    }
+    let cross = |o: Point, a: Point, b: Point| (a.x - o.x) as i128 * (b.y - o.y) as i128 - (a.y - o.y) as i128 * (b.x - o.x) as i128;
+    let mut lower: Vec<Point> = Vec::new();
+    for &p in &points {
+        while lower.len() >= 2 && cross(lower[lower.len() - 2], lower[lower.len() - 1], p) <= 0 {
+            lower.pop();
+        }
+        lower.push(p);
+    }
+    let mut upper: Vec<Point> = Vec::new();
+    for &p in points.iter().rev() {
+        while upper.len() >= 2 && cross(upper[upper.len() - 2], upper[upper.len() - 1], p) <= 0 {
+            upper.pop();
+        }
+        upper.push(p);
+    }
+    lower.pop();
+    upper.pop();
+    lower.extend(upper);
+    lower
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -173,6 +278,9 @@ pub struct Board {
     /// Where the mask leaves vias bare (one bit per outer copper layer it does), and how far
     /// beyond a via its opening reaches.
     pub via_openings: (u64, Nm),
+    /// The narrowest web of mask between two openings (`solder_mask_min_width`): two openings
+    /// nearer than this run together, and bridge their copper if of two nets.
+    pub mask_web: Nm,
     /// Openings drawn in the solder mask: the shape, the copper layer it bares, and the one net
     /// whose pads it bares, which alone may run there; 0 where it bares none or several.
     pub mask_areas: Vec<(Shape, u64, u32)>,
@@ -265,6 +373,7 @@ impl Board {
             planes: 0,
             mask_openings: HashMap::new(),
             via_openings: (0, 0),
+            mask_web: nm(copper.solder_mask_min_width),
             mask_areas: Vec::new(),
             pad_clearances: HashMap::new(),
             via_avoid: Vec::new(),
@@ -286,22 +395,30 @@ impl Board {
         // Copper keeps clear of every Edge.Cuts and Margin primitive, whether it closes into the
         // board's loops or not: a slot drawn as an open line, or a cutout the loops missed.
         for p in pcb.outline.iter().chain(&pcb.margin) {
-            let points: Vec<Point> = edge_points(&p.shape).into_iter().map(Point::from_m).collect();
-            for w in points.windows(2) {
-                board.outline_edges.push((w[0], w[1], BBox::of([w[0], w[1]])));
+            for line in edge_polylines(&p.shape, p.width) {
+                let points: Vec<Point> = line.into_iter().map(Point::from_m).collect();
+                for w in points.windows(2) {
+                    board.outline_edges.push((w[0], w[1], BBox::of([w[0], w[1]])));
+                }
             }
         }
 
+        // Openings in the mask, each its shapes, the copper layer it bares, and the one net that
+        // may run there if known yet; else the net of the pads it bares, found once they are in.
+        let mut apertures: Vec<(Vec<Shape>, u64, Option<u32>)> = Vec::new();
         for pad in &copper.pads {
             let model = &pcb.footprints[pad.footprint].pads[pad.pad];
             let hole = model.drill.map(|d| (Point::from_m(model.position), nm(d[0].min(d[1]) / 2.0)));
             let plated = !matches!(model.kind, PadKind::NpThruHole);
             let bigger_than_hole = model.drill.is_none_or(|d| model.size[0] > d[0] || model.size[1] > d[1]);
             let mut layers = if plated || bigger_than_hole { mask(&pad.layers) } else { 0 };
-            // A pad with no hole that lists every copper layer has copper on its footprint's
-            // side alone, as KiCad takes it: nothing joins the layers through it.
+            // A pad with no hole that lists every copper layer joins its net on its footprint's
+            // side alone, as KiCad takes it: nothing joins the layers through it. Its copper is on
+            // the other layers all the same, for other nets to keep clear of: drawn copper there.
+            let mut unjoined = 0;
             if model.drill.is_none() && pad.layers.iter().any(|l| l == "*.Cu") {
                 let side = if matches!(pcb.footprints[pad.footprint].side, kicad_pcb::Side::Back) { one("B.Cu") } else { one("F.Cu") };
+                unjoined = layers & !side;
                 layers &= side;
             }
             let shape = match &pad.outline {
@@ -341,6 +458,25 @@ impl Board {
                         hole: None,
                         ..base.clone()
                     }));
+                }
+            }
+            // Where the pad's mask opens over a side without its copper, the opening bares what
+            // lies there: only the pad's net may run there, or, for an opening with no copper at
+            // all, the one net whose pads it bares.
+            let margin = nm(pad.mask_margin.unwrap_or(copper.pad_to_mask_clearance).max(0.0));
+            let pad_shapes: Vec<Shape> = match &pad.outline {
+                Outline::Circle { .. } => vec![base.shape.clone()],
+                Outline::Polygons(polys) => polys.iter().map(|p| Shape::Polygon(p.iter().copied().map(Point::from_m).collect())).collect(),
+            };
+            for side in [one("F.Cu"), one("B.Cu")] {
+                if openings & side != 0 && layers & side == 0 {
+                    let lists_copper = pad.layers.iter().any(|l| l.ends_with(".Cu"));
+                    apertures.push((pad_shapes.iter().map(|s| grown(s, margin)).collect(), side, lists_copper.then_some(base.net)));
+                }
+            }
+            if unjoined != 0 {
+                for shape in &pad_shapes {
+                    board.insert(Item { kind: Kind::Pour { zone: DRAWN, kept: true }, net: base.net, layers: unjoined, shape: shape.clone(), hole: None, locked: true, span: None });
                 }
             }
             ids.push(board.insert(base));
@@ -457,23 +593,32 @@ impl Board {
         board.via_openings = (bare(copper.vias_bare[0], copper.vias_bare[1]), nm(copper.pad_to_mask_clearance.max(0.0)));
         for g in &copper.mask_graphics {
             let layer = bare(g.layer == "F.Mask", g.layer == "B.Mask");
-            let l = layer.trailing_zeros() as usize;
             let shapes: Vec<Shape> = g.polygons.iter().map(|poly| Shape::Polygon(poly.iter().copied().map(Point::from_m).collect())).collect();
-            // The nets of the pads the drawing bares, judged over the whole of it (its outline's
-            // stroke is drawn in pieces): a pad is bared when its centre lies in the drawing.
-            let mut nets: Vec<u32> = Vec::new();
-            for shape in &shapes {
-                for id in board.near(l, shape.bbox()) {
-                    let Some(it) = board.item(id) else { continue };
-                    let b = it.shape.bbox();
-                    if matches!(it.kind, Kind::Pad { .. }) && it.on(l) && shape.contains(Point::new((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2)) {
-                        nets.push(it.net);
+            apertures.push((shapes, layer, None));
+        }
+        for (shapes, layer, net) in apertures {
+            if layer == 0 {
+                continue;
+            }
+            let l = layer.trailing_zeros() as usize;
+            // As KiCad judges an opening that belongs to no copper: by the nets of the pads it
+            // bares, over the whole of it (its outline's stroke is drawn in pieces), a pad being
+            // bared when its copper there touches the opening. One net may run there; with none
+            // or several, none may.
+            let net = net.unwrap_or_else(|| {
+                let mut nets: Vec<u32> = Vec::new();
+                for shape in &shapes {
+                    for id in board.near(l, shape.bbox()) {
+                        let Some(it) = board.item(id) else { continue };
+                        if matches!(it.kind, Kind::Pad { .. }) && it.on(l) && shape.gap_within(&it.shape, 1.0) == 0.0 {
+                            nets.push(it.net);
+                        }
                     }
                 }
-            }
-            nets.sort_unstable();
-            nets.dedup();
-            let net = if let [n] = nets[..] { n } else { 0 };
+                nets.sort_unstable();
+                nets.dedup();
+                if let [n] = nets[..] { n } else { 0 }
+            });
             board.mask_areas.extend(shapes.into_iter().map(|shape| (shape, layer, net)));
         }
         for g in &copper.graphics {

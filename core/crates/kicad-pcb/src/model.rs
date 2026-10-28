@@ -66,6 +66,15 @@ pub struct OutlinePrimitive {
     /// The footprint (uuid) whose `fp_*` graphic this is; `None` for a
     /// board-level `gr_*`.
     pub footprint: Option<String>,
+    /// The stroke's width as KiCad's edge clearance counts it, metres: the
+    /// drawn width on `Margin`, 0 on `Edge.Cuts`, whose lines KiCad takes
+    /// as having none.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub width: f64,
+}
+
+fn is_zero(w: &f64) -> bool {
+    *w == 0.0
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -140,8 +149,9 @@ pub struct Pad {
     pub shape: String,
     /// Centre in the board frame, metres (footprint `at` applied).
     pub position: [f64; 2],
-    /// Absolute rotation, degrees (footprint rotation + the pad's
-    /// footprint-relative angle).
+    /// Absolute rotation, degrees: the angle of the pad's `(at x y angle)`,
+    /// which KiCad writes on the board's frame, its footprint's rotation
+    /// already in it.
     pub rotation_deg: f64,
     /// `(size w h)`, metres.
     pub size: [f64; 2],

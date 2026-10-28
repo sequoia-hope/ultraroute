@@ -314,10 +314,21 @@ fn read_graphic(
         None => (Placement::IDENTITY, None),
     };
     let form = n.head().unwrap_or("graphic");
+    // KiCad's edge clearance counts a Margin line's width, and an Edge.Cuts line as having none.
+    let width = match layer_of(n) {
+        Some("Margin") => n
+            .find("stroke")
+            .and_then(|s| s.find("width"))
+            .or_else(|| n.find("width"))
+            .and_then(|w| w.number_arg(0, "width").ok())
+            .map_or(0.0, |w| w.max(0.0) * MM),
+        _ => 0.0,
+    };
     let mut push = |shape: OutlineShape| {
         out.push(OutlinePrimitive {
             shape,
             footprint: footprint.clone(),
+            width,
         })
     };
     match form {
@@ -616,7 +627,8 @@ fn read_pad(p: &Node, placement: &Placement) -> Result<Pad, KicadParse> {
         kind,
         shape,
         position: placement.apply(local),
-        rotation_deg: placement.rotation_deg + pad_rot,
+        // The file holds a pad's angle on the board, its footprint's rotation included.
+        rotation_deg: pad_rot,
         size,
         drill,
         net,

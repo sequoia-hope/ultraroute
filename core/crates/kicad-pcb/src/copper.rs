@@ -44,6 +44,10 @@ pub struct Copper {
     /// Openings drawn in the solder mask, on `F.Mask` or `B.Mask`, as `graphics` are read.
     #[serde(default)]
     pub mask_graphics: Vec<CopperGraphic>,
+    /// `(setup (solder_mask_min_width X))`: the narrowest web of mask KiCad wants between two
+    /// openings, metres; two openings nearer than this bridge.
+    #[serde(default)]
+    pub solder_mask_min_width: f64,
     /// The outer copper sides whose vias the mask leaves bare (`(setup (tenting ...))` without
     /// that side): `[front, back]`.
     #[serde(default)]
@@ -263,6 +267,11 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
             }
             None => [false, false],
         },
+        solder_mask_min_width: root
+            .find("setup")
+            .and_then(|s| s.find("solder_mask_min_width"))
+            .and_then(|c| c.number_arg(0, "solder_mask_min_width").ok())
+            .map_or(0.0, |mm| mm.max(0.0) * MM),
         pad_to_mask_clearance: root
             .find("setup")
             .and_then(|s| s.find("pad_to_mask_clearance"))
@@ -424,7 +433,8 @@ fn graphic(g: &Node, place: &dyn Fn([f64; 2]) -> [f64; 2], rotation: f64) -> Res
             let size = font.and_then(|f| f.find("size")).map(|s| point_of(s, "size")).transpose()?.unwrap_or([1e-3, 1e-3]);
             let thick = font.and_then(|f| f.find("thickness")).and_then(|t| t.number_arg(0, "thickness").ok()).map_or(size[0] * 0.15, |t| t * MM);
             let justify: Vec<&str> = effects.and_then(|e| e.find("justify")).map(|j| j.args().iter().filter_map(Node::text).collect()).unwrap_or_default();
-            let lines = string.split("\\n").collect::<Vec<_>>();
+            // The reader has turned the file's `\\n` escapes into newlines.
+            let lines = string.split('\n').collect::<Vec<_>>();
             let chars = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as f64;
             let (w, h) = (chars * size[1] * 1.1 + thick, lines.len() as f64 * size[0] * 1.6 + thick);
             let x0 = if justify.contains(&"left") { 0.0 } else if justify.contains(&"right") { -w } else { -w / 2.0 };
