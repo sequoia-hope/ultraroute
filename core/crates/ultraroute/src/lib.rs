@@ -725,6 +725,38 @@ impl Live {
 }
 
 /// Every part that moved, by hand or by the nudger, as the `(at …)` it now has.
+/// The fills of refillable pours, as last poured, that new copper of another net now comes
+/// within clearance of, or every such fill once a part has moved: written out they would short
+/// the new copper until KiCad refilled them, so they go, and KiCad shows those zones unfilled.
+/// Kept pours, which the router steers clear of, keep theirs.
+fn stale_fills(board: &Board, laid: &[ItemId], text: &str, moved: bool) -> Vec<kicad_pcb::Span> {
+    let Ok((_, copper)) = kicad_pcb::parse_board(text) else { return Vec::new() };
+    let new: Vec<&Item> = laid.iter().filter_map(|&id| board.item(id)).filter(|it| matches!(it.kind, Kind::Track | Kind::Via)).collect();
+    let mut stale: BTreeSet<(usize, String)> = BTreeSet::new();
+    for (_, pour) in board.items() {
+        let Kind::Pour { zone, kept: false } = pour.kind else { continue };
+        let Some(z) = copper.zones.get(zone) else { continue };
+        let layer = board.layers.get(pour.layers.trailing_zeros() as usize).cloned().unwrap_or_default();
+        if stale.contains(&(zone, layer.clone())) {
+            continue;
+        }
+        let cuts = |it: &&Item| {
+            let c = (board.clearance(pour.net, it.net).max(board::nm(z.clearance)) + 1) as f64;
+            it.net != pour.net && it.layers & pour.layers != 0 && pour.shape.bbox().grow(c as Nm).overlaps(it.shape.bbox()) && pour.shape.gap_within(&it.shape, c) < c
+        };
+        if moved || new.iter().any(cuts) {
+            stale.insert((zone, layer));
+        }
+    }
+    stale
+        .iter()
+        .flat_map(|(zone, layer)| {
+            let z = &copper.zones[*zone];
+            z.filled.iter().zip(&z.fill_spans).filter(move |((l, _), _)| l == layer).map(|(_, span)| *span)
+        })
+        .collect()
+}
+
 fn moved_parts(board: &Board, original_at: &[Point]) -> Vec<(kicad_pcb::Span, String)> {
     board
         .footprints
@@ -1157,6 +1189,7 @@ pub fn run_with_solver(
             print_blame(&mut board, a.pours_block);
         }
         let replace = moved_parts(&board, &original_at);
+        removed.extend(stale_fills(&board, &[], text, !replace.is_empty()));
         let out = apply(text, &Edit { remove: removed, replace, ..Edit::default() });
         if let Some(l) = live.as_mut() {
             l.fills(&out, &board.rules);
@@ -2023,6 +2056,11 @@ pub fn run_with_solver(
     let replace = moved_parts(&board, &original_at);
     grid::keep_orphans(&board, &removed, &mut laid);
     let (tracks, vias) = grid::edits(&board, &laid);
+    let stale = stale_fills(&board, &laid, text, !replace.is_empty());
+    if !stale.is_empty() {
+        eprintln!("dropped {} pour fills new copper cuts; KiCad refills them", stale.len());
+    }
+    removed.extend(stale);
     let routed = apply(text, &Edit { remove: removed, replace, tracks, vias });
     let mut live = live.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(l) = live.as_mut() {
@@ -2052,6 +2090,34 @@ mod tests {
     fn earring() -> Board {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/earring.kicad_pcb");
         Board::load(&path).unwrap().0
+    }
+
+    #[test]
+    fn a_fill_new_copper_cuts_is_dropped_and_others_kept() {
+        let text = "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal)) (net 0 \"\") (net 1 \"GND\") (net 2 \"SIG\")
+\t(zone (net 1) (net_name \"GND\") (layer \"F.Cu\") (uuid \"z1\") (name \"gnd\") (connect_pads (clearance 0.2)) (min_thickness 0.2) (polygon (pts (xy 0 0) (xy 10 0) (xy 10 10) (xy 0 10))) (filled_polygon (layer \"F.Cu\") (pts (xy 0.2 0.2) (xy 9.8 0.2) (xy 9.8 9.8) (xy 0.2 9.8))))
+\t(zone (net 1) (net_name \"GND\") (layer \"F.Cu\") (uuid \"z2\") (name \"far\") (connect_pads (clearance 0.2)) (min_thickness 0.2) (polygon (pts (xy 50 0) (xy 60 0) (xy 60 10) (xy 50 10))) (filled_polygon (layer \"F.Cu\") (pts (xy 50.2 0.2) (xy 59.8 0.2) (xy 59.8 9.8) (xy 50.2 9.8))))
+)";
+        let (pcb, copper) = kicad_pcb::parse_board(text).unwrap();
+        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+        let track = |net: u32, layers: u64| Item {
+            kind: Kind::Track,
+            net,
+            layers,
+            shape: Shape::Capsule { a: Point::new(-5_000_000, 5_000_000), b: Point::new(15_000_000, 5_000_000), r: 100_000 },
+            hole: None,
+            locked: false,
+            span: None,
+        };
+        let (sig, gnd, back) = (board.insert(track(2, 1)), board.insert(track(1, 1)), board.insert(track(2, 2)));
+        let gone = stale_fills(&board, &[sig], text, false);
+        assert_eq!(gone, vec![copper.zones[0].fill_spans[0]], "only the fill the other net's track crosses goes");
+        assert!(text[gone[0].start..gone[0].end].starts_with("(filled_polygon"));
+        assert!(stale_fills(&board, &[gnd, back], text, false).is_empty(), "its own net, or another layer, cuts nothing");
+        assert_eq!(stale_fills(&board, &[], text, true).len(), 2, "a moved part leaves every fill stale");
+        let out = apply(text, &Edit { remove: gone, ..Edit::default() });
+        assert_eq!(out.matches("filled_polygon").count(), 1);
+        assert!(kicad_pcb::parse_board(&out).is_ok());
     }
 
     #[test]

@@ -137,6 +137,9 @@ pub struct Zone {
     pub outline: Vec<[f64; 2]>,
     /// The poured copper KiCad last computed, per layer; empty for a keepout or an unfilled zone.
     pub filled: Vec<(String, Vec<[f64; 2]>)>,
+    /// Where each of `filled` is written, so a stale fill can be taken out of the file.
+    #[serde(default)]
+    pub fill_spans: Vec<Span>,
     pub keepout: Option<Keepout>,
     pub priority: u32,
     /// `(connect_pads (clearance …))`: the gap the pour keeps from other nets, in metres; 0 when unset.
@@ -526,11 +529,12 @@ fn read_zone(z: &Node, footprint: Option<usize>) -> Result<Zone, KicadParse> {
         }
     });
     let outline = z.find("polygon").and_then(|p| p.find("pts")).map(pts).transpose()?.unwrap_or_default();
-    let mut filled = Vec::new();
+    let (mut filled, mut fill_spans) = (Vec::new(), Vec::new());
     for f in z.find_all("filled_polygon") {
         let layer = f.find("layer").and_then(|l| l.args().first()).and_then(Node::text).unwrap_or("").to_string();
         if let Some(p) = f.find("pts") {
             filled.push((layer, pts(p)?));
+            fill_spans.push(f.pos().into());
         }
     }
     Ok(Zone {
@@ -540,6 +544,7 @@ fn read_zone(z: &Node, footprint: Option<usize>) -> Result<Zone, KicadParse> {
         layers,
         outline,
         filled,
+        fill_spans,
         keepout,
         priority: z.find("priority").and_then(|p| p.number_arg(0, "priority").ok()).unwrap_or(0.0) as u32,
         clearance: z
