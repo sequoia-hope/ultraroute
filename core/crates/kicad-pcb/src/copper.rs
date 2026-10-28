@@ -44,6 +44,10 @@ pub struct Copper {
     /// Openings drawn in the solder mask, on `F.Mask` or `B.Mask`, as `graphics` are read.
     #[serde(default)]
     pub mask_graphics: Vec<CopperGraphic>,
+    /// `(setup (solder_mask_min_width X))`: the narrowest web of mask KiCad wants between two
+    /// openings, metres; two openings nearer than this bridge.
+    #[serde(default)]
+    pub solder_mask_min_width: f64,
     /// The outer copper sides whose vias the mask leaves bare (`(setup (tenting ...))` without
     /// that side): `[front, back]`.
     #[serde(default)]
@@ -263,6 +267,11 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
             }
             None => [false, false],
         },
+        solder_mask_min_width: root
+            .find("setup")
+            .and_then(|s| s.find("solder_mask_min_width"))
+            .and_then(|c| c.number_arg(0, "solder_mask_min_width").ok())
+            .map_or(0.0, |mm| mm.max(0.0) * MM),
         pad_to_mask_clearance: root
             .find("setup")
             .and_then(|s| s.find("pad_to_mask_clearance"))

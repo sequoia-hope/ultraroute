@@ -118,11 +118,88 @@ fn an_edge_arc_that_ends_where_it_starts_is_a_whole_circle() {
 }
 
 #[test]
-fn a_pad_without_a_hole_on_every_layer_has_copper_on_its_side_alone() {
-    let b = board(
+fn a_pad_without_a_hole_on_every_layer_joins_on_its_side_alone_but_is_copper_on_all() {
+    let mut b = board(
         "(footprint \"J\" (layer \"F.Cu\") (uuid \"0b10c000-0000-4000-8000-0000000000b4\") (at 15 15) (property \"Reference\" \"J1\")
            (pad \"1\" smd rect (at 0 0) (size 2 1) (layers \"*.Cu\" \"*.Mask\") (net 1 \"A\")))",
     );
-    let (_, pad) = b.items().find(|(_, it)| matches!(it.kind, Kind::Pad { .. })).unwrap();
-    assert_eq!(pad.layers, 1, "F.Cu only");
+    let (pad, it) = b.items().find(|(_, it)| matches!(it.kind, Kind::Pad { .. })).unwrap();
+    assert_eq!(it.layers, 1, "the pad joins on F.Cu only");
+    // KiCad still sees its copper on B.Cu: another net's track there shorts to it, and its own
+    // net's track there is not connected to it.
+    let back = |b: &mut Board, net| {
+        b.insert(Item {
+            kind: Kind::Track,
+            net,
+            layers: 2,
+            shape: Shape::Capsule { a: Point::new(nm(15e-3), nm(10e-3)), b: Point::new(nm(15e-3), nm(20e-3)), r: nm(0.1e-3) },
+            hole: None,
+            locked: false,
+            span: None,
+        })
+    };
+    let other = back(&mut b, 2);
+    assert!(check_item(&b, other).iter().any(|v| v.rule == Rule::Clearance), "net B's track over the pad on B.Cu");
+    b.remove(other);
+    let own = back(&mut b, 1);
+    assert!(check_item(&b, own).is_empty(), "net A's own track may lie there");
+    let c = connectivity(&b);
+    assert_ne!(c.cluster[&pad], c.cluster[&own], "but it does not join the pad");
+}
+
+#[test]
+fn an_unplated_slot_lies_along_its_pads_angle_on_the_board() {
+    // The pad's angle in the file is on the board: 90° with the footprint's 90° in it, so the
+    // slot, long along the pad's own y, lies along the board's x, from 14.1 to 15.9.
+    let mut b = board(
+        "(footprint \"S\" (layer \"F.Cu\") (uuid \"0b10c000-0000-4000-8000-0000000000b5\") (at 15 15 90) (property \"Reference\" \"SW1\")
+           (pad \"\" np_thru_hole oval (at 0 0 90) (size 0.8 2.6) (drill oval 0.8 2.6) (layers \"*.Cu\" \"*.Mask\")))",
+    );
+    // 0.25 mm beyond the slot's end: clear of the 0.2 mm clearance, not of the 0.3 mm edge rule.
+    let t = track(&mut b, 15.0 + 1.3 + 0.1 + 0.25);
+    assert!(!check_item(&b, t).is_empty(), "the slot's end is board edge");
+}
+
+#[test]
+fn a_margin_line_keeps_copper_off_its_stroke_and_an_edge_line_off_its_centre() {
+    // 0.4 mm wide lines at x = 5; a track 0.35 mm from the centre line is 0.15 mm from the stroke.
+    for (layer, near) in [("Margin", true), ("Edge.Cuts", false)] {
+        let mut b = board(&format!("(gr_line (start 5 5) (end 5 25) (layer \"{layer}\") (stroke (width 0.4) (type solid)))"));
+        let t = track(&mut b, 5.0 + 0.1 + 0.35);
+        assert_eq!(!check_item(&b, t).is_empty(), near, "{layer}");
+        let t = track(&mut b, 5.0 + 0.1 + 0.2 + 0.31);
+        assert!(check_item(&b, t).is_empty(), "{layer}: 0.31 mm beyond the stroke");
+    }
+}
+
+#[test]
+fn an_edge_arc_keeps_copper_off_on_both_its_sides_to_the_micron() {
+    // A half circle of radius 8 about (15, 15), y down; dots of copper 0.2985 mm off it, inside
+    // and outside, all round: the arc's straight pieces must not pass farther from either.
+    let mut b = board("(gr_arc (start 23 15) (mid 15 23) (end 7 15) (layer \"Edge.Cuts\") (width 0.1))");
+    for k in 1..200 {
+        let t = std::f64::consts::PI * k as f64 / 200.0;
+        for r in [8.0 + 0.1 + 0.2985, 8.0 - 0.1 - 0.2985] {
+            let p = Point::new(nm((15.0 + r * t.cos()) * 1e-3), nm((15.0 + r * t.sin()) * 1e-3));
+            let dot = b.insert(Item { kind: Kind::Via, net: 2, layers: 1, shape: Shape::Capsule { a: p, b: p, r: nm(0.1e-3) }, hole: None, locked: false, span: None });
+            assert!(check_item(&b, dot).iter().any(|v| v.rule == Rule::EdgeClearance), "at {t:.3} rad, radius {r}");
+            b.remove(dot);
+        }
+    }
+}
+
+#[test]
+fn copper_text_of_several_lines_is_as_tall_as_all_of_them() {
+    // Three lines 1 mm high about (15, 15): the last is near y = 16.6, well below one line's box.
+    let mut b = board("(gr_text \"ONE\\nTWO\\nTHREE\" (at 15 15) (layer \"F.Cu\") (effects (font (size 1 1) (thickness 0.15))))");
+    let t = b.insert(Item {
+        kind: Kind::Track,
+        net: 2,
+        layers: 1,
+        shape: Shape::Capsule { a: Point::new(nm(10e-3), nm(16.8e-3)), b: Point::new(nm(20e-3), nm(16.8e-3)), r: nm(0.1e-3) },
+        hole: None,
+        locked: false,
+        span: None,
+    });
+    assert!(!check_item(&b, t).is_empty(), "through the third line");
 }

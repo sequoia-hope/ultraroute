@@ -96,3 +96,75 @@ fn an_opening_drawn_in_the_mask_admits_only_the_net_it_bares() {
     let other = track(&mut b, 2);
     assert!(check_item(&b, other).iter().any(|v| v.rule == Rule::Keepout), "net B would be bared beside A");
 }
+
+/// A vertical track of `net` at `x` on the layer bit `layer`, from y 5 to 15.
+fn track_at(b: &mut Board, net: u32, x: f64, layer: u64) -> ItemId {
+    b.insert(Item { kind: Kind::Track, net, layers: layer, shape: Shape::Capsule { a: Point::new(nm(x * 1e-3), nm(5e-3)), b: Point::new(nm(x * 1e-3), nm(15e-3)), r: nm(0.1e-3) }, hole: None, locked: false, span: None })
+}
+
+#[test]
+fn a_pads_opening_over_the_side_without_its_copper_bares_that_side() {
+    // Net B's pad at (15, 10) has its copper on B.Cu and its 0.2 mm mask opening on the front.
+    let pad = "(footprint \"P\" (layer \"F.Cu\") (uuid \"0b10c000-0000-4000-8000-0000000000ac\") (at 15 10) (property \"Reference\" \"P1\")
+         (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"B.Cu\" \"F.Mask\") (net 2 \"B\")))";
+    let mut b = plain("(pad_to_mask_clearance 0.2)", pad);
+    // 0.15 mm from the pad's outline, within its opening, on F.Cu.
+    let x = 15.5 + 0.1 + 0.15;
+    let a = track_at(&mut b, 1, x, 1);
+    assert!(!check_item(&b, a).is_empty(), "net A bared in B's front opening");
+    b.remove(a);
+    let own = track_at(&mut b, 2, x, 1);
+    assert!(check_item(&b, own).is_empty(), "net B's own track may lie there");
+    b.remove(own);
+    let outside = track_at(&mut b, 1, 15.5 + 0.1 + 0.25, 1);
+    assert!(check_item(&b, outside).is_empty(), "outside the opening");
+}
+
+#[test]
+fn an_opening_drawn_in_the_mask_bares_the_pads_it_touches_not_only_those_it_covers() {
+    // A stroke on F.Mask from A's pad (edge at 10.5) to B's (edge at 11.5), covering neither
+    // centre: it bares both nets, so neither may run there.
+    let drawn = "(footprint \"P\" (layer \"F.Cu\") (uuid \"0b10c000-0000-4000-8000-0000000000ad\") (at 12 10) (property \"Reference\" \"P2\")
+         (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\") (net 2 \"B\")))
+         (gr_line (start 10.4 10) (end 11.6 10) (layer \"F.Mask\") (stroke (width 0.4) (type solid)))";
+    let mut b = plain("(pad_to_mask_clearance 0)", drawn);
+    assert_eq!(b.mask_areas.len(), 1);
+    assert_eq!(b.mask_areas[0].2, 0, "it bares nets A and B");
+    let a = track_at(&mut b, 1, 11.0, 1);
+    assert!(check_item(&b, a).iter().any(|v| v.rule == Rule::Keepout));
+}
+
+#[test]
+fn a_mask_only_pad_admits_the_one_net_of_the_pads_it_bares() {
+    // A 4 mm opening with no copper of its own over net A's pad at (10, 10).
+    let drawn = "(footprint \"M\" (layer \"F.Cu\") (uuid \"0b10c000-0000-4000-8000-0000000000ae\") (at 10 10) (property \"Reference\" \"M1\")
+         (pad \"\" smd circle (at 0 0) (size 4 4) (layers \"F.Mask\")))";
+    let mut b = plain("(pad_to_mask_clearance 0)", drawn);
+    assert_eq!(b.mask_areas.iter().map(|a| a.2).collect::<Vec<_>>(), vec![1]);
+    let own = track_at(&mut b, 1, 11.5, 1);
+    assert!(check_item(&b, own).is_empty(), "net A may run in it");
+    let other = track_at(&mut b, 2, 11.5, 1);
+    assert!(check_item(&b, other).iter().any(|v| v.rule == Rule::Keepout), "net B would be bared there");
+}
+
+#[test]
+fn two_bare_openings_keep_the_masks_narrowest_web_between_them() {
+    // Openings reach 0.1 mm and the web is 0.1 mm: a bare via keeps its copper 0.3 mm from
+    // another's, and from a pad's with a front opening.
+    let setup = "(pad_to_mask_clearance 0.1) (solder_mask_min_width 0.1) (tenting none)";
+    let pad = "(footprint \"P\" (layer \"F.Cu\") (uuid \"0b10c000-0000-4000-8000-0000000000af\") (at 15 10) (property \"Reference\" \"P3\")
+         (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\" \"F.Mask\") (net 1 \"A\")))";
+    for (gap, bridged) in [(0.25, true), (0.31, false)] {
+        let mut b = plain(setup, pad);
+        via(&mut b, 1, 5.0, 5.0);
+        let v = via(&mut b, 2, 5.6 + gap, 5.0);
+        assert_eq!(!check_item(&b, v).is_empty(), bridged, "via to via {gap}");
+        let p = via(&mut b, 2, 15.5 + 0.3 + gap, 10.0);
+        assert_eq!(!check_item(&b, p).is_empty(), bridged, "via to pad {gap}");
+    }
+    // A track has no opening: it keeps only the via's 0.1 mm.
+    let mut b = plain(setup, "");
+    via(&mut b, 1, 5.0, 5.0);
+    let t = track_at(&mut b, 2, 5.0 + 0.3 + 0.1 + 0.15, 1);
+    assert!(check_item(&b, t).is_empty());
+}

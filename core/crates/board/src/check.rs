@@ -94,15 +94,10 @@ impl Limits {
         let pth_hole_clearance = hole_clearance.max(nm(rules.pth_hole_clearance));
         let pth_hole_to_hole = hole_to_hole.max(nm(rules.pth_hole_to_hole));
         let smd_pad_clearance = nm(rules.smd_pad_clearance);
-        // The widest solder mask opening round a pad beyond its copper, or pad clearance.
-        let mask = board
-            .mask_openings
-            .values()
-            .chain([&board.via_openings])
-            .map(|o| o.1 + MASK_MARGIN)
-            .chain(board.pad_clearances.values().copied())
-            .max()
-            .unwrap_or(0);
+        // The widest solder mask opening round a pad beyond its copper, twice over with the web
+        // between two openings, or pad clearance.
+        let widest = board.mask_openings.values().chain([&board.via_openings]).map(|o| o.1).max().unwrap_or(0);
+        let mask = (2 * widest + MASK_MARGIN + board.mask_web).max(board.pad_clearances.values().copied().max().unwrap_or(0));
         Limits {
             max_clearance: rules
                 .classes
@@ -138,6 +133,19 @@ pub fn mask_gap(board: &Board, id: ItemId, own: &Item, other: &Item, layer: usiz
     match opening {
         Some((layers, by)) if layers & (1 << layer) != 0 => by + MASK_MARGIN,
         _ => 0,
+    }
+}
+
+/// The gap two items' copper must keep on `layer` for neither to be bared in the other's solder
+/// mask opening, and, where both have an opening there (a bare via beside a pad or another bare
+/// via), for the two openings to keep the mask's narrowest web between them, as KiCad checks
+/// opening against opening.
+pub fn mask_pair_gap(board: &Board, a_id: ItemId, a: &Item, b_id: ItemId, b: &Item, layer: usize) -> Nm {
+    let (x, y) = (mask_gap(board, a_id, a, b, layer), mask_gap(board, b_id, b, a, layer));
+    if x > 0 && y > 0 {
+        x + y - MASK_MARGIN + board.mask_web
+    } else {
+        x.max(y)
     }
 }
 
@@ -214,7 +222,7 @@ fn item_checks(
                         if smd(item) && smd(o) {
                             required = required.max(limits.smd_pad_clearance);
                         }
-                        required = required.max(mask_gap(board, id, item, o, layer)).max(mask_gap(board, other, o, item, layer));
+                        required = required.max(mask_pair_gap(board, id, item, other, o, layer));
                         for p in [id, other] {
                             required = required.max(board.pad_clearances.get(&p).copied().unwrap_or(0));
                         }

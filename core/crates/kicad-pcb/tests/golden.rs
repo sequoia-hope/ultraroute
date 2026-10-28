@@ -106,7 +106,8 @@ fn rect_v8_golden_and_values() {
         "{:?}",
         p1.position
     );
-    assert_eq!(p1.rotation_deg, 180.0);
+    // The pad's `(at -0.825 0 90)` angle is on the board, the footprint's 90° already in it.
+    assert_eq!(p1.rotation_deg, 90.0);
     assert_eq!(p1.kind, PadKind::Smd);
     assert_eq!(p1.net.as_ref().unwrap().name, "GND");
     assert!(!p1.is_unconnected_hole());

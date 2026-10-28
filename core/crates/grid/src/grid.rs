@@ -368,7 +368,7 @@ impl ObstacleMap {
             [r.min_copper_edge_clearance, r.min_clearance, r.min_hole_clearance, r.pth_hole_clearance, r.min_hole_to_hole].map(f64::to_bits).hash(h);
             board.outline.hash(h);
             board.outline_edges.iter().map(|&(a, b, _)| (a, b)).collect::<Vec<_>>().hash(h);
-            board.via_openings.hash(h);
+            (board.via_openings, board.mask_web).hash(h);
             for &id in fixed {
                 let Some(it) = board.item(id) else { continue };
                 (id, it.net, it.layers, it.refilled(), it.hole, self.clearance_to(board, it.net)).hash(h);
@@ -690,6 +690,8 @@ impl ObstacleMap {
             };
             if let Some((layers, by)) = opening {
                 let keep = by + board::MASK_MARGIN;
+                // A bare via's own opening keeps the mask's narrowest web from this one too.
+                let via_keep = if layers & bare != 0 { keep + board.via_openings.1 + board.mask_web } else { keep };
                 if keep > clearance {
                     let mut hit = Vec::new();
                     self.cells_near(&item.shape, half_width + keep + reach, &mut |c| hit.push(c));
@@ -698,8 +700,10 @@ impl ObstacleMap {
                             ObstacleMap::claim(&mut self.owner[l * cells + c], item.net);
                         }
                     }
-                    hit.clear();
-                    self.cells_near(&item.shape, via_radius + keep, &mut |c| hit.push(c));
+                }
+                if via_keep > clearance {
+                    let mut hit = Vec::new();
+                    self.cells_near(&item.shape, via_radius + via_keep, &mut |c| hit.push(c));
                     for c in hit {
                         ObstacleMap::claim(&mut self.via_owner[c], item.net);
                     }

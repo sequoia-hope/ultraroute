@@ -447,6 +447,7 @@ mod tests {
         OutlinePrimitive {
             shape: OutlineShape::Line { start: a, end: b },
             footprint: None,
+            width: 0.0,
         }
     }
 
@@ -521,6 +522,7 @@ mod tests {
                 radius: 0.002,
             },
             footprint: None,
+            width: 0.0,
         });
         let l = chain(&prims).unwrap();
         assert_eq!(l.holes.len(), 2);
@@ -571,6 +573,7 @@ mod tests {
                     end: [2.0, 0.0],
                 },
                 footprint: None,
+                width: 0.0,
             },
             line([2.0, 0.0], [0.0, 0.0]),
         ];
