@@ -12,6 +12,35 @@ Boards and runs live in ~/Software/ultraroute-lab/pcbench/. `ULTRAROUTE_BIN` pic
 router build. Conversion gives each repeated uuid a fresh one (KiCad 5 numbers footprints 0, 1,
 ...).
 
+## Comparing runs
+
+    python3 tools/pcbench.py compare A B [C ...] [--noise N|auto] [--noise-from A B] [--json OUT]
+    python3 tools/pcbench.py note RUN "text"
+
+`compare` judges each later run against A on the boards both routed: clean count, boards lost and
+won (with what was open and which error types were new), boards whose new error types changed,
+vias and wirelength over boards clean in both, boards at the time limit (within 10 s of the run's
+timeout), referee failures and peak memory. It exits 1 when a run loses more boards than the
+noise allows or any board gains an error type. `--json` writes the per-board table.
+
+**Noise floor.** Until the router is deterministic under a wall-clock budget, the same binary and
+seed disagree with themselves on a few boards. `--noise auto` counts the boards whose verdict
+differs between `remed-0-base-s0` and `remed-0-base-s0b` (the 200-board subset, `--sample 200
+--sample-seed 1`, binary 184f640 run twice on seed 0): **3**. Across seeds 0, 1 and 2 it is 7
+(s0 vs s1) and 5 (s0 vs s2). No board gained an error type in any of those pairs.
+
+## Provenance and referee failures
+
+`run` writes `runs/RUN/run.json` once, when the run starts: recipe, timeout, seed, boards,
+commit (and whether `core/` was dirty), the router binary's path and sha256, `kicad-cli
+--version`, Python, host and workers. Resuming a run whose commit or binary hash differs is
+refused unless `--resume-anyway` is given, which records the new provenance under `resumed`.
+`--note` (or the `note` command) adds to its `notes`.
+
+Each route runs under `/usr/bin/time`, and `result.json` keeps its peak resident memory as
+`peak_mb`. When the zone refill or KiCad's DRC fails, the board gets `referee_error` (the end of
+the tool's stderr) and no verdict; `report` counts it as "referee failed", not "router failed".
+
 A board is **clean** when KiCad finds nothing unconnected after a refill and no DRC error of a
 type the bare board had fewer of; **routed** allows new solder mask bridges, closer to what the
 baselines probably counted. Wirelength and vias are counted as the baselines report them.

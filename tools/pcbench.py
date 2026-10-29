@@ -9,20 +9,35 @@ baselines (FreeRouting, PcbRouter, RL-MCTS; PCBench/Baselines/Results_all.csv).
                                              runs $RESERVED_CORES routes at once)
     pcbench.py report RUN [RUN ...]          success, wirelength and vias against the baselines
     pcbench.py rescore RUN [RUN ...]         judge saved reports again (after the rules change)
+    pcbench.py compare A B [C ...] [--noise N|auto] [--noise-from A B] [--json OUT]
+                                             each later run against A, board by board: boards
+                                             lost and won, error types gained, vias, wirelength,
+                                             time limit, referee failures, peak memory; exits 1
+                                             when one loses more than N boards (auto: the boards
+                                             whose verdict differs between remed-0-base-s0 and
+                                             remed-0-base-s0b, the same binary and seed twice: 3)
+                                             or a board gains an error type
+    pcbench.py note RUN TEXT                 add a dated note to the run's run.json
 
 A board succeeds when KiCad finds nothing unconnected after a zone refill and no DRC error that
 involves routed copper (a track, arc or via) of a type the bare board did not have as often: routed copper that breaks the board's own rules is a
-failure, not a success. Wirelength is the routed tracks' length and vias their count, as the
+failure, not a success. When KiCad itself fails (the zone refill or the DRC), the board gets
+`referee_error` and no verdict: the referee failed, not the router. Wirelength is the routed tracks' length and vias their count, as the
 baselines report them. Everything lives in ~/Software/ultraroute-lab/pcbench/: boards/ID/ holds
 board.kicad_pcb (+ .kicad_pro), bare.kicad_pcb and bare.json, runs/RUN/ID/ each run's output.
+runs/RUN/run.json records where the run came from (commit, binary and its sha256, kicad-cli,
+Python, host, workers) when it starts; resuming a run with another commit or binary is refused
+unless --resume-anyway is given. Each board's peak memory (`peak_mb`) comes from /usr/bin/time.
 """
 
 import argparse
 import concurrent.futures
 import csv
+import hashlib
 import json
 import math
 import os
+import platform
 import random
 import re
 import shutil
@@ -39,6 +54,9 @@ ROUTER = Path(os.environ.get("ULTRAROUTE_BIN", ROOT / "core/target/release/ultra
 RECIPE = "--negotiate --rip-up --tighten --prefanout --diff-pairs --shove-plough region --shove-reach 0.5 --shove-repair 20 --shove-ties --shove-passes 60 --shove-patience 8"
 MASK = {"solder_mask_bridge"}
 CAP = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=8G", "-p", "MemorySwapMax=0"]
+# The two runs of the Stage 0 baseline made with the same binary and seed: the boards whose verdict
+# differs between them are the benchmark's noise floor (`compare --noise auto`).
+NOISE_RUNS = ("remed-0-base-s0", "remed-0-base-s0b")
 
 
 def baselines():
@@ -63,18 +81,35 @@ def board_ids(only=None):
     return ids
 
 
+class RefereeError(Exception):
+    """KiCad (the zone refill or the DRC) failed on a board: no verdict, and not the router's fault."""
+
+
+def referee(name, cmd):
+    """Runs one of the referee's steps, raising RefereeError with the end of its stderr if it fails."""
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+    except subprocess.TimeoutExpired:
+        raise RefereeError(f"{name}: timed out after 900 s")
+    except OSError as e:
+        raise RefereeError(f"{name}: {e}")
+    if r.returncode != 0:
+        raise RefereeError(f"{name}: exit {r.returncode}: {r.stderr[-300:]}")
+
+
 def drc(pcb, out_dir, stem):
-    """Refill the zones and ask KiCad: (unconnected, {error type: count}, {warning type: count})."""
+    """Refill the zones and ask KiCad: (unconnected, {error type: count}, {warning type: count}).
+    Raises RefereeError when the refill or the DRC fails."""
     filled, report = out_dir / f"{stem}.filled.kicad_pcb", out_dir / f"{stem}.drc.json"
     for suffix in (".kicad_pro", ".kicad_dru"):
         if pcb.with_suffix(suffix).exists():
             shutil.copy(pcb.with_suffix(suffix), filled.with_suffix(suffix))
-    subprocess.run([sys.executable, ROOT / "tools/refill_zones.py", pcb, filled], capture_output=True, timeout=900)
-    subprocess.run(["kicad-cli", "pcb", "drc", "--format", "json", "--severity-all", "-o", report, filled], capture_output=True, timeout=900)
+    report.unlink(missing_ok=True)
+    referee("refill", [sys.executable, ROOT / "tools/refill_zones.py", pcb, filled])
+    referee("kicad-cli drc", ["kicad-cli", "pcb", "drc", "--format", "json", "--severity-all", "-o", report, filled])
     if not report.exists():
-        return None
-    d = json.loads(report.read_text())
-    return tally(d)
+        raise RefereeError("kicad-cli drc: wrote no report")
+    return tally(json.loads(report.read_text()))
 
 
 def routed(v):
@@ -135,11 +170,10 @@ def prepare_one(b):
         if r.returncode != 0 or not bare.exists():
             info["error"] = "load: " + (r.stderr.strip().splitlines() or ["?"])[-1][:300]
         else:
-            v = drc(bare, d, "bare")
-            if v is None:
-                info["error"] = "drc failed on the bare board"
-            else:
-                info["unconnected"], info["errors"], info["warnings"] = v
+            try:
+                info["unconnected"], info["errors"], info["warnings"] = drc(bare, d, "bare")
+            except RefereeError as e:
+                info["error"] = f"drc failed on the bare board: {e}"
     (d / "bare.json").write_text(json.dumps(info, indent=1))
     return b, info
 
@@ -166,7 +200,8 @@ def route_one(b, run_dir, recipe, timeout, seed):
     src = HOME / "boards" / b
     out = d / "out.kicad_pcb"
     res = {"id": b}
-    args = [str(ROUTER), "route", str(src / "board.kicad_pcb"), "-o", str(out), "--strip-all", *recipe.split(), "--seed", str(seed), "--threads", "1", "--timeout", str(timeout)]
+    timing = d / "time.txt"
+    args = ["/usr/bin/time", "-f", "%e %M", "-o", str(timing), str(ROUTER), "route", str(src / "board.kicad_pcb"), "-o", str(out), "--strip-all", *recipe.split(), "--seed", str(seed), "--threads", "1", "--timeout", str(timeout)]
     started = time.time()
     try:
         r = subprocess.run(CAP + args, capture_output=True, text=True, timeout=timeout * 3 + 300)
@@ -175,13 +210,21 @@ def route_one(b, run_dir, recipe, timeout, seed):
     except subprocess.TimeoutExpired:
         res["code"] = "hung"
     res["seconds"] = round(time.time() - started, 1)
+    try:
+        # /usr/bin/time's last line; a router killed by a signal gets a "Command terminated" line first.
+        res["peak_mb"] = round(int(timing.read_text().split()[-1]) / 1024)
+    except (OSError, ValueError, IndexError):
+        pass
     if out.exists():
         for suffix in (".kicad_pro", ".kicad_dru"):
             if (src / "board").with_suffix(suffix).exists():
                 shutil.copy((src / "board").with_suffix(suffix), out.with_suffix(suffix))
         res["wirelength"], res["vias"] = lengths(out)
-        if drc(out, d, "out") is not None:
+        try:
+            drc(out, d, "out")
             score(res, run_dir, b)
+        except RefereeError as e:
+            res["referee_error"] = str(e)
     (d / "result.json").write_text(json.dumps(res, indent=1))
     return res
 
@@ -191,7 +234,7 @@ def score(res, run_dir, b):
     d = run_dir / b
     src = HOME / "boards" / b
     report = d / "out.drc.json"
-    if not report.exists():
+    if not report.exists() or "referee_error" in res:
         return res
     res["unconnected"], errors, warnings = tally(json.loads(report.read_text()))
     _, bare_errors, bare_warnings = tally(json.loads((src / "bare.drc.json").read_text()))
@@ -231,18 +274,134 @@ def run(a):
     run_dir = HOME / "runs" / a.run
     run_dir.mkdir(parents=True, exist_ok=True)
     meta = run_dir / "run.json"
-    head = subprocess.run(["git", "-C", ROOT, "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
-    dirty = bool(subprocess.run(["git", "-C", ROOT, "status", "--porcelain", "core"], capture_output=True, text=True).stdout.strip())
-    meta.write_text(json.dumps({"recipe": a.recipe, "timeout": a.timeout, "seed": a.seed, "boards": ids, "commit": head, "dirty": dirty, "started": time.strftime("%Y-%m-%dT%H:%M:%S")}, indent=1))
     workers = int(os.environ.get("RESERVED_CORES", "4"))
+    now = provenance(workers)
+    info = {"recipe": a.recipe, "timeout": a.timeout, "seed": a.seed, "boards": ids, **now, "started": time.strftime("%Y-%m-%dT%H:%M:%S"), "notes": [a.note] if a.note else []}
+    if meta.exists():
+        info = json.loads(meta.read_text())
+        differ = {k: (info.get(k), now[k]) for k in ("commit", "binary_sha256") if info.get(k) != now[k]}
+        if differ:
+            for k, (was, new) in differ.items():
+                print(f"{a.run} was started with {k} {was}, now {new}", file=sys.stderr)
+            if not a.resume_anyway:
+                sys.exit(f"refusing to resume {a.run} with another router; pass --resume-anyway to mix them")
+            info.setdefault("resumed", []).append({**now, "at": time.strftime("%Y-%m-%dT%H:%M:%S")})
+            meta.write_text(json.dumps(info, indent=1))
+    else:
+        meta.write_text(json.dumps(info, indent=1))
     ok = 0
     with concurrent.futures.ThreadPoolExecutor(workers) as pool:
         futures = [pool.submit(route_one, b, run_dir, a.recipe, a.timeout, a.seed) for b in ids]
         for k, f in enumerate(concurrent.futures.as_completed(futures), 1):
             r = f.result()
             ok += bool(r.get("success"))
-            print(f"[{k}/{len(ids)}] {r['id']}: {'ok' if r.get('success') else 'FAIL'} open {r.get('unconnected')} new {r.get('new_errors')} {r['seconds']} s", flush=True)
+            verdict = "ok" if r.get("success") else "REFEREE FAILED" if "referee_error" in r else "FAIL"
+            print(f"[{k}/{len(ids)}] {r['id']}: {verdict} open {r.get('unconnected')} new {r.get('new_errors')} {r['seconds']} s", flush=True)
     print(f"{ok} of {len(ids)} succeeded")
+
+
+def provenance(workers):
+    """What a run is made with: the commit, the router binary and its hash, the referee's version,
+    Python, the host and the number of routes at once."""
+    def out(cmd):
+        try:
+            return subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
+        except OSError:
+            return None
+    binary = ROUTER.resolve()
+    return {
+        "commit": out(["git", "-C", ROOT, "rev-parse", "--short", "HEAD"]),
+        "dirty": bool(out(["git", "-C", ROOT, "status", "--porcelain", "core"])),
+        "binary": str(binary),
+        "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest() if binary.exists() else None,
+        "kicad_cli_version": out(["kicad-cli", "--version"]),
+        "python_version": platform.python_version(),
+        "hostname": platform.node(),
+        "workers": workers,
+    }
+
+
+def note(a):
+    meta = HOME / "runs" / a.run / "run.json"
+    info = json.loads(meta.read_text())
+    info.setdefault("notes", []).append(f"{time.strftime('%Y-%m-%d')}: {a.text}")
+    meta.write_text(json.dumps(info, indent=1))
+
+
+def load(name):
+    """A run's results by board, and its run.json (empty if it has none)."""
+    run_dir = HOME / "runs" / name
+    if not run_dir.is_dir():
+        sys.exit(f"no run {name} in {HOME / 'runs'}")
+    results = {}
+    for f in run_dir.glob("*/result.json"):
+        r = json.loads(f.read_text())
+        results[r["id"]] = r
+    meta = run_dir / "run.json"
+    return results, json.loads(meta.read_text()) if meta.exists() else {}
+
+
+def noise(a_name, b_name):
+    """The number of boards both runs routed whose clean verdict differs."""
+    ra, rb = load(a_name)[0], load(b_name)[0]
+    return sum(bool(ra[i].get("success")) != bool(rb[i].get("success")) for i in set(ra) & set(rb))
+
+
+def compare(a):
+    if a.noise == "auto":
+        floor = noise(*(a.noise_from or NOISE_RUNS))
+        print(f"noise floor {floor}: boards whose verdict differs between {' and '.join(a.noise_from or NOISE_RUNS)}")
+    else:
+        floor = int(a.noise)
+    base, base_meta = load(a.runs[0])
+    table = {"noise": floor, "runs": a.runs, "boards": {}}
+    passed = True
+    for name in a.runs[1:]:
+        new, meta = load(name)
+        common = sorted(set(base) & set(new))
+        print(f"== {a.runs[0]} -> {name}: {len(common)} boards in both" + (f" ({len(base) - len(common)} only in {a.runs[0]}, {len(new) - len(common)} only in {name})" if len(common) != max(len(base), len(new)) else ""))
+        clean = lambda rs: [i for i in common if rs[i].get("success")]
+        print(f"   clean {len(clean(base))} -> {len(clean(new))}")
+        lost = [i for i in common if base[i].get("success") and not new[i].get("success")]
+        won = [i for i in common if new[i].get("success") and not base[i].get("success")]
+
+        def why(r):
+            if "referee_error" in r:
+                return "referee failed"
+            if "unconnected" not in r:
+                return f"router failed (code {r.get('code')})"
+            return f"open {r['unconnected']}" + (f", new {sorted(r['new_errors'])}" if r.get("new_errors") else "")
+        for title, ids, rs, was in (("lost", lost, new, ""), ("won", won, base, "was ")):
+            print(f"   {title} {len(ids)}" + "".join(f"\n      {i}: {was}{why(rs[i])}" for i in ids))
+        gained = {i: sorted(set(new[i].get("new_errors") or {}) - set(base[i].get("new_errors") or {})) for i in common}
+        gained = {i: t for i, t in gained.items() if t}
+        changed = [i for i in common if set(new[i].get("new_errors") or {}) != set(base[i].get("new_errors") or {})]
+        print(f"   error types differ on {len(changed)} boards, gained on {len(gained)}" + "".join(f"\n      {i}: {sorted(base[i].get('new_errors') or {})} -> {sorted(new[i].get('new_errors') or {})}" for i in changed))
+        both = [i for i in common if base[i].get("success") and new[i].get("success")]
+        vias = [sum(rs[i].get("vias") or 0 for i in both) for rs in (base, new)]
+        wl = [sum(rs[i].get("wirelength") or 0 for i in both) for rs in (base, new)]
+        print(f"   on the {len(both)} boards clean in both: vias {vias[0]} -> {vias[1]}, wirelength {wl[0]:.0f} -> {wl[1]:.0f} mm")
+        limits = [m.get("timeout", 120) - 10 for m in (base_meta, meta)]
+        print(f"   at the time limit (>= timeout - 10 s): {sum(base[i]['seconds'] >= limits[0] for i in common)} -> {sum(new[i]['seconds'] >= limits[1] for i in common)}")
+        refs = [[i for i in common if "referee_error" in rs[i]] for rs in (base, new)]
+        print(f"   referee failures: {len(refs[0])} -> {len(refs[1])}" + "".join(f"\n      {i}: {new[i]['referee_error'][:120]!r}" for i in refs[1]))
+        peaks = {i: new[i]["peak_mb"] for i in common if "peak_mb" in new[i]}
+        if peaks:
+            top = max(peaks, key=peaks.get)
+            big = sorted(i for i, m in peaks.items() if m > 2048)
+            print(f"   peak memory: max {peaks[top]} MB ({top}); over 2 GB: {len(big)}" + (f" {big}" if big else ""))
+        else:
+            print("   peak memory: not recorded")
+        ok = len(lost) <= floor and not gained
+        passed &= ok
+        print(f"   verdict: {'PASS' if ok else 'FAIL'}: lost {len(lost)} (noise {floor}), won {len(won)}, boards gaining an error type {len(gained)}")
+        keys = ("success", "unconnected", "new_errors", "vias", "wirelength", "seconds", "code", "peak_mb", "referee_error")
+        for i in common:
+            row = table["boards"].setdefault(i, {a.runs[0]: {k: base[i].get(k) for k in keys}})
+            row[name] = {k: new[i].get(k) for k in keys}
+    if a.json:
+        Path(a.json).write_text(json.dumps(table, indent=1))
+    sys.exit(0 if passed else 1)
 
 
 def report(a):
@@ -277,7 +436,7 @@ def report(a):
             r = results[b]
             if r.get("success"):
                 continue
-            k = "router failed" if r.get("code") not in (0, None) or "unconnected" not in r else ("open and errors" if r["unconnected"] and r.get("new_errors") else "open" if r["unconnected"] else "new errors")
+            k = "referee failed" if "referee_error" in r else "router failed" if r.get("code") not in (0, None) or "unconnected" not in r else ("open and errors" if r["unconnected"] and r.get("new_errors") else "open" if r["unconnected"] else "new errors")
             kinds[k] = kinds.get(k, 0) + 1
         errs = {}
         for b in ids:
@@ -305,12 +464,24 @@ def main():
     s.add_argument("--only")
     s.add_argument("--sample", type=int, help="route this many boards, drawn at random")
     s.add_argument("--sample-seed", type=int, default=1)
+    s.add_argument("--resume-anyway", action="store_true", help="resume a run started with another commit or binary")
+    s.add_argument("--note", help="a note for run.json")
     s = sub.add_parser("report")
     s.add_argument("runs", nargs="+")
     s = sub.add_parser("rescore")
     s.add_argument("runs", nargs="+")
+    s = sub.add_parser("compare")
+    s.add_argument("runs", nargs="+", help="the reference run, then the runs to judge against it")
+    s.add_argument("--noise", default="0", help="boards a run may lose and still pass, or auto")
+    s.add_argument("--noise-from", nargs=2, metavar=("A", "B"), help="the two runs --noise auto measures")
+    s.add_argument("--json", help="write the per-board table here")
+    s = sub.add_parser("note")
+    s.add_argument("run")
+    s.add_argument("text")
     a = p.parse_args()
-    {"prepare": prepare, "run": run, "report": report, "rescore": rescore}[a.cmd](a)
+    if a.cmd == "compare" and len(a.runs) < 2:
+        p.error("compare needs at least two runs")
+    {"prepare": prepare, "run": run, "report": report, "rescore": rescore, "compare": compare, "note": note}[a.cmd](a)
 
 
 if __name__ == "__main__":
