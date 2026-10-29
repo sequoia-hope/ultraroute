@@ -500,10 +500,15 @@ pub fn route_negotiated_rounds(
     for a in &open {
         let p = Profile::for_net(board, a.net);
         if let std::collections::hash_map::Entry::Vacant(slot) = maps.entry(p.class.clone()) {
-            // On a board of much drawn copper the maps alone can outlast the deadline.
-            let Some(map) = ObstacleMap::new_by(board, p, options.cell, options.pours_block, &options.deadline) else { return stats };
+            // On a board of much drawn copper the maps alone can outlast negotiation's deadline.
+            // They are finished all the same, until the run's: the stage after needs the same
+            // maps, and finds them made; one cut short would be made again from nothing.
+            let Some(map) = ObstacleMap::new_by(board, p, options.cell, options.pours_block, &options.deadline.to_hard()) else { return stats };
             slot.insert(map);
         }
+    }
+    if out_of_time() {
+        return stats;
     }
     let sample = maps.values().next().expect("one map per class").view(0);
     let mut grid_buf = sample.clone();
