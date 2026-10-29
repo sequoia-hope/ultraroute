@@ -679,7 +679,8 @@ struct CommittedRun {
 /// own nets) claims `fat.half_width + clearance` so neither offset track can short to the partner
 /// net; only the four endpoint pads themselves are stamped with the tighter margin that lets the
 /// centreline start between them.
-fn coupled_grid(board: &Board, options: &PairOptions, pair: &Pair, profile: &Profile, a: PinPair, b: PinPair) -> RouteGrid {
+/// `None` if the deadline passes before the maps are made.
+fn coupled_grid(board: &Board, options: &PairOptions, pair: &Pair, profile: &Profile, a: PinPair, b: PinPair) -> Option<RouteGrid> {
     let (pref_vp, min_vp) = via_pitches(board, pair, profile);
     let fat = Profile {
         class: format!("pair {}", board.net_name(pair.p)),
@@ -689,9 +690,7 @@ fn coupled_grid(board: &Board, options: &PairOptions, pair: &Pair, profile: &Pro
         ..profile.clone()
     };
     let end_pads = [a.p, a.n, b.p, b.n];
-    let mut map = ObstacleMap::without(board, fat.clone(), options.cell, options.pours_block, &|id| {
-        end_pads.contains(&id)
-    });
+    let mut map = ObstacleMap::without_by(board, fat.clone(), options.cell, options.pours_block, &|id| end_pads.contains(&id), &options.deadline)?;
     let cells = map.nx * map.ny;
     let reach = map.reach();
     let rules = &board.rules;
@@ -813,9 +812,7 @@ fn coupled_grid(board: &Board, options: &PairOptions, pair: &Pair, profile: &Pro
             drill_radius: pref_vp / 2 + profile.drill_radius,
             ..fat
         };
-        let pref_map = ObstacleMap::without(board, pref_profile, options.cell, options.pours_block, &|id| {
-            end_pads.contains(&id)
-        });
+        let pref_map = ObstacleMap::without_by(board, pref_profile, options.cell, options.pours_block, &|id| end_pads.contains(&id), &options.deadline)?;
         if grid.via_penalty.len() != cells {
             grid.via_penalty.resize(cells, 0);
         }
@@ -825,7 +822,7 @@ fn coupled_grid(board: &Board, options: &PairOptions, pair: &Pair, profile: &Pro
             }
         }
     }
-    grid
+    Some(grid)
 }
 
 /// Converts a grid path into single-layer pulled-straight stretches `(board_layer, points)`,
@@ -886,7 +883,7 @@ fn couple_end_to_end(
     a: PinPair,
     b: PinPair,
 ) -> Option<CoupledCandidate> {
-    let mut grid = coupled_grid(board, options, pair, profile, a, b);
+    let mut grid = coupled_grid(board, options, pair, profile, a, b)?;
     let all_blocked = grid.blocked.clone();
     let saved_via = grid.via.clone();
     let paired_via_cost = ((VIA_COST / grid.h as f64) * STRAIGHT as f64).round().max(80.0) as u32;
@@ -2269,13 +2266,13 @@ fn route_pairs_legacy(board: &mut Board, options: &PairOptions, watch: &mut dyn 
 /// The legacy run between two pin pairs: a coupled centreline on one layer, no legs.
 fn legacy_run(board: &mut Board, options: &PairOptions, pair: &Pair, fat: &Profile, a: PinPair, b: PinPair) -> Option<(Vec<ItemId>, f64, Vec<Point>)> {
     let ours: HashSet<u32> = [pair.p, pair.n].into();
-    let map = ObstacleMap::without(board, fat.clone(), options.cell, options.pours_block, &|id| {
-        board.item(id).is_some_and(|it| (ours.contains(&it.net) && !matches!(it.kind, Kind::Keepout { .. })) || (matches!(it.kind, Kind::Pour { .. }) && !it.drawn()))
-    });
+    // Past end-to-end coupling's own deadline, the legacy run still has until the run's.
+    let deadline = options.deadline.to_hard();
+    let skip = |id| board.item(id).is_some_and(|it| (ours.contains(&it.net) && !matches!(it.kind, Kind::Keepout { .. })) || (matches!(it.kind, Kind::Pour { .. }) && !it.drawn()));
+    let map = ObstacleMap::without_by(board, fat.clone(), options.cell, options.pours_block, &skip, &deadline)?;
     let mut grid = map.view(pair.p);
     grid.via = None;
-    // Past end-to-end coupling's own deadline, the legacy run still has until the run's.
-    grid.deadline = options.deadline.to_hard();
+    grid.deadline = deadline;
     couple_legacy(board, &mut grid, pair, a, b)
 }
 

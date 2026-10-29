@@ -207,7 +207,11 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
                 Some(Focus::Connection { net: airline.net, from: airline.from, to: airline.to }),
             );
             let profile = Profile::for_net(board, airline.net);
-            let map = maps.entry(profile.class.clone()).or_insert_with(|| ObstacleMap::new(board, profile, options.cell, options.pours_block));
+            if !maps.contains_key(&profile.class) {
+                let Some(map) = ObstacleMap::new_by(board, profile.clone(), options.cell, options.pours_block, &options.deadline) else { return stats };
+                maps.insert(profile.class.clone(), map);
+            }
+            let map = &maps[&profile.class];
             map.view_into(airline.net, &mut grid);
             grid.directional = directional;
             let sources = terminals(board, &grid, airline.from_item);

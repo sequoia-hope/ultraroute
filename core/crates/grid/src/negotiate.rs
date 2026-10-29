@@ -499,8 +499,10 @@ pub fn route_negotiated_rounds(
     let mut maps: HashMap<String, ObstacleMap> = HashMap::new();
     for a in &open {
         let p = Profile::for_net(board, a.net);
-        if !maps.contains_key(&p.class) {
-            maps.insert(p.class.clone(), ObstacleMap::new(board, p, options.cell, options.pours_block));
+        if let std::collections::hash_map::Entry::Vacant(slot) = maps.entry(p.class.clone()) {
+            // On a board of much drawn copper the maps alone can outlast the deadline.
+            let Some(map) = ObstacleMap::new_by(board, p, options.cell, options.pours_block, &options.deadline) else { return stats };
+            slot.insert(map);
         }
     }
     let sample = maps.values().next().expect("one map per class").view(0);
