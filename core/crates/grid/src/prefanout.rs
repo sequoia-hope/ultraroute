@@ -1794,6 +1794,10 @@ mod tests {
         );
         assert_eq!(open.escaped, 8, "{open:?}");
         assert_eq!(open.vias, 0, "unblocked two-layer perimeter pads escape on F.Cu with 0 vias: {open:?}");
+        for &id in &open.laid {
+            let v = board::check_item(&board, id);
+            assert!(v.is_empty(), "unblocked escape item {id} broke rules: {v:?}");
+        }
 
         // Box the north row in tightly on F.Cu (within 0.3 mm of the pad box so no ring cell lies
         // inside the enclosure on F.Cu); those 4 pads must drop dogbone vias inside the package to B.Cu.
@@ -1821,5 +1825,9 @@ mod tests {
         );
         assert_eq!(blocked.escaped, 8, "{blocked:?}");
         assert!(blocked.vias >= 4 && blocked.vias <= 5, "walled north row falls back to dogbone vias while south row stays on F.Cu: {blocked:?}");
+        for &id in &blocked.laid {
+            let v = board::check_item(&walled, id);
+            assert!(v.is_empty(), "walled escape item {id} broke rules: {v:?}");
+        }
     }
 }

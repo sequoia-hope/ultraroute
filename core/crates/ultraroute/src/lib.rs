@@ -2384,6 +2384,8 @@ mod tests {
         assert!(dpl.diff_pairs && dpl.diff_pairs_legacy);
     }
 
+    // Pins today's via prices on purpose, to document them. Stage 7 of REMEDIATION.md replaces
+    // `via_costs` with one price per board and retires this test with it.
     #[test]
     fn via_prices_follow_the_planes_and_scale_with_the_cell() {
         let (pcb, copper) = kicad_pcb::parse_board("(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal)) (net 0 \"\"))").unwrap();
