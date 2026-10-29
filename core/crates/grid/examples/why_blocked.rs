@@ -124,7 +124,7 @@ fn main() {
     }
     println!("-- what walls it in (cell contacts):");
     let mut walls: Vec<_> = walls.into_iter().collect();
-    walls.sort_by(|a, b| b.1.cmp(&a.1));
+    walls.sort_by_key(|b| std::cmp::Reverse(b.1));
     for (w, n) in walls.iter().take(25) {
         println!("{n:5}  {w}");
     }

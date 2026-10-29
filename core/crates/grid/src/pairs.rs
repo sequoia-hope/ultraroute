@@ -1039,8 +1039,8 @@ fn pad_outward_dir(board: &Board, pad_id: ItemId) -> Option<(f64, f64)> {
     for (id, it) in board.items() {
         if matches!(it.kind, Kind::Pad { .. }) && pad_footprint(board, id) == Some(fp) {
             let c = centre(board, id);
-            sx += c.x as i64;
-            sy += c.y as i64;
+            sx += c.x;
+            sy += c.y;
             n += 1;
         }
     }
@@ -2376,7 +2376,7 @@ mod tests {
         }"#
     }
 
-    fn insert_smd_pad(board: &mut Board, fp: usize, num: &str, net: u32, layer: usize, x: Nm, y: Nm, r: Nm) -> ItemId {
+    fn insert_smd_pad(board: &mut Board, fp: usize, num: &str, net: u32, layer: usize, (x, y): (Nm, Nm), r: Nm) -> ItemId {
         board.insert(Item {
             kind: Kind::Pad { footprint: fp, number: num.into(), plated: false },
             net,
@@ -2403,7 +2403,8 @@ mod tests {
         let line = [Point::new(0, 0), Point::new(1_000_000, 0), Point::new(2_000_000, 1_000_000)];
         let (l, r) = (offset(&line, 100_000.0), offset(&line, -100_000.0));
         for k in 0..line.len() - 1 {
-            for (u, v) in [(&l, &r)] {
+            {
+                let (u, v) = (&l, &r);
                 let mid = |s: &[Point]| Point::new((s[k].x + s[k + 1].x) / 2, (s[k].y + s[k + 1].y) / 2);
                 let d = board::point_segment(mid(u), v[k], v[k + 1]);
                 assert!((d - 200_000.0).abs() < 2.0, "piece {k}: {d}");
@@ -2416,11 +2417,11 @@ mod tests {
         let mut board = synthetic_board("(0 \"F.Cu\" signal) (31 \"B.Cu\" signal)", default_pair_rules());
         // Left connector has pins 1.6 mm apart with a blocker pad at the midpoint; right IC has
         // 0.4 mm pitch pins 16 mm away.
-        insert_smd_pad(&mut board, 0, "1", 1, 0, 3_000_000, 9_200_000, 150_000);
-        insert_smd_pad(&mut board, 0, "2", 3, 0, 3_000_000, 10_000_000, 150_000);
-        insert_smd_pad(&mut board, 0, "3", 2, 0, 3_000_000, 10_800_000, 150_000);
-        insert_smd_pad(&mut board, 1, "1", 1, 0, 19_000_000, 9_800_000, 100_000);
-        insert_smd_pad(&mut board, 1, "2", 2, 0, 19_000_000, 10_200_000, 100_000);
+        insert_smd_pad(&mut board, 0, "1", 1, 0, (3_000_000, 9_200_000), 150_000);
+        insert_smd_pad(&mut board, 0, "2", 3, 0, (3_000_000, 10_000_000), 150_000);
+        insert_smd_pad(&mut board, 0, "3", 2, 0, (3_000_000, 10_800_000), 150_000);
+        insert_smd_pad(&mut board, 1, "1", 1, 0, (19_000_000, 9_800_000), 100_000);
+        insert_smd_pad(&mut board, 1, "2", 2, 0, (19_000_000, 10_200_000), 100_000);
 
         let stats = route_pairs(&mut board, &PairOptions::default(), &mut |_| {});
         assert_eq!((stats.runs, stats.coupled), (1, 1), "{stats:?}");
@@ -2439,10 +2440,10 @@ mod tests {
         let mut board = synthetic_board("(0 \"F.Cu\" signal) (31 \"B.Cu\" signal)", default_pair_rules());
         // Source pads on F.Cu, destination pads on B.Cu, with an F.Cu obstacle wall across the
         // middle so the coupled pair transitions through a paired via onto B.Cu.
-        insert_smd_pad(&mut board, 0, "1", 1, 0, 3_000_000, 9_800_000, 100_000);
-        insert_smd_pad(&mut board, 0, "2", 2, 0, 3_000_000, 10_200_000, 100_000);
-        insert_smd_pad(&mut board, 1, "1", 1, 1, 22_000_000, 9_800_000, 100_000);
-        insert_smd_pad(&mut board, 1, "2", 2, 1, 22_000_000, 10_200_000, 100_000);
+        insert_smd_pad(&mut board, 0, "1", 1, 0, (3_000_000, 9_800_000), 100_000);
+        insert_smd_pad(&mut board, 0, "2", 2, 0, (3_000_000, 10_200_000), 100_000);
+        insert_smd_pad(&mut board, 1, "1", 1, 1, (22_000_000, 9_800_000), 100_000);
+        insert_smd_pad(&mut board, 1, "2", 2, 1, (22_000_000, 10_200_000), 100_000);
         board.insert(Item {
             kind: Kind::Track,
             net: 3,
@@ -2482,10 +2483,10 @@ mod tests {
     #[test]
     fn already_connected_pair_lays_no_duplicate_copper() {
         let mut board = synthetic_board("(0 \"F.Cu\" signal) (31 \"B.Cu\" signal)", default_pair_rules());
-        insert_smd_pad(&mut board, 0, "1", 1, 0, 3_000_000, 9_800_000, 100_000);
-        insert_smd_pad(&mut board, 0, "2", 2, 0, 3_000_000, 10_200_000, 100_000);
-        insert_smd_pad(&mut board, 1, "1", 1, 0, 15_000_000, 9_800_000, 100_000);
-        insert_smd_pad(&mut board, 1, "2", 2, 0, 15_000_000, 10_200_000, 100_000);
+        insert_smd_pad(&mut board, 0, "1", 1, 0, (3_000_000, 9_800_000), 100_000);
+        insert_smd_pad(&mut board, 0, "2", 2, 0, (3_000_000, 10_200_000), 100_000);
+        insert_smd_pad(&mut board, 1, "1", 1, 0, (15_000_000, 9_800_000), 100_000);
+        insert_smd_pad(&mut board, 1, "2", 2, 0, (15_000_000, 10_200_000), 100_000);
         board.insert(Item {
             kind: Kind::Track,
             net: 1,
@@ -2513,13 +2514,13 @@ mod tests {
     #[test]
     fn locked_pair_keeps_coupling_through_rip_up_shove_and_tightening() {
         let mut board = synthetic_board("(0 \"F.Cu\" signal) (31 \"B.Cu\" signal)", default_pair_rules());
-        insert_smd_pad(&mut board, 0, "1", 1, 0, 4_000_000, 9_800_000, 100_000);
-        insert_smd_pad(&mut board, 0, "2", 2, 0, 4_000_000, 10_200_000, 100_000);
-        insert_smd_pad(&mut board, 1, "1", 1, 0, 20_000_000, 9_800_000, 100_000);
-        insert_smd_pad(&mut board, 1, "2", 2, 0, 20_000_000, 10_200_000, 100_000);
+        insert_smd_pad(&mut board, 0, "1", 1, 0, (4_000_000, 9_800_000), 100_000);
+        insert_smd_pad(&mut board, 0, "2", 2, 0, (4_000_000, 10_200_000), 100_000);
+        insert_smd_pad(&mut board, 1, "1", 1, 0, (20_000_000, 9_800_000), 100_000);
+        insert_smd_pad(&mut board, 1, "2", 2, 0, (20_000_000, 10_200_000), 100_000);
         // Orthogonal single-ended net crossing the pair's path so it must drop under the locked pair.
-        insert_smd_pad(&mut board, 2, "1", 4, 0, 12_000_000, 5_000_000, 120_000);
-        insert_smd_pad(&mut board, 3, "1", 4, 0, 12_000_000, 15_000_000, 120_000);
+        insert_smd_pad(&mut board, 2, "1", 4, 0, (12_000_000, 5_000_000), 120_000);
+        insert_smd_pad(&mut board, 3, "1", 4, 0, (12_000_000, 15_000_000), 120_000);
 
         let pair_stats = route_pairs(&mut board, &PairOptions::default(), &mut |_| {});
         assert_eq!(pair_stats.coupled, 1);

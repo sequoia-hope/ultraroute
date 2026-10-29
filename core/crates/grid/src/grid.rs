@@ -570,8 +570,9 @@ impl ObstacleMap {
             outer.and_then(|o| o.first().copied()),
             outer.and_then(|o| o.last().copied()),
         );
+        type OutlineCache = Option<(OutlineKey, Vec<i32>, Vec<i32>)>;
         thread_local! {
-            static CACHE: std::cell::RefCell<Option<(OutlineKey, Vec<i32>, Vec<i32>)>> = const { std::cell::RefCell::new(None) };
+            static CACHE: std::cell::RefCell<OutlineCache> = const { std::cell::RefCell::new(None) };
         }
         let hit = CACHE.with(|cache| {
             let borrow = cache.borrow();

@@ -22,6 +22,9 @@ use board::{
 };
 use serde_json::{json, Value};
 
+/// What a progress activity says and where on the board it looks.
+type Focused = (String, Option<grid::Focus>);
+
 const USAGE: &str = "\
 usage:
   feature_film dipole     BOARD.kicad_pcb OUT.json X,Y STRENGTH RADIUS STEPS [--pair X2,Y2[,STRENGTH2]] [--guard] [--rip] [--reroute S]
@@ -207,19 +210,20 @@ struct FilmBuilder {
     extra: serde_json::Map<String, Value>,
 }
 
+/// What a film is called and where it goes: the part of `FilmBuilder::new`'s inputs that is not the board.
+struct FilmSpec<'a> {
+    feature: &'a str,
+    out_path: &'a Path,
+    board_path: &'a str,
+    cropped: bool,
+    max_frames: usize,
+    title: String,
+    subtitle: String,
+}
+
 impl FilmBuilder {
-    fn new(
-        feature: &str,
-        out_path: &Path,
-        board_path: &str,
-        board: &Board,
-        window: BBox,
-        cropped: bool,
-        pours_block: bool,
-        max_frames: usize,
-        title: String,
-        subtitle: String,
-    ) -> Self {
+    fn new(spec: FilmSpec<'_>, board: &Board, window: BBox, pours_block: bool) -> Self {
+        let FilmSpec { feature, out_path, board_path, cropped, max_frames, title, subtitle } = spec;
         let name = out_path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -861,16 +865,18 @@ fn run_dipole(cli: &Cli) {
     let default_title = format!("{kind_label} at ({:.1}, {:.1}) mm", mm(c1.x as f64), mm(c1.y as f64));
     let default_sub = format!("strength {:+.2} mm, radius {:.2} mm, {steps} steps{}", s1_mm, radius_mm, if guard { ", guarded" } else { "" });
     let mut fb = FilmBuilder::new(
-        "dipole",
-        &out_path,
-        &board_path,
+        FilmSpec {
+            feature: "dipole",
+            out_path: &out_path,
+            board_path: &board_path,
+            cropped: true,
+            max_frames,
+            title: cli.flag("--title").unwrap_or(default_title),
+            subtitle: cli.flag("--subtitle").unwrap_or(default_sub),
+        },
         &board,
         window,
-        true,
         pours_block,
-        max_frames,
-        cli.flag("--title").unwrap_or(default_title),
-        cli.flag("--subtitle").unwrap_or(default_sub),
     );
 
     let poles_json: Vec<Value> = total_poles
@@ -901,15 +907,15 @@ fn run_dipole(cli: &Cli) {
     );
 
     for step in 1..=steps {
-        let before_items: Vec<(ItemId, Item)> = guard
-            .then(|| {
-                board
-                    .items()
-                    .filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked && it.shape.bbox().overlaps(window.grow(1_000_000)))
-                    .map(|(id, it)| (id, it.clone()))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let before_items: Vec<(ItemId, Item)> = if guard {
+            board
+                .items()
+                .filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked && it.shape.bbox().overlaps(window.grow(1_000_000)))
+                .map(|(id, it)| (id, it.clone()))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let first_new = board.items().map(|(id, _)| id).max().map_or(0, |m| m + 1);
         let (moved, _) = morph::shift_poles(&mut board, &mut soft, &step_poles, 150_000.0);
         let mut reverted_nets = 0usize;
@@ -1075,16 +1081,18 @@ fn run_push(cli: &Cli) {
     let margin = ((radius * 2.6).max(6.5) * 1e6).round() as Nm;
     let window = cli.crop_override().unwrap_or_else(|| BBox::of([center]).grow(margin));
     let mut fb = FilmBuilder::new(
-        "push",
-        &out_path,
-        board_path,
+        FilmSpec {
+            feature: "push",
+            out_path: &out_path,
+            board_path,
+            cropped: true,
+            max_frames,
+            title: cli.flag("--title").unwrap_or_else(|| format!("Push field at ({cx:.1}, {cy:.1}) mm")),
+            subtitle: cli.flag("--subtitle").unwrap_or_else(|| format!("radius {radius:.1} mm, outward {outward:+.2} mm, drift ({dx:+.2}, {dy:+.2}) mm, {steps} steps")),
+        },
         &board,
         window,
-        true,
         pours_block,
-        max_frames,
-        cli.flag("--title").unwrap_or_else(|| format!("Push field at ({cx:.1}, {cy:.1}) mm")),
-        cli.flag("--subtitle").unwrap_or_else(|| format!("radius {radius:.1} mm, outward {outward:+.2} mm, drift ({dx:+.2}, {dy:+.2}) mm, {steps} steps")),
     );
 
     let arrows = sample_arrows(window, 20, |p| field.at(p));
@@ -1270,16 +1278,18 @@ fn run_flow(cli: &Cli) {
     let window = cli.crop_override().unwrap_or_else(|| BBox::of([c0, Point::new(c0.x + delta.x, c0.y + delta.y)]).grow(5_500_000));
 
     let mut fb = FilmBuilder::new(
-        "flow",
-        &out_path,
-        board_path,
+        FilmSpec {
+            feature: "flow",
+            out_path: &out_path,
+            board_path,
+            cropped: true,
+            max_frames,
+            title: cli.flag("--title").unwrap_or_else(|| format!("Harmonic copper flow moving {ref_name}")),
+            subtitle: cli.flag("--subtitle").unwrap_or_else(|| format!("shift ({:+.2}, {:+.2}) mm across {steps} warp steps", mm(delta.x as f64), mm(delta.y as f64))),
+        },
         &board,
         window,
-        true,
         pours_block,
-        max_frames,
-        cli.flag("--title").unwrap_or_else(|| format!("Harmonic copper flow moving {ref_name}")),
-        cli.flag("--subtitle").unwrap_or_else(|| format!("shift ({:+.2}, {:+.2}) mm across {steps} warp steps", mm(delta.x as f64), mm(delta.y as f64))),
     );
 
     let full_moves = HashMap::from([(fp, delta)]);
@@ -1509,16 +1519,18 @@ fn run_comb(cli: &Cli) {
     let window = cli.crop_override().unwrap_or_else(|| pad_box.grow(opts.zone + 1_800_000));
 
     let mut fb = FilmBuilder::new(
-        "comb",
-        &out_path,
-        board_path,
+        FilmSpec {
+            feature: "comb",
+            out_path: &out_path,
+            board_path,
+            cropped: true,
+            max_frames,
+            title: cli.flag("--title").unwrap_or_else(|| format!("Comb escape lanes on {ref_name}")),
+            subtitle: cli.flag("--subtitle").unwrap_or_else(|| format!("zone {:.2} mm: comb onto lanes, rip broken copper, reroute open connections", mm(opts.zone as f64))),
+        },
         &board,
         window,
-        true,
         pours_block,
-        max_frames,
-        cli.flag("--title").unwrap_or_else(|| format!("Comb escape lanes on {ref_name}")),
-        cli.flag("--subtitle").unwrap_or_else(|| format!("zone {:.2} mm: comb onto lanes, rip broken copper, reroute open connections", mm(opts.zone as f64))),
     );
 
     let (corridors, arrows) = edge_corridors(&board, fp, &opts);
@@ -1584,7 +1596,7 @@ fn run_comb(cli: &Cli) {
 
     let before_reroute = fb.snapshot_copper(&board);
     let mut prev = before_reroute.clone();
-    let last_act: Arc<Mutex<Option<(String, Option<grid::Focus>)>>> = Arc::new(Mutex::new(None));
+    let last_act: Arc<Mutex<Option<Focused>>> = Arc::new(Mutex::new(None));
     let shared = last_act.clone();
     let log = grid::Log(Arc::new(move |act| {
         if act.phase == "routing" {
@@ -1707,16 +1719,18 @@ fn run_clear_lane(cli: &Cli) {
     let window = cli.crop_override().unwrap_or_else(|| pad_box.grow(opts.zone + 1_800_000));
 
     let mut fb = FilmBuilder::new(
-        "clear-lane",
-        &out_path,
-        board_path,
+        FilmSpec {
+            feature: "clear-lane",
+            out_path: &out_path,
+            board_path,
+            cropped: true,
+            max_frames,
+            title: cli.flag("--title").unwrap_or_else(|| format!("Clear lanes pad by pad on {ref_name}")),
+            subtitle: cli.flag("--subtitle").unwrap_or_else(|| format!("slide foreign copper out of each trapped pad's {:.2} mm lane", mm(opts.zone as f64))),
+        },
         &board,
         window,
-        true,
         pours_block,
-        max_frames,
-        cli.flag("--title").unwrap_or_else(|| format!("Clear lanes pad by pad on {ref_name}")),
-        cli.flag("--subtitle").unwrap_or_else(|| format!("slide foreign copper out of each trapped pad's {:.2} mm lane", mm(opts.zone as f64))),
     );
 
     let init_copper = fb.snapshot_copper(&board);
@@ -1900,16 +1914,18 @@ fn run_shove(cli: &Cli) {
     let window = cli.crop_override().unwrap_or_else(|| part_box.grow(5_000_000));
 
     let mut fb = FilmBuilder::new(
-        "shove",
-        &out_path,
-        board_path,
+        FilmSpec {
+            feature: "shove",
+            out_path: &out_path,
+            board_path,
+            cropped: true,
+            max_frames,
+            title: cli.flag("--title").unwrap_or_else(|| format!("Plough escape ({plough_name})")),
+            subtitle: cli.flag("--subtitle").unwrap_or_else(|| format!("plough={plough_name}, cascade={cascade}, repair={repair_s:.0}s")),
+        },
         &board,
         window,
-        true,
         pours_block,
-        max_frames,
-        cli.flag("--title").unwrap_or_else(|| format!("Plough escape ({plough_name})")),
-        cli.flag("--subtitle").unwrap_or_else(|| format!("plough={plough_name}, cascade={cascade}, repair={repair_s:.0}s")),
     );
 
     let init_copper = fb.snapshot_copper(&board);
@@ -2182,16 +2198,18 @@ fn run_nudge(cli: &Cli) {
     };
     let window = cli.crop_override().unwrap_or_else(|| board_bounds(&board));
     let mut fb = FilmBuilder::new(
-        "nudge",
-        &out_path,
-        board_path,
+        FilmSpec {
+            feature: "nudge",
+            out_path: &out_path,
+            board_path,
+            cropped: cli.crop_override().is_some(),
+            max_frames,
+            title: cli.flag("--title").unwrap_or_else(|| format!("Nudge parts ({})", if guided_only { "blame-guided" } else { "guided + blind" })),
+            subtitle: cli.flag("--subtitle").unwrap_or_else(|| "step unlocked parts aside with flowing copper and reroute".to_string()),
+        },
         &board,
         window,
-        cli.crop_override().is_some(),
         pours_block,
-        max_frames,
-        cli.flag("--title").unwrap_or_else(|| format!("Nudge parts ({})", if guided_only { "blame-guided" } else { "guided + blind" })),
-        cli.flag("--subtitle").unwrap_or_else(|| "step unlocked parts aside with flowing copper and reroute".to_string()),
     );
 
     let init_copper = fb.snapshot_copper(&board);
@@ -2421,16 +2439,18 @@ fn run_negotiate(cli: &Cli) {
     }
     let window = cli.crop_override().unwrap_or_else(|| board_bounds(&board));
     let mut fb = FilmBuilder::new(
-        "negotiate",
-        &out_path,
-        board_path,
+        FilmSpec {
+            feature: "negotiate",
+            out_path: &out_path,
+            board_path,
+            cropped: cli.crop_override().is_some(),
+            max_frames,
+            title: cli.flag("--title").unwrap_or_else(|| "PathFinder negotiated congestion".to_string()),
+            subtitle: cli.flag("--subtitle").unwrap_or_else(|| format!("up to {max_rounds} rounds, congestion heat map and trial routes")),
+        },
         &board,
         window,
-        cli.crop_override().is_some(),
         pours_block,
-        max_frames,
-        cli.flag("--title").unwrap_or_else(|| "PathFinder negotiated congestion".to_string()),
-        cli.flag("--subtitle").unwrap_or_else(|| format!("up to {max_rounds} rounds, congestion heat map and trial routes")),
     );
 
     let base_board = board.clone();
@@ -2556,22 +2576,24 @@ fn run_route(cli: &Cli) {
     }
     let window = cli.crop_override().unwrap_or_else(|| board_bounds(&board));
     let mut fb = FilmBuilder::new(
-        "route",
-        &out_path,
-        board_path,
+        FilmSpec {
+            feature: "route",
+            out_path: &out_path,
+            board_path,
+            cropped: cli.crop_override().is_some(),
+            max_frames,
+            title: cli.flag("--title").unwrap_or_else(|| {
+                if after_neg {
+                    "Grid route_open finishing after negotiation".to_string()
+                } else {
+                    "Grid route_open from scratch (shortest first)".to_string()
+                }
+            }),
+            subtitle: cli.flag("--subtitle").unwrap_or_else(|| "one connection per frame on the obstacle grid".to_string()),
+        },
         &board,
         window,
-        cli.crop_override().is_some(),
         pours_block,
-        max_frames,
-        cli.flag("--title").unwrap_or_else(|| {
-            if after_neg {
-                "Grid route_open finishing after negotiation".to_string()
-            } else {
-                "Grid route_open from scratch (shortest first)".to_string()
-            }
-        }),
-        cli.flag("--subtitle").unwrap_or_else(|| "one connection per frame on the obstacle grid".to_string()),
     );
 
     let init_copper = fb.snapshot_copper(&board);
@@ -2587,8 +2609,8 @@ fn run_route(cli: &Cli) {
         },
     );
 
-    let current_conn: Arc<Mutex<Option<(String, Option<grid::Focus>)>>> = Arc::new(Mutex::new(None));
-    let gave_up_list: Arc<Mutex<Vec<(String, Option<grid::Focus>)>>> = Arc::new(Mutex::new(Vec::new()));
+    let current_conn: Arc<Mutex<Option<Focused>>> = Arc::new(Mutex::new(None));
+    let gave_up_list: Arc<Mutex<Vec<Focused>>> = Arc::new(Mutex::new(Vec::new()));
     let c_shared = current_conn.clone();
     let g_shared = gave_up_list.clone();
     let log = grid::Log(Arc::new(move |act| match act.phase {
@@ -2726,22 +2748,24 @@ fn run_rip_up(cli: &Cli) {
     });
 
     let mut fb = FilmBuilder::new(
-        "rip-up",
-        &out_path,
-        board_path,
+        FilmSpec {
+            feature: "rip-up",
+            out_path: &out_path,
+            board_path,
+            cropped: cli.crop_override().is_some() || !prep,
+            max_frames,
+            title: cli.flag("--title").unwrap_or_else(|| {
+                if prep {
+                    "Rip-up and reroute after greedy routing".to_string()
+                } else {
+                    "Rip-up attempts on the routed earring".to_string()
+                }
+            }),
+            subtitle: cli.flag("--subtitle").unwrap_or_else(|| "route through soft copper at a price, rip conflicts, reroute victims".to_string()),
+        },
         &board,
         window,
-        cli.crop_override().is_some() || !prep,
         pours_block,
-        max_frames,
-        cli.flag("--title").unwrap_or_else(|| {
-            if prep {
-                "Rip-up and reroute after greedy routing".to_string()
-            } else {
-                "Rip-up attempts on the routed earring".to_string()
-            }
-        }),
-        cli.flag("--subtitle").unwrap_or_else(|| "route through soft copper at a price, rip conflicts, reroute victims".to_string()),
     );
 
     let init_copper = fb.snapshot_copper(&board);
@@ -2882,16 +2906,18 @@ fn run_chase(cli: &Cli) {
     });
 
     let mut fb = FilmBuilder::new(
-        "chase",
-        &out_path,
-        board_path,
+        FilmSpec {
+            feature: "chase",
+            out_path: &out_path,
+            board_path,
+            cropped: true,
+            max_frames,
+            title: cli.flag("--title").unwrap_or_else(|| "Chained rip-up (chase)".to_string()),
+            subtitle: cli.flag("--subtitle").unwrap_or_else(|| format!("up to {links} links per chain; ripped nets rip in turn")),
+        },
         &board,
         window,
-        true,
         pours_block,
-        max_frames,
-        cli.flag("--title").unwrap_or_else(|| "Chained rip-up (chase)".to_string()),
-        cli.flag("--subtitle").unwrap_or_else(|| format!("up to {links} links per chain; ripped nets rip in turn")),
     );
 
     let init_copper = fb.snapshot_copper(&board);
@@ -2998,16 +3024,18 @@ fn run_tighten(cli: &Cli) {
     let window = cli.crop_override().unwrap_or_else(|| board_bounds(&board));
 
     let mut fb = FilmBuilder::new(
-        "tighten",
-        &out_path,
-        board_path,
+        FilmSpec {
+            feature: "tighten",
+            out_path: &out_path,
+            board_path,
+            cropped: cli.crop_override().is_some(),
+            max_frames,
+            title: cli.flag("--title").unwrap_or_else(|| "Pull routed tracks tight".to_string()),
+            subtitle: cli.flag("--subtitle").unwrap_or_else(|| "replace stair-stepped grid chains with longest legal straight tracks".to_string()),
+        },
         &board,
         window,
-        cli.crop_override().is_some(),
         pours_block,
-        max_frames,
-        cli.flag("--title").unwrap_or_else(|| "Pull routed tracks tight".to_string()),
-        cli.flag("--subtitle").unwrap_or_else(|| "replace stair-stepped grid chains with longest legal straight tracks".to_string()),
     );
 
     let init_copper = fb.snapshot_copper(&board);
@@ -3142,16 +3170,18 @@ fn run_cleanup(cli: &Cli) {
     });
 
     let mut fb = FilmBuilder::new(
-        "cleanup",
-        &out_path,
-        board_path,
+        FilmSpec {
+            feature: "cleanup",
+            out_path: &out_path,
+            board_path,
+            cropped: cli.crop_override().is_some() || prep_messy,
+            max_frames,
+            title: cli.flag("--title").unwrap_or_else(|| "Cleanup: drop duplicates and prune dangling copper".to_string()),
+            subtitle: cli.flag("--subtitle").unwrap_or_else(|| "remove doubled tracks and dead-end antennas without breaking connectivity".to_string()),
+        },
         &board,
         window,
-        cli.crop_override().is_some() || prep_messy,
         pours_block,
-        max_frames,
-        cli.flag("--title").unwrap_or_else(|| "Cleanup: drop duplicates and prune dangling copper".to_string()),
-        cli.flag("--subtitle").unwrap_or_else(|| "remove doubled tracks and dead-end antennas without breaking connectivity".to_string()),
     );
 
     let init_copper = fb.snapshot_copper(&board);
@@ -3245,16 +3275,18 @@ fn run_topo(cli: &Cli) {
     }
     let window = cli.crop_override().unwrap_or_else(|| board_bounds(&board));
     let mut fb = FilmBuilder::new(
-        "topo",
-        &out_path,
-        board_path,
+        FilmSpec {
+            feature: "topo",
+            out_path: &out_path,
+            board_path,
+            cropped: cli.crop_override().is_some(),
+            max_frames,
+            title: cli.flag("--title").unwrap_or_else(|| "Topological rubber-band router (topo)".to_string()),
+            subtitle: cli.flag("--subtitle").unwrap_or_else(|| format!("Delaunay channel search + funnel shortest paths, {rip_passes} rip-up passes")),
+        },
         &board,
         window,
-        cli.crop_override().is_some(),
         pours_block,
-        max_frames,
-        cli.flag("--title").unwrap_or_else(|| "Topological rubber-band router (topo)".to_string()),
-        cli.flag("--subtitle").unwrap_or_else(|| format!("Delaunay channel search + funnel shortest paths, {rip_passes} rip-up passes")),
     );
 
     let init_copper = fb.snapshot_copper(&board);
@@ -3296,7 +3328,7 @@ fn run_topo(cli: &Cli) {
             step_n += 1;
             let (phase, text, focus) = latest_act.lock().unwrap().clone();
             let is_rip_phase = phase == "ripping up";
-            if !is_rip_phase && step_n > 12 && step_n % 4 != 0 {
+            if !is_rip_phase && step_n > 12 && !step_n.is_multiple_of(4) {
                 return;
             }
             let cur = fb.snapshot_copper(now);
@@ -3387,16 +3419,18 @@ fn run_prefanout(cli: &Cli) {
         parts.iter().filter_map(|&f| pad_box_of(&board, f)).reduce(BBox::union).map_or_else(|| board_bounds(&board), |b| b.grow(2_500_000))
     });
     let mut fb = FilmBuilder::new(
-        "prefanout",
-        &out_path,
-        board_path,
+        FilmSpec {
+            feature: "prefanout",
+            out_path: &out_path,
+            board_path,
+            cropped: true,
+            max_frames,
+            title: cli.flag("--title").unwrap_or_else(|| "Pre-fanout: escape fine-pitch pins to vias".to_string()),
+            subtitle: cli.flag("--subtitle").unwrap_or_else(|| format!("{} parts ({}), pad by pad before any routing", parts.len(), names.join(", "))),
+        },
         &board,
         window,
-        true,
         pours_block,
-        max_frames,
-        cli.flag("--title").unwrap_or_else(|| "Pre-fanout: escape fine-pitch pins to vias".to_string()),
-        cli.flag("--subtitle").unwrap_or_else(|| format!("{} parts ({}), pad by pad before any routing", parts.len(), names.join(", "))),
     );
 
     let init_copper = fb.snapshot_copper(&board);
@@ -3505,16 +3539,18 @@ fn run_pairs(cli: &Cli) {
     let names: Vec<String> = pairs.iter().map(|p| format!("{}/{}", board.net_name(p.p), board.net_name(p.n))).collect();
     let window = cli.crop_override().unwrap_or_else(|| board_bounds(&board));
     let mut fb = FilmBuilder::new(
-        "pairs",
-        &out_path,
-        board_path,
+        FilmSpec {
+            feature: "pairs",
+            out_path: &out_path,
+            board_path,
+            cropped: cli.crop_override().is_some(),
+            max_frames,
+            title: cli.flag("--title").unwrap_or_else(|| "Differential pairs routed coupled".to_string()),
+            subtitle: cli.flag("--subtitle").unwrap_or_else(|| format!("{}: one centreline per run between pin pairs, a track laid each side", names.join(", "))),
+        },
         &board,
         window,
-        cli.crop_override().is_some(),
         pours_block,
-        max_frames,
-        cli.flag("--title").unwrap_or_else(|| "Differential pairs routed coupled".to_string()),
-        cli.flag("--subtitle").unwrap_or_else(|| format!("{}: one centreline per run between pin pairs, a track laid each side", names.join(", "))),
     );
 
     let init_copper = fb.snapshot_copper(&board);
@@ -3631,16 +3667,18 @@ fn run_tune(cli: &Cli) {
         .map(|p| skew_of(&board, p).map_or_else(|| format!("{} not joined end to end", name_of(&board, p)), |s| format!("{} {s:.2} mm", name_of(&board, p))))
         .collect();
     let mut fb = FilmBuilder::new(
-        "tune",
-        &out_path,
-        board_path,
+        FilmSpec {
+            feature: "tune",
+            out_path: &out_path,
+            board_path,
+            cropped: true,
+            max_frames,
+            title: cli.flag("--title").unwrap_or_else(|| "Length matching: bumps on the shorter net".to_string()),
+            subtitle: cli.flag("--subtitle").unwrap_or_else(|| format!("skew before: {}; tolerance {:.2} mm", skews0.join(", "), grid::tune::TOLERANCE * 1e-6)),
+        },
         &board,
         window,
-        true,
         pours_block,
-        max_frames,
-        cli.flag("--title").unwrap_or_else(|| "Length matching: bumps on the shorter net".to_string()),
-        cli.flag("--subtitle").unwrap_or_else(|| format!("skew before: {}; tolerance {:.2} mm", skews0.join(", "), grid::tune::TOLERANCE * 1e-6)),
     );
 
     let init_copper = fb.snapshot_copper(&board);
@@ -3727,16 +3765,18 @@ fn run_fill(cli: &Cli) {
     let (_, copper) = kicad_pcb::parse_board(&text).unwrap_or_else(|e| panic!("{board_path}: {e}"));
     let window = cli.crop_override().unwrap_or_else(|| board_bounds(&board));
     let mut fb = FilmBuilder::new(
-        "fill",
-        &out_path,
-        board_path,
+        FilmSpec {
+            feature: "fill",
+            out_path: &out_path,
+            board_path,
+            cropped: cli.crop_override().is_some(),
+            max_frames,
+            title: cli.flag("--title").unwrap_or_else(|| "Zone fills as KiCad would pour them".to_string()),
+            subtitle: cli.flag("--subtitle").unwrap_or_else(|| format!("board::fill_zones on a {} µm raster, highest priority first", board::fill::STEP / 1000)),
+        },
         &board,
         window,
-        cli.crop_override().is_some(),
         pours_block,
-        max_frames,
-        cli.flag("--title").unwrap_or_else(|| "Zone fills as KiCad would pour them".to_string()),
-        cli.flag("--subtitle").unwrap_or_else(|| format!("board::fill_zones on a {} µm raster, highest priority first", board::fill::STEP / 1000)),
     );
     // The fills the file holds are stale once the router has moved copper; only fresh ones show.
     fb.pours.clear();

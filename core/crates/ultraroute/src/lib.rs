@@ -1640,7 +1640,6 @@ pub fn run_with_solver(
                         pours_block: a.pours_block,
                         cancel: Some(cancel.clone()),
                         log: log.clone(),
-                        ..Default::default()
                     },
                     &mut watch,
                 );
@@ -1674,7 +1673,6 @@ pub fn run_with_solver(
                             pours_block: a.pours_block,
                             cancel: Some(cancel.clone()),
                             log: log.clone(),
-                            ..Default::default()
                         },
                         &mut watch,
                     );
@@ -2117,7 +2115,7 @@ pub fn run_with_solver(
         grid::pull_tight(&mut board, &mut laid)
     });
     // Copper pulled tight can leave room for a route on one layer where it took two.
-    if !a.no_reduce_vias && !(laid.is_empty() && fanout_laid.is_empty()) {
+    if !a.no_reduce_vias && (!laid.is_empty() || !fanout_laid.is_empty()) {
         say("vias", "taking out vias a route on one layer can do without".to_string());
         let v = grid::reduce_vias_all(
             &mut board,

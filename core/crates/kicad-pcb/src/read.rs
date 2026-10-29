@@ -596,7 +596,7 @@ fn read_pad(p: &Node, placement: &Placement) -> Result<Pad, KicadParse> {
     let drill = match p.find("drill") {
         Some(d) => {
             let args = d.args();
-            if args.first().and_then(|a| a.text()) == Some("oval") && !args.get(1).is_some_and(|a| a.number().is_ok()) {
+            if args.first().and_then(|a| a.text()) == Some("oval") && args.get(1).is_none_or(|a| a.number().is_err()) {
                 // `(drill oval (offset ...))` with no size, as KiCad 5 left on some SMD pads.
                 None
             } else if args.first().and_then(|a| a.text()) == Some("oval") {

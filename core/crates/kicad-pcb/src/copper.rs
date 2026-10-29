@@ -428,7 +428,7 @@ fn graphic(g: &Node, place: &dyn Fn([f64; 2]) -> [f64; 2], rotation: f64) -> Res
             if hidden(g) || effects.is_some_and(hidden) {
                 return Ok(None);
             }
-            let string = g.args().iter().filter_map(Node::text).filter(|t| !matches!(*t, "reference" | "value" | "user" | "hide")).last().unwrap_or("");
+            let string = g.args().iter().filter_map(Node::text).rfind(|t| !matches!(*t, "reference" | "value" | "user" | "hide")).unwrap_or("");
             let font = effects.and_then(|e| e.find("font"));
             let size = font.and_then(|f| f.find("size")).map(|s| point_of(s, "size")).transpose()?.unwrap_or([1e-3, 1e-3]);
             let thick = font.and_then(|f| f.find("thickness")).and_then(|t| t.number_arg(0, "thickness").ok()).map_or(size[0] * 0.15, |t| t * MM);
