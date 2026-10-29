@@ -1,0 +1,40 @@
+name: Test
+
+# The gate the repository did not have: every push and pull request builds the MIT core, runs its
+# whole test suite and holds it to a clippy-clean tree. pages.yml publishes the site and runs no tests.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  core:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+      # Clippy first: it is the quicker of the two and the likelier to need a fix.
+      - name: Clippy, every target, no warnings allowed
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      # --release because the router's tests route real boards; --no-fail-fast to see every failure.
+      - name: Tests
+        run: cargo test --workspace --no-fail-fast --release
