@@ -709,7 +709,7 @@ fn prepare_fresh_route(board: &mut Board, pours_block: bool) -> Vec<ItemId> {
         &mut grid::CpuSolver,
         &grid::NegotiationOptions {
             threads: 4,
-            max_seconds: Some(25.0),
+            deadline: grid::Deadline::max_seconds(Some(25.0)),
             pours_block,
             ..Default::default()
         },
@@ -720,7 +720,7 @@ fn prepare_fresh_route(board: &mut Board, pours_block: bool) -> Vec<ItemId> {
     let r = grid::route_open(
         board,
         &mut grid::CpuSolver,
-        &grid::Options { max_seconds: Some(15.0), pours_block, ..Default::default() },
+        &grid::Options { deadline: grid::Deadline::max_seconds(Some(15.0)), pours_block, ..Default::default() },
         &mut |_| {},
     );
     laid.extend(r.laid);
@@ -779,7 +779,7 @@ fn prepare_recipe(board: &mut Board, upto: &str, seed: u64, threads: usize, pour
         grid::nudge(board, &mut solver, &grid::NudgeOptions { locked, pours_block, ..Default::default() }, &mut soft, &mut |_| {});
     }
     if runs("tighten") {
-        grid::pull_tight(board, &mut soft);
+        grid::pull_tight(board, &mut soft, &Default::default());
         soft.extend(pair_laid.iter().copied());
     }
     if runs("cleanup") {
@@ -1030,7 +1030,7 @@ fn run_dipole(cli: &Cli) {
         let r = grid::route_open(
             &mut board,
             &mut grid::CpuSolver,
-            &grid::Options { max_seconds: Some(secs), pours_block, ..Default::default() },
+            &grid::Options { deadline: grid::Deadline::max_seconds(Some(secs)), pours_block, ..Default::default() },
             &mut |_| {},
         );
         soft.extend(r.laid);
@@ -1193,7 +1193,7 @@ fn run_push(cli: &Cli) {
         let r = grid::route_open(
             &mut board,
             &mut grid::CpuSolver,
-            &grid::Options { max_seconds: Some(reroute_s), pours_block, ..Default::default() },
+            &grid::Options { deadline: grid::Deadline::max_seconds(Some(reroute_s)), pours_block, ..Default::default() },
             &mut |_| {},
         );
         soft.extend(r.laid);
@@ -1424,7 +1424,7 @@ fn run_flow(cli: &Cli) {
         let r = grid::route_open(
             &mut board,
             &mut grid::CpuSolver,
-            &grid::Options { max_seconds: Some(secs), pours_block, ..Default::default() },
+            &grid::Options { deadline: grid::Deadline::max_seconds(Some(secs)), pours_block, ..Default::default() },
             &mut |_| {},
         );
         soft.extend(r.laid);
@@ -1607,7 +1607,7 @@ fn run_comb(cli: &Cli) {
     let r = grid::route_open(
         &mut board,
         &mut grid::CpuSolver,
-        &grid::Options { max_seconds: Some(reroute_s), pours_block, log: Some(log), ..Default::default() },
+        &grid::Options { deadline: grid::Deadline::max_seconds(Some(reroute_s)), pours_block, log: Some(log), ..Default::default() },
         &mut |now| {
             step_n += 1;
             let cur = fb.snapshot_copper(now);
@@ -1813,7 +1813,7 @@ fn run_clear_lane(cli: &Cli) {
         let r = grid::route_open(
             &mut board,
             &mut grid::CpuSolver,
-            &grid::Options { max_seconds: Some(reroute_s), pours_block, ..Default::default() },
+            &grid::Options { deadline: grid::Deadline::max_seconds(Some(reroute_s)), pours_block, ..Default::default() },
             &mut |_| {},
         );
         soft.extend(r.laid);
@@ -2189,7 +2189,7 @@ fn run_nudge(cli: &Cli) {
         let r = grid::route_open(
             &mut board,
             &mut grid::CpuSolver,
-            &grid::Options { max_seconds: Some(20.0), pours_block, ..Default::default() },
+            &grid::Options { deadline: grid::Deadline::max_seconds(Some(20.0)), pours_block, ..Default::default() },
             &mut |_| {},
         );
         r.laid
@@ -2235,7 +2235,7 @@ fn run_nudge(cli: &Cli) {
         &mut grid::CpuSolver,
         &grid::NudgeOptions {
             blind: !guided_only,
-            max_seconds: Some(max_s),
+            deadline: grid::Deadline::max_seconds(Some(max_s)),
             reroute_seconds: 3.0,
             locked,
             pours_block,
@@ -2569,7 +2569,7 @@ fn run_route(cli: &Cli) {
         grid::route_negotiated(
             &mut board,
             &mut grid::CpuSolver,
-            &grid::NegotiationOptions { threads: 4, max_seconds: Some(25.0), seed, pours_block, ..Default::default() },
+            &grid::NegotiationOptions { threads: 4, deadline: grid::Deadline::max_seconds(Some(25.0)), seed, pours_block, ..Default::default() },
             &mut |_| {},
             &mut |_, _| {},
         );
@@ -2629,7 +2629,7 @@ fn run_route(cli: &Cli) {
     let stats = grid::route_open(
         &mut board,
         &mut grid::CpuSolver,
-        &grid::Options { max_seconds: max_s, pours_block, seed, log: Some(log), ..Default::default() },
+        &grid::Options { deadline: grid::Deadline::max_seconds(max_s), pours_block, seed, log: Some(log), ..Default::default() },
         &mut |now| {
             count += 1;
             let cur = fb.snapshot_copper(now);
@@ -2725,7 +2725,7 @@ fn run_rip_up(cli: &Cli) {
         let r = grid::route_open(
             &mut board,
             &mut grid::CpuSolver,
-            &grid::Options { max_seconds: Some(20.0), pours_block, ..Default::default() },
+            &grid::Options { deadline: grid::Deadline::max_seconds(Some(20.0)), pours_block, ..Default::default() },
             &mut |_| {},
         );
         r.laid
@@ -2785,7 +2785,7 @@ fn run_rip_up(cli: &Cli) {
     let r_stats = grid::rip_up_watch(
         &mut board,
         &mut grid::CpuSolver,
-        &grid::RipOptions { max_seconds: Some(max_s), pours_block, ..Default::default() },
+        &grid::RipOptions { deadline: grid::Deadline::max_seconds(Some(max_s)), pours_block, ..Default::default() },
         &mut soft,
         &mut |now, att| {
             try_n += 1;
@@ -2884,7 +2884,7 @@ fn run_chase(cli: &Cli) {
         let r = grid::route_open(
             &mut board,
             &mut grid::CpuSolver,
-            &grid::Options { max_seconds: Some(20.0), pours_block, ..Default::default() },
+            &grid::Options { deadline: grid::Deadline::max_seconds(Some(20.0)), pours_block, ..Default::default() },
             &mut |_| {},
         );
         r.laid
@@ -2945,7 +2945,7 @@ fn run_chase(cli: &Cli) {
     let c_stats = grid::chase(
         &mut board,
         &mut grid::CpuSolver,
-        &grid::ChaseOptions { links, max_seconds: Some(max_s), pours_block, log: Some(log), ..Default::default() },
+        &grid::ChaseOptions { links, deadline: grid::Deadline::max_seconds(Some(max_s)), pours_block, log: Some(log), ..Default::default() },
         &mut soft,
         &mut |now| {
             let cur = fb.snapshot_copper(now);
@@ -3052,7 +3052,7 @@ fn run_tighten(cli: &Cli) {
     );
 
     let mut shortened_chains = 0usize;
-    let stats = grid::pull_tight_watch(&mut board, &mut soft, &mut |now, net, old_items, new_ids| {
+    let stats = grid::pull_tight_watch(&mut board, &mut soft, &Default::default(), &mut |now, net, old_items, new_ids| {
         shortened_chains += 1;
         let moved_from = fb.intern_items(now, old_items);
         let mut laid = Vec::new();
@@ -3134,7 +3134,7 @@ fn run_cleanup(cli: &Cli) {
             let r = grid::route_open(
                 &mut board,
                 &mut grid::CpuSolver,
-                &grid::Options { max_seconds: Some(15.0), pours_block, ..Default::default() },
+                &grid::Options { deadline: grid::Deadline::max_seconds(Some(15.0)), pours_block, ..Default::default() },
                 &mut |_| {},
             );
             s.extend(r.laid);
@@ -3318,7 +3318,7 @@ fn run_topo(cli: &Cli) {
     let t_stats = topo::route_topological(
         &mut board,
         &topo::Options {
-            max_seconds: max_s,
+            deadline: grid::Deadline::max_seconds(max_s),
             rip_passes,
             pours_block,
             log: Some(log),
@@ -3695,7 +3695,7 @@ fn run_tune(cli: &Cli) {
     );
 
     let mut bump_n = 0usize;
-    let stats = grid::match_lengths_watch(&mut board, &pairs, &mut soft, &mut |now, bump| {
+    let stats = grid::match_lengths_watch(&mut board, &pairs, &mut soft, &Default::default(), &mut |now, bump| {
         bump_n += 1;
         let ripped = fb.intern_items(now, std::slice::from_ref(bump.replaced));
         let laid: Vec<u32> = bump.laid.iter().filter_map(|&id| now.item(id).map(|it| fb.intern(now, id, it))).collect();

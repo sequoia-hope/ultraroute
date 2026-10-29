@@ -6,6 +6,8 @@
 
 use board::{nm, Board, ItemId, Kind, Nm, Point, Shape};
 
+use crate::clock::Deadline;
+
 /// How far a step between neighbouring centres strays from the nearer one, in cells.
 const STEP_REACH: f64 = std::f64::consts::FRAC_1_SQRT_2;
 
@@ -104,6 +106,8 @@ pub struct RouteGrid {
     /// routing layers, vertical on odd ones (see [`crate::search`]). For two-layer boards, where
     /// crossing nets otherwise both take the first layer and pay vias to pass each other.
     pub directional: bool,
+    /// When a search on the grid gives up; the stage searching sets it from its own deadline.
+    pub deadline: crate::clock::Deadline,
 }
 
 impl RouteGrid {
@@ -161,6 +165,11 @@ pub struct ObstacleMap {
 }
 
 
+/// Building a map looks at its deadline once in this many items stamped, and once in this many
+/// mask openings.
+const STAMPS_PER_CHECK: usize = 256;
+const MASKS_PER_CHECK: usize = 16;
+
 impl ObstacleMap {
     /// With `pours_block`, poured copper is kept like any other copper; otherwise it claims
     /// nothing, to be refilled around whatever is routed through it.
@@ -192,7 +201,7 @@ impl ObstacleMap {
         map.stamp_outline(board);
         map.stamp_via_avoid(board);
         map.regions = map.region_rasters(board);
-        map.stamp_mask_areas(board);
+        map.stamp_mask_areas(board, &Deadline::default());
         let max_clr = (0..board.nets.len() as u32)
             .map(|n| map.clearance_to(board, n))
             .max()
@@ -278,6 +287,17 @@ impl ObstacleMap {
 
     /// The map with the items `skip` names left out, as if they were not on the board.
     pub fn without(board: &Board, profile: Profile, h: Nm, pours_block: bool, skip: &dyn Fn(ItemId) -> bool) -> ObstacleMap {
+        ObstacleMap::without_by(board, profile, h, pours_block, skip, &Deadline::default()).expect("a map with no deadline is finished")
+    }
+
+    /// [`ObstacleMap::new`], or `None` if `deadline` passes first: a board with tens of thousands
+    /// of drawn copper shapes takes tens of seconds to map.
+    pub fn new_by(board: &Board, profile: Profile, h: Nm, pours_block: bool, deadline: &Deadline) -> Option<ObstacleMap> {
+        ObstacleMap::without_by(board, profile, h, pours_block, &|_| false, deadline)
+    }
+
+    /// [`ObstacleMap::without`], or `None` if `deadline` passes first.
+    pub fn without_by(board: &Board, profile: Profile, h: Nm, pours_block: bool, skip: &dyn Fn(ItemId) -> bool, deadline: &Deadline) -> Option<ObstacleMap> {
         let b = board.outline.iter().flatten().copied().fold(None, |b: Option<board::BBox>, p| {
             Some(b.map_or(board::BBox::of([p]), |b| b.union(board::BBox::of([p]))))
         });
@@ -314,17 +334,25 @@ impl ObstacleMap {
         for (id, it) in board.items().filter(|(id, _)| !skip(*id)) {
             if matches!(it.kind, Kind::Track | Kind::Via) { &mut moving } else { &mut fixed }.push(id);
         }
-        map.stamp_fixed(board, &fixed);
+        if !map.stamp_fixed(board, &fixed, deadline) {
+            return None;
+        }
         map.regions = map.region_rasters(board);
-        map.stamp_mask_areas(board);
-        for id in moving {
+        if !map.stamp_mask_areas(board, deadline) {
+            return None;
+        }
+        for (k, id) in moving.into_iter().enumerate() {
+            if k % STAMPS_PER_CHECK == STAMPS_PER_CHECK - 1 && deadline.expired() {
+                return None;
+            }
             map.stamp(board, id);
         }
-        map
+        Some(map)
     }
 
-    /// The outline and `fixed`, from the last few maps' if one had the same.
-    fn stamp_fixed(&mut self, board: &Board, fixed: &[ItemId]) {
+    /// The outline and `fixed`, from the last few maps' if one had the same; false, and nothing
+    /// kept, if `deadline` passes first.
+    fn stamp_fixed(&mut self, board: &Board, fixed: &[ItemId], deadline: &Deadline) -> bool {
         // A few, for the classes a board's maps are built for. Kept as runs of cells alike,
         // which fixed copper leaves long: a whole map each would cost a phone's tab too dear.
         const KEPT: usize = 4;
@@ -341,10 +369,13 @@ impl ObstacleMap {
             true
         });
         if hit {
-            return;
+            return true;
         }
         self.stamp_outline(board);
-        for &id in fixed {
+        for (k, &id) in fixed.iter().enumerate() {
+            if k % STAMPS_PER_CHECK == STAMPS_PER_CHECK - 1 && deadline.expired() {
+                return false;
+            }
             self.stamp(board, id);
         }
         CACHE.with(|cache| {
@@ -354,6 +385,7 @@ impl ObstacleMap {
             }
             cache.push((key, runs(&self.owner), runs(&self.via_owner)));
         });
+        true
     }
 
     /// Everything [`ObstacleMap::stamp_fixed`] stamps from: the grid, the profile, the rules, the
@@ -393,11 +425,14 @@ impl ObstacleMap {
     }
 
     /// Openings drawn in the mask: only the net they bare may run there; none where they bare
-    /// none or several.
-    fn stamp_mask_areas(&mut self, board: &Board) {
+    /// none or several. False if `deadline` passes first: a board can draw thousands.
+    fn stamp_mask_areas(&mut self, board: &Board, deadline: &Deadline) -> bool {
         let cells = self.nx * self.ny;
         let (track, via) = (self.profile.half_width + board::MASK_MARGIN + self.reach(), self.profile.via_radius + board::MASK_MARGIN);
-        for (shape, layers, net) in &board.mask_areas {
+        for (k, (shape, layers, net)) in board.mask_areas.iter().enumerate() {
+            if k % MASKS_PER_CHECK == MASKS_PER_CHECK - 1 && deadline.expired() {
+                return false;
+            }
             let mut hit = Vec::new();
             self.cells_near(shape, track, &mut |c| hit.push(c));
             for l in (0..self.layers).filter(|l| layers & (1 << l) != 0) {
@@ -411,6 +446,7 @@ impl ObstacleMap {
                 ObstacleMap::claim(&mut self.via_owner[c], *net);
             }
         }
+        true
     }
 
     /// Marks the cells where a via would reach into one of the board's via-avoid areas.
@@ -797,6 +833,7 @@ impl ObstacleMap {
             region_cost: Vec::new(),
             pours_block: self.pours_block,
             directional: false,
+            deadline: Default::default(),
         };
         self.apply_regions(net, &mut grid);
         grid
@@ -881,7 +918,7 @@ mod tests {
                 regions: Vec::new(),
             };
             map.stamp_outline(board);
-            map.stamp_mask_areas(board);
+            map.stamp_mask_areas(board, &Deadline::default());
             let ids: Vec<ItemId> = board.items().map(|(id, _)| id).collect();
             for id in ids {
                 map.stamp(board, id);

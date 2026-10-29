@@ -69,9 +69,8 @@ pub struct ShoveOptions {
     pub negotiate_vias: bool,
     pub negotiate_repasses: usize,
     pub negotiate_tree: bool,
-    pub max_seconds: Option<f64>,
+    pub deadline: crate::clock::Deadline,
     pub pours_block: bool,
-    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub log: Option<Log>,
 }
 
@@ -98,9 +97,8 @@ impl Default for ShoveOptions {
             negotiate_repasses: 1,
             negotiate_tree: true,
             seed: 0,
-            max_seconds: None,
+            deadline: Default::default(),
             pours_block: false,
-            cancel: None,
             log: None,
         }
     }
@@ -242,11 +240,7 @@ pub fn shove_escape_steps(
     watch: &mut dyn FnMut(&Board, ShoveEvent),
     on_step: &mut dyn FnMut(&Board, &ShoveTry, &ShoveRound, usize),
 ) -> ShoveStats {
-    let started = crate::clock::Instant::now();
-    let out_of_time = || {
-        options.max_seconds.is_some_and(|limit| started.elapsed().as_secs_f64() > limit)
-            || options.cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
-    };
+    let out_of_time = || options.deadline.expired();
     let region = options.plough == Plough::Region;
     let mut stats = ShoveStats::default();
     let mut cache = PassCache::of(board, options);
@@ -318,7 +312,7 @@ pub fn shove_escape_steps(
             let again = route_open(
                 board,
                 solver,
-                &Options { cell: options.cell, via_cost: options.via_cost, max_seconds: Some(options.reroute_seconds), nets: None, pours_block: options.pours_block, directional: false, seed: 0, cancel: options.cancel.clone(), log: None },
+                &Options { cell: options.cell, via_cost: options.via_cost, deadline: options.deadline.seconds(options.reroute_seconds), nets: None, pours_block: options.pours_block, directional: false, seed: 0, log: None },
                 &mut |_| {},
             );
             soft.extend(again.laid.iter().copied());
@@ -447,10 +441,9 @@ fn repair(board: &mut Board, solver: &mut dyn FieldSolver, options: &ShoveOption
         &crate::ripup::RipOptions {
             cell: options.cell,
             via_cost: options.via_cost,
-            max_seconds: Some(options.repair_seconds * share),
+            deadline: options.deadline.seconds(options.repair_seconds * share),
             pours_block: options.pours_block,
             region_repair: options.plough == Plough::Region,
-            cancel: options.cancel.clone(),
             ..Default::default()
         },
         soft,
@@ -468,7 +461,8 @@ fn settle(board: &mut Board, soft: &mut Vec<ItemId>, pours_block: bool, plane_ne
     let pick = |it: &Item| !it.locked && !open.contains(&it.net) && only.is_none_or(|o| o.contains(&it.net));
     spans.extend(crate::cleanup::prune_dangling_of(board, soft, &pick, &mut |_, _| {}).1);
     if !plane_nets.is_empty() {
-        soft.extend(crate::planes::join_planes(board, &None).laid);
+        // A tidy-up finishes what it starts: the planes' joins are part of the board it leaves.
+        soft.extend(crate::planes::join_planes(board, &None, &Default::default()).laid);
     }
     spans
 }
@@ -660,7 +654,7 @@ fn plough_round(
             round.routed = true;
         }
         if !round.ripped_items.is_empty() && !cache.plane_nets.is_empty() {
-            soft.extend(crate::planes::join_planes(board, &None).laid);
+            soft.extend(crate::planes::join_planes(board, &None, &options.deadline).laid);
         }
         if round.routed {
             return round;
@@ -786,6 +780,7 @@ fn soft_path(
     let movable = |it: &Item| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked && it.net != net;
     let profile = Profile::for_net(board, net);
     let mut grid = cache.walls(board, &profile, options, &movable).view(net);
+    grid.deadline = options.deadline.clone();
     let (sources, targets) = if region {
         let pads = cluster_pads(board, conn);
         let lift = |board: &mut Board, grid: &RouteGrid, id: ItemId| terminals_lifting(board, grid, id, &movable);
@@ -1101,7 +1096,7 @@ fn negotiate(
         &crate::negotiate::NegotiationOptions {
             cell: options.cell,
             via_cost: options.via_cost,
-            max_seconds: Some(options.reroute_seconds),
+            deadline: options.deadline.seconds(options.reroute_seconds),
             nets: Some(nets.clone()),
             net_weight,
             pours_block: options.pours_block,
@@ -1112,7 +1107,6 @@ fn negotiate(
             pad_ends: true,
             directional: false,
             seed,
-            cancel: options.cancel.clone(),
             ..Default::default()
         },
         &mut |_| {},
@@ -1126,12 +1120,11 @@ fn negotiate(
         &Options {
             cell: options.cell,
             via_cost: options.via_cost,
-            max_seconds: Some(options.reroute_seconds.min(5.0)),
+            deadline: options.deadline.seconds(options.reroute_seconds.min(5.0)),
             nets: Some(nets.clone()),
             pours_block: options.pours_block,
             directional: false,
             seed,
-            cancel: options.cancel.clone(),
             log: None,
         },
         &mut |_| {},
@@ -1369,7 +1362,7 @@ fn route_one(board: &mut Board, solver: &mut dyn FieldSolver, options: &ShoveOpt
     let Some(airline) = connection_of(board, pad, options.pours_block) else { return true };
     let far = if airline.from_item == pad { airline.to_item } else { airline.from_item };
     let profile = Profile::for_net(board, airline.net);
-    let grid = ObstacleMap::new(board, profile, options.cell, options.pours_block).view(airline.net);
+    let grid = RouteGrid { deadline: options.deadline.clone(), ..ObstacleMap::new(board, profile, options.cell, options.pours_block).view(airline.net) };
     let sources = terminals(board, &grid, pad);
     let targets = terminals(board, &grid, far);
     if sources.is_empty() || targets.is_empty() {
@@ -1636,7 +1629,7 @@ mod tests {
         let options = ShoveOptions {
             plough: Plough::Region,
             reach: mm(1.0),
-            max_seconds: Some(5.0),
+            deadline: crate::clock::Deadline::max_seconds(Some(5.0)),
             ..Default::default()
         };
         let stats = shove_escape(&mut board, &mut crate::route::CpuSolver, &options, &mut soft, &mut |_, _| {});

@@ -17,8 +17,6 @@ pub mod world;
 
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, BinaryHeap, HashMap, HashSet};
-use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
 
 use board::{check_item, nm, Board, Item, ItemId, Kind, Nm, Point, Shape};
 use grid::{item_name, Activity, Focus, Log, Profile};
@@ -27,6 +25,11 @@ use funnel::{Bend, Gate, Pt};
 use outline::{pt, round};
 use world::{Conns, Face, Rule, World};
 
+/// The longest the grid may take to route what one rip knocked loose, and to rip up for it, inside
+/// the stage's own deadline.
+const REPAIR_ROUTE_SECONDS: f64 = 3.0;
+const REPAIR_RIP_SECONDS: f64 = 2.5;
+
 #[derive(Debug, Clone)]
 pub struct Options {
     /// Spacing of the samples along each obstacle's outline, in nanometres. It must stay below
@@ -34,7 +37,8 @@ pub struct Options {
     pub sample: Nm,
     /// What a via costs, as a length in nanometres.
     pub via_cost: Nm,
-    pub max_seconds: Option<f64>,
+    /// When to stop, between connections and between orders.
+    pub deadline: grid::clock::Deadline,
     /// Triangles one search may expand before it gives the connection up.
     pub max_expansions: usize,
     /// Orders to try the connections in; the board keeps the one that routes most.
@@ -51,8 +55,6 @@ pub struct Options {
     pub nets: Option<HashSet<u32>>,
     /// Keep other nets out of poured copper instead of routing through it to be refilled.
     pub pours_block: bool,
-    /// Set from elsewhere to stop at the next connection.
-    pub cancel: Option<Arc<AtomicBool>>,
     pub log: Option<Log>,
 }
 
@@ -61,7 +63,7 @@ impl Default for Options {
         Options {
             sample: 100_000,
             via_cost: 2_000_000,
-            max_seconds: None,
+            deadline: Default::default(),
             max_expansions: 400_000,
             orders: 1,
             rip_cost: 1_000_000,
@@ -69,7 +71,6 @@ impl Default for Options {
             only: None,
             nets: None,
             pours_block: false,
-            cancel: None,
             log: None,
         }
     }
@@ -114,10 +115,7 @@ fn filtered_gaps(board: &Board, options: &Options) -> Vec<(f64, ItemId, ItemId)>
 /// `watch` sees the board being routed after every connection laid.
 pub fn route_topological(board: &mut Board, options: &Options, watch: &mut dyn FnMut(&Board)) -> Stats {
     let started = grid::clock::Instant::now();
-    let out_of_time = || {
-        options.max_seconds.is_some_and(|limit| started.elapsed().as_secs_f64() > limit)
-            || options.cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
-    };
+    let out_of_time = || options.deadline.expired();
     let gaps = filtered_gaps(board, options);
     if gaps.is_empty() {
         return Stats::default();
@@ -214,11 +212,7 @@ pub fn route_topological_with_soft(
     soft: &mut Vec<ItemId>,
     watch: &mut dyn FnMut(&Board),
 ) -> Stats {
-    let started = grid::clock::Instant::now();
-    let out_of_time = || {
-        options.max_seconds.is_some_and(|limit| started.elapsed().as_secs_f64() > limit)
-            || options.cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
-    };
+    let out_of_time = || options.deadline.expired();
     let raw_gaps = filtered_gaps(board, options);
     if raw_gaps.is_empty() {
         return Stats::default();
@@ -317,7 +311,7 @@ pub fn route_topological_with_soft(
                     let g = grid::route_open(
                         board,
                         &mut grid::CpuSolver,
-                        &grid::Options { max_seconds: Some(3.0), pours_block: pours, cancel: options.cancel.clone(), ..Default::default() },
+                        &grid::Options { deadline: options.deadline.seconds(REPAIR_ROUTE_SECONDS), pours_block: pours, ..Default::default() },
                         &mut |_| {},
                     );
                     if !g.laid.is_empty() {
@@ -343,7 +337,7 @@ pub fn route_topological_with_soft(
                     grid::rip_up(
                         board,
                         &mut grid::CpuSolver,
-                        &grid::RipOptions { max_seconds: Some(2.5), reroute_seconds: 1.0, pours_block: pours, cancel: options.cancel.clone(), ..Default::default() },
+                        &grid::RipOptions { deadline: options.deadline.seconds(REPAIR_RIP_SECONDS), reroute_seconds: 1.0, pours_block: pours, ..Default::default() },
                         &mut repair_soft,
                         &mut |_| {},
                     );

@@ -83,7 +83,7 @@ fn main() {
     let soft: Vec<ItemId> = board.items().filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked).map(|(id, _)| id).collect();
     let opts = morph::EscapeOptions::default();
     let route = |b: &mut Board, soft: &mut Vec<ItemId>, seconds: f64| {
-        let s = grid::route_open(b, &mut grid::CpuSolver, &grid::Options { max_seconds: Some(seconds), pours_block, ..Default::default() }, &mut |_| {});
+        let s = grid::route_open(b, &mut grid::CpuSolver, &grid::Options { deadline: grid::Deadline::max_seconds(Some(seconds)), pours_block, ..Default::default() }, &mut |_| {});
         soft.extend(s.laid.iter().copied());
         s
     };

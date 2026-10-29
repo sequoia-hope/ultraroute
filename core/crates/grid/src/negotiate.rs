@@ -46,7 +46,9 @@ pub struct NegotiationOptions {
     pub present_growth: f64,
     /// Added to a cell's history each round a path there collides.
     pub history_step: u32,
-    pub max_seconds: Option<f64>,
+    /// When to stop: between rounds, between connections, inside a search, and in the set-up
+    /// before the first round.
+    pub deadline: crate::clock::Deadline,
     /// Above one, every connection routes against the previous round's congestion at once on
     /// this many CPU threads (Jacobi PathFinder) instead of one after another (Gauss-Seidel).
     pub threads: usize,
@@ -81,7 +83,6 @@ pub struct NegotiationOptions {
     pub directional: bool,
     /// Reorders the connections, for a search over many runs; 0 keeps the board's order.
     pub seed: u64,
-    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub log: Option<Log>,
 }
 
@@ -94,7 +95,7 @@ impl Default for NegotiationOptions {
             present: 20.0,
             present_growth: 1.6,
             history_step: 10,
-            max_seconds: None,
+            deadline: Default::default(),
             threads: 1,
             patience: 4,
             nets: None,
@@ -107,7 +108,6 @@ impl Default for NegotiationOptions {
             pad_ends: false,
             directional: true,
             seed: 0,
-            cancel: None,
             log: None,
         }
     }
@@ -487,11 +487,7 @@ pub fn route_negotiated_rounds(
     trials: &mut dyn FnMut(usize, &[Trial]),
     mut on_round: Option<&mut dyn FnMut(RoundView)>,
 ) -> NegotiationStats {
-    let started = crate::clock::Instant::now();
-    let out_of_time = || {
-        options.max_seconds.is_some_and(|limit| started.elapsed().as_secs_f64() > limit)
-            || options.cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
-    };
+    let out_of_time = || options.deadline.expired();
     let mut stats = NegotiationStats::default();
     let conn = joined(board, options.pours_block);
     let mut open = open_of(&conn, &options.nets);
@@ -503,12 +499,20 @@ pub fn route_negotiated_rounds(
     let mut maps: HashMap<String, ObstacleMap> = HashMap::new();
     for a in &open {
         let p = Profile::for_net(board, a.net);
-        if !maps.contains_key(&p.class) {
-            maps.insert(p.class.clone(), ObstacleMap::new(board, p, options.cell, options.pours_block));
+        if let std::collections::hash_map::Entry::Vacant(slot) = maps.entry(p.class.clone()) {
+            // On a board of much drawn copper the maps alone can outlast negotiation's deadline.
+            // They are finished all the same, until the run's: the stage after needs the same
+            // maps, and finds them made; one cut short would be made again from nothing.
+            let Some(map) = ObstacleMap::new_by(board, p, options.cell, options.pours_block, &options.deadline.to_hard()) else { return stats };
+            slot.insert(map);
         }
+    }
+    if out_of_time() {
+        return stats;
     }
     let sample = maps.values().next().expect("one map per class").view(0);
     let mut grid_buf = sample.clone();
+    grid_buf.deadline = options.deadline.clone();
     if options.reachable_tree {
         open = reachable_airlines(board, &conn, open, &maps, &mut grid_buf, options.via_cost);
     }
@@ -631,9 +635,14 @@ fn run_pass(
         let pads = cluster_pads(board, &conn);
         (conn, pads)
     });
+    // Finding the ends is the slow part of the set-up on a board of many walled-in pads: once the
+    // deadline passes, the connections left get none, and the rounds that follow route nothing.
     let ends: Vec<(Vec<Terminal>, Vec<Terminal>)> = connections
         .iter()
         .map(|c| {
+            if out_of_time() {
+                return (Vec::new(), Vec::new());
+            }
             maps[&c.class].view_into(c.net, grid_buf);
             let mut end = |id: ItemId| match &near {
                 Some((conn, pads)) => {
@@ -1121,6 +1130,10 @@ pub(crate) fn reachable_airlines(
     }
 
     for (net, idxs) in by_net {
+        // Out of time, the nets not yet looked at keep the airlines they were spanned with.
+        if grid_buf.deadline.expired() {
+            break;
+        }
         let Some(map) = maps.get(&Profile::for_net(board, net).class) else { continue };
         let Some(by_cluster) = clusters_of.get(&net) else { continue };
         let clusters: Vec<&Vec<Anchor>> = by_cluster.values().filter(|v| !v.is_empty()).collect();
@@ -1324,7 +1337,7 @@ fn route_round_in_batches(
 ) {
     let size = solver.batch_size().max(1);
     let sample = maps.values().next().expect("one map per class").view(0);
-    let mut grids: Vec<RouteGrid> = (0..size.min(connections.len())).map(|_| sample.clone()).collect();
+    let mut grids: Vec<RouteGrid> = (0..size.min(connections.len())).map(|_| RouteGrid { deadline: options.deadline.clone(), ..sample.clone() }).collect();
     // The round's prices are the same for every connection: a solver that can price them itself
     // is handed them once, and each connection's grid without prices.
     static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -1343,6 +1356,10 @@ fn route_round_in_batches(
     let weight_of = |net: u32| weights.get(&net).copied().unwrap_or(1.0);
     let mut priced = true;
     for start in (0..connections.len()).step_by(size) {
+        // A round cut short keeps the paths of the connections it did not reach.
+        if options.deadline.expired() {
+            break;
+        }
         let end = (start + size).min(connections.len());
         let count = end - start;
         let sources: Vec<Vec<usize>> = ends[start..end].iter().map(|(s, _)| s.iter().map(|t| t.0).collect()).collect();
@@ -1425,6 +1442,10 @@ fn route_round_in_parallel(
                 // to tens of megabytes, too much to allocate and free hundreds of times a round.
                 let mut grid: Option<RouteGrid> = None;
                 loop {
+                    // A round cut short keeps the paths of the connections it did not reach.
+                    if options.deadline.expired() {
+                        break;
+                    }
                     let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     if k >= jobs.len() {
                         break;
@@ -1435,7 +1456,7 @@ fn route_round_in_parallel(
                             maps[class].view_into(net, g);
                             g
                         }
-                        None => grid.insert(maps[class].view(net)),
+                        None => grid.insert(RouteGrid { deadline: options.deadline.clone(), ..maps[class].view(net) }),
                     };
                     grid.directional = options.directional && grid.layers.len() == 2;
                     penalties_into(zones.trace.seen_by(class), history, present, net, weight, &mut grid.penalty);
@@ -1450,7 +1471,7 @@ fn route_round_in_parallel(
                 }
             });
         }
-        while done.load(std::sync::atomic::Ordering::Relaxed) < jobs.len() {
+        while done.load(std::sync::atomic::Ordering::Relaxed) < jobs.len() && !options.deadline.expired() {
             std::thread::sleep(TRIAL_INTERVAL);
             if !report {
                 continue;

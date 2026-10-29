@@ -134,12 +134,12 @@ fn a_cancelled_run_stops_before_routing() {
     let n = route_negotiated(
         &mut b,
         &mut CpuSolver,
-        &NegotiationOptions { cell: CELL, pours_block: true, cancel: Some(cancel.clone()), ..Default::default() },
+        &NegotiationOptions { cell: CELL, pours_block: true, deadline: Deadline::unlimited(cancel.clone()), ..Default::default() },
         &mut |_| {},
         &mut |_, _| {},
     );
     assert_eq!((n.rounds, n.committed), (0, 0));
-    let r = route_open(&mut b, &mut CpuSolver, &Options { cell: CELL, pours_block: true, cancel: Some(cancel.clone()), ..Default::default() }, &mut |_| {});
+    let r = route_open(&mut b, &mut CpuSolver, &Options { cell: CELL, pours_block: true, deadline: Deadline::unlimited(cancel.clone()), ..Default::default() }, &mut |_| {});
     assert_eq!(r.routed, 0);
     assert!(r.laid.is_empty());
     assert_eq!(violations(&b), before);
@@ -153,12 +153,30 @@ fn a_zero_time_budget_is_honoured() {
     let n = route_negotiated(
         &mut b,
         &mut CpuSolver,
-        &NegotiationOptions { cell: CELL, pours_block: true, max_seconds: Some(0.0), ..Default::default() },
+        &NegotiationOptions { cell: CELL, pours_block: true, deadline: Deadline::max_seconds(Some(0.0)), ..Default::default() },
         &mut |_| {},
         &mut |_, _| {},
     );
-    assert!(n.rounds <= 1);
+    assert_eq!(n.rounds, 0);
     assert!(t.elapsed().as_secs_f64() < 30.0);
+}
+
+/// A second's budget on a whole board stripped bare, at the benchmark's cell: negotiation's
+/// set-up (every connection's ends, the trees re-spanned) is under the deadline too, not only
+/// its rounds.
+#[test]
+fn a_one_second_budget_holds_on_a_whole_board() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/bluebuzz-rm2.kicad_pcb");
+    let mut b = Board::load(&path).unwrap().0;
+    let copper: Vec<ItemId> = b.items().filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via)).map(|(id, _)| id).collect();
+    for id in copper {
+        b.remove(id);
+    }
+    assert!(connectivity_without_pours(&b).airlines.len() > 100, "the fixture is a whole board to route");
+    let t = std::time::Instant::now();
+    route_negotiated(&mut b, &mut CpuSolver, &NegotiationOptions { deadline: Deadline::max_seconds(Some(1.0)), ..Default::default() }, &mut |_| {}, &mut |_, _| {});
+    let took = t.elapsed().as_secs_f64();
+    assert!(took < 3.0, "negotiation given 1 s took {took:.1} s");
 }
 
 #[test]
@@ -404,7 +422,7 @@ fn shared_cell_without_copper_refuses_instead_of_looping() {
     let stats = route_open(
         &mut b,
         &mut CpuSolver,
-        &Options { cell: 50_000, max_seconds: Some(2.0), ..Default::default() },
+        &Options { cell: 50_000, deadline: Deadline::max_seconds(Some(2.0)), ..Default::default() },
         &mut |_| {},
     );
     assert_eq!(stats.routed, 0, "{stats:?}");

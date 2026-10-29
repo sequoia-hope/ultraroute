@@ -7,6 +7,8 @@ use std::collections::{HashMap, HashSet};
 use board::{check_item, joined, Board, Item, ItemId, Kind, Nm, Point, Shape};
 use kicad_pcb::Span;
 
+use crate::clock::Deadline;
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CleanStats {
     pub chains: usize,
@@ -613,9 +615,9 @@ fn length(points: &[Point]) -> f64 {
 }
 
 /// Pulls every chain of the router's tracks tight. `soft` holds the copper the router laid and
-/// is updated with the tracks that replace it.
-pub fn pull_tight(board: &mut Board, soft: &mut Vec<ItemId>) -> CleanStats {
-    pull_tight_watch(board, soft, &mut |_, _, _, _| {})
+/// is updated with the tracks that replace it. Chains not reached by `deadline` stay as they are.
+pub fn pull_tight(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &Deadline) -> CleanStats {
+    pull_tight_watch(board, soft, deadline, &mut |_, _, _, _| {})
 }
 
 /// Sees a chain pulled tight: the board after, the net, the tracks replaced and the new ones.
@@ -623,12 +625,15 @@ pub type TightWatch<'a> = dyn FnMut(&Board, u32, &[Item], &[ItemId]) + 'a;
 
 /// As [`pull_tight`], calling `watch` with the net, replaced tracks and new track ids whenever a
 /// chain is shortened.
-pub fn pull_tight_watch(board: &mut Board, soft: &mut Vec<ItemId>, watch: &mut TightWatch) -> CleanStats {
+pub fn pull_tight_watch(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &Deadline, watch: &mut TightWatch) -> CleanStats {
     let soft_set: HashSet<ItemId> = soft.iter().copied().filter(|id| board.item(*id).is_some()).collect();
     let mut stats = CleanStats::default();
     let mut replaced: HashSet<ItemId> = HashSet::new();
     let mut added: Vec<ItemId> = Vec::new();
     for chain in chains(board, &soft_set) {
+        if deadline.expired() {
+            break;
+        }
         stats.chains += 1;
         stats.segments_before += chain.tracks.len();
         stats.length_before += length(&chain.points);
@@ -789,7 +794,7 @@ mod tests {
         let s2 = board.insert(seg(Point::new(500_000, 300_000), Point::new(1_000_000, 0)));
         let mut soft = vec![s1, s2];
         let mut tightened = 0;
-        let clean = pull_tight_watch(&mut board, &mut soft, &mut |_, net, old, new| {
+        let clean = pull_tight_watch(&mut board, &mut soft, &Default::default(), &mut |_, net, old, new| {
             assert_eq!(net, 1);
             assert_eq!(old.len(), 2);
             assert_eq!(new.len(), 1);

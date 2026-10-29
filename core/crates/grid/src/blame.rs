@@ -445,6 +445,7 @@ mod tests {
             region_cost: Vec::new(),
             pours_block: false,
             directional: false,
+            deadline: Default::default(),
         };
         let p = pad(Shape::Capsule { a: Point::new(1000, 1000), b: Point::new(1000, 1000), r: 100 }, 300.0);
         let mut depth = vec![f64::NEG_INFINITY; 400];

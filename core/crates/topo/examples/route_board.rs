@@ -35,7 +35,7 @@ fn main() {
     });
     let defaults = Options::default();
     let options = Options {
-        max_seconds: value("--seconds"),
+        deadline: grid::Deadline::max_seconds(value("--seconds")),
         sample: value("--sample").map_or(defaults.sample, |v| v as i64),
         rip_passes: value("--rip-passes").map_or(defaults.rip_passes, |v| v as usize),
         pours_block,

@@ -41,6 +41,7 @@ pub use ripup::{rip_up, rip_up_watch, RipAttempt, RipOptions, RipStats};
 pub use route::{edits, keep_orphans, route_open, terminal_cells, CpuSolver, FieldSolver, Options, PricedJob, RoundPrices, Stats};
 pub use search::via_cost_mm;
 pub use tune::{match_lengths, match_lengths_watch, pair_lengths, TuneBump, TuneStats};
+pub use clock::Deadline;
 pub use vias::{reduce_vias, reduce_vias_all, ViaOptions, ViaStats};
 pub use shove::{plough_fields, shove_escape, shove_escape_steps, Plough, ShoveEvent, ShoveOptions, ShoveRound, ShoveStats, ShoveTry};
 #[cfg(feature = "gpu")]

@@ -10,6 +10,11 @@ pub const STRAIGHT: u32 = 10;
 pub const DIAGONAL: u32 = 14;
 pub const UNREACHED: u32 = u32::MAX;
 
+/// A search looks at its grid's deadline once in this many expansions. A search is bounded by
+/// time, not by a count of expansions: on the fixtures, searches that arrive expand up to four
+/// fifths of the grid, so any count that saved time on the searches that fail lost routes.
+const CHECK_EVERY: usize = 4096;
+
 pub const NEIGHBOURS: [(i32, i32, u32); 8] = [
     (1, 0, STRAIGHT),
     (-1, 0, STRAIGHT),
@@ -46,7 +51,8 @@ fn step_cost(directional: bool, layer: usize, di: i32, dj: i32, base: u32) -> u3
     }
 }
 
-/// Cost from the nearest source to every cell (`UNREACHED` where none).
+/// Cost from the nearest source to every cell (`UNREACHED` where none, and everywhere when the
+/// grid's deadline passes before the field is done).
 pub fn cost_field(grid: &RouteGrid, sources: &[usize], via_cost: u32) -> Vec<u32> {
     let cells = grid.cell_count();
     let mut cost = vec![UNREACHED; grid.blocked.len()];
@@ -57,9 +63,15 @@ pub fn cost_field(grid: &RouteGrid, sources: &[usize], via_cost: u32) -> Vec<u32
             heap.push(Reverse((0u32, s)));
         }
     }
+    let mut popped = 0usize;
     while let Some(Reverse((c, index))) = heap.pop() {
         if c > cost[index] {
             continue;
+        }
+        popped += 1;
+        if popped.is_multiple_of(CHECK_EVERY) && grid.deadline.expired() {
+            cost.fill(UNREACHED);
+            return cost;
         }
         let layer = index / cells;
         let cell = index % cells;
@@ -144,7 +156,8 @@ pub fn trace_back(
 
 /// The cheapest route from any source to any target by A*, stopping at the first target
 /// reached: the octile distance to the targets' box (never more than the true cost) steers it,
-/// so a short connection explores a small patch instead of the whole board.
+/// so a short connection explores a small patch instead of the whole board. It gives up (`None`)
+/// when the grid's deadline passes.
 pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_cost: u32) -> Option<GridPath> {
     struct Buffers {
         cost: Vec<u32>,
@@ -294,6 +307,7 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
                 b.heap.push(Reverse((estimate(s), s)));
             }
         }
+        let mut expanded = 0usize;
         let mut reached = None;
         while let Some(Reverse((f, index))) = b.heap.pop() {
             let c = if b.gen[index] == epoch { b.cost[index] } else { UNREACHED };
@@ -302,6 +316,10 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
             }
             if b.is_target[index] == epoch {
                 reached = Some(index);
+                break;
+            }
+            expanded += 1;
+            if expanded.is_multiple_of(CHECK_EVERY) && grid.deadline.expired() {
                 break;
             }
             let layer = index / cells;
@@ -504,6 +522,7 @@ mod tests {
             region_cost: Vec::new(),
             pours_block: false,
             directional: false,
+            deadline: Default::default(),
         };
         let via_at = |path: &GridPath| path.windows(2).find(|w| w[0].0 != w[1].0).map(|w| w[1].1);
         let (src, tgt) = (vec![0], vec![nx + nx - 1]);
@@ -546,6 +565,7 @@ mod tests {
             region_cost: Vec::new(),
             pours_block: false,
             directional: false,
+            deadline: Default::default(),
         }
     }
 
@@ -600,6 +620,7 @@ mod tests {
             region_cost: Vec::new(),
             pours_block: false,
             directional: true,
+            deadline: Default::default(),
         };
         let pth = |i: usize, j: usize| vec![grid.index(0, i, j), grid.index(1, i, j)];
         let horiz = route_astar(&grid, &pth(2, 12), &pth(22, 12), 500).unwrap();

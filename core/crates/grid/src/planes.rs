@@ -7,6 +7,7 @@ use std::collections::HashSet;
 
 use board::{check_item, connectivity_without_pours, Board, Item, ItemId, Kind, Nm, Point, Shape};
 
+use crate::clock::Deadline;
 use crate::grid::Profile;
 use crate::report::{tell, Log};
 
@@ -29,8 +30,8 @@ fn centre(item: &Item) -> Point {
 }
 
 /// Joins every piece of a plane's net that is not on its plane, a pad or locked track, with a
-/// via beside it, where one fits: beside a pad first, else at a track's end.
-pub fn join_planes(board: &mut Board, log: &Option<Log>) -> PlaneStats {
+/// via beside it, where one fits: beside a pad first, else at a track's end; until `deadline`.
+pub fn join_planes(board: &mut Board, log: &Option<Log>, deadline: &Deadline) -> PlaneStats {
     let mut stats = PlaneStats::default();
     if board.planes == 0 {
         return stats;
@@ -55,6 +56,9 @@ pub fn join_planes(board: &mut Board, log: &Option<Log>) -> PlaneStats {
     pieces.retain(|c, _| !on.contains(c));
     stats.pads = pieces.len();
     for (_, mut members) in pieces {
+        if deadline.expired() {
+            break;
+        }
         members.sort_by_key(|id| board.item(*id).is_some_and(|it| it.kind == Kind::Track));
         // An earlier via may have joined this piece already.
         if on_plane(board, members[0]) {
@@ -216,7 +220,7 @@ mod tests {
         board.insert(Item { kind: Kind::Pour { zone: 0, kept: false }, net: 1, layers: 2, shape: Shape::Polygon(fill), hole: None, locked: false, span: None });
         assert_eq!(connectivity_without_pours(&board).airlines.len(), 1, "two pads, the pour not counted yet");
         board.set_planes(2);
-        let mut stats = join_planes(&mut board, &None);
+        let mut stats = join_planes(&mut board, &None, &Default::default());
         assert_eq!((stats.pads, stats.joined), (2, 2), "{stats:?}");
         assert!(connectivity_without_pours(&board).airlines.is_empty(), "the plane joins the two vias");
         // The cleanup keeps vias whose only other copper is the plane.

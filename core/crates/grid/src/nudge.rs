@@ -21,7 +21,7 @@ use crate::route::{route_open, FieldSolver, Options};
 pub struct NudgeOptions {
     pub cell: Nm,
     pub via_cost: u32,
-    pub max_seconds: Option<f64>,
+    pub deadline: crate::clock::Deadline,
     /// Step lengths tried, in nanometres, shortest first.
     pub steps: Vec<Nm>,
     /// How near an airline a part's courtyard must come to be tried.
@@ -35,7 +35,6 @@ pub struct NudgeOptions {
     /// After blame's moves, also try small steps in every direction (slow).
     pub blind: bool,
     pub pours_block: bool,
-    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub log: Option<Log>,
 }
 
@@ -44,7 +43,7 @@ impl Default for NudgeOptions {
         NudgeOptions {
             cell: 50_000,
             via_cost: 80,
-            max_seconds: None,
+            deadline: Default::default(),
             steps: vec![250_000, 500_000, 1_000_000],
             reach: 2_000_000,
             parts_per_connection: 6,
@@ -52,7 +51,6 @@ impl Default for NudgeOptions {
             locked: HashSet::new(),
             blind: true,
             pours_block: false,
-            cancel: None,
             log: None,
         }
     }
@@ -204,7 +202,7 @@ fn try_step(
     tell(&options.log, "nudging", || format!("{reference}: trying {:+.2}, {:+.2} mm for {why}", by.x as f64 * 1e-6, -by.y as f64 * 1e-6), Some(Focus::Trial { part: footprint, by }));
     let field = Field { center: centre(board, footprint), outward: 0.0, vector: (by.x as f64, by.y as f64), radius: reach_of(board, footprint), decay: 2.0 };
     let only = Some(HashSet::from([footprint]));
-    let pushed = push(board, &field, &PushOptions { steps: 1, locked: options.locked.clone(), only, pours_block: options.pours_block, log: None }, soft, &mut |_| {});
+    let pushed = push(board, &field, &PushOptions { steps: 1, locked: options.locked.clone(), only, pours_block: options.pours_block, deadline: options.deadline.clone(), log: None }, soft, &mut |_| {});
     let moved = pushed.moved.first().map(|&(_, by)| by);
     let Some(actual) = moved.filter(|_| legal(board, footprint)) else {
         stats.illegal += 1;
@@ -230,11 +228,10 @@ fn try_step(
         seed: 0,
         cell: options.cell,
         via_cost: options.via_cost,
-        max_seconds: Some(options.reroute_seconds),
+        deadline: options.deadline.seconds(options.reroute_seconds),
         nets: None,
         pours_block: options.pours_block,
         directional: false,
-        cancel: options.cancel.clone(),
         log: None,
     };
     let again = route_open(board, solver, &reroute, &mut |_| {});
@@ -303,11 +300,7 @@ pub fn nudge_watch(
     soft: &mut Vec<ItemId>,
     watch: &mut dyn FnMut(&Board, NudgeEvent),
 ) -> NudgeStats {
-    let started = crate::clock::Instant::now();
-    let out_of_time = || {
-        options.max_seconds.is_some_and(|limit| started.elapsed().as_secs_f64() > limit)
-            || options.cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
-    };
+    let out_of_time = || options.deadline.expired();
     let mut stats = NudgeStats::default();
     loop {
         let open = if options.pours_block { connectivity(board) } else { connectivity_without_pours(board) }.airlines;

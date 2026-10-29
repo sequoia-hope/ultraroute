@@ -97,7 +97,8 @@ impl FieldSolver for CpuSolver {
 pub struct Options {
     pub cell: Nm,
     pub via_cost: u32,
-    pub max_seconds: Option<f64>,
+    /// When to stop, at the next connection and inside a search.
+    pub deadline: crate::clock::Deadline,
     /// Nets whose open connections are routed; every net when `None`.
     pub nets: Option<HashSet<u32>>,
     /// Keep other nets out of poured copper instead of routing through it to be refilled.
@@ -107,14 +108,12 @@ pub struct Options {
     /// Reorders connections of nearly equal length, for a search over many runs; 0 keeps the
     /// shortest-first order exact.
     pub seed: u64,
-    /// Set from elsewhere to stop at the next connection.
-    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub log: Option<Log>,
 }
 
 impl Default for Options {
     fn default() -> Options {
-        Options { cell: 50_000, via_cost: 80, max_seconds: None, nets: None, pours_block: false, directional: true, seed: 0, cancel: None, log: None }
+        Options { cell: 50_000, via_cost: 80, deadline: Default::default(), nets: None, pours_block: false, directional: true, seed: 0, log: None }
     }
 }
 
@@ -140,11 +139,7 @@ pub(crate) type Terminal = (usize, Option<(Point, Nm)>);
 /// Routes the board's open connections, shortest first, until a round joins nothing more.
 /// `watch` sees the board after every connection laid.
 pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Options, watch: &mut dyn FnMut(&Board)) -> Stats {
-    let started = crate::clock::Instant::now();
-    let out_of_time = || {
-        options.max_seconds.is_some_and(|limit| started.elapsed().as_secs_f64() > limit)
-            || options.cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
-    };
+    let out_of_time = || options.deadline.expired();
     let mut stats = Stats::default();
     let mut maps: HashMap<String, ObstacleMap> = HashMap::new();
     let mut grid = RouteGrid {
@@ -164,6 +159,7 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
         region_cost: Vec::new(),
         pours_block: options.pours_block,
         directional: false,
+        deadline: options.deadline.clone(),
     };
     // The GPU's fields know nothing of directions.
     let directional = options.directional && board.layers.len() == 2 && solver.batch_size() <= 1;
@@ -211,7 +207,11 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
                 Some(Focus::Connection { net: airline.net, from: airline.from, to: airline.to }),
             );
             let profile = Profile::for_net(board, airline.net);
-            let map = maps.entry(profile.class.clone()).or_insert_with(|| ObstacleMap::new(board, profile, options.cell, options.pours_block));
+            if !maps.contains_key(&profile.class) {
+                let Some(map) = ObstacleMap::new_by(board, profile.clone(), options.cell, options.pours_block, &options.deadline) else { return stats };
+                maps.insert(profile.class.clone(), map);
+            }
+            let map = &maps[&profile.class];
             map.view_into(airline.net, &mut grid);
             grid.directional = directional;
             let sources = terminals(board, &grid, airline.from_item);

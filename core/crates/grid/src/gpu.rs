@@ -347,7 +347,8 @@ impl GpuSolver {
         q.len() < LIMIT
     }
 
-    fn run_relax(&mut self, jobs: &[(&RouteGrid, &[usize], &[usize])], via_cost: u32, with_targets: bool) {
+    /// Relaxes the batch's fields until nothing changes: false when the grids' deadline cut it short.
+    fn run_relax(&mut self, jobs: &[(&RouteGrid, &[usize], &[usize])], via_cost: u32, with_targets: bool) -> bool {
         let (first, _, _) = jobs[0];
         let per_field = first.blocked.len();
         let cells = first.nx * first.ny;
@@ -464,7 +465,11 @@ impl GpuSolver {
             self.dispatches += u64::from(DISPATCHES_PER_BATCH);
             let changed = Self::read_staging_u32(&self.device, &self.queue, &bufs.state, &bufs.state_staging, 4);
             if changed.first().copied().unwrap_or(0) == 0 {
-                break;
+                return true;
+            }
+            // The batch's grids share their stage's deadline; a relaxation cut short finds nothing.
+            if jobs[0].0.deadline.expired() {
+                return false;
             }
         }
     }
@@ -478,7 +483,9 @@ impl GpuSolver {
         let per_field = jobs[0].0.blocked.len();
         let nodes = per_field * jobs.len();
         let full_jobs: Vec<(&RouteGrid, &[usize], &[usize])> = jobs.iter().map(|&(g, s)| (g, s, &[][..])).collect();
-        self.run_relax(&full_jobs, via_cost, false);
+        if !self.run_relax(&full_jobs, via_cost, false) {
+            return vec![vec![UNREACHED; per_field]; jobs.len()];
+        }
         let bufs = self.buffers.as_ref().unwrap();
         let values: Vec<u32> = read_back(&self.device, &self.queue, &bufs.cost, (nodes * 4) as u64)
             .chunks_exact(4)
@@ -497,7 +504,9 @@ impl GpuSolver {
         let per_field = first.blocked.len();
         let cells = first.cell_count();
         let fields = jobs.len();
-        self.run_relax(jobs, via_cost, true);
+        if !self.run_relax(jobs, via_cost, true) {
+            return vec![None; fields];
+        }
         let bufs = self.buffers.as_ref().unwrap();
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {

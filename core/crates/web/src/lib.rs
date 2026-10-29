@@ -458,6 +458,7 @@ pub fn route_priced_job(header: &[u32], job: &[u32]) -> Vec<u32> {
                     region_cost: Vec::new(),
                     pours_block: false,
                     directional: false,
+                    deadline: Default::default(),
                 });
                 (grid.nx, grid.ny) = (nx, ny);
                 grid.layers = (0..layers).collect();
@@ -493,7 +494,7 @@ pub fn route_priced_job(header: &[u32], job: &[u32]) -> Vec<u32> {
 #[wasm_bindgen]
 pub fn route_packed_job(words: &[u32], job_index: usize) -> Vec<u32> {
     thread_local! {
-        static GRID_BUF: RefCell<RouteGrid> = const {
+        static GRID_BUF: RefCell<RouteGrid> = {
             RefCell::new(RouteGrid {
                 net: 0,
                 x0: 0,
@@ -511,6 +512,7 @@ pub fn route_packed_job(words: &[u32], job_index: usize) -> Vec<u32> {
                 region_cost: Vec::new(),
                 pours_block: false,
                 directional: false,
+                deadline: Default::default(),
             })
         };
     }

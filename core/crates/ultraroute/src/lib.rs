@@ -1003,9 +1003,62 @@ const REGION_WIDEST: Nm = 4_000_000;
 /// as that net's plane.
 const PLANE_SHARE: f64 = 0.6;
 
+// The stages' shares of `--timeout`. Stage 8 of REMEDIATION.md moves them into the stage table.
+/// Pre-fanout: of what is left when it starts.
+const PREFANOUT_SHARE: f64 = 0.15;
+/// Joining plane pads to their planes: of what is left when it starts.
+const PLANES_SHARE: f64 = 0.05;
+/// Coupling differential pairs end to end, until this share of the whole run has gone.
+const PAIRS_UNTIL: f64 = 0.25;
+/// Negotiation in a plain run (no restarts, nothing routed first): of the whole run.
+const NEGOTIATE_SHARE: f64 = 0.5;
+/// Dropping vias: this share of `--timeout`, kept back from the stages before it.
+const VIAS_SHARE: f64 = 0.1;
+/// What the run keeps back at the end of `--timeout` to clean up and write the board: this
+/// share of it, and never less than `RESERVE_SECONDS`.
+const RESERVE_SHARE: f64 = 0.02;
+const RESERVE_SECONDS: f64 = 2.0;
+
+/// The deadline of a run limited to `timeout` seconds from `started`: its hard end comes early
+/// by the reserve, which the clean-up and the write after it may use.
+fn run_deadline(started: Instant, timeout: Option<f64>, cancel: Arc<AtomicBool>) -> grid::Deadline {
+    match timeout {
+        Some(t) => {
+            let reserve = (t * RESERVE_SHARE).max(RESERVE_SECONDS).min(t);
+            grid::Deadline::until(started + Duration::from_secs_f64((t - reserve).max(0.0)), cancel)
+        }
+        None => grid::Deadline::unlimited(cancel),
+    }
+}
+
+/// `deadline` ending `seconds` before it would, or itself when it has no end.
+fn sooner(deadline: &grid::Deadline, seconds: f64) -> grid::Deadline {
+    match deadline.at {
+        Some(at) => deadline.until_at(at.checked_sub(Duration::from_secs_f64(seconds.max(0.0))).unwrap_or_else(Instant::now)),
+        None => deadline.clone(),
+    }
+}
+
+/// Which stage is running, and the one that was when the run's hard deadline passed.
+struct Timeline {
+    stage: &'static str,
+    overran_in: Option<&'static str>,
+}
+
+impl Timeline {
+    /// `stage` starts. Whether it may run: not once the hard deadline has passed.
+    fn enter(&mut self, run: &grid::Deadline, stage: &'static str) -> bool {
+        let passed = run.hard_passed();
+        if passed && self.overran_in.is_none() && !run.cancelled() {
+            self.overran_in = Some(self.stage);
+        }
+        self.stage = stage;
+        !passed
+    }
+}
+
 /// The plough for connections trapped at fine-pitch parts, up to `--shove-passes` times, each in
-/// another order, stopping `until` seconds into the run: the board file's spans of copper it moved
-/// or ripped.
+/// another order, stopping at `deadline`: the board file's spans of copper it moved or ripped.
 #[allow(clippy::too_many_arguments)]
 fn shove_pass(
     a: &Args,
@@ -1013,8 +1066,7 @@ fn shove_pass(
     solver: &mut dyn grid::FieldSolver,
     laid: &mut Vec<ItemId>,
     started: Instant,
-    until: Option<f64>,
-    cancel: &Arc<AtomicBool>,
+    deadline: &grid::Deadline,
     log: &Option<grid::Log>,
     step: &dyn Fn(&Board),
 ) -> Vec<kicad_pcb::Span> {
@@ -1063,9 +1115,8 @@ fn shove_pass(
                 negotiate_tree: a.negotiate_tree,
                 cascade: a.shove_cascade.unwrap_or(defaults.cascade),
                 seed: a.seed.wrapping_mul(1000).wrapping_add(pass as u64 + 1),
-                max_seconds: until.map(|s| (s - started.elapsed().as_secs_f64()).max(0.0)),
+                deadline: deadline.clone(),
                 pours_block: a.pours_block,
-                cancel: Some(cancel.clone()),
                 log: log.clone(),
                 ..defaults
             },
@@ -1112,7 +1163,7 @@ fn shove_pass(
             break;
         }
         stalled = if after < before || grew { 0 } else { stalled + 1 };
-        if stalled >= a.shove_patience.max(1) || until.is_some_and(|t| started.elapsed().as_secs_f64() >= t) {
+        if stalled >= a.shove_patience.max(1) || deadline.expired() {
             break;
         }
     }
@@ -1267,6 +1318,11 @@ pub fn run_with_solver(
         return out;
     }
     let started = Instant::now();
+    // One deadline for the whole run: every stage's is a share of it, none past its hard end.
+    let run = run_deadline(started, a.timeout, cancel.clone());
+    // Routing, and the stages that rescue what it left open, stop in time for the via pass.
+    let rescue = if a.no_reduce_vias { run.clone() } else { sooner(&run, a.timeout.map_or(0.0, |t| t * VIAS_SHARE)) };
+    let mut timeline = Timeline { stage: "set-up", overran_in: None };
     let mut solver: Box<dyn grid::FieldSolver> = match custom_solver {
         Some(s) => s,
         None => {
@@ -1355,7 +1411,9 @@ pub fn run_with_solver(
     // Escapes laid before routing, held apart from the router's own copper until the grid has
     // had its pass, so the ones no route used can be taken out again.
     let mut fanout_laid = Vec::new();
-    if a.prefanout {
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get() / 2).max(1);
+    let threads = a.threads.unwrap_or(cores);
+    if a.prefanout && timeline.enter(&run, "prefanout") {
         let parts = morph::fine_pitch(&board, 500_000);
         let defaults = grid::PrefanoutOptions::default();
         // Open differential pairs are held back from pre-fanout so `route_pairs` can fan out and
@@ -1382,7 +1440,8 @@ pub fn run_with_solver(
                 parts,
                 skip_nets,
                 pours_block: a.pours_block,
-                cancel: Some(cancel.clone()),
+                deadline: run.share(PREFANOUT_SHARE),
+                threads,
                 log: log.clone(),
                 ..defaults
             },
@@ -1418,8 +1477,8 @@ pub fn run_with_solver(
     }
     // Plane pads not on their plane get a via down to it beside them, as the router's own copper
     // a rip-up may take up again.
-    if board.planes != 0 {
-        let p = grid::join_planes(&mut board, &log);
+    if board.planes != 0 && timeline.enter(&run, "planes") {
+        let p = grid::join_planes(&mut board, &log, &run.share(PLANES_SHARE));
         say("planes", format!("{} of {} pads joined to their planes by a via", p.joined, p.pads));
         eprintln!("planes: {} of {} pads off their planes joined, {:.1} s", p.joined, p.pads, started.elapsed().as_secs_f64());
         step(&board);
@@ -1427,7 +1486,7 @@ pub fn run_with_solver(
     }
     // Differential pairs next, round the escapes, and held apart from the router's own copper so
     // nothing rips or straightens them apart; the legs to their pads are routed as usual.
-    if a.diff_pairs {
+    if a.diff_pairs && timeline.enter(&run, "pairs") {
         let p = grid::route_pairs(
             &mut board,
             &grid::PairOptions {
@@ -1437,7 +1496,10 @@ pub fn run_with_solver(
                 // Coupling end to end may run until a quarter of the time is gone; later runs are
                 // laid the legacy way, as the pairs are a small part of a board, the rest of it
                 // still to route.
-                max_seconds: a.timeout.map(|t| (t / 4.0 - started.elapsed().as_secs_f64()).max(0.0)),
+                deadline: match a.timeout {
+                    Some(t) => run.until_at(started + Duration::from_secs_f64(t * PAIRS_UNTIL)),
+                    None => run.clone(),
+                },
                 log: log.clone(),
             },
             &mut watch,
@@ -1474,7 +1536,8 @@ pub fn run_with_solver(
                         parts: fine.into_iter().collect(),
                         skip_nets: skip_others,
                         pours_block: a.pours_block,
-                        cancel: Some(cancel.clone()),
+                        deadline: run.share(PREFANOUT_SHARE),
+                        threads,
                         log: log.clone(),
                         ..defaults
                     },
@@ -1488,8 +1551,6 @@ pub fn run_with_solver(
             }
         }
     }
-    let cores = std::thread::available_parallelism().map_or(1, |n| n.get() / 2).max(1);
-    let threads = a.threads.unwrap_or(cores);
     let topo_sample = a.topo_sample.unwrap_or(topo::Options::default().sample);
     let open_airlines = |b: &Board| if a.pours_block { connectivity(b) } else { connectivity_without_pours(b) }.airlines;
     let costs = via_costs(a, &board);
@@ -1517,11 +1578,20 @@ pub fn run_with_solver(
         (Some(t), true) if a.nudge => Some(t * 0.8),
         (t, _) => t,
     };
+    let routing = match routing_timeout {
+        Some(t) => rescue.until_at(started + Duration::from_secs_f64(t)),
+        None => rescue.clone(),
+    };
+    // A stage's share of the whole `--timeout`, from when it starts.
+    let of_timeout = |share: f64| match a.timeout {
+        Some(t) => run.seconds(t * share),
+        None => run.clone(),
+    };
     // A pass that routes nothing first and does not restart keeps the time limits it always had.
     let plain = a.restart == 0 && a.first.is_empty() && a.topo_first.is_empty() && lengths.is_empty();
 
     for round in 0..total_rounds {
-        if round > 0 && (cancel.load(Ordering::Relaxed) || routing_timeout.is_some_and(|t| started.elapsed().as_secs_f64() >= t)) {
+        if (round > 0 && routing.expired()) || !timeline.enter(&run, "routing") {
             break;
         }
         if round > 0 {
@@ -1534,22 +1604,19 @@ pub fn run_with_solver(
             say("restart", format!("round {} of {}: {} priority nets", round + 1, total_rounds, fail_counts.len()));
             step(&board);
         }
-        // This round's even share of the routing time left, as seconds into the run.
+        // This round's even share of the routing time left.
         let rounds_left = (total_rounds - round) as f64;
-        let now = started.elapsed().as_secs_f64();
-        let round_deadline = routing_timeout.map(|total| now + (total - now).max(0.0) / rounds_left);
-        let left_in_round = || round_deadline.map(|d| (d - started.elapsed().as_secs_f64()).max(0.0));
+        let round_deadline = routing.share(1.0 / rounds_left);
 
-        if a.topo {
+        if a.topo && timeline.enter(&run, "topo") {
             // Rubber bands first, through a triangulation of the copper; the grid finishes what they
             // leave open.
             let t = topo::route_topological(
                 &mut board,
                 &topo::Options {
                     sample: topo_sample,
-                    max_seconds: if a.restart > 0 { left_in_round().map(|s| s * 0.4) } else { a.timeout.map(|s| s * 0.4) },
+                    deadline: if a.restart > 0 { round_deadline.share(0.4) } else { of_timeout(0.4) },
                     pours_block: a.pours_block,
-                    cancel: Some(cancel.clone()),
                     log: log.clone(),
                     ..Default::default()
                 },
@@ -1565,7 +1632,7 @@ pub fn run_with_solver(
             );
             laid.extend(t.laid);
         }
-        if !a.topo_first.is_empty() {
+        if !a.topo_first.is_empty() && timeline.enter(&run, "topo-first") {
             let only = resolve_topo_only(&board, &a.topo_first, a.pours_block);
             if !only.is_empty() {
                 say("topo-first", format!("routing {} target connections as rubber bands before negotiation", only.len()));
@@ -1573,10 +1640,9 @@ pub fn run_with_solver(
                     &mut board,
                     &topo::Options {
                         sample: topo_sample,
-                        max_seconds: left_in_round().map(|s| s * 0.25),
+                        deadline: round_deadline.share(0.25),
                         only: Some(only),
                         pours_block: a.pours_block,
-                        cancel: Some(cancel.clone()),
                         log: log.clone(),
                         ..Default::default()
                     },
@@ -1593,7 +1659,7 @@ pub fn run_with_solver(
                 laid.extend(t.laid);
             }
         }
-        if !fail_counts.is_empty() && a.first_weight.is_none() {
+        if !fail_counts.is_empty() && a.first_weight.is_none() && timeline.enter(&run, "first") {
             if a.first_negotiate {
                 let prio_nets: HashSet<u32> = fail_counts.keys().copied().collect();
                 let weights: HashMap<u32, f64> = fail_counts.iter().map(|(&net, &k)| (net, 0.5_f64.powi(k.saturating_sub(1) as i32))).collect();
@@ -1602,7 +1668,7 @@ pub fn run_with_solver(
                     &mut board,
                     solver.as_mut(),
                     &grid::NegotiationOptions {
-                        max_seconds: left_in_round().map(|s| s * 0.25),
+                        deadline: round_deadline.share(0.25),
                         threads,
                         cell: a.cell.unwrap_or(grid::NegotiationOptions::default().cell),
                         via_cost: costs.negotiate,
@@ -1615,7 +1681,6 @@ pub fn run_with_solver(
                         rip_blocked: a.negotiate_rip,
                         reachable_tree: a.negotiate_tree,
                         seed: a.seed,
-                        cancel: Some(cancel.clone()),
                         log: log.clone(),
                         ..Default::default()
                     },
@@ -1635,10 +1700,9 @@ pub fn run_with_solver(
                         via_cost: costs.open,
                         directional,
                         seed: a.seed,
-                        max_seconds: left_in_round().map(|s| s * 0.15),
+                        deadline: round_deadline.share(0.15),
                         nets: Some(prio_nets.clone()),
                         pours_block: a.pours_block,
-                        cancel: Some(cancel.clone()),
                         log: log.clone(),
                     },
                     &mut watch,
@@ -1668,10 +1732,9 @@ pub fn run_with_solver(
                             via_cost: costs.open,
                             directional,
                             seed: a.seed,
-                            max_seconds: left_in_round().map(|s| s * 0.25),
+                            deadline: round_deadline.share(0.25),
                             nets: Some(net_set),
                             pours_block: a.pours_block,
-                            cancel: Some(cancel.clone()),
                             log: log.clone(),
                         },
                         &mut watch,
@@ -1684,7 +1747,7 @@ pub fn run_with_solver(
                 eprintln!("first: {total_prio} nets, {routed} routed, {failed} failed, {vias} vias, {:.1} s", started.elapsed().as_secs_f64());
             }
         }
-        if a.negotiate {
+        if a.negotiate && timeline.enter(&run, "negotiation") {
             // Nets that failed more often route at a lower price, and so first.
             let net_weight: HashMap<u32, f64> = match a.first_weight {
                 Some(w) => fail_counts.iter().map(|(&net, &k)| (net, w.powi(k as i32))).collect(),
@@ -1694,7 +1757,7 @@ pub fn run_with_solver(
                 &mut board,
                 solver.as_mut(),
                 &grid::NegotiationOptions {
-                    max_seconds: if plain { a.timeout.map(|s| s / 2.0) } else { left_in_round().map(|s| s * if a.restart > 0 { 0.6 } else { 0.5 }) },
+                    deadline: if plain { of_timeout(NEGOTIATE_SHARE) } else { round_deadline.share(if a.restart > 0 { 0.6 } else { 0.5 }) },
                     threads,
                     cell: a.cell.unwrap_or(grid::NegotiationOptions::default().cell),
                     via_cost: costs.negotiate,
@@ -1702,7 +1765,6 @@ pub fn run_with_solver(
                     net_weight,
                     pours_block: a.pours_block,
                     seed: a.seed,
-                    cancel: Some(cancel.clone()),
                     log: log.clone(),
                     max_rounds: a.negotiate_rounds.unwrap_or(grid::NegotiationOptions::default().max_rounds),
                     patience: a.negotiate_patience.unwrap_or(grid::NegotiationOptions::default().patience),
@@ -1735,29 +1797,29 @@ pub fn run_with_solver(
             via_cost: costs.open,
             directional,
             seed: a.seed,
-            max_seconds: left_in_round(),
+            deadline: round_deadline.clone(),
             pours_block: a.pours_block,
-            cancel: Some(cancel.clone()),
             log: log.clone(),
             ..Default::default()
         };
-        say("finishing", "routing what negotiation left, one connection at a time".to_string());
-        stats = grid::route_open(&mut board, solver.as_mut(), &options, &mut watch);
-        laid.extend(stats.laid.iter().copied());
+        if timeline.enter(&run, "finishing") {
+            say("finishing", "routing what negotiation left, one connection at a time".to_string());
+            stats = grid::route_open(&mut board, solver.as_mut(), &options, &mut watch);
+            laid.extend(stats.laid.iter().copied());
+        }
         if !fanout_laid.is_empty() && !a.prefanout_keep_unused {
             let (_, spans) = grid::prune_closed_escapes(&mut board, &mut fanout_laid, a.pours_block);
             removed.extend(spans);
         }
-        if a.rip_up {
+        if a.rip_up && timeline.enter(&run, "rip-up") {
             let r = grid::rip_up(
                 &mut board,
                 solver.as_mut(),
                 &grid::RipOptions {
                     cell: a.cell.unwrap_or(grid::RipOptions::default().cell),
                     via_cost: costs.rip,
-                    max_seconds: left_in_round(),
+                    deadline: round_deadline.clone(),
                     pours_block: a.pours_block,
-                    cancel: Some(cancel.clone()),
                     log: log.clone(),
                     ..Default::default()
                 },
@@ -1775,7 +1837,7 @@ pub fn run_with_solver(
                 started.elapsed().as_secs_f64()
             );
         }
-        if a.chase {
+        if a.chase && timeline.enter(&run, "chase") {
             let c = grid::chase(
                 &mut board,
                 solver.as_mut(),
@@ -1784,9 +1846,8 @@ pub fn run_with_solver(
                     rip_cost: a.chase_costs.map_or(grid::ChaseOptions::default().rip_cost, |c| c.0),
                     chain_cost: a.chase_costs.map_or(grid::ChaseOptions::default().chain_cost, |c| c.1),
                     links: a.chase_costs.and_then(|c| c.2).unwrap_or(grid::ChaseOptions::default().links),
-                    max_seconds: left_in_round(),
+                    deadline: round_deadline.clone(),
                     pours_block: a.pours_block,
-                    cancel: Some(cancel.clone()),
                     log: log.clone(),
                     ..Default::default()
                 },
@@ -1808,7 +1869,7 @@ pub fn run_with_solver(
         if !fanout_laid.is_empty() && !a.prefanout_keep_unused {
             laid.append(&mut fanout_laid);
         }
-        if let Some([x, y, radius, outward, dx, dy]) = a.push {
+        if let Some([x, y, radius, outward, dx, dy]) = a.push.filter(|_| timeline.enter(&run, "push")) {
             // Same coordinates as --place: the board's y runs the other way.
             let field = grid::Field {
                 center: Point::new((x * 1e6).round() as i64, (-y * 1e6).round() as i64),
@@ -1822,7 +1883,7 @@ pub fn run_with_solver(
             let p = grid::push(
                 &mut board,
                 &field,
-                &grid::PushOptions { steps: a.push_steps, locked, pours_block: a.pours_block, log: log.clone(), ..Default::default() },
+                &grid::PushOptions { steps: a.push_steps, locked, pours_block: a.pours_block, deadline: round_deadline.clone(), log: log.clone(), ..Default::default() },
                 &mut laid,
                 &mut |b: &Board| {
                     if let Some(l) = live.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
@@ -1831,7 +1892,7 @@ pub fn run_with_solver(
                 },
             );
             removed.extend(p.removed_spans.iter().copied());
-            let again = grid::route_open(&mut board, solver.as_mut(), &grid::Options { max_seconds: left_in_round(), ..options.clone() }, &mut watch);
+            let again = grid::route_open(&mut board, solver.as_mut(), &grid::Options { deadline: round_deadline.clone(), ..options.clone() }, &mut watch);
             laid.extend(again.laid.iter().copied());
             eprintln!(
                 "push: {} parts moved, {} held back, {} copper moves, {} ripped, {} rerouted, {:.1} s",
@@ -1843,7 +1904,7 @@ pub fn run_with_solver(
                 started.elapsed().as_secs_f64()
             );
         }
-        if !a.escape.is_empty() {
+        if !a.escape.is_empty() && timeline.enter(&run, "escape") {
             let parts: Vec<usize> = if a.escape.iter().any(|r| r == "auto") {
                 morph::fine_pitch(&board, 500_000)
             } else {
@@ -1861,7 +1922,7 @@ pub fn run_with_solver(
                 eprintln!("escape {}: {} lanes, {} combed onto them, {} pushed out of the zone, {ripped} ripped", board.footprints[f].reference, e.lanes, e.combed, e.pushed_out);
                 step(&board);
             }
-            let reroute = grid::Options { max_seconds: left_in_round(), ..options.clone() };
+            let reroute = grid::Options { deadline: round_deadline.clone(), ..options.clone() };
             let again = grid::route_open(&mut board, solver.as_mut(), &reroute, &mut watch);
             laid.extend(again.laid.iter().copied());
             if a.rip_up {
@@ -1871,9 +1932,8 @@ pub fn run_with_solver(
                     &grid::RipOptions {
                         cell: a.cell.unwrap_or(grid::RipOptions::default().cell),
                         via_cost: costs.rip,
-                        max_seconds: left_in_round(),
+                        deadline: round_deadline.clone(),
                         pours_block: a.pours_block,
-                        cancel: Some(cancel.clone()),
                         log: log.clone(),
                         ..Default::default()
                     },
@@ -1890,7 +1950,7 @@ pub fn run_with_solver(
                 step(&board);
             }
         }
-        if a.clear_lanes {
+        if a.clear_lanes && timeline.enter(&run, "clear lanes") {
             let fine = morph::fine_pitch(&board, 500_000);
             let opts = morph::EscapeOptions { zone: a.escape_zone.map_or(morph::EscapeOptions::default().zone, |mm| (mm * 1e6).round() as Nm), ..Default::default() };
             let (mut tried, mut kept_count) = (0, 0);
@@ -1902,7 +1962,7 @@ pub fn run_with_solver(
                     !done.contains(id) && board.item(*id).is_some_and(|it| matches!(it.kind, Kind::Pad { footprint, .. } if fine.contains(&footprint)))
                 });
                 let Some(pad) = pad else { break };
-                if cancel.load(Ordering::Relaxed) || round_deadline.is_some_and(|t| started.elapsed().as_secs_f64() > t) {
+                if round_deadline.expired() {
                     break;
                 }
                 done.insert(pad);
@@ -1923,7 +1983,7 @@ pub fn run_with_solver(
                 say("clearing lanes", format!("{reference}-{number}: {moved} pieces slid, {ripped} ripped for breaking a rule"));
                 step(&board);
                 let open_after_rip = open_airlines(&board).len();
-                let reroute = grid::Options { max_seconds: Some(20.0), ..options.clone() };
+                let reroute = grid::Options { deadline: round_deadline.seconds(20.0), ..options.clone() };
                 let again = grid::route_open(&mut board, solver.as_mut(), &reroute, &mut |_| {});
                 laid.extend(again.laid.iter().copied());
                 let left = open_airlines(&board);
@@ -1993,36 +2053,28 @@ pub fn run_with_solver(
             stats = best_stats;
         }
     }
-    let left_total = || a.timeout.map(|s| (s - started.elapsed().as_secs_f64()).max(0.0));
-    if a.shove && !a.shove_late {
+    if a.shove && !a.shove_late && timeline.enter(&run, "shove") {
         // Rubber bands to come after keep a third of what is left.
-        let until = match a.timeout {
-            Some(t) if a.topo_trapped_rip => {
-                let now = started.elapsed().as_secs_f64();
-                Some(now + (t - now).max(0.0) * 0.65)
-            }
-            t => t,
-        };
-        let spans = shove_pass(a, &mut board, solver.as_mut(), &mut laid, started, until, &cancel, &log, &step);
+        let until = if a.topo_trapped_rip { rescue.share(0.65) } else { rescue.clone() };
+        let spans = shove_pass(a, &mut board, solver.as_mut(), &mut laid, started, &until, &log, &step);
         removed.extend(spans);
         if a.diff_pairs && !a.diff_pairs_legacy && !pair_laid.is_empty() {
             let open = open_airlines(&board);
             if unlock_pairs_near_open(&mut board, &pair_laid, &open) > 0 {
-                let spans = shove_pass(a, &mut board, solver.as_mut(), &mut laid, started, until, &cancel, &log, &step);
+                let spans = shove_pass(a, &mut board, solver.as_mut(), &mut laid, started, &until, &log, &step);
                 removed.extend(spans);
                 relock_pairs(&mut board, &pair_laid);
             }
         }
     }
-    if a.topo_trapped || a.topo_trapped_rip {
+    if (a.topo_trapped || a.topo_trapped_rip) && timeline.enter(&run, "topo-trapped") {
         let trapped: HashSet<(ItemId, ItemId)> = open_airlines(&board).iter().map(|c| (c.from_item.min(c.to_item), c.from_item.max(c.to_item))).collect();
         if !trapped.is_empty() {
             let mut topo_opts = topo::Options {
                 sample: topo_sample,
-                max_seconds: left_total(),
+                deadline: rescue.clone(),
                 only: Some(trapped),
                 pours_block: a.pours_block,
-                cancel: Some(cancel.clone()),
                 log: log.clone(),
                 ..Default::default()
             };
@@ -2038,9 +2090,8 @@ pub fn run_with_solver(
                             via_cost: costs.open,
                             directional,
                             seed: a.seed,
-                            max_seconds: left_total(),
+                            deadline: rescue.clone(),
                             pours_block: a.pours_block,
-                            cancel: Some(cancel.clone()),
                             log: log.clone(),
                             ..Default::default()
                         },
@@ -2075,7 +2126,7 @@ pub fn run_with_solver(
             }
         }
     }
-    if a.nudge {
+    if a.nudge && timeline.enter(&run, "nudge") {
         let locked = locked_footprints(&board, &pair_laid, a.diff_pairs_legacy);
         let n = grid::nudge(
             &mut board,
@@ -2084,10 +2135,9 @@ pub fn run_with_solver(
                 cell: a.cell.unwrap_or(grid::NudgeOptions::default().cell),
                 blind: !a.nudge_guided,
                 // A plough to come after keeps its share of the time.
-                max_seconds: a.timeout.map(|s| (s - started.elapsed().as_secs_f64() - if a.shove && a.shove_late { a.shove_seconds } else { 0.0 }).max(0.0)),
+                deadline: if a.shove && a.shove_late { sooner(&rescue, a.shove_seconds) } else { rescue.clone() },
                 locked,
                 pours_block: a.pours_block,
-                cancel: Some(cancel.clone()),
                 log: log.clone(),
                 ..Default::default()
             },
@@ -2098,28 +2148,28 @@ pub fn run_with_solver(
         let names: Vec<&str> = n.moved.iter().map(|(f, _)| board.footprints[*f].reference.as_str()).collect();
         eprintln!("nudge: {} steps tried, {} illegal, {} kept ({} as blame asked), moved {names:?}, {:.1} s", n.tried, n.illegal, n.kept, n.guided, started.elapsed().as_secs_f64());
     }
-    if a.shove && a.shove_late {
-        let spans = shove_pass(a, &mut board, solver.as_mut(), &mut laid, started, a.timeout, &cancel, &log, &step);
+    if a.shove && a.shove_late && timeline.enter(&run, "shove") {
+        let spans = shove_pass(a, &mut board, solver.as_mut(), &mut laid, started, &rescue, &log, &step);
         removed.extend(spans);
         if a.diff_pairs && !a.diff_pairs_legacy && !pair_laid.is_empty() {
             let open = open_airlines(&board);
             if unlock_pairs_near_open(&mut board, &pair_laid, &open) > 0 {
-                let spans = shove_pass(a, &mut board, solver.as_mut(), &mut laid, started, a.timeout, &cancel, &log, &step);
+                let spans = shove_pass(a, &mut board, solver.as_mut(), &mut laid, started, &rescue, &log, &step);
                 removed.extend(spans);
                 relock_pairs(&mut board, &pair_laid);
             }
         }
     }
-    let mut tightened = a.tighten.then(|| {
+    let mut tightened = (a.tighten && timeline.enter(&run, "tightening")).then(|| {
         say("tightening", "straightening the routed copper".to_string());
-        grid::pull_tight(&mut board, &mut laid)
+        grid::pull_tight(&mut board, &mut laid, &run)
     });
     // Copper pulled tight can leave room for a route on one layer where it took two.
-    if !a.no_reduce_vias && (!laid.is_empty() || !fanout_laid.is_empty()) {
+    if !a.no_reduce_vias && (!laid.is_empty() || !fanout_laid.is_empty()) && timeline.enter(&run, "vias") {
         say("vias", "taking out vias a route on one layer can do without".to_string());
         let v = grid::reduce_vias_all(
             &mut board,
-            &grid::ViaOptions { cell: a.cell.unwrap_or(grid::ViaOptions::default().cell), pours_block: a.pours_block, cancel: Some(cancel.clone()), log: log.clone(), ..Default::default() },
+            &grid::ViaOptions { cell: a.cell.unwrap_or(grid::ViaOptions::default().cell), pours_block: a.pours_block, deadline: run.clone(), log: log.clone(), ..Default::default() },
             &mut laid,
             &mut fanout_laid,
             &mut watch,
@@ -2129,7 +2179,7 @@ pub fn run_with_solver(
             eprintln!("vias: {} of {} dropped, {} of {} tries kept, {:.1} s", v.dropped, v.vias_before, v.kept, v.tried, started.elapsed().as_secs_f64());
             step(&board);
             if let Some(c) = &mut tightened {
-                let again = grid::pull_tight(&mut board, &mut laid);
+                let again = grid::pull_tight(&mut board, &mut laid, &run);
                 (c.segments_after, c.length_after) = (again.segments_after, again.length_after);
             }
         }
@@ -2145,6 +2195,8 @@ pub fn run_with_solver(
             started.elapsed().as_secs_f64()
         );
     }
+    // The clean-up runs whatever the time: what it leaves out would be written as it stands.
+    timeline.enter(&run, "cleaning");
     let open_now = |board: &Board| if a.pours_block { connectivity(board) } else { connectivity_without_pours(board) }.airlines.len();
     let open_before = open_now(&board);
     // The pairs' copper was locked only against the single-ended stages; it is the router's own
@@ -2165,10 +2217,10 @@ pub fn run_with_solver(
         say("cleaning", format!("{doubled} doubled tracks and {pruned} pieces of copper leading nowhere taken out"));
         eprintln!("dropped {doubled} doubled, pruned {pruned} dangling, open {open_before} -> {}, {:.1} s", open_now(&board), started.elapsed().as_secs_f64());
     }
-    if a.diff_pairs {
+    if a.diff_pairs && timeline.enter(&run, "length matching") {
         // Last, once the copper is settled: the shorter net of each pair is given bumps.
         let pairs = grid::diff_pairs(&board);
-        let t = grid::match_lengths(&mut board, &pairs, &mut laid);
+        let t = grid::match_lengths(&mut board, &pairs, &mut laid, &run);
         for (pair, before, after) in &t.skews {
             say("pairs", format!("{pair}: {before:.2} mm apart in length, {after:.2} mm after tuning"));
             eprintln!("tune: {pair} skew {before:.2} -> {after:.2} mm");
@@ -2207,6 +2259,12 @@ pub fn run_with_solver(
     }
     removed.extend(stale);
     let routed = apply(text, &Edit { remove: removed, replace, tracks, vias });
+    timeline.enter(&run, "done");
+    if let Some(stage) = timeline.overran_in {
+        let over = a.timeout.map_or(0.0, |t| started.elapsed().as_secs_f64() - t);
+        let by = if over > 0.0 { format!("the run overran --timeout by {over:.1} s") } else { "the run still ended within --timeout".to_string() };
+        eprintln!("deadline: the run's hard limit passed during {stage}; {by}");
+    }
     let mut live = live.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(l) = live.as_mut() {
         l.frame(&board, true, Vec::new());
