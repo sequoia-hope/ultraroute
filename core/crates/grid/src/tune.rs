@@ -103,8 +103,11 @@ pub fn copper_path(board: &Board, from: ItemId, to: ItemId) -> Option<(f64, Vec<
     None
 }
 
+/// One net's length from end to end, and the tracks along it.
+pub type NetRun = (f64, Vec<ItemId>);
+
 /// Each net's length from one end of the pair to the other, and the tracks along it.
-pub fn pair_lengths(board: &Board, pair: &Pair) -> Option<((f64, Vec<ItemId>), (f64, Vec<ItemId>))> {
+pub fn pair_lengths(board: &Board, pair: &Pair) -> Option<(NetRun, NetRun)> {
     let ((pa, pb), (na, nb)) = ends(board, pair)?;
     Some((copper_path(board, pa, pb)?, copper_path(board, na, nb)?))
 }
@@ -273,7 +276,7 @@ mod tests {
             soft.push(board.insert(track(2, Point::new(a.0, a.1), Point::new(b.0, b.1))));
         }
         let pair = Pair { p: 1, n: 2, width: 150_000, gap: 250_000 };
-        let t = match_lengths(&mut board, &[pair.clone()], &mut soft);
+        let t = match_lengths(&mut board, std::slice::from_ref(&pair), &mut soft);
         let (before, after) = (t.skews[0].1, t.skews[0].2);
         assert!((before - 1.2).abs() < 1e-6, "{t:?}");
         assert!(after <= TOLERANCE * 1e-6, "{t:?}");

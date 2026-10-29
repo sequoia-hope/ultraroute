@@ -1744,7 +1744,7 @@ mod tests {
         let mut z = Zones::new(nodes);
         let mut added: Vec<(u32, Vec<u32>)> = Vec::new();
         for _ in 0..300 {
-            if added.len() > 5 && next() % 3 == 0 {
+            if added.len() > 5 && next().is_multiple_of(3) {
                 let (net, cells) = added.swap_remove((next() % added.len() as u64) as usize);
                 z.remove(net, &cells);
             } else {

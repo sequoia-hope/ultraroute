@@ -77,7 +77,8 @@ pub fn edges(board: &Board, footprint: usize) -> Vec<Edge> {
         Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2)
     };
     // A pad belongs to a side when its centre lies within a pad's own size of it.
-    let sides: [((f64, f64), (f64, f64), f64); 4] = [
+    type Side = ((f64, f64), (f64, f64), f64);
+    let sides: [Side; 4] = [
         ((-1.0, 0.0), (0.0, 1.0), -(b.min.x as f64)),
         ((1.0, 0.0), (0.0, 1.0), b.max.x as f64),
         ((0.0, -1.0), (1.0, 0.0), -(b.min.y as f64)),

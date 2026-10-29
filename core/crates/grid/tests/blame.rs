@@ -109,9 +109,10 @@ fn a_part_moved_as_blame_asks_no_longer_stands_in_that_path() {
         let r = blame(&mut b, a.from_item, a.to_item, &walled, &|f| !locked[f]);
         r.blamed.first().cloned().map(|bl| (a.clone(), bl, r))
     });
+    // The coarse routed earring leaves connections with a movable part in the way; if that stops
+    // being so, this test has lost its case and must say so rather than pass.
     let Some((airline, first, report)) = found else {
-        eprintln!("no open connection has a movable part to blame; nothing to move");
-        return;
+        panic!("no open connection on the routed earring has a movable part to blame, so there is nothing to move");
     };
     b.move_footprint(first.footprint, Point::new(first.dx.round() as Nm, first.dy.round() as Nm));
     let again = blame(&mut b, airline.from_item, airline.to_item, &walled, &|f| !locked[f]);

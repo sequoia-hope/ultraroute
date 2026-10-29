@@ -102,7 +102,7 @@ fn negotiation_commits_only_legal_routes_one_thread_or_many() {
         assert_eq!(last.iter().filter(|t| t.2).count(), stats.conflicted, "threads {threads}");
         for (net, corners, _) in &last {
             assert!(nets.contains(net));
-            assert!(corners.len() >= 2 || corners.len() == 1, "a trial has at least its ends");
+            assert!(!corners.is_empty(), "a trial is never empty");
         }
         assert_clean_and_on_nets(&before, &b, &stats.laid, &nets);
         assert!(open(&b) <= opened - stats.committed.min(opened));

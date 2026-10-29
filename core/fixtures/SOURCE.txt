@@ -1,3 +1,9 @@
 Real boards for tests, copied unchanged from their repositories:
   bluebuzz-rm2.kicad_pcb, .kicad_pro   github.com/sequoia-hope/bluebuzz        out/ at bf235b5
   earring.kicad_pcb, .kicad_pro        github.com/sequoia-hope/simple-earring  out/ at 1300fe6
+
+Copied from this repository, frozen here so that a refreshed job input cannot change a test:
+  earring-locked.kicad_pcb, .kicad_pro, .kicad_dru   jobs/earring-kicad-locked/input/ at 184f640
+    The earring with its locked copper kept and its rp2350_power block group, under the JLC rules in the
+    .kicad_dru (Rules::read picks that up beside the .kicad_pro). The pair test in grid/src/pairs.rs
+    strips the loose copper and routes the two USB pairs.

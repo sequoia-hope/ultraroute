@@ -139,7 +139,7 @@ pub fn blame(board: &mut Board, from: ItemId, to: ItemId, options: &BlameOptions
         !kind_of(board, id).is_some_and(|k| routed(&k))
     });
     let pinned_map = ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| {
-        !kind_of(board, id).and_then(|k| part_of(&k)).is_some_and(|f| !moves(f))
+        kind_of(board, id).and_then(|k| part_of(&k)).is_none_or(&moves)
     });
     let mut grid = hard_map.view(net);
     let routed_grid = routed_map.view(net);
@@ -176,7 +176,8 @@ pub fn blame(board: &mut Board, from: ItemId, to: ItemId, options: &BlameOptions
     report.path_cells = path.len();
 
     let h = grid.h as f64;
-    let mut pushes: BTreeMap<usize, Vec<((f64, f64), f64)>> = BTreeMap::new();
+    type Push = ((f64, f64), f64);
+    let mut pushes: BTreeMap<usize, Vec<Push>> = BTreeMap::new();
     let (mut pinned_parts, mut routed_nets) = (BTreeSet::new(), BTreeSet::new());
     for &(layer, i, j) in &path {
         let n = grid.index(layer, i, j);
