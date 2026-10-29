@@ -25,15 +25,14 @@ pub struct ChaseOptions {
     pub chain_cost: u32,
     /// Most connections laid in one chain.
     pub links: usize,
-    pub max_seconds: Option<f64>,
+    pub deadline: crate::clock::Deadline,
     pub pours_block: bool,
-    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub log: Option<Log>,
 }
 
 impl Default for ChaseOptions {
     fn default() -> ChaseOptions {
-        ChaseOptions { cell: 50_000, via_cost: 80, rip_cost: 400, chain_cost: 3_000, links: 24, max_seconds: None, pours_block: false, cancel: None, log: None }
+        ChaseOptions { cell: 50_000, via_cost: 80, rip_cost: 400, chain_cost: 3_000, links: 24, deadline: Default::default(), pours_block: false, log: None }
     }
 }
 
@@ -65,11 +64,7 @@ fn open(board: &Board, pours_block: bool) -> Vec<Airline> {
 /// is kept. `soft` holds the copper the router laid; it is updated as copper is ripped and laid.
 /// `watch` sees the board after every link, and again when a chain is put back.
 pub fn chase(board: &mut Board, solver: &mut dyn FieldSolver, options: &ChaseOptions, soft: &mut Vec<ItemId>, watch: &mut dyn FnMut(&Board)) -> ChaseStats {
-    let started = crate::clock::Instant::now();
-    let out_of_time = || {
-        options.max_seconds.is_some_and(|limit| started.elapsed().as_secs_f64() > limit)
-            || options.cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
-    };
+    let out_of_time = || options.deadline.expired();
     let mut stats = ChaseStats::default();
     let mut tried: HashSet<(ItemId, ItemId)> = HashSet::new();
     'rounds: loop {
@@ -212,6 +207,7 @@ fn link(
     let profile = Profile::for_net(board, airline.net);
     let hard = ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| rippable.contains(&id));
     let mut grid = hard.view(airline.net);
+    grid.deadline = options.deadline.clone();
     let cheap = ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| !rippable.contains(&id) || chained.contains(&id));
     let dear = ObstacleMap::without(board, profile, options.cell, options.pours_block, &|id| !chained.contains(&id));
     let (cheap, dear) = (cheap.view(airline.net), dear.view(airline.net));

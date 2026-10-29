@@ -19,7 +19,7 @@ pub struct RipOptions {
     pub via_cost: u32,
     /// Price of entering a cell that soft copper of another net claims.
     pub rip_cost: u32,
-    pub max_seconds: Option<f64>,
+    pub deadline: crate::clock::Deadline,
     /// Time allowed for rerouting what one attempt ripped.
     pub reroute_seconds: f64,
     pub pours_block: bool,
@@ -29,7 +29,6 @@ pub struct RipOptions {
     /// rerouting one after another leaves the ripped nets no better, they are negotiated
     /// together, the connection's net with them; a change kept prunes closed nets' stubs.
     pub region_repair: bool,
-    pub cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub log: Option<Log>,
 }
 
@@ -39,11 +38,10 @@ impl Default for RipOptions {
             cell: 50_000,
             via_cost: 80,
             rip_cost: 400,
-            max_seconds: None,
+            deadline: Default::default(),
             reroute_seconds: 10.0,
             pours_block: false,
             region_repair: false,
-            cancel: None,
             log: None,
         }
     }
@@ -100,11 +98,7 @@ pub fn rip_up_watch(
     soft: &mut Vec<ItemId>,
     watch: &mut dyn FnMut(&Board, RipAttempt),
 ) -> RipStats {
-    let started = crate::clock::Instant::now();
-    let out_of_time = || {
-        options.max_seconds.is_some_and(|limit| started.elapsed().as_secs_f64() > limit)
-            || options.cancel.as_ref().is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
-    };
+    let out_of_time = || options.deadline.expired();
     let mut stats = RipStats::default();
     let mut hard: HashMap<String, ObstacleMap> = HashMap::new();
     let mut soft_maps: HashMap<String, ObstacleMap> = HashMap::new();
@@ -125,6 +119,7 @@ pub fn rip_up_watch(
         region_cost: Vec::new(),
         pours_block: options.pours_block,
         directional: false,
+        deadline: options.deadline.clone(),
     };
     // Plane nets' connections are the planes' to make (`join_planes`), not rip-up's.
     let plane_nets: HashSet<u32> = if options.region_repair && !options.pours_block && board.planes != 0 {
@@ -269,17 +264,16 @@ pub fn rip_up_watch(
                 seed: 0,
                 cell: options.cell,
                 via_cost: options.via_cost,
-                max_seconds: Some(options.reroute_seconds),
+                deadline: options.deadline.seconds(options.reroute_seconds),
                 nets: None,
                 pours_block: options.pours_block,
                 directional: false,
-                cancel: options.cancel.clone(),
                 log: options.log.clone(),
             };
             tell(&options.log, "ripping up", || format!("{net_name}: ripped {ripped} pieces, rerouting them"), None);
             let mut again = route_open(board, solver, &reroute, &mut |_| {}).laid;
             if !plane_nets.is_empty() {
-                again.extend(crate::planes::join_planes(board, &None).laid);
+                again.extend(crate::planes::join_planes(board, &None, &options.deadline).laid);
             }
             let mut score_after = score(board);
             // One after another, the first rerouted may take the only lane of the next. The
@@ -300,13 +294,12 @@ pub fn rip_up_watch(
                     &crate::negotiate::NegotiationOptions {
                         cell: options.cell,
                         via_cost: options.via_cost,
-                        max_seconds: Some(options.reroute_seconds),
+                        deadline: options.deadline.seconds(options.reroute_seconds),
                         nets: Some(nets),
                         pours_block: options.pours_block,
                         rip_blocked: false,
                         pad_ends: true,
                         directional: false,
-                        cancel: options.cancel.clone(),
                         ..Default::default()
                     },
                     &mut |_| {},
@@ -315,7 +308,7 @@ pub fn rip_up_watch(
                 again.extend(negotiated.laid);
                 again.extend(route_open(board, solver, &reroute, &mut |_| {}).laid);
                 if !plane_nets.is_empty() {
-                    again.extend(crate::planes::join_planes(board, &None).laid);
+                    again.extend(crate::planes::join_planes(board, &None, &options.deadline).laid);
                 }
                 score_after = score(board);
             }

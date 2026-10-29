@@ -104,6 +104,8 @@ pub struct RouteGrid {
     /// routing layers, vertical on odd ones (see [`crate::search`]). For two-layer boards, where
     /// crossing nets otherwise both take the first layer and pay vias to pass each other.
     pub directional: bool,
+    /// When a search on the grid gives up; the stage searching sets it from its own deadline.
+    pub deadline: crate::clock::Deadline,
 }
 
 impl RouteGrid {
@@ -797,6 +799,7 @@ impl ObstacleMap {
             region_cost: Vec::new(),
             pours_block: self.pours_block,
             directional: false,
+            deadline: Default::default(),
         };
         self.apply_regions(net, &mut grid);
         grid

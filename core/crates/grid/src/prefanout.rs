@@ -8,8 +8,6 @@
 //! cells that are free on the global routing grid.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
 use board::{connectivity, connectivity_without_pours, nm, BBox, Board, Connectivity, Item, ItemId, Kind, Nm, Point, Shape};
 use kicad_pcb::Span;
@@ -63,7 +61,10 @@ pub struct PrefanoutOptions {
     /// Nets whose pads are left for routing of their own, such as a differential pair's.
     pub skip_nets: HashSet<u32>,
     pub pours_block: bool,
-    pub cancel: Option<Arc<AtomicBool>>,
+    /// When to stop: between parts, between pads, and inside each escape's search.
+    pub deadline: crate::clock::Deadline,
+    /// Threads for the trial route `EscapeOrder::TrappedFirst` runs.
+    pub threads: usize,
     pub log: Option<Log>,
 }
 
@@ -79,7 +80,8 @@ impl Default for PrefanoutOptions {
             parts: Vec::new(),
             skip_nets: HashSet::new(),
             pours_block: false,
-            cancel: None,
+            deadline: Default::default(),
+            threads: 1,
             log: None,
         }
     }
@@ -266,7 +268,8 @@ fn aligned_window(raw: BBox, h: Nm) -> BBox {
 }
 
 /// Runs a short trial route on a copy of `board` to discover which nets end up trapped without
-/// pre-fanout, for `EscapeOrder::TrappedFirst`.
+/// pre-fanout, for `EscapeOrder::TrappedFirst`: a quarter of the pre-fanout's time to negotiate,
+/// a tenth of what is left to finish.
 fn probe_trapped_nets(board: &Board, options: &PrefanoutOptions) -> HashSet<u32> {
     let mut copy = board.clone();
     let mut solver = CpuSolver;
@@ -277,10 +280,9 @@ fn probe_trapped_nets(board: &Board, options: &PrefanoutOptions) -> HashSet<u32>
             cell: options.global_cell,
             max_rounds: 6,
             patience: 2,
-            threads: 4,
-            max_seconds: Some(4.0),
+            threads: options.threads,
+            deadline: options.deadline.share(0.25),
             pours_block: options.pours_block,
-            cancel: options.cancel.clone(),
             ..Default::default()
         },
         &mut |_| {},
@@ -291,9 +293,8 @@ fn probe_trapped_nets(board: &Board, options: &PrefanoutOptions) -> HashSet<u32>
         &mut solver,
         &Options {
             cell: options.global_cell,
-            max_seconds: Some(2.0),
+            deadline: options.deadline.share(0.1),
             pours_block: options.pours_block,
-            cancel: options.cancel.clone(),
             ..Default::default()
         },
         &mut |_| {},
@@ -305,7 +306,7 @@ fn probe_trapped_nets(board: &Board, options: &PrefanoutOptions) -> HashSet<u32>
 /// the board's rules and reachable on the global grid.
 pub fn prefanout(board: &mut Board, options: &PrefanoutOptions, watch: &mut dyn FnMut(&Board)) -> PrefanoutStats {
     let mut stats = PrefanoutStats::default();
-    let cancelled = || options.cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed));
+    let cancelled = || options.deadline.expired();
     if options.parts.is_empty() || cancelled() {
         return stats;
     }
@@ -771,6 +772,7 @@ fn single_layer_view(map: &ObstacleMap, net: u32, board_layer: usize) -> RouteGr
         region_cost: Vec::new(),
         pours_block: full.pours_block,
         directional: false,
+        deadline: Default::default(),
     }
 }
 
@@ -1371,6 +1373,7 @@ fn lay_grid_escape(
             .or_insert_with(|| ObstacleMap::window(board, local_profile, options.local_cell, win_bounds, options.pours_block));
 
         let mut base_grid = if multi_layer { lmap.view(pad.net) } else { single_layer_view(lmap, pad.net, pad.layer) };
+        base_grid.deadline = options.deadline.clone();
         protect_vital_handoffs(board, &mut base_grid, pad.net, hw, global_maps, handoffs);
 
         let sources = item_terminals(board, &base_grid, pad.id, hw, 8, 24);
@@ -1563,7 +1566,7 @@ fn commit_grid_path(
     let mut ids = lay(board, grid, path, sources, targets)?;
     if !grid.pours_block {
         let saved: Vec<Item> = ids.iter().filter_map(|&id| board.item(id).cloned()).collect();
-        pull_tight(board, &mut ids);
+        pull_tight(board, &mut ids, &Default::default());
         let cells = handoff_cells_of(board, &ids, grid.net, &global_maps[class]);
         if (!cells.is_empty() || landed_on_pour) && preserves_handoffs(board, &ids, grid.net, global_maps, handoffs) {
             return Some((ids, cells));

@@ -7,6 +7,7 @@ use std::collections::{BinaryHeap, HashMap};
 
 use board::{check_item, joined, Board, Item, ItemId, Kind, Nm, Point, Shape};
 
+use crate::clock::Deadline;
 use crate::pairs::{pin_pairs, Pair};
 
 /// Lengths within this of each other are matched.
@@ -190,13 +191,13 @@ pub struct TuneBump<'a> {
 }
 
 /// Matches every pair's lengths, bumping the shorter net's tracks that `soft` holds (the
-/// router's own), one bump at a time; `soft` is kept up to date.
-pub fn match_lengths(board: &mut Board, pairs: &[Pair], soft: &mut Vec<ItemId>) -> TuneStats {
-    match_lengths_watch(board, pairs, soft, &mut |_, _| {})
+/// router's own), one bump at a time, until `deadline`; `soft` is kept up to date.
+pub fn match_lengths(board: &mut Board, pairs: &[Pair], soft: &mut Vec<ItemId>, deadline: &Deadline) -> TuneStats {
+    match_lengths_watch(board, pairs, soft, deadline, &mut |_, _| {})
 }
 
 /// `match_lengths`, telling `watch` of every bump kept.
-pub fn match_lengths_watch(board: &mut Board, pairs: &[Pair], soft: &mut Vec<ItemId>, watch: &mut dyn FnMut(&Board, &TuneBump)) -> TuneStats {
+pub fn match_lengths_watch(board: &mut Board, pairs: &[Pair], soft: &mut Vec<ItemId>, deadline: &Deadline, watch: &mut dyn FnMut(&Board, &TuneBump)) -> TuneStats {
     let mut stats = TuneStats::default();
     for pair in pairs {
         let Some(((lp, tp), (ln, tn))) = pair_lengths(board, pair) else { continue };
@@ -206,7 +207,7 @@ pub fn match_lengths_watch(board: &mut Board, pairs: &[Pair], soft: &mut Vec<Ite
         let mut tracks: Vec<ItemId> = tracks.into_iter().filter(|id| soft.contains(id)).collect();
         let skew = |board: &Board| pair_lengths(board, pair).map(|((lp, _), (ln, _))| (lp - ln).abs());
         let mut now = before;
-        while want > TOLERANCE {
+        while want > TOLERANCE && !deadline.expired() {
             // Tracks running beside the partner last, so the coupling is kept where it can be;
             // otherwise longest first, for the most room.
             let other = if lp < ln { pair.n } else { pair.p };
@@ -276,7 +277,7 @@ mod tests {
             soft.push(board.insert(track(2, Point::new(a.0, a.1), Point::new(b.0, b.1))));
         }
         let pair = Pair { p: 1, n: 2, width: 150_000, gap: 250_000 };
-        let t = match_lengths(&mut board, std::slice::from_ref(&pair), &mut soft);
+        let t = match_lengths(&mut board, std::slice::from_ref(&pair), &mut soft, &Default::default());
         let (before, after) = (t.skews[0].1, t.skews[0].2);
         assert!((before - 1.2).abs() < 1e-6, "{t:?}");
         assert!(after <= TOLERANCE * 1e-6, "{t:?}");

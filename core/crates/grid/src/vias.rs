@@ -12,8 +12,6 @@
 //! dangling copper before it is kept; anything else puts the lifted items back under their ids.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
 use board::{joined, Airline, BBox, Board, Item, ItemId, Kind, Nm, Point, Shape};
 use kicad_pcb::Span;
@@ -37,9 +35,8 @@ pub struct ViaOptions {
     pub max_cluster_vias: usize,
     /// Passes over the board before stopping; stops early as soon as a pass drops nothing.
     pub max_passes: usize,
-    pub max_seconds: Option<f64>,
+    pub deadline: crate::clock::Deadline,
     pub pours_block: bool,
-    pub cancel: Option<Arc<AtomicBool>>,
     pub log: Option<Log>,
 }
 
@@ -52,9 +49,8 @@ impl Default for ViaOptions {
             max_cluster_span: 45_000_000,
             max_cluster_vias: 8,
             max_passes: 3,
-            max_seconds: Some(8.0),
+            deadline: Default::default(),
             pours_block: false,
-            cancel: None,
             log: None,
         }
     }
@@ -259,6 +255,7 @@ fn try_replace(
     for &(allow_vias, max_new_vias) in modes {
         let mut map = base_map.clone();
         let mut grid = map.view(net);
+        grid.deadline = options.deadline.clone();
         if !allow_vias {
             grid.via = None;
         }
@@ -402,11 +399,7 @@ pub fn reduce_vias_all(
     fanout: &mut Vec<ItemId>,
     watch: &mut dyn FnMut(&Board),
 ) -> ViaStats {
-    let started = crate::clock::Instant::now();
-    let out_of_time = || {
-        options.max_seconds.is_some_and(|limit| started.elapsed().as_secs_f64() > limit)
-            || options.cancel.as_ref().is_some_and(|c| c.load(Ordering::Relaxed))
-    };
+    let out_of_time = || options.deadline.expired();
 
     // Plane nets on a board with dedicated inner planes keep their direct stitching vias beside
     // decoupling and power pads instead of daisy-chaining return currents along outer tracks.

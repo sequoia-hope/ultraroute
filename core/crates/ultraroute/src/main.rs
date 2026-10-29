@@ -51,10 +51,19 @@ fn main() {
         };
         Live::new(out, a.fps, a.pours_block).with_step(a.live_step)
     });
-    let routed = run(&a, board, &text, live, cancel);
-    if let Err(e) = std::fs::write(&a.output, routed) {
+    // A crash still leaves the caller a board: the input as it came, and a failing exit.
+    let routed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&a, board, &text, live, cancel)));
+    let (out, code) = match routed {
+        Ok(routed) => (routed, 0),
+        Err(_) => {
+            eprintln!("error: the router crashed; {} is the input board, unrouted", a.output);
+            (text, 1)
+        }
+    };
+    if let Err(e) = std::fs::write(&a.output, out) {
         eprintln!("{}: {e}", a.output);
         std::process::exit(1);
     }
+    std::process::exit(code);
 }
 

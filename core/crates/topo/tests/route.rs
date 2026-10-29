@@ -123,7 +123,7 @@ fn a_cancelled_run_lays_nothing() {
     let mut b = window(Point::new(0, 0), false);
     let before = violations(&b);
     let items = b.items().count();
-    let stats = route_topological(&mut b, &Options { cancel: Some(Arc::new(AtomicBool::new(true))), ..quick() }, &mut |_| {});
+    let stats = route_topological(&mut b, &Options { deadline: grid::Deadline::unlimited(Arc::new(AtomicBool::new(true))), ..quick() }, &mut |_| {});
     assert_eq!((stats.routed, stats.laid.len()), (0, 0), "{stats:?}");
     assert_eq!(b.items().count(), items);
     assert_eq!(violations(&b), before);

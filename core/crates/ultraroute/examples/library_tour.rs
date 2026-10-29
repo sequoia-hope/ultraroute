@@ -58,18 +58,18 @@ fn main() {
     let n = grid::route_negotiated(
         &mut board,
         &mut solver,
-        &grid::NegotiationOptions { max_seconds: Some(seconds * 0.5), threads, ..Default::default() },
+        &grid::NegotiationOptions { deadline: grid::Deadline::max_seconds(Some(seconds * 0.5)), threads, ..Default::default() },
         &mut |_| {},    // sees the board after each connection committed
         &mut |_, _| {}, // sees each round's trial paths
     );
     laid.extend(n.laid);
     println!("negotiate: {} of {} connections in {} rounds, {} vias, {} open", n.committed, n.connections, n.rounds, n.vias, open(&board));
 
-    let s = grid::route_open(&mut board, &mut solver, &grid::Options { max_seconds: Some(seconds * 0.2), ..Default::default() }, &mut |_| {});
+    let s = grid::route_open(&mut board, &mut solver, &grid::Options { deadline: grid::Deadline::max_seconds(Some(seconds * 0.2)), ..Default::default() }, &mut |_| {});
     laid.extend(s.laid.iter().copied());
     println!("route_open: {} routed, {} failed, {} open", s.routed, s.failed, open(&board));
 
-    let r = grid::rip_up(&mut board, &mut solver, &grid::RipOptions { max_seconds: Some(seconds * 0.3), ..Default::default() }, &mut laid, &mut |_| {});
+    let r = grid::rip_up(&mut board, &mut solver, &grid::RipOptions { deadline: grid::Deadline::max_seconds(Some(seconds * 0.3)), ..Default::default() }, &mut laid, &mut |_| {});
     println!("rip_up: {} tries, {} kept, {} open", r.attempts, r.kept, open(&board));
 
     // 4. Morph. A repulsor pole at the middle of the routed copper pushes every unlocked track
@@ -86,7 +86,7 @@ fn main() {
         removed.extend(spans);
         let (ripped, spans) = grid::rip_broken(&mut board, &mut laid, false);
         removed.extend(spans);
-        let again = grid::route_open(&mut board, &mut solver, &grid::Options { max_seconds: Some(5.0), ..Default::default() }, &mut |_| {});
+        let again = grid::route_open(&mut board, &mut solver, &grid::Options { deadline: grid::Deadline::max_seconds(Some(5.0)), ..Default::default() }, &mut |_| {});
         laid.extend(again.laid.iter().copied());
         let after = open(&board);
         println!(
@@ -104,7 +104,7 @@ fn main() {
 
     // 5. Tidy: straighten the router's tracks, then drop doubled tracks and copper leading
     // nowhere. Both may take out file copper, so their spans join `removed`.
-    let t = grid::pull_tight(&mut board, &mut laid);
+    let t = grid::pull_tight(&mut board, &mut laid, &Default::default());
     println!("pull_tight: {} -> {} segments, {:.1} -> {:.1} mm", t.segments_before, t.segments_after, t.length_before, t.length_after);
     let (doubled, spans) = grid::drop_duplicates(&mut board, &mut laid);
     removed.extend(spans);

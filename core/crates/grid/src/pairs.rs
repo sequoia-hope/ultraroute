@@ -70,15 +70,15 @@ pub struct PairOptions {
     pub pours_block: bool,
     /// Run the single-layer, legless pair stage from before end-to-end coupling, for comparison.
     pub legacy: bool,
-    /// How long end-to-end coupling may search, in seconds: runs still to do after it are
-    /// coupled the legacy way, their legs left to the router.
-    pub max_seconds: Option<f64>,
+    /// When end-to-end coupling stops searching: runs still to do after it are coupled the legacy
+    /// way, their legs left to the router, until the run's hard deadline.
+    pub deadline: crate::clock::Deadline,
     pub log: Option<Log>,
 }
 
 impl Default for PairOptions {
     fn default() -> PairOptions {
-        PairOptions { cell: 50_000, pours_block: false, legacy: false, max_seconds: None, log: None }
+        PairOptions { cell: 50_000, pours_block: false, legacy: false, deadline: Default::default(), log: None }
     }
 }
 
@@ -487,7 +487,6 @@ pub fn route_pairs_watch(board: &mut Board, options: &PairOptions, watch: &mut d
     if options.legacy {
         return route_pairs_legacy(board, options, watch);
     }
-    let started = crate::clock::Instant::now();
     let mut stats = PairStats::default();
     for pair in diff_pairs(board) {
         stats.pairs += 1;
@@ -545,14 +544,14 @@ pub fn route_pairs_watch(board: &mut Board, options: &PairOptions, watch: &mut d
             let b_cands = if b_alts.is_empty() { vec![b] } else { b_alts };
 
             let mut best: Option<CoupledCandidate> = None;
-            let out_of_time = || late(options, started);
+            let out_of_time = || options.deadline.expired();
             for &ac in &a_cands {
                 for &bc in &b_cands {
                     // Each try builds the board's map afresh, which on a large board is slow.
                     if out_of_time() {
                         break;
                     }
-                    if let Some(cand) = couple_end_to_end(board, options, started, &pair, &profile, ac, bc) {
+                    if let Some(cand) = couple_end_to_end(board, options, &pair, &profile, ac, bc) {
                         if best.as_ref().is_none_or(|prev| cand.score < prev.score) {
                             best = Some(cand);
                         }
@@ -675,11 +674,6 @@ struct CommittedRun {
     paired_vias: usize,
 }
 
-/// Whether the end-to-end search, begun at `started`, has used the time `options` gives it.
-fn late(options: &PairOptions, started: crate::clock::Instant) -> bool {
-    options.max_seconds.is_some_and(|s| started.elapsed().as_secs_f64() >= s)
-}
-
 /// Builds the obstacle map and routing grid for the centreline of `pair` between `a` and `b`.
 /// Every piece of existing copper on the board (including other runs and jumper vias of the pair's
 /// own nets) claims `fat.half_width + clearance` so neither offset track can short to the partner
@@ -760,6 +754,7 @@ fn coupled_grid(board: &Board, options: &PairOptions, pair: &Pair, profile: &Pro
         region_cost: Vec::new(),
         pours_block: options.pours_block,
         directional: false,
+        deadline: options.deadline.clone(),
     };
     map.apply_regions(pair.p, &mut grid);
     // Enforce any region rules specific to the negative net without double-counting shared pour costs.
@@ -780,6 +775,7 @@ fn coupled_grid(board: &Board, options: &PairOptions, pair: &Pair, profile: &Pro
         region_cost: Vec::new(),
         pours_block: options.pours_block,
         directional: false,
+        deadline: Default::default(),
     };
     map.apply_regions(pair.n, &mut grid_n);
     for (b, &bn) in grid.blocked.iter_mut().zip(&grid_n.blocked) {
@@ -885,7 +881,6 @@ fn path_stretches(grid: &RouteGrid, path: &GridPath) -> Vec<(usize, Vec<Point>)>
 fn couple_end_to_end(
     board: &mut Board,
     options: &PairOptions,
-    started: crate::clock::Instant,
     pair: &Pair,
     profile: &Profile,
     a: PinPair,
@@ -922,7 +917,7 @@ fn couple_end_to_end(
     };
 
     let mut best: Option<CoupledCandidate> = None;
-    let late = || late(options, started);
+    let late = || options.deadline.expired();
 
     // 1. Single-layer candidates on every non-plane layer.
     let cells = grid.cell_count();
@@ -2279,6 +2274,8 @@ fn legacy_run(board: &mut Board, options: &PairOptions, pair: &Pair, fat: &Profi
     });
     let mut grid = map.view(pair.p);
     grid.via = None;
+    // Past end-to-end coupling's own deadline, the legacy run still has until the run's.
+    grid.deadline = options.deadline.to_hard();
     couple_legacy(board, &mut grid, pair, a, b)
 }
 
@@ -2536,7 +2533,7 @@ mod tests {
             &mut soft,
             &mut |_, _| {},
         );
-        crate::cleanup::pull_tight(&mut board, &mut soft);
+        crate::cleanup::pull_tight(&mut board, &mut soft, &Default::default());
 
         assert!(board::connectivity(&board).airlines.is_empty());
         let after: Vec<Shape> = pair_stats.laid.iter().map(|&id| board.item(id).expect("pair item intact").shape.clone()).collect();

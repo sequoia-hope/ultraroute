@@ -57,12 +57,14 @@ pub struct PushOptions {
     /// When set, only these footprints may move.
     pub only: Option<HashSet<usize>>,
     pub pours_block: bool,
+    /// Steps not begun by then are not taken.
+    pub deadline: crate::clock::Deadline,
     pub log: Option<Log>,
 }
 
 impl Default for PushOptions {
     fn default() -> PushOptions {
-        PushOptions { steps: 20, locked: HashSet::new(), only: None, pours_block: false, log: None }
+        PushOptions { steps: 20, locked: HashSet::new(), only: None, pours_block: false, deadline: Default::default(), log: None }
     }
 }
 
@@ -167,6 +169,9 @@ pub fn push_watch(
     };
     let mut total: HashMap<usize, Point> = HashMap::new();
     for step in 0..steps {
+        if options.deadline.expired() {
+            break;
+        }
         let flowing: HashSet<ItemId> =
             board.items().filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked).map(|(id, _)| id).collect();
 

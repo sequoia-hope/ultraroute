@@ -27,7 +27,7 @@ fn main() {
     removed.dedup();
     println!("{} open before", connectivity(&b).airlines.len());
     let t = Instant::now();
-    let options = Options { max_seconds: seconds, pours_block: args.iter().any(|a| a == "--pours-block"), ..Options::default() };
+    let options = Options { deadline: grid::Deadline::max_seconds(seconds), pours_block: args.iter().any(|a| a == "--pours-block"), ..Options::default() };
     let mut solver: Box<dyn grid::FieldSolver> = Box::new(CpuSolver);
     #[cfg(feature = "gpu")]
     if args.iter().any(|a| a == "--gpu") {
@@ -45,7 +45,7 @@ fn main() {
         let n = grid::route_negotiated(
             &mut b,
             solver.as_mut(),
-            &grid::NegotiationOptions { max_seconds: seconds.map(|s: f64| s / 2.0), threads, pours_block: options.pours_block, ..Default::default() },
+            &grid::NegotiationOptions { deadline: grid::Deadline::max_seconds(seconds.map(|s: f64| s / 2.0)), threads, pours_block: options.pours_block, ..Default::default() },
             &mut |_| {},
             &mut |_, _| {},
         );
@@ -62,7 +62,7 @@ fn main() {
             &mut b,
             solver.as_mut(),
             &grid::RipOptions {
-                max_seconds: seconds.map(|s: f64| s / 2.0),
+                deadline: grid::Deadline::max_seconds(seconds.map(|s: f64| s / 2.0)),
                 pours_block: options.pours_block,
                 rip_cost: args.iter().position(|a| a == "--rip-cost").and_then(|i| args.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(400),
                 ..Default::default()
@@ -76,7 +76,7 @@ fn main() {
         );
     }
     if args.iter().any(|a| a == "--tighten") {
-        let c = grid::pull_tight(&mut b, &mut laid);
+        let c = grid::pull_tight(&mut b, &mut laid, &Default::default());
         println!(
             "pulled {} chains tight: {} -> {} segments, {:.1} -> {:.1} mm, {:.1?}",
             c.chains, c.segments_before, c.segments_after, c.length_before, c.length_after, t.elapsed()
