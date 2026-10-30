@@ -549,7 +549,7 @@ fn read_zone(z: &Node, footprint: Option<usize>) -> Result<Zone, KicadParse> {
         }
     });
     // The first polygon is the outline, each one after it a cutout, as KiCad writes them.
-    let mut polygons = z.find_all("polygon").into_iter().filter_map(|p| p.find("pts")).map(pts);
+    let mut polygons = z.find_all("polygon").filter_map(|p| p.find("pts")).map(pts);
     let outline = polygons.next().transpose()?.unwrap_or_default();
     let cutouts = polygons.collect::<Result<Vec<_>, _>>()?;
     let (mut filled, mut fill_spans) = (Vec::new(), Vec::new());
