@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { Studio } from './core/studio_core.js';
   import Board from './lib/Board.svelte';
+  import { DEFAULT_RULES_NOTE, KICAD_DEFAULT_PRO, readBoardFiles } from './lib/open-board.js';
 
   const studio = new Studio();
   studio.set_show_pours(true);
@@ -23,6 +24,12 @@
   let projectBoard = $state(null);
   let saveable = $state(false);
   let saveNote = $state('');
+  // A board opened from the user's computer, read in the browser: it routes in this tab, in
+  // every build, and the result is downloaded.
+  let fileBoard = $state(null);
+  let fileNote = $state('');
+  let dragging = $state(false);
+  let fileInput;
   let argsText = $state('');
   let envText = $state('');
   // A tab routes on one thread, several times slower than the server on a phone.
@@ -71,10 +78,14 @@
 
   const STEPS = [0.1, 0.25, 0.5, 1, 2];
   const job = $derived(
-    projectBoard
-      ? { name: `${projectBoard.board}/${projectBoard.variant}`, kicad_pcb: projectBoard.kicad_pcb, kicad_project: projectBoard.kicad_project, presets: [] }
-      : jobs.find((j) => j.name === jobName),
+    fileBoard
+      ? { name: fileBoard.name, kicad_pcb: fileBoard.pcbName, kicad_project: fileBoard.proName, presets: [] }
+      : projectBoard
+        ? { name: `${projectBoard.board}/${projectBoard.variant}`, kicad_pcb: projectBoard.kicad_pcb, kicad_project: projectBoard.kicad_project, presets: [] }
+        : jobs.find((j) => j.name === jobName),
   );
+  // A file board needs no server: the tab routes it.
+  const canRoute = $derived(connected || !!fileBoard);
   const boardKey = (b) => `project:${b.board}/${b.variant}`;
   const presets = $derived(job?.presets ?? []);
   const running = $derived(mode !== 'idle');
@@ -184,7 +195,16 @@
       .join('\n');
   }
 
+  // Leaves a board opened from a file, and its result, for a job or a project's board.
+  function leaveBoard() {
+    if (fileBoard) timeout = LOCAL || inTab ? 600 : 120;
+    fileBoard = null;
+    fileNote = '';
+    routedText = '';
+  }
+
   function chooseJob(name) {
+    leaveBoard();
     jobName = name;
     projectBoard = null;
     saveable = false;
@@ -201,6 +221,7 @@
 
   // A project's board: the core router on the server, with no lock or placement from before.
   function chooseProjectBoard(b) {
+    leaveBoard();
     projectBoard = b;
     jobName = '';
     placements = {};
@@ -245,6 +266,52 @@
     }
   }
 
+  // A board from the user's computer: the core routes it in this tab, with no lock or placement
+  // from before. The address can't name a local file, so a reload returns to the default board.
+  async function openFiles(fileList) {
+    if (!fileList?.length) return;
+    let opened;
+    try {
+      opened = await readBoardFiles(fileList);
+    } catch (e) {
+      message = `couldn't open the board: ${e.message}`;
+      return;
+    }
+    if (running) stop();
+    leaveReplay();
+    fileBoard = opened;
+    projectBoard = null;
+    jobName = '';
+    placements = {};
+    selected = null;
+    refitNext = true;
+    locks = [];
+    router = 'core';
+    timeout = 600;
+    routedText = '';
+    saveable = false;
+    saveNote = '';
+    const notes = [...opened.notes];
+    if (!opened.pro) notes.push(`no .kicad_pro was given, so it routes with ${DEFAULT_RULES_NOTE}`);
+    if (opened.pro && !opened.dru) notes.push('no .kicad_dru was given, so no custom rules apply');
+    fileNote = notes.length ? `${notes.join('; ')}.`.replace(/^./, (c) => c.toUpperCase()) : '';
+    compose();
+    load();
+  }
+
+  function dropFiles(event) {
+    event.preventDefault();
+    dragging = false;
+    if (!STATIC) openFiles(event.dataTransfer?.files);
+  }
+
+  function dragOver(event) {
+    if (STATIC || ![...(event.dataTransfer?.types ?? [])].includes('Files')) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    dragging = true;
+  }
+
   function saveToProject() {
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     socket.send(JSON.stringify({ cmd: 'save' }));
@@ -271,7 +338,7 @@
   }
 
   function send(cmd, args, lockList, options = {}) {
-    if (inTab && engine === 'core' && !projectBoard) return sendToTab(cmd, args, lockList, options);
+    if (fileBoard || (inTab && engine === 'core' && !projectBoard)) return sendToTab(cmd, args, lockList, options);
     if (!socket || socket.readyState !== WebSocket.OPEN || !(jobName || projectBoard)) return;
     if (lockList.length) args = [...args, '--lock', lockList.join(',')];
     if (retireDesign) args = [...args, '--retire-fixed', 'all'];
@@ -306,17 +373,22 @@
     const fetchText = (name) => fetch(input + encodeURIComponent(name)).then((r) => (r.ok ? r.text() : Promise.reject(new Error(`${name}: ${r.status}`))));
     const continuing = !load && options.continue && routedText;
     let pcb, pro, dru;
-    // The custom rules beside the project are optional; a board without them has none.
+    // The custom rules beside the project are optional; a board without them has none. A board
+    // without a project has KiCad's default rules, as a new KiCad project would.
     const druName = job.kicad_project?.replace(/\.kicad_pro$/, '.kicad_dru');
-    try {
-      [pcb, pro, dru] = await Promise.all([
-        continuing ? routedText : fetchText(job.kicad_pcb),
-        job.kicad_project ? fetchText(job.kicad_project) : '{}',
-        druName ? fetchText(druName).catch(() => '') : '',
-      ]);
-    } catch (e) {
-      message = `couldn't fetch the board: ${e.message}`;
-      return;
+    if (fileBoard) {
+      [pcb, pro, dru] = [continuing ? routedText : fileBoard.pcb, fileBoard.pro ?? KICAD_DEFAULT_PRO, fileBoard.dru];
+    } else {
+      try {
+        [pcb, pro, dru] = await Promise.all([
+          continuing ? routedText : fetchText(job.kicad_pcb),
+          job.kicad_project ? fetchText(job.kicad_project) : KICAD_DEFAULT_PRO,
+          druName ? fetchText(druName).catch(() => '') : '',
+        ]);
+      } catch (e) {
+        message = `couldn't fetch the board: ${e.message}`;
+        return;
+      }
     }
     const all = [];
     if (!continuing) all.push(...(job.strip === 'all' ? ['--strip-all'] : job.strip === true ? ['--strip'] : []));
@@ -352,7 +424,7 @@
 
   function downloadRouted() {
     const url = URL.createObjectURL(new Blob([routedText], { type: 'text/plain' }));
-    const a = Object.assign(document.createElement('a'), { href: url, download: `${jobName}-routed.kicad_pcb` });
+    const a = Object.assign(document.createElement('a'), { href: url, download: `${(job?.name ?? 'board').replace(/\//g, '-')}-routed.kicad_pcb` });
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
@@ -566,7 +638,8 @@
       mode = 'idle';
       setTimeout(connect, 1500);
     };
-    socket.onmessage = (event) => receive(event.data);
+    // A board opened from a file is the tab's alone: nothing the server sends is about it.
+    socket.onmessage = (event) => fileBoard || receive(event.data);
   }
 
   function toggleLayer(index, hidden) {
@@ -748,9 +821,10 @@
     <label>
       Board
       <select
-        value={projectBoard ? boardKey(projectBoard) : jobName}
+        value={fileBoard ? 'file:' : projectBoard ? boardKey(projectBoard) : jobName}
         onchange={(e) => chooseBoard(e.currentTarget.value)}
       >
+        {#if fileBoard}<option value="file:" disabled>{fileBoard.pcbName} (from your computer)</option>{/if}
         {#if project}
           {#if !projectBoard && !jobName}<option value="" disabled>Choose a board</option>{/if}
           <optgroup label="Project {project.name}">
@@ -764,6 +838,28 @@
         {/if}
       </select>
     </label>
+    <div class="open-file">
+      <button onclick={() => fileInput.click()} title="A .kicad_pcb, with its .kicad_pro and .kicad_dru if you have them. The files are read here and stay on your computer.">Open board…</button>
+      <span class="muted small">or drop the files on the board</span>
+      <input
+        bind:this={fileInput}
+        type="file"
+        multiple
+        accept=".kicad_pcb,.kicad_pro,.kicad_dru"
+        hidden
+        onchange={(e) => {
+          openFiles(e.currentTarget.files);
+          e.currentTarget.value = '';
+        }}
+      />
+    </div>
+    {#if fileBoard}
+      <p class="note">
+        {fileBoard.pcbName}{fileBoard.proName ? ` with ${fileBoard.proName}` : ''}{fileBoard.druName ? ` and ${fileBoard.druName}` : ''},
+        opened from your computer. It routes here in this tab and nothing is uploaded; download the result when it's done.
+        {#if fileNote}<br />{fileNote}{/if}
+      </p>
+    {/if}
 
     {#if job?.dsn && !LOCAL}
     <div class="field">
@@ -788,7 +884,7 @@
       <label class="check"><input type="checkbox" bind:checked={fineGrid} onchange={compose} /> Fine grid (0.05 mm cells)</label>
     {/if}
     {#if router === 'core'}
-      {#if !LOCAL && !projectBoard}
+      {#if !LOCAL && !projectBoard && !fileBoard}
         <label class="check" title="Run the core router in this tab, compiled to WebAssembly, instead of on the server">
           <input type="checkbox" bind:checked={inTab} onchange={() => (timeout = inTab ? 600 : 120)} /> Route in this tab
         </label>
@@ -830,7 +926,7 @@
     {/if}
 
     <div class="buttons">
-      <button class="primary" onclick={() => route({ continue: keepGoing })} disabled={!connected}>
+      <button class="primary" onclick={() => route({ continue: keepGoing })} disabled={!canRoute}>
         {mode === 'routing' ? 'Restart' : 'Route'}
       </button>
       <button onclick={stop} disabled={!running}>Stop</button>
@@ -839,7 +935,7 @@
       Route lays the whole board{keepGoing ? ', keeping the last result’s copper' : ' from the start'}{moveParts ? ', then moves unlocked parts for what is left' : ''}.
       Each press is one complete run.
     </p>
-    <button class="quiet" onclick={load} disabled={!connected}>Show the board as designed</button>
+    <button class="quiet" onclick={load} disabled={!canRoute}>Show the board as designed</button>
     {#if routedText && !running}
       <button class="quiet" onclick={downloadRouted}>Download the routed board (.kicad_pcb)</button>
     {/if}
@@ -1000,7 +1096,7 @@
   </aside>
 
   <div class="stage">
-    <div class="canvas-area">
+    <div class="canvas-area" role="region" aria-label="Board" ondragover={dragOver} ondragleave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) dragging = false; }} ondrop={dropFiles}>
     <Board
       bind:this={board}
       {studio}
@@ -1050,6 +1146,9 @@
         {#if hover.net}<span>{hover.net}</span>{/if}
       </div>
     {/if}
+    {#if dragging}
+      <div class="drop-here">Drop a .kicad_pcb (with its .kicad_pro and .kicad_dru) to open it here</div>
+    {/if}
     {#if showCongestion}
       <div class="legend">
         <span>free</span><span class="ramp"></span><span>full</span>
@@ -1072,7 +1171,7 @@
         {#if running}
           <button onclick={stop}>Stop</button>
         {:else}
-          <button class="primary" onclick={() => route({ continue: keepGoing })} disabled={!connected}>Route</button>
+          <button class="primary" onclick={() => route({ continue: keepGoing })} disabled={!canRoute}>Route</button>
         {/if}
       {/if}
       <span class="phone-stat" aria-live="polite"><b class:done={status?.open === 0}>{status?.open ?? '–'}</b> open · {seconds(status?.ms ?? 0)} s</span>
