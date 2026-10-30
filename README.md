@@ -23,6 +23,13 @@ Then open `http://localhost:<port>/studio/`: pick a board and a recipe, watch it
 nudge parts, lock them, and see where the board is congested. On this machine the port comes
 from the project registry, and `./serve.sh` starts the server.
 
+A Boardroom project opens by its path: `/?project=<absolute path>&board=<name>&variant=<v>`
+(board and variant may be left out when the project has one board). The studio routes
+`hw/<board>/<variant>/<board>.kicad_pcb` with the `.kicad_pro`, `.kicad_dru` and `routing.json`
+beside it; **Save to project** writes the routed board back over that file, unless it changed on
+disk since it was loaded, and records the route under `apps.studio.<board>` in
+`design/status.json`.
+
 | Path | What |
 |---|---|
 | `studio/` | Server (runs the router, relays its live stream), Rust core compiled to WASM, Svelte client |

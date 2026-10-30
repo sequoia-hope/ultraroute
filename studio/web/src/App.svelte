@@ -17,6 +17,12 @@
 
   let jobs = $state([]);
   let jobName = $state('');
+  // A Boardroom project opened by path (?project=…&board=…&variant=…), and the board of it on
+  // show: the core routes it on the server, and the result can be saved back over its file.
+  let project = $state(null);
+  let projectBoard = $state(null);
+  let saveable = $state(false);
+  let saveNote = $state('');
   let argsText = $state('');
   let envText = $state('');
   // A tab routes on one thread, several times slower than the server on a phone.
@@ -64,7 +70,12 @@
   let positionStart = 0;
 
   const STEPS = [0.1, 0.25, 0.5, 1, 2];
-  const job = $derived(jobs.find((j) => j.name === jobName));
+  const job = $derived(
+    projectBoard
+      ? { name: `${projectBoard.board}/${projectBoard.variant}`, kicad_pcb: projectBoard.kicad_pcb, kicad_project: projectBoard.kicad_project, presets: [] }
+      : jobs.find((j) => j.name === jobName),
+  );
+  const boardKey = (b) => `project:${b.board}/${b.variant}`;
   const presets = $derived(job?.presets ?? []);
   const running = $derived(mode !== 'idle');
   const designFixed = $derived(parts.filter((p) => p.fixed && !sentLocks.includes(p.name) && !locks.includes(p.name)));
@@ -175,6 +186,9 @@
 
   function chooseJob(name) {
     jobName = name;
+    projectBoard = null;
+    saveable = false;
+    saveNote = '';
     placements = {};
     selected = null;
     refitNext = true;
@@ -183,6 +197,59 @@
     locks = withLocks ? splitLocks(withLocks.args).found : [];
     if (!available(router, chosen)) router = available('grid', chosen) ? 'grid' : 'core';
     compose();
+  }
+
+  // A project's board: the core router on the server, with no lock or placement from before.
+  function chooseProjectBoard(b) {
+    projectBoard = b;
+    jobName = '';
+    placements = {};
+    selected = null;
+    refitNext = true;
+    locks = [];
+    router = 'core';
+    inTab = false;
+    saveable = false;
+    saveNote = '';
+    compose();
+    const url = new URL(location.href);
+    url.searchParams.delete('job');
+    url.searchParams.set('board', b.board);
+    url.searchParams.set('variant', b.variant);
+    history.replaceState(null, '', url);
+  }
+
+  function chooseBoard(value) {
+    const b = project?.boards.find((x) => boardKey(x) === value);
+    if (b) chooseProjectBoard(b);
+    else chooseJob(value);
+    load();
+  }
+
+  async function openProject(path, asked) {
+    const query = new URLSearchParams({ project: path });
+    for (const key of ['board', 'variant']) if (asked.get(key)) query.set(key, asked.get(key));
+    const answer = await fetch(`../api/project?${query}`)
+      .then((r) => r.json())
+      .catch((e) => ({ error: e.message }));
+    if (answer.error) {
+      message = `couldn't open the project: ${answer.error}`;
+      return;
+    }
+    project = answer;
+    if (answer.chosen) chooseProjectBoard(answer.chosen);
+    else {
+      // Several boards and none named: nothing loads until one is chosen.
+      jobName = '';
+      message = `${answer.choose}: pick it under Board.`;
+    }
+  }
+
+  function saveToProject() {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify({ cmd: 'save' }));
+    saveable = false;
+    saveNote = 'Saving…';
   }
 
   function environment() {
@@ -204,15 +271,15 @@
   }
 
   function send(cmd, args, lockList, options = {}) {
-    if (inTab && engine === 'core') return sendToTab(cmd, args, lockList, options);
-    if (!socket || socket.readyState !== WebSocket.OPEN || !jobName) return;
+    if (inTab && engine === 'core' && !projectBoard) return sendToTab(cmd, args, lockList, options);
+    if (!socket || socket.readyState !== WebSocket.OPEN || !(jobName || projectBoard)) return;
     if (lockList.length) args = [...args, '--lock', lockList.join(',')];
     if (retireDesign) args = [...args, '--retire-fixed', 'all'];
     sentLocks = [...lockList];
     socket.send(
       JSON.stringify({
         cmd,
-        job: jobName,
+        ...(projectBoard ? { project: project.project, board: projectBoard.board, variant: projectBoard.variant } : { job: jobName }),
         args,
         env: cmd === 'load' ? {} : environment(),
         timeout: cmd === 'load' ? undefined : Number(timeout) || undefined,
@@ -225,6 +292,8 @@
     mode = cmd === 'load' ? 'loading' : 'routing';
     message = '';
     logs = [];
+    saveable = false;
+    saveNote = '';
   }
 
   // A run in this tab, built as the server builds one for the core: the job's board, stripped
@@ -470,6 +539,15 @@
     } else if (event.t === 'log') {
       if (/ (INFO|WARN|ERROR) /.test(event.line)) logs = [...logs.slice(-200), event.line];
       if (/ WARN --place/.test(event.line)) message = event.line.replace(/^.*WARN /, '');
+    } else if (event.t === 'routed') {
+      saveable = event.saveable;
+      saveNote = event.status_error ? `design/status.json was not updated: ${event.status_error}` : '';
+    } else if (event.t === 'saved') {
+      if (event.ok) saveNote = `Saved over ${event.path}.${event.status_error ? ` design/status.json was not updated: ${event.status_error}` : ''}`;
+      else {
+        saveNote = '';
+        message = event.message;
+      }
     } else if (event.t === 'error') {
       message = event.message;
       mode = 'idle';
@@ -557,6 +635,7 @@
     const asked = new URLSearchParams(location.search);
     const first = jobs.find((j) => j.name === asked.get('job')) ?? jobs[0];
     if (first) chooseJob(first.name);
+    if (asked.get('project') && !STATIC && !LOCAL) await openProject(asked.get('project'), asked);
     if (LOCAL) {
       router = 'core';
       compose();
@@ -669,13 +748,20 @@
     <label>
       Board
       <select
-        value={jobName}
-        onchange={(e) => {
-          chooseJob(e.currentTarget.value);
-          load();
-        }}
+        value={projectBoard ? boardKey(projectBoard) : jobName}
+        onchange={(e) => chooseBoard(e.currentTarget.value)}
       >
-        {#each jobs as j}<option value={j.name}>{j.name}</option>{/each}
+        {#if project}
+          {#if !projectBoard && !jobName}<option value="" disabled>Choose a board</option>{/if}
+          <optgroup label="Project {project.name}">
+            {#each project.boards as b}<option value={boardKey(b)}>{b.board} / {b.variant}</option>{/each}
+          </optgroup>
+          <optgroup label="Jobs">
+            {#each jobs as j}<option value={j.name}>{j.name}</option>{/each}
+          </optgroup>
+        {:else}
+          {#each jobs as j}<option value={j.name}>{j.name}</option>{/each}
+        {/if}
       </select>
     </label>
 
@@ -702,7 +788,7 @@
       <label class="check"><input type="checkbox" bind:checked={fineGrid} onchange={compose} /> Fine grid (0.05 mm cells)</label>
     {/if}
     {#if router === 'core'}
-      {#if !LOCAL}
+      {#if !LOCAL && !projectBoard}
         <label class="check" title="Run the core router in this tab, compiled to WebAssembly, instead of on the server">
           <input type="checkbox" bind:checked={inTab} onchange={() => (timeout = inTab ? 600 : 120)} /> Route in this tab
         </label>
@@ -756,6 +842,16 @@
     <button class="quiet" onclick={load} disabled={!connected}>Show the board as designed</button>
     {#if routedText && !running}
       <button class="quiet" onclick={downloadRouted}>Download the routed board (.kicad_pcb)</button>
+    {/if}
+    {#if projectBoard}
+      <button
+        class="quiet"
+        onclick={saveToProject}
+        disabled={!saveable || running}
+        title="Writes the routed board over {project.project}/hw/{projectBoard.board}/{projectBoard.variant}/{projectBoard.kicad_pcb}, unless that file changed since it was loaded"
+      >Save to project ({projectBoard.kicad_pcb})</button>
+      {#if saveNote}<p class="muted small">{saveNote}</p>{/if}
+      {#if projectBoard.routing}<p class="muted small">Routes with the project's {projectBoard.routing}.</p>{/if}
     {/if}
     {#if message}<p class="warn">{message}</p>{/if}
     {/if}
