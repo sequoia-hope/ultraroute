@@ -240,3 +240,34 @@ fn an_outline_that_does_not_close_is_reported() {
     // A closed outline warns of nothing.
     assert!(!board("").warnings.iter().any(|w| w.contains("outline")));
 }
+
+#[test]
+fn a_curved_edge_closes_the_outline_and_keeps_copper_clear() {
+    // Three straight sides and a Bezier for the fourth, bulging to y = 37.5 at x = 15.
+    let text = "(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))
+         (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user))
+         (net 0 \"\") (net 1 \"A\") (net 2 \"B\")
+         (gr_line (start 0 0) (end 30 0) (layer \"Edge.Cuts\") (width 0.1))
+         (gr_line (start 30 0) (end 30 30) (layer \"Edge.Cuts\") (width 0.1))
+         (gr_curve (pts (xy 30 30) (xy 20 40) (xy 10 40) (xy 0 30)) (layer \"Edge.Cuts\") (width 0.1))
+         (gr_line (start 0 30) (end 0 0) (layer \"Edge.Cuts\") (width 0.1)))";
+    let (pcb, copper) = kicad_pcb::parse_board(text).unwrap();
+    let mut b = Board::new(&pcb, &copper, kicad_pcb::Rules::parse(r#"{"board":{"design_settings":{"rules":{"min_copper_edge_clearance":0.5}}}}"#).unwrap());
+    assert_eq!(b.outline.len(), 1, "the curve closes the outline: {:?}", b.warnings);
+    let at = |b: &mut Board, y: f64| {
+        let id = b.insert(Item {
+            kind: Kind::Track,
+            net: 2,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(nm(14.5e-3), nm(y * 1e-3)), b: Point::new(nm(15.5e-3), nm(y * 1e-3)), r: nm(0.05e-3) },
+            hole: None,
+            locked: false,
+            span: None,
+        });
+        let edge = check_item(b, id).iter().any(|v| v.rule == Rule::EdgeClearance);
+        b.remove(id);
+        edge
+    };
+    assert!(at(&mut b, 37.3), "0.15 mm inside the curve's bulge");
+    assert!(!at(&mut b, 36.0), "1.45 mm inside it");
+}
