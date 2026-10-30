@@ -820,7 +820,7 @@ fn run_pass(
                         assert!(whole.penalty == grid_buf.penalty, "a patched grid's prices differ from a whole one's");
                         assert!(whole.via_penalty == grid_buf.via_penalty, "a patched grid's via prices differ from a whole one's");
                     }
-            } else {
+                } else {
                     map.view_into(c.net, grid_buf);
                     grid_buf.directional = directional;
                     penalties_into(zones.trace.seen_by(&c.class), &history, present, c.net, w, &mut grid_buf.penalty);
