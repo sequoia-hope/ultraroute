@@ -176,7 +176,7 @@
     const at = toBoard(event);
     // Middle and right buttons pan, as in KiCad; the left picks a part or pans empty board.
     const part = event.button === 0 && !event.shiftKey ? studio.part_at(at[0], at[1]) : 0;
-    drag = { part, start: at, view: { ...view }, moved: false };
+    drag = { part, start: at, screen: [event.clientX, event.clientY], view: { ...view }, moved: false };
     if (part) {
       studio.set_picked(part);
       drawn = -1;
@@ -193,9 +193,9 @@
     const at = toBoard(event);
     if (drag) {
       drag.moved = true;
-      if (drag.part && !editable) {
-        return;
-      } else if (drag.part) {
+      // A part held where parts can't be moved pans the board, as empty board does: on a phone a
+      // finger landing on a chip still scrolls.
+      if (drag.part && editable) {
         studio.set_offset(drag.part, at[0] - drag.start[0], at[1] - drag.start[1]);
         drawn = -1;
       } else {
@@ -226,7 +226,9 @@
       return;
     }
     const at = toBoard(event);
-    const dragged = drag && Math.hypot(at[0] - drag.start[0], at[1] - drag.start[1]) * view.zoom > 3;
+    // Measured on the screen: a pan keeps the board point under the finger, so the board's own
+    // distance would call every pan a tap.
+    const dragged = drag && Math.hypot(event.clientX - drag.screen[0], event.clientY - drag.screen[1]) > 3;
     // A double tap on empty board fits it, as a double click does.
     if (event.pointerType === 'touch' && drag && !dragged && !drag.part) {
       const now = performance.now();

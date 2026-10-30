@@ -802,3 +802,13 @@ aside h1 a {
     flex-wrap: wrap;
   }
 }
+
+/* A collapsible panel whose title is an h2, the marker beside it. */
+details.locked > summary {
+  list-style-position: inside;
+}
+
+details.locked > summary h2 {
+  display: inline-flex;
+  margin: 4px 0;
+}
