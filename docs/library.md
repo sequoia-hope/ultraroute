@@ -482,10 +482,7 @@ it runs `route_open` and the cleanup only; each flag adds a stage. In order:
    from `laid` unless `--prefanout-soft`.
 3. **Planes**: `join_planes` when any layer is a plane.
 4. **`--diff-pairs`**: `route_pairs`, held apart until cleanup.
-5. **Routing**, once, or `--restart N` more times from the same start with the nets left open
-   promoted, keeping the best board:
-   `--first` (priority nets,
-   by `route_open` tier by tier or, with `--first-negotiate`, negotiated among themselves),
+5. **Routing**: the nets `--regions` gives a length limit, by `route_open`, first;
    `--negotiate` (`route_negotiated`, half the timeout), `route_open` to finish (always),
    `prune_closed_escapes`, `--rip-up` (`rip_up`), the escapes join `laid`.
 6. **Rescue**: `--shove` (`shove_escape` passes); `--nudge` (`nudge`).
