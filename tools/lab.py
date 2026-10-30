@@ -30,8 +30,8 @@ ROOT = Path(__file__).resolve().parent.parent
 LAB = Path(os.environ.get("ULTRAROUTE_LAB", Path.home() / "Software" / "ultraroute-lab"))
 ROUTER = Path(os.environ.get("ULTRAROUTE_BIN", ROOT / "core/target/release/ultraroute")).resolve()
 BLOCK_CHECK = ROOT / "core/target/release/examples/block_check"
-# The studio's default recipe for the core router.
-RECIPE = "--strip-all --negotiate --rip-up --nudge --tighten"
+# The router's default recipe (ultraroute::RECIPE), on the bare board.
+RECIPE = "--strip-all --recipe default"
 
 
 def now():

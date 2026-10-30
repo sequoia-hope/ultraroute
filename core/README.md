@@ -16,8 +16,12 @@ freerouting.
 
 ```sh
 cargo build --release -p ultraroute
-target/release/ultraroute route board.kicad_pcb -o routed.kicad_pcb --negotiate --rip-up --tighten
+target/release/ultraroute route board.kicad_pcb -o routed.kicad_pcb
 ```
+
+With no stage named it runs the default recipe, the benchmark's (`ultraroute::RECIPE`): pre-fanout,
+differential pairs, negotiation, rip-up, the region plough's shove passes and tightening. Naming
+stages runs those alone, and `--recipe minimal` runs none but the grid router.
 
 The project's `.kicad_pro` beside the board supplies the rules. Pours are left for KiCad to
 refill: `python3 ../tools/refill_zones.py routed.kicad_pcb filled.kicad_pcb`, then judge it with
@@ -26,6 +30,7 @@ refill: `python3 ../tools/refill_zones.py routed.kicad_pcb filled.kicad_pcb`, th
 | Option | |
 |---|---|
 | `--strip` | take out every unlocked track and via first |
+| `--recipe default\|minimal` | the default stages (also `bench`), or none; flags after it override its settings |
 | `--topo` | route as rubber bands through a triangulation of the copper first; the grid finishes what is left |
 | `--negotiate` | negotiated congestion before routing one connection at a time |
 | `--rip-up` | let blocked connections cross the router's own copper, rerouting what they rip |

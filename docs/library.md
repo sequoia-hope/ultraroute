@@ -559,7 +559,10 @@ if connectivity_without_pours(&board).airlines.len() > before {
 
 If the stages above as the command runs them are what you want, run the command:
 
-    ultraroute route IN.kicad_pcb -o OUT.kicad_pcb --strip --negotiate --rip-up --tighten --timeout 60
+    ultraroute route IN.kicad_pcb -o OUT.kicad_pcb --strip --timeout 60
+
+With no stage named it runs the default recipe, `ultraroute::RECIPE`; `--recipe minimal` runs only
+the grid router.
 
 The `.kicad_pro` (and `.kicad_dru`) beside the input give the rules. Progress goes to standard
 error. `ultraroute route` with no input prints every flag.

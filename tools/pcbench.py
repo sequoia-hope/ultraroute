@@ -52,7 +52,8 @@ ROOT = Path(__file__).resolve().parent.parent
 BENCH = ROOT / "PCBench"
 HOME = Path(os.environ.get("ULTRAROUTE_LAB", Path.home() / "Software" / "ultraroute-lab")) / "pcbench"
 ROUTER = Path(os.environ.get("ULTRAROUTE_BIN", ROOT / "core/target/release/ultraroute"))
-RECIPE = "--negotiate --rip-up --tighten --prefanout --diff-pairs --shove-plough region --shove-reach 0.5 --shove-repair 20 --shove-ties --shove-passes 60 --shove-patience 8"
+# The router's own default (ultraroute::RECIPE), named rather than spelt out here.
+RECIPE = "--recipe default"
 MASK = {"solder_mask_bridge"}
 CAP = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=8G", "-p", "MemorySwapMax=0"]
 # The two runs of the Stage 0 baseline made with the same binary and seed: the boards whose verdict
