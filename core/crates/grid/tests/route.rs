@@ -134,6 +134,28 @@ fn negotiation_is_the_same_however_many_threads_run() {
 }
 
 #[test]
+fn a_patched_grid_is_the_grid_built_whole() {
+    // Each connection of a round patches the last one's grid; checked against a whole build at
+    // every step, and the copper must be what it is unchecked.
+    let run = |check_patches: bool| {
+        let (mut b, _) = stripped(4);
+        let stats = route_negotiated(
+            &mut b,
+            &mut CpuSolver,
+            &NegotiationOptions { cell: CELL, pours_block: true, max_rounds: 6, check_patches, ..Default::default() },
+            &mut |_| {},
+            &mut |_, _| {},
+        );
+        let mut copper: Vec<String> = stats.laid.iter().filter_map(|id| b.item(*id)).map(|it| format!("{} {} {:?}", it.net, it.layers, it.shape)).collect();
+        copper.sort();
+        copper
+    };
+    let checked = run(true);
+    assert!(!checked.is_empty());
+    assert_eq!(checked, run(false));
+}
+
+#[test]
 fn a_cancelled_run_stops_before_routing() {
     let (mut b, _) = stripped(2);
     let before = violations(&b);

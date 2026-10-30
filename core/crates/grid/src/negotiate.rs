@@ -57,6 +57,9 @@ pub struct NegotiationOptions {
     /// fixtures it does not settle: 30 rounds where Gauss-Seidel takes 7. A GPU solver always
     /// routes this way.
     pub jacobi: bool,
+    /// Builds every patched grid whole as well and panics where the two differ: for tests, as
+    /// it gives back what patching saves.
+    pub check_patches: bool,
     /// Rounds without fewer collisions than the best so far before negotiation gives up.
     pub patience: usize,
     /// Nets whose open connections participate; every net when `None`.
@@ -103,6 +106,7 @@ impl Default for NegotiationOptions {
             deadline: Default::default(),
             threads: 1,
             jacobi: false,
+            check_patches: false,
             patience: 4,
             nets: None,
             net_weight: HashMap::new(),
@@ -321,6 +325,70 @@ impl SameNetHoles {
     }
 }
 
+/// The cells a route's claims cover, by viewer: what changes in the counts when it is claimed or
+/// dropped.
+struct Touched {
+    trace: Vec<(String, Vec<u32>)>,
+    via: Vec<(String, Vec<u32>)>,
+}
+
+/// The cells of a map each net owns, of its nodes and of its via cells: where one net's view
+/// differs from another's.
+struct Owned {
+    nodes: HashMap<i32, Vec<u32>>,
+    vias: HashMap<i32, Vec<u32>>,
+}
+
+impl Owned {
+    fn of(map: &ObstacleMap) -> Owned {
+        let by_net = |owner: &[i32]| {
+            let mut out: HashMap<i32, Vec<u32>> = HashMap::new();
+            for (c, &o) in owner.iter().enumerate() {
+                if o > 0 {
+                    out.entry(o).or_default().push(c as u32);
+                }
+            }
+            out
+        };
+        Owned { nodes: by_net(&map.owner), vias: by_net(&map.via_owner) }
+    }
+}
+
+/// The grid a Gauss-Seidel round last routed on, and what it was priced with, so the next
+/// connection of its class is patched where the two differ rather than built over the whole
+/// board again: the cells either net owns in the map, the cells whose claims changed since, and
+/// the two nets' own claims and hole rings. The arrays come out as a full build makes them.
+struct Patchable {
+    class: String,
+    net: u32,
+    weight: f64,
+    /// The viewers whose claims price this class's traces and vias.
+    trace_viewer: String,
+    via_viewer: String,
+    /// The cells priced as the net's own, of traces and of vias, and its hole ring.
+    own: Vec<u32>,
+    own_vias: Vec<u32>,
+    ring: Vec<u32>,
+    /// Cells whose claim counts changed since the grid was priced.
+    dirty: Vec<u32>,
+    dirty_vias: Vec<u32>,
+}
+
+impl Patchable {
+    fn note(&mut self, t: &Touched) {
+        for (viewer, cells) in &t.trace {
+            if *viewer == self.trace_viewer {
+                self.dirty.extend_from_slice(cells);
+            }
+        }
+        for (viewer, cells) in &t.via {
+            if *viewer == self.via_viewer {
+                self.dirty_vias.extend_from_slice(cells);
+            }
+        }
+    }
+}
+
 /// A pass's claims: on the nodes traces may take, on the cells vias may take, and each net's
 /// hole rings.
 struct PassClaims {
@@ -339,20 +407,26 @@ impl PassClaims {
         }
     }
 
-    fn add(&mut self, claimer: &mut Claimer, r: Route) {
-        self.trace.add(r.net, &claimer.trace(r));
+    /// Claims the route's zones, and returns them: by viewer, its trace and via cells.
+    fn add(&mut self, claimer: &mut Claimer, r: Route) -> Touched {
+        let touched = Touched { trace: claimer.trace(r), via: claimer.via(r) };
+        self.trace.add(r.net, &touched.trace);
         if claimer.exact {
-            self.via.add(r.net, &claimer.via(r));
+            self.via.add(r.net, &touched.via);
             self.holes.add(r.net, r.hole_ring);
         }
+        touched
     }
 
-    fn remove(&mut self, claimer: &mut Claimer, r: Route) {
-        self.trace.remove(r.net, &claimer.trace(r));
+    /// Drops the route's claims, and returns the zones they were on, as [`PassClaims::add`].
+    fn remove(&mut self, claimer: &mut Claimer, r: Route) -> Touched {
+        let touched = Touched { trace: claimer.trace(r), via: claimer.via(r) };
+        self.trace.remove(r.net, &touched.trace);
         if claimer.exact {
-            self.via.remove(r.net, &claimer.via(r));
+            self.via.remove(r.net, &touched.via);
             self.holes.remove(r.net, r.hole_ring);
         }
+        touched
     }
 
     fn clear(&mut self) {
@@ -632,6 +706,8 @@ fn run_pass(
     let via_step = options.history_step * layers.max(2) as u32;
 
     let mut zones = PassClaims::new(claimer);
+    // Each class's map's cells by owning net, for patching one connection's grid into the next.
+    let mut owned: HashMap<String, Owned> = HashMap::new();
     let mut history = vec![0u32; layers * cells];
     let mut via_history = if options.via_zones { vec![0u32; cells] } else { Vec::new() };
     let mut present = options.present;
@@ -705,6 +781,8 @@ fn run_pass(
                 }
             }
         } else {
+            // History moved since the last round: its first connection builds the grid whole.
+            let mut patch: Option<Patchable> = None;
             for k in 0..connections.len() {
                 if out_of_time() {
                     break;
@@ -714,20 +792,58 @@ fn run_pass(
                     tell(&options.log, "negotiating", || format!("round {}: rerouting {}", round + 1, board.net_name(c.net)), None);
                 }
                 if let Some(r) = c.route() {
-                    zones.remove(claimer, r);
+                    let t = zones.remove(claimer, r);
+                    if let Some(p) = &mut patch {
+                        p.note(&t);
+                    }
                 }
-                maps[&c.class].view_into(c.net, grid_buf);
-                grid_buf.directional = directional;
                 let w = weight_of(c.net);
-                penalties_into(zones.trace.seen_by(&c.class), &history, present, c.net, w, &mut grid_buf.penalty);
-                if options.via_zones {
-                    via_penalties_into(&zones, &c.class, &[], &via_history, present * via_scale, c.net, w, &mut grid_buf.via_penalty);
+                let map = &maps[&c.class];
+                match &mut patch {
+                    Some(p) if p.class == c.class && p.weight == w && map.regions.is_empty() => {
+                        let owned = owned.entry(c.class.clone()).or_insert_with(|| Owned::of(map));
+                        patch_grid(p, c.net, owned, map, &zones, &history, &via_history, present, via_scale, options.via_zones, grid_buf);
+                        if options.check_patches {
+                            let mut whole = grid_buf.clone();
+                            map.view_into(c.net, &mut whole);
+                            penalties_into(zones.trace.seen_by(&c.class), &history, present, c.net, w, &mut whole.penalty);
+                            if options.via_zones {
+                                via_penalties_into(&zones, &c.class, &[], &via_history, present * via_scale, c.net, w, &mut whole.via_penalty);
+                            }
+                            assert!(whole.blocked == grid_buf.blocked && whole.via_blocked == grid_buf.via_blocked, "a patched grid's blocked cells differ from a whole one's");
+                            assert!(whole.penalty == grid_buf.penalty, "a patched grid's prices differ from a whole one's");
+                            assert!(whole.via_penalty == grid_buf.via_penalty, "a patched grid's via prices differ from a whole one's");
+                        }
+                    }
+                    _ => {
+                        map.view_into(c.net, grid_buf);
+                        grid_buf.directional = directional;
+                        penalties_into(zones.trace.seen_by(&c.class), &history, present, c.net, w, &mut grid_buf.penalty);
+                        if options.via_zones {
+                            via_penalties_into(&zones, &c.class, &[], &via_history, present * via_scale, c.net, w, &mut grid_buf.via_penalty);
+                        }
+                        patch = Some(Patchable {
+                            class: c.class.clone(),
+                            net: c.net,
+                            weight: w,
+                            trace_viewer: zones.trace.alias[&c.class].clone(),
+                            via_viewer: zones.via.alias.get(&c.class).cloned().unwrap_or_default(),
+                            own: own_cells(zones.trace.seen_by(&c.class), c.net),
+                            own_vias: if options.via_zones { own_cells(zones.via.seen_by(&c.class), c.net) } else { Vec::new() },
+                            ring: if options.via_zones { sibling_hole_ring(&zones.holes, c.net, &[]).iter().map(|&(c, _)| c).collect() } else { Vec::new() },
+                            dirty: Vec::new(),
+                            dirty_vias: Vec::new(),
+                        });
+                    }
                 }
                 let (sources, targets) = &ends[k];
                 c.path = solver.route(grid_buf, &cells_of(sources), &cells_of(targets), options.via_cost);
                 settle(k, c, claimer);
                 if let Some(r) = c.route() {
-                    zones.add(claimer, r);
+                    let t = zones.add(claimer, r);
+                    if let Some(p) = &mut patch {
+                        p.note(&t);
+                    }
                 }
                 if report && shown.elapsed() > TRIAL_INTERVAL {
                     trials(round, &trial_list(&connections, sample));
@@ -1244,6 +1360,60 @@ fn corners(path: &GridPath) -> Vec<(usize, usize, usize)> {
 fn penalties_into(zones: &Zones, history: &[u32], present: f64, net: u32, weight: f64, out: &mut Vec<u32>) {
     let own = zones.per_net.get(&net).into_iter().flat_map(|m| m.keys().copied());
     price_into(history, &zones.count, own, present, weight, out);
+}
+
+/// The cells `zones` counts as `net`'s own.
+fn own_cells(zones: &Zones, net: u32) -> Vec<u32> {
+    zones.per_net.get(&net).map(|m| m.keys().copied().collect()).unwrap_or_default()
+}
+
+/// Patches `grid`, last built and priced for `p.net`, into what [`ObstacleMap::view_into`],
+/// [`penalties_into`] and [`via_penalties_into`] would make for `net` of the same class and
+/// weight: only the cells where the two can differ are written.
+#[allow(clippy::too_many_arguments)]
+fn patch_grid(p: &mut Patchable, net: u32, owned: &Owned, map: &ObstacleMap, zones: &PassClaims, history: &[u32], via_history: &[u32], present: f64, via_scale: f64, via_zones: bool, grid: &mut RouteGrid) {
+    if p.net != net {
+        // Free to one net, the other's copper blocks it.
+        for (who, blocked) in [(p.net, true), (net, false)] {
+            for &c in owned.nodes.get(&(who as i32)).into_iter().flatten() {
+                grid.blocked[c as usize] = blocked;
+            }
+            for &c in owned.vias.get(&(who as i32)).into_iter().flatten() {
+                grid.via_blocked[c as usize] = blocked;
+            }
+        }
+        grid.net = net;
+    }
+    let w = p.weight;
+    let trace = &zones.trace.by_viewer[&p.trace_viewer];
+    let own: HashSet<u32> = trace.per_net.get(&net).map(|m| m.keys().copied().collect()).unwrap_or_default();
+    for &c in p.own.iter().chain(&p.dirty).chain(&own) {
+        let c = c as usize;
+        grid.penalty[c] = price(history[c], trace.count[c] - u16::from(own.contains(&(c as u32))), present, w);
+    }
+    p.own = own.into_iter().collect();
+    p.dirty.clear();
+    if via_zones {
+        let vias = &zones.via.by_viewer[&p.via_viewer];
+        let vp = present * via_scale;
+        let own: HashSet<u32> = vias.per_net.get(&net).map(|m| m.keys().copied().collect()).unwrap_or_default();
+        let ring: HashMap<u32, u16> = sibling_hole_ring(&zones.holes, net, &[]).into_iter().collect();
+        for &c in p.own_vias.iter().chain(&p.ring).chain(&p.dirty_vias).chain(&own).chain(ring.keys()) {
+            let (h, n) = (via_history[c as usize], vias.count[c as usize]);
+            let mut v = map.via_avoid.get(c as usize).copied().unwrap_or(0).saturating_add(price(h, n, vp, w));
+            if own.contains(&c) {
+                v = v.saturating_sub(price(h, n, vp, w)).saturating_add(price(h, n.saturating_sub(1), vp, w));
+            }
+            if let Some(&k) = ring.get(&c) {
+                v = v.saturating_add(price(0, k, vp, w));
+            }
+            grid.via_penalty[c as usize] = v;
+        }
+        p.own_vias = own.into_iter().collect();
+        p.ring = ring.into_keys().collect();
+        p.dirty_vias.clear();
+    }
+    p.net = net;
 }
 
 /// Each node's present price for `net` alone, without history: for a rescue, which has none.
