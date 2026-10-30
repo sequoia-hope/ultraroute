@@ -29,7 +29,7 @@ mod regions;
 pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--no-negotiate-vias] [--no-negotiate-rip] [--no-negotiate-tree] [--negotiate-jacobi] [--negotiate-reroute-all] [--negotiate-legacy] [--diff-pairs] [--diff-pairs-legacy] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--via-cost MM[,OPEN_MM]] [--no-directional] [--no-reduce-vias] [--gpu] \
 [--timeout SECONDS] [--cell MM] [--first NET,...] [--first-negotiate] [--first-weight W] [--restart N] [--topo-first REF,...|auto] [--topo-trapped] [--topo-trapped-rip] [--topo-sample MM] \
 [--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--push-decay D] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough warp|linear|rip|gentle|dipole|region] [--shove-steps N] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-late] [--shove-seconds S] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--uuid-seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
-[--live PATH|-] [--live-fps N] [--live-step MS] [--blame]
+[--recipe default|bench|minimal] [--live PATH|-] [--live-fps N] [--live-step MS] [--blame]
 --push and --place take millimetres with y pointing up: give KiCad's y negated (KiCad y 127.5 is -127.5).";
 
 pub struct Args {
@@ -177,10 +177,50 @@ pub struct Args {
     pub blame: bool,
 }
 
+/// The stages and settings the router runs with unless told otherwise: the benchmark's recipe
+/// (`docs/pcbench.md`), measured as the best of what the router has.
+pub const RECIPE: &str = "--negotiate --rip-up --tighten --prefanout --diff-pairs --shove-plough region --shove-reach 0.5 --shove-repair 20 --shove-ties --shove-passes 60 --shove-patience 8";
+
+/// Flags that name a stage to run. A run naming none gets [`RECIPE`]; one naming its own stages
+/// gets those alone, as before there was a default.
+const STAGE_FLAGS: &[&str] = &[
+    "--negotiate", "--rip-up", "--tighten", "--prefanout", "--diff-pairs", "--shove", "--shove-plough", "--nudge", "--topo", "--topo-first",
+    "--topo-trapped", "--topo-trapped-rip", "--chase", "--escape", "--clear-lanes", "--push", "--restart", "--first",
+    // Loading a board to look at it names no stage to run, and wants none.
+    "--no-route",
+];
+
+/// Reads a command line. `--recipe default` (or `bench`, the same) puts [`RECIPE`]'s flags before
+/// the others, which then override its settings; `--recipe minimal` puts none, for library users
+/// and tests; with no `--recipe`, a line naming no stage gets `default`.
 pub fn parse(args: &[String]) -> Result<Args, String> {
     if args.first().map(String::as_str) != Some("route") {
         return Err(USAGE.to_string());
     }
+    let mut args = args.to_vec();
+    let named = match args.iter().position(|a| a == "--recipe") {
+        Some(i) if i + 1 < args.len() => {
+            let name = args.remove(i + 1);
+            args.remove(i);
+            Some(name)
+        }
+        Some(_) => return Err("--recipe: default, bench or minimal".to_string()),
+        None => None,
+    };
+    let recipe = match named.as_deref() {
+        Some("default" | "bench") => RECIPE,
+        Some("minimal") => "",
+        Some(other) => return Err(format!("--recipe {other}: default, bench or minimal")),
+        None if args.iter().any(|a| STAGE_FLAGS.contains(&a.as_str())) => "",
+        None => RECIPE,
+    };
+    let mut all = vec![args[0].clone()];
+    all.extend(recipe.split_whitespace().map(String::from));
+    all.extend(args[1..].iter().cloned());
+    parse_flags(&all)
+}
+
+fn parse_flags(args: &[String]) -> Result<Args, String> {
     let mut a = Args {
         input: String::new(),
         output: String::new(),
@@ -2440,6 +2480,27 @@ mod tests {
 
     fn words(s: &str) -> Vec<String> {
         s.split_whitespace().map(String::from).collect()
+    }
+
+    #[test]
+    fn a_line_naming_no_stage_runs_the_recipe_and_one_naming_stages_runs_those() {
+        let recipe = parse(&words(&format!("route in.kicad_pcb -o out.kicad_pcb {RECIPE}"))).unwrap();
+        let same = |a: &Args, b: &Args| {
+            (a.negotiate, a.rip_up, a.tighten, a.prefanout, a.diff_pairs, a.shove_passes, a.shove_patience) == (b.negotiate, b.rip_up, b.tighten, b.prefanout, b.diff_pairs, b.shove_passes, b.shove_patience)
+        };
+        assert!(same(&parse(&words("route in.kicad_pcb -o out.kicad_pcb")).unwrap(), &recipe));
+        assert!(same(&parse(&words("route in.kicad_pcb -o out.kicad_pcb --recipe default")).unwrap(), &recipe));
+        assert!(same(&parse(&words("route --recipe bench in.kicad_pcb -o out.kicad_pcb")).unwrap(), &recipe));
+        let minimal = parse(&words("route in.kicad_pcb -o out.kicad_pcb --recipe minimal")).unwrap();
+        assert!(!minimal.negotiate && !minimal.prefanout && !minimal.tighten);
+        let named = parse(&words("route in.kicad_pcb -o out.kicad_pcb --negotiate")).unwrap();
+        assert!(named.negotiate && !named.prefanout && !named.rip_up);
+        let load = parse(&words("route in.kicad_pcb -o out.kicad_pcb --no-route")).unwrap();
+        assert!(load.no_route && !load.prefanout && !load.negotiate);
+        // The recipe's settings come first, so a flag given after them wins.
+        let fewer = parse(&words("route in.kicad_pcb -o out.kicad_pcb --recipe default --shove-passes 5")).unwrap();
+        assert!(fewer.prefanout && fewer.shove_passes == 5);
+        assert!(parse(&words("route in.kicad_pcb -o out.kicad_pcb --recipe fast")).is_err());
     }
 
     fn earring() -> Board {

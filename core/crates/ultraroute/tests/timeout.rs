@@ -7,13 +7,10 @@ use std::sync::Arc;
 
 use board::Board;
 
-/// The benchmark recipe of REMEDIATION.md §0.5.
-const RECIPE: &str = "--negotiate --rip-up --tighten --prefanout --diff-pairs --shove-plough region --shove-reach 0.5 --shove-repair 20 --shove-ties --shove-passes 60 --shove-patience 8";
-
 fn routed_within(timeout: f64, limit: f64) {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/bluebuzz-rm2.kicad_pcb");
     let mut args: Vec<String> = ["route", path.to_str().unwrap(), "-o", "unused.kicad_pcb", "--strip-all", "--seed", "0", "--threads", "1"].map(String::from).to_vec();
-    args.extend(RECIPE.split_whitespace().map(String::from));
+    args.extend(["--recipe".to_string(), "default".to_string()]);
     args.extend(["--timeout".to_string(), timeout.to_string()]);
     let a = ultraroute::parse(&args).unwrap();
     let (board, text) = Board::load(&path).unwrap();
