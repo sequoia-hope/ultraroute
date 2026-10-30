@@ -2268,6 +2268,10 @@ pub fn run_with_solver(
         eprintln!("regions: {line}");
         say("regions", line);
     }
+    for line in grid::necks::report(&board, &laid) {
+        eprintln!("neck: {line}");
+        say("necks", line);
+    }
     let replace = moved_parts(&board, &original_at);
     grid::keep_orphans(&board, &removed, &mut laid);
     let (tracks, vias) = grid::edits(&board, &laid);

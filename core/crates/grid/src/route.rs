@@ -14,6 +14,9 @@ const LEG_CANDIDATES: usize = 16;
 const LEG_CELLS: Nm = 3;
 /// How far a necked-down leg may reach out of a pad too crowded for a full-width one, in cells.
 const NECK_CELLS: Nm = 20;
+/// How far a forced neck, one narrower than the rules allow, may reach beyond its pad, in
+/// nanometres: out from among the part's pins and no further.
+const FORCED_NECK_REACH: Nm = 1_000_000;
 
 pub trait FieldSolver {
     fn solve(&mut self, grid: &RouteGrid, sources: &[usize], via_cost: u32) -> Vec<u32>;
@@ -429,11 +432,25 @@ pub(crate) fn terminals(board: &mut Board, grid: &RouteGrid, id: ItemId) -> Vec<
     if !found.is_empty() {
         return found;
     }
-    let narrow = Profile::for_net(board, grid.net).neck_into(board.item(id));
-    if narrow >= grid.half_width {
-        return found;
+    let profile = Profile::for_net(board, grid.net);
+    let narrow = profile.neck_into(board.item(id));
+    if narrow < grid.half_width {
+        let found = gather(board, narrow, NECK_CELLS, 2 * LEG_CANDIDATES);
+        if !found.is_empty() {
+            return found;
+        }
     }
-    gather(board, narrow, NECK_CELLS, 2 * LEG_CANDIDATES)
+    // A pin no leg within the rules can leave would stay open: a short leg narrower than the
+    // rules allow reaches it instead, as a designer necks a wide net into a fine-pitch part,
+    // and the run reports it (`crate::necks`).
+    let reach = (FORCED_NECK_REACH + grid.h - 1) / grid.h.max(1);
+    for hw in profile.forced_necks(board.item(id)).into_iter().filter(|&hw| hw < grid.half_width) {
+        let found = gather(board, hw, reach, 2 * LEG_CANDIDATES);
+        if !found.is_empty() {
+            return found;
+        }
+    }
+    Vec::new()
 }
 
 pub(crate) fn item_terminals(board: &mut Board, grid: &RouteGrid, id: ItemId, leg_half_width: Nm, leg_cells: Nm, tries: usize) -> Vec<Terminal> {

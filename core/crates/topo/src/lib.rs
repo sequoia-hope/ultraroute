@@ -679,7 +679,8 @@ impl WireRules {
         WireRules {
             net,
             half_width: profile.half_width,
-            min_half_width: (nm(rules.min_track_width) / 2).max(1),
+            // The net's own minimum, from a custom rule, where it is above the board's.
+            min_half_width: profile.min_half_width,
             via,
             clearance,
             hole_clearance,
@@ -698,7 +699,7 @@ impl WireRules {
         net == self.net && net != 0
     }
 
-    /// Narrower half-widths a leg at a pad may neck down to, never below the board's minimum.
+    /// Narrower half-widths a leg at a pad may neck down to, never below the net's minimum.
     fn necked_widths(&self) -> Vec<Nm> {
         let (full, floor) = (self.half_width, self.min_half_width);
         let mut widths: Vec<Nm> = [full * 3 / 4, full / 2].into_iter().filter(|&w| w > floor).collect();
@@ -708,7 +709,7 @@ impl WireRules {
         widths
     }
 
-    /// Rules at a pad exit, where the first or last segment may neck down to the board's
+    /// Rules at a pad exit, where the first or last segment may neck down to the net's
     /// narrowest track so a wide net or wider margin can still leave a fine-pitch pad.
     pub fn necked(&self) -> WireRules {
         WireRules { half_width: self.min_half_width, margin: self.margin.min(25_000.0), ..self.clone() }
