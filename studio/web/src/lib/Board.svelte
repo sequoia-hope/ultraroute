@@ -81,6 +81,14 @@
     return [using.cx + x / using.zoom, using.cy + y / using.zoom];
   }
 
+  // The part under the pointer, of those the pane under it shows.
+  function partAt(event, at) {
+    const rect = canvas.getBoundingClientRect();
+    const px = (event.clientX - rect.left) * (canvas.width / rect.width);
+    const pane = panes().find((p) => px >= p.rect.x && px < p.rect.x + p.rect.w) ?? panes()[0];
+    return studio.part_at_in(at[0], at[1], pane.mask);
+  }
+
   function frame() {
     if (renderer && canvas) {
       const now = performance.now();
@@ -181,7 +189,7 @@
     }
     const at = toBoard(event);
     // Middle and right buttons pan, as in KiCad; the left picks a part or pans empty board.
-    const part = event.button === 0 && !event.shiftKey ? studio.part_at(at[0], at[1]) : 0;
+    const part = event.button === 0 && !event.shiftKey ? partAt(event, at) : 0;
     drag = { part, start: at, screen: [event.clientX, event.clientY], view: { ...view }, moved: false };
     if (part) {
       studio.set_picked(part);
@@ -213,7 +221,7 @@
       }
       return;
     }
-    const part = studio.part_at(at[0], at[1]);
+    const part = partAt(event, at);
     const net = studio.net_at(at[0], at[1], 4 / view.zoom);
     if (part !== hoverPart || net !== hoverNet) {
       hoverPart = part;

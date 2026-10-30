@@ -13,6 +13,6 @@
     "vite": "8.3.4"
   },
   "dependencies": {
-    "board-draw": "github:sequoia-hope/board-draw#43c4f6fc9179c387af4340b899a469198f7e3c67"
+    "board-draw": "github:sequoia-hope/board-draw#d37b1f8eb25454facb83e07040f1e43e2798a6f5"
   }
 }
