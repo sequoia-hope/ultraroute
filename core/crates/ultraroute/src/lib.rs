@@ -1382,10 +1382,15 @@ fn solver_for(a: &Args, custom_solver: Option<Box<dyn grid::FieldSolver>>) -> Bo
         None => {
             #[allow(unused_mut)]
             let mut s: Box<dyn grid::FieldSolver> = Box::new(grid::CpuSolver);
+            #[cfg(not(feature = "gpu"))]
+            if a.gpu {
+                eprintln!("warning: --gpu: this router is built without the GPU solver (cargo build --features gpu); solving on the CPU");
+            }
             #[cfg(feature = "gpu")]
             if a.gpu {
                 match grid::GpuSolver::new() {
                     Some(gpu) => {
+                        eprintln!("warning: --gpu: the GPU field solver is experimental and about 10x slower than the CPU's search on boards of this size");
                         eprintln!("field solver on {}", gpu.adapter_name);
                         s = Box::new(gpu);
                     }

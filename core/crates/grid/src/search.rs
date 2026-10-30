@@ -141,7 +141,7 @@ pub fn cost_field(grid: &RouteGrid, sources: &[usize], via_cost: u32) -> Vec<u32
         let cell = index % cells;
         let (i, j) = ((cell % grid.nx) as i32, (cell / grid.nx) as i32);
         let mut relax = |next: usize, step: u32| {
-            let candidate = c + step + grid.penalty_at(next);
+            let candidate = c.saturating_add(step).saturating_add(grid.penalty_at(next));
             if candidate < cost[next] && !grid.blocked[next] {
                 cost[next] = candidate;
                 heap.push(candidate, next);
@@ -193,7 +193,7 @@ pub fn trace_back(
             }
             let n = grid.index(layer, ni as usize, nj as usize);
             let actual = step_cost(grid.directional, layer, di, dj, step);
-            if cost[n] != UNREACHED && cost[n] + actual + grid.penalty_at(at) == cost[at] {
+            if cost[n] != UNREACHED && cost[n].saturating_add(actual).saturating_add(grid.penalty_at(at)) == cost[at] {
                 previous = Some(n);
                 break;
             }
@@ -203,7 +203,7 @@ pub fn trace_back(
                 .filter(|&other| other != layer)
                 .map(|other| other * cells + cell)
                 .find(|&n| {
-                    cost[n] != UNREACHED && cost[n] + via_cost + grid.via_penalty_at(cell) + grid.penalty_at(at) == cost[at]
+                    cost[n] != UNREACHED && cost[n].saturating_add(via_cost).saturating_add(grid.via_penalty_at(cell)).saturating_add(grid.penalty_at(at)) == cost[at]
                 });
         }
         at = previous?;
@@ -409,12 +409,12 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
                 }
                 let next = grid.index(layer, ni as usize, nj as usize);
                 if !grid.blocked[next] {
-                    let candidate = c + step_cost(grid.directional, layer, di, dj, step) + grid.penalty_at(next);
+                    let candidate = c.saturating_add(step_cost(grid.directional, layer, di, dj, step)).saturating_add(grid.penalty_at(next));
                     let cur = if b.gen[next] == epoch { b.cost[next] } else { UNREACHED };
                     if candidate < cur {
                         b.gen[next] = epoch;
                         b.cost[next] = candidate;
-                        b.heap.push(candidate + estimate(next), next);
+                        b.heap.push(candidate.saturating_add(estimate(next)), next);
                     }
                 }
             }
@@ -423,12 +423,12 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
                     if other != layer {
                         let next = other * cells + cell;
                         if !grid.blocked[next] {
-                            let candidate = c + via_cost + grid.via_penalty_at(cell) + grid.penalty_at(next);
+                            let candidate = c.saturating_add(via_cost).saturating_add(grid.via_penalty_at(cell)).saturating_add(grid.penalty_at(next));
                             let cur = if b.gen[next] == epoch { b.cost[next] } else { UNREACHED };
                             if candidate < cur {
                                 b.gen[next] = epoch;
                                 b.cost[next] = candidate;
-                                b.heap.push(candidate + estimate(next), next);
+                                b.heap.push(candidate.saturating_add(estimate(next)), next);
                             }
                         }
                     }
@@ -453,7 +453,7 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
                 let n = grid.index(layer, ni as usize, nj as usize);
                 let cn = cost_at(b, n);
                 let actual = step_cost(grid.directional, layer, di, dj, step);
-                if cn != UNREACHED && cn + actual + grid.penalty_at(at) == c_at {
+                if cn != UNREACHED && cn.saturating_add(actual).saturating_add(grid.penalty_at(at)) == c_at {
                     previous = Some(n);
                     break;
                 }
@@ -464,7 +464,7 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
                     .map(|other| other * cells + cell)
                     .find(|&n| {
                         let cn = cost_at(b, n);
-                        cn != UNREACHED && cn + via_cost + grid.via_penalty_at(cell) + grid.penalty_at(at) == c_at
+                        cn != UNREACHED && cn.saturating_add(via_cost).saturating_add(grid.via_penalty_at(cell)).saturating_add(grid.penalty_at(at)) == c_at
                     });
             }
             at = previous?;

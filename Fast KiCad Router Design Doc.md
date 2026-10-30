@@ -1,5 +1,11 @@
 # Fast KiCad Router: Design Doc
 
+> **Status, 2026-10-30:** this is the plan the project started from. The GPU routing it proposes
+> was built (`grid::GpuSolver`, a Bellman-Ford field relaxed on the GPU) and measured about 10x
+> slower than A* on the CPU on these boards (`REVIEW.md` §3.4), so it is parked behind
+> `--features gpu`. What runs is A* on the CPU, natively and, in the studio, in a pool of
+> WebAssembly workers in the browser tab; there is no WebGPU routing.
+
 ## Goal
 
 Build an open-source, Rust-based PCB autorouter for KiCad boards that is much faster than Freerouting, runs well on a desktop GPU, and never destabilizes the host machine. Browser support (WebAssembly + WebGPU) is a nice-to-have, not a requirement. The project doubles as an experimentation suite for comparing routing approaches.

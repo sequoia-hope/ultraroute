@@ -37,6 +37,9 @@ jobs:
       # Clippy first: it is the quicker of the two and the likelier to need a fix.
       - name: Clippy, every target, no warnings allowed
         run: cargo clippy --workspace --all-targets -- -D warnings
+      # The GPU solver is off by default; its build is kept clippy-clean all the same.
+      - name: Clippy with the GPU solver built in
+        run: cargo clippy --workspace --all-targets --features ultraroute/gpu -- -D warnings
       # --release because the router's tests route real boards; --no-fail-fast to see every failure.
       - name: Tests
         run: cargo test --workspace --no-fail-fast --release
