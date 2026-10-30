@@ -329,11 +329,9 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
                 span: child.pos().into(),
             }),
             _ if unread_kind(child) => unread += 1,
-            Some("generated") => {
-                if child.find("type").and_then(|t| t.args().first()).and_then(Node::text) == Some("tuning_pattern") {
-                    patterns += 1;
-                    tuned.extend(child.find("members").into_iter().flat_map(|m| m.args().iter().filter_map(Node::text).map(str::to_string)));
-                }
+            Some("generated") if child.find("type").and_then(|t| t.args().first()).and_then(Node::text) == Some("tuning_pattern") => {
+                patterns += 1;
+                tuned.extend(child.find("members").into_iter().flat_map(|m| m.args().iter().filter_map(Node::text).map(str::to_string)));
             }
             Some("via") => {
                 rings += usize::from(unused_layers(child));
