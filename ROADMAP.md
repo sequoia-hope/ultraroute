@@ -75,7 +75,7 @@ with WebGPU) under MIT. Estimate ~15k lines:
       kept. Pours are refilled around new copper (`tools/refill_zones.py`), so every connection is
       made in tracks. Judged by KiCad after a refill: the earring 249 → 14 open in 22 s, bluebuzz
       with its unlocked copper stripped 25 → 5 open in 13 s, 0 errors on both.
-- [ ] Holes as slots (oval drills), not only round.
+- [x] Holes as slots (oval drills), not only round (REMEDIATION Stage 9).
 - [x] The GPU field solver (`--features gpu`) and negotiated congestion on the core. With
       negotiation then single routing for what is left, after a KiCad refill: the earring 10 open,
       stripped bluebuzz 3 open, 0 errors on both. Slow yet: 30 rounds that do not converge, ~3 min
@@ -89,7 +89,10 @@ with WebGPU) under MIT. Estimate ~15k lines:
       bluebuzz 3, 0 errors.
 - [ ] GPU batches for negotiation rounds work but are slow: ~110 s a round on the earring's
       3.5M-node fields against ~10 s on CPU threads. The relaxation kernel needs a better
-      schedule (or a coarser grid) before the GPU pays.
+      schedule (or a coarser grid) before the GPU pays. Parked (REMEDIATION Stage 10, 2026-10-30):
+      off by default (`--features gpu` builds it in, `--gpu` warns), kept for a frontier or
+      windowed kernel; the browser's WebGPU copy was deleted. What runs: A* on the CPU, natively
+      and in the tab's worker pool.
 - [ ] Topo with rip-up, nudge and diffusion on the core.
 - [x] A* search on the CPU (routes as cheap as the full field, a fraction of the work), zones
       sized per pair of net classes, legs necked down to the narrowest track out of crowded pads,
