@@ -26,8 +26,8 @@ use serde_json::{json, Value};
 
 mod regions;
 
-pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--no-negotiate-vias] [--no-negotiate-rip] [--no-negotiate-tree] [--negotiate-jacobi] [--negotiate-reroute-all] [--negotiate-legacy] [--diff-pairs] [--diff-pairs-legacy] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner|same] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--via-cost MM[,OPEN_MM]] [--no-directional] [--no-reduce-vias] [--gpu] \
-[--timeout SECONDS] [--cell MM] [--first NET,...] [--first-negotiate] [--first-weight W] [--restart N] [--topo-first REF,...|auto] [--topo-trapped] [--topo-trapped-rip] [--topo-sample MM] \
+pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--no-negotiate-vias] [--no-negotiate-rip] [--no-negotiate-tree] [--negotiate-jacobi] [--negotiate-reroute-all] [--negotiate-legacy] [--diff-pairs] [--diff-pairs-legacy] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner|same] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--via-cost MM[,OPEN_MM]] [--no-directional] [--no-reduce-vias] [--gpu] \
+[--timeout SECONDS] [--cell MM] [--first NET,...] [--first-negotiate] [--first-weight W] [--restart N] \
 [--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--uuid-seed N] [--adopt] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
 [--recipe default|bench|minimal] [--live PATH|-] [--live-fps N] [--live-step MS] [--blame]
 --place takes millimetres with y pointing up: give KiCad's y negated (KiCad y 127.5 is -127.5).";
@@ -71,7 +71,6 @@ pub struct Args {
     pub prefanout_soft: bool,
     pub prefanout_keep_unused: bool,
     pub prefanout_inward: bool,
-    pub topo: bool,
     pub negotiate: bool,
     pub rip_up: bool,
     pub tighten: bool,
@@ -109,14 +108,6 @@ pub struct Args {
     pub first_weight: Option<f64>,
     /// Extra passes from the starting board, promoting nets left open to priority and keeping the best board.
     pub restart: usize,
-    /// Parts (or `auto`, `REF:signals`, `REF:pads`, or net names) whose connections route first as rubber bands.
-    pub topo_first: Vec<String>,
-    /// Try rubber-band routing on the connections still open after the grid stages, without ripping grid copper.
-    pub topo_trapped: bool,
-    /// Try rubber-band routing with rip-up of soft grid copper on the connections still open after the grid stages.
-    pub topo_trapped_rip: bool,
-    /// Outline sample spacing for topological passes, in nanometres.
-    pub topo_sample: Option<Nm>,
     /// Plough a way out for each open connection trapped at a fine-pitch part's pads.
     pub shove: bool,
     /// How the plough clears the copper in the way, its reach, the rip-up repair after each try,
@@ -164,8 +155,7 @@ pub const RECIPE: &str = "--negotiate --rip-up --tighten --prefanout --diff-pair
 /// Flags that name a stage to run. A run naming none gets [`RECIPE`]; one naming its own stages
 /// gets those alone, as before there was a default.
 const STAGE_FLAGS: &[&str] = &[
-    "--negotiate", "--rip-up", "--tighten", "--prefanout", "--diff-pairs", "--shove", "--shove-plough", "--nudge", "--topo", "--topo-first",
-    "--topo-trapped", "--topo-trapped-rip", "--restart", "--first",
+    "--negotiate", "--rip-up", "--tighten", "--prefanout", "--diff-pairs", "--shove", "--shove-plough", "--nudge", "--restart", "--first",
     // Loading a board to look at it names no stage to run, and wants none.
     "--no-route",
 ];
@@ -225,7 +215,6 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
         prefanout_soft: false,
         prefanout_keep_unused: false,
         prefanout_inward: true,
-        topo: false,
         negotiate: false,
         rip_up: false,
         tighten: false,
@@ -250,10 +239,6 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
         first_negotiate: false,
         first_weight: None,
         restart: 0,
-        topo_first: Vec::new(),
-        topo_trapped: false,
-        topo_trapped_rip: false,
-        topo_sample: None,
         shove: false,
         shove_plough: None,
         shove_reach: None,
@@ -356,7 +341,6 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
                 a.prefanout = true;
                 a.prefanout_inward = false;
             }
-            "--topo" => a.topo = true,
             "--negotiate" => a.negotiate = true,
             "--rip-up" => a.rip_up = true,
             "--tighten" => a.tighten = true,
@@ -397,16 +381,6 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
                 a.first_weight = Some(w);
             }
             "--restart" => a.restart = value()?.parse().map_err(|e| format!("--restart: {e}"))?,
-            "--topo-first" => a.topo_first.extend(value()?.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_string)),
-            "--topo-trapped" => a.topo_trapped = true,
-            "--topo-trapped-rip" => a.topo_trapped_rip = true,
-            "--topo-sample" => {
-                let mm: f64 = value()?.parse().map_err(|e| format!("--topo-sample: {e}"))?;
-                if !(0.01..=1.0).contains(&mm) {
-                    return Err(format!("--topo-sample: {mm} mm is outside 0.01 to 1 mm"));
-                }
-                a.topo_sample = Some((mm * 1e6).round() as Nm);
-            }
             "--timeout" => a.timeout = Some(value()?.parse().map_err(|e| format!("--timeout: {e}"))?),
             "--live" => a.live = Some(value()?),
             "--live-fps" => a.fps = value()?.parse().map_err(|e| format!("--live-fps: {e}"))?,
@@ -909,66 +883,6 @@ fn priority_tiers(fail_counts: &HashMap<u32, usize>) -> Vec<BTreeSet<u32>> {
         }
     }
     by_count.into_values().collect()
-}
-
-/// Resolves `--topo-first` targets into open endpoint pairs `(from.min(to), from.max(to))`:
-/// `auto` selects fine-pitch parts, `REF` selects a part's connections (plus all connections of
-/// its non-poured nets), `REF:signals` skips poured nets, `REF:pads` restricts to airlines with
-/// an end directly on `REF`, and a net name selects that net's open connections.
-fn resolve_topo_only(board: &Board, specs: &[String], pours_block: bool) -> HashSet<(ItemId, ItemId)> {
-    let airlines = if pours_block { connectivity(board) } else { connectivity_without_pours(board) }.airlines;
-    let poured: HashSet<u32> = board
-        .items()
-        .filter(|(_, it)| matches!(it.kind, Kind::Pour { .. }))
-        .map(|(_, it)| it.net)
-        .collect();
-    let pair = |a: ItemId, b: ItemId| (a.min(b), a.max(b));
-    let mut out = HashSet::new();
-    for spec in specs {
-        let (name, signals_only, pads_only) = if let Some(r) = spec.strip_suffix(":signals") {
-            (r, true, false)
-        } else if let Some(r) = spec.strip_suffix(":pads") {
-            (r, false, true)
-        } else {
-            (spec.as_str(), false, false)
-        };
-        let parts: Vec<usize> = if name == "auto" {
-            morph::fine_pitch(board, 500_000)
-        } else if let Some(fp) = board.footprints.iter().position(|f| f.reference == name) {
-            vec![fp]
-        } else if let Some(net) = (1..board.nets.len() as u32).find(|&n| board.net_name(n) == spec) {
-            for a in airlines.iter().filter(|a| a.net == net) {
-                out.insert(pair(a.from_item, a.to_item));
-            }
-            continue;
-        } else {
-            eprintln!("warning: --topo-first {spec}: no such part or net on the board");
-            continue;
-        };
-        let fp_set: HashSet<usize> = parts.into_iter().collect();
-        let mut pads = HashSet::new();
-        let mut signal_nets = HashSet::new();
-        for (id, it) in board.items() {
-            if let Kind::Pad { footprint, .. } = it.kind {
-                if fp_set.contains(&footprint) {
-                    pads.insert(id);
-                    if it.net != 0 && !poured.contains(&it.net) {
-                        signal_nets.insert(it.net);
-                    }
-                }
-            }
-        }
-        for a in &airlines {
-            if signals_only && poured.contains(&a.net) {
-                continue;
-            }
-            let touches_pad = pads.contains(&a.from_item) || pads.contains(&a.to_item);
-            if touches_pad || (!pads_only && signal_nets.contains(&a.net)) {
-                out.insert(pair(a.from_item, a.to_item));
-            }
-        }
-    }
-    out
 }
 
 /// A restart round's board, the copper it laid, the file's spans it took out, and the last
@@ -1670,7 +1584,6 @@ pub fn run_with_solver(
             }
         }
     }
-    let topo_sample = a.topo_sample.unwrap_or(topo::Options::default().sample);
     let open_airlines = |b: &Board| if a.pours_block { connectivity(b) } else { connectivity_without_pours(b) }.airlines;
     let costs = via_costs(a, &board);
     let directional = !a.no_directional;
@@ -1691,7 +1604,7 @@ pub fn run_with_solver(
     let mut best_run: Option<((usize, usize), Restart)> = None;
     let mut stats = grid::Stats::default();
     // Restarts leave the rescue stages after them a share of the time.
-    let post_rescue = a.shove || a.topo_trapped_rip;
+    let post_rescue = a.shove;
     let routing_timeout = match (a.timeout, a.restart > 0) {
         (Some(t), true) if post_rescue => Some(t * 0.7),
         (Some(t), true) if a.nudge => Some(t * 0.8),
@@ -1707,7 +1620,7 @@ pub fn run_with_solver(
         None => run.clone(),
     };
     // A pass that routes nothing first and does not restart keeps the time limits it always had.
-    let plain = a.restart == 0 && a.first.is_empty() && a.topo_first.is_empty() && lengths.is_empty();
+    let plain = a.restart == 0 && a.first.is_empty() && lengths.is_empty();
 
     for round in 0..total_rounds {
         if (round > 0 && routing.expired()) || !timeline.enter(&run, "routing") {
@@ -1727,57 +1640,6 @@ pub fn run_with_solver(
         let rounds_left = (total_rounds - round) as f64;
         let round_deadline = routing.share(1.0 / rounds_left);
 
-        if a.topo && timeline.enter(&run, "topo") {
-            // Rubber bands first, through a triangulation of the copper; the grid finishes what they
-            // leave open.
-            let t = topo::route_topological(
-                &mut board,
-                &topo::Options {
-                    sample: topo_sample,
-                    deadline: if a.restart > 0 { round_deadline.share(0.4) } else { of_timeout(0.4) },
-                    pours_block: a.pours_block,
-                    log: log.clone(),
-                    ..Default::default()
-                },
-                &mut watch,
-            );
-            eprintln!(
-                "topo: {} of {} connections, {} rip-ups, {} vias, {:.1} s",
-                t.routed,
-                t.connections,
-                t.rip_ups,
-                t.vias,
-                started.elapsed().as_secs_f64()
-            );
-            laid.extend(t.laid);
-        }
-        if !a.topo_first.is_empty() && timeline.enter(&run, "topo-first") {
-            let only = resolve_topo_only(&board, &a.topo_first, a.pours_block);
-            if !only.is_empty() {
-                say("topo-first", format!("routing {} target connections as rubber bands before negotiation", only.len()));
-                let t = topo::route_topological(
-                    &mut board,
-                    &topo::Options {
-                        sample: topo_sample,
-                        deadline: round_deadline.share(0.25),
-                        only: Some(only),
-                        pours_block: a.pours_block,
-                        log: log.clone(),
-                        ..Default::default()
-                    },
-                    &mut watch,
-                );
-                eprintln!(
-                    "topo-first: {} of {} connections, {} rip-ups, {} vias, {:.1} s",
-                    t.routed,
-                    t.connections,
-                    t.rip_ups,
-                    t.vias,
-                    started.elapsed().as_secs_f64()
-                );
-                laid.extend(t.laid);
-            }
-        }
         if !fail_counts.is_empty() && a.first_weight.is_none() && timeline.enter(&run, "first") {
             if a.first_negotiate {
                 let prio_nets: HashSet<u32> = fail_counts.keys().copied().collect();
@@ -2003,8 +1865,7 @@ pub fn run_with_solver(
         }
     }
     if a.shove && timeline.enter(&run, "shove") {
-        // Rubber bands to come after keep a third of what is left.
-        let until = if a.topo_trapped_rip { rescue.share(0.65) } else { rescue.clone() };
+        let until = rescue.clone();
         let spans = shove_pass(a, &mut board, solver.as_mut(), &mut laid, started, &until, &log, &step);
         removed.extend(spans);
         if a.diff_pairs && !a.diff_pairs_legacy && !pair_laid.is_empty() {
@@ -2013,65 +1874,6 @@ pub fn run_with_solver(
                 let spans = shove_pass(a, &mut board, solver.as_mut(), &mut laid, started, &until, &log, &step);
                 removed.extend(spans);
                 relock_pairs(&mut board, &pair_laid);
-            }
-        }
-    }
-    if (a.topo_trapped || a.topo_trapped_rip) && timeline.enter(&run, "topo-trapped") {
-        let trapped: HashSet<(ItemId, ItemId)> = open_airlines(&board).iter().map(|c| (c.from_item.min(c.to_item), c.from_item.max(c.to_item))).collect();
-        if !trapped.is_empty() {
-            let mut topo_opts = topo::Options {
-                sample: topo_sample,
-                deadline: rescue.clone(),
-                only: Some(trapped),
-                pours_block: a.pours_block,
-                log: log.clone(),
-                ..Default::default()
-            };
-            if a.topo_trapped_rip {
-                say("topo-trapped", format!("routing {} trapped connections as rubber bands with rip-up", topo_opts.only.as_ref().map_or(0, HashSet::len)));
-                let t = topo::route_topological_with_soft(&mut board, &topo_opts, &mut laid, &mut watch);
-                if t.routed > 0 || t.rip_ups > 0 {
-                    let after_topo = grid::route_open(
-                        &mut board,
-                        solver.as_mut(),
-                        &grid::Options {
-                            cell: a.cell.unwrap_or(grid::Options::default().cell),
-                            via_cost: costs.open,
-                            directional,
-                            seed: a.seed,
-                            deadline: rescue.clone(),
-                            pours_block: a.pours_block,
-                            log: log.clone(),
-                            ..Default::default()
-                        },
-                        &mut watch,
-                    );
-                    laid.extend(after_topo.laid);
-                }
-                eprintln!(
-                    "topo-trapped-rip: {} of {} trapped, {} rip-ups, {} vias, {} open, {:.1} s",
-                    t.routed,
-                    t.connections,
-                    t.rip_ups,
-                    t.vias,
-                    open_airlines(&board).len(),
-                    started.elapsed().as_secs_f64()
-                );
-            } else {
-                topo_opts.rip_passes = 0;
-                say("topo-trapped", format!("routing {} trapped connections as rubber bands", topo_opts.only.as_ref().map_or(0, HashSet::len)));
-                let t = topo::route_topological(&mut board, &topo_opts, &mut watch);
-                laid.extend(t.laid);
-                eprintln!(
-                    "topo-trapped: {} of {} trapped ({} no channel, {} rejected), {} vias, {} open, {:.1} s",
-                    t.routed,
-                    t.connections,
-                    t.no_channel,
-                    t.rejected,
-                    t.vias,
-                    open_airlines(&board).len(),
-                    started.elapsed().as_secs_f64()
-                );
             }
         }
     }
@@ -2290,22 +2092,17 @@ mod tests {
     }
 
     #[test]
-    fn parses_priority_and_topo_flags() {
+    fn parses_priority_flags() {
         let a = parse(&words(
-            "route in.kicad_pcb -o out.kicad_pcb --first CHRG,SWDIO --first @U1 --first-negotiate --first-weight 0.25 --restart 2 --topo-first U1,auto --topo-trapped --topo-trapped-rip --topo-sample 0.05",
+            "route in.kicad_pcb -o out.kicad_pcb --first CHRG,SWDIO --first @U1 --first-negotiate --first-weight 0.25 --restart 2",
         ))
         .unwrap();
         assert_eq!(a.first, vec!["CHRG", "SWDIO", "@U1"]);
         assert!(a.first_negotiate);
         assert_eq!(a.first_weight, Some(0.25));
         assert_eq!(a.restart, 2);
-        assert_eq!(a.topo_first, vec!["U1", "auto"]);
-        assert!(a.topo_trapped);
-        assert!(a.topo_trapped_rip);
-        assert_eq!(a.topo_sample, Some(50_000));
 
         assert!(parse(&words("route in.kicad_pcb -o out.kicad_pcb --first-weight -0.1")).is_err());
-        assert!(parse(&words("route in.kicad_pcb -o out.kicad_pcb --topo-sample 0.001")).is_err());
     }
 
     #[test]
@@ -2318,7 +2115,7 @@ mod tests {
     }
 
     #[test]
-    fn resolves_part_signal_nets_and_topo_pairs_on_earring() {
+    fn resolves_part_signal_nets_on_earring() {
         let b = earring();
         let u1_signals = resolve_priority_nets(&b, &[String::from("@U1")]);
         let gnd = (1..b.nets.len() as u32).find(|&n| b.net_name(n) == "GND").unwrap();
@@ -2327,11 +2124,6 @@ mod tests {
         assert!(!u1_signals.contains(&gnd), "@U1 skips poured planes unless :all is asked");
         let u1_all = resolve_priority_nets(&b, &[String::from("@U1:all")]);
         assert!(u1_all.contains(&gnd));
-
-        let sig_pairs = resolve_topo_only(&b, &[String::from("U1:signals")], false);
-        let pad_pairs = resolve_topo_only(&b, &[String::from("U1:pads")], false);
-        assert!(!sig_pairs.is_empty());
-        assert!(!pad_pairs.is_empty());
     }
 
     fn vec_args(s: &[&str]) -> Vec<String> {

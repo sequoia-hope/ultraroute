@@ -19,7 +19,7 @@ Read it beside this guide.
 | `board` | The routing model: every piece of copper, hole, keepout and the outline as `Item`s in a spatial index (`Board`), the rule check (`check_item`), connectivity (`connectivity`), zone fills for display. Nanometres. |
 | `grid` | The grid routers and everything that reworks routed copper: `route_open`, `route_negotiated`, `rip_up`, `prefanout`, `route_pairs`, `join_planes`, `shove_escape` (the plough), `push`, `nudge`, `pull_tight`, cleanup, `match_lengths`, `blame`. Also the grid itself (`ObstacleMap`, `RouteGrid`, `Profile`) and the `FieldSolver` trait with CPU and GPU solvers. |
 | `morph` | Moving copper smoothly: the harmonic `WarpField`, `flow` (copper carried along with moving parts), `shift_copper` (any per-point move that keeps joints joined), and `fine_pitch` (the parts whose escapes are hard). |
-| `topo` | Topological routing: rubber bands pulled taut through a triangulation of the copper. |
+| `topo` | Topological routing: rubber bands pulled taut through a triangulation of the copper. An experiment: the command does not link it, and it stays in the workspace for its own tests. |
 | `ultraroute` | The command: `parse` turns flags into `Args`, `run` drives the whole pipeline from text to text, `Live` streams the studio's frames. |
 | `web` | The same pipeline compiled to WebAssembly for the studio's Web Worker. |
 
@@ -312,7 +312,8 @@ moves are offered.
 ## topo: rubber bands
 
 `topo::route_topological(board, &topo::Options, watch) -> topo::Stats` routes open connections
-as taut wires through a triangulation of the copper, with its own rip-up.
+as taut wires through a triangulation of the copper, with its own rip-up. The command no longer
+runs it: depend on the `topo` crate yourself to use it.
 `route_topological_with_soft(board, &options, soft, watch)` may also rip earlier grid copper in
 `soft`. `topo::Options`: `sample` 100,000 nm (outline sample spacing; keep it below twice the
 narrowest clearance reach), `via_cost` 2,000,000 nm, `max_expansions` 400,000, `orders` 1,
@@ -483,12 +484,11 @@ it runs `route_open` and the cleanup only; each flag adds a stage. In order:
 4. **`--diff-pairs`**: `route_pairs`, held apart until cleanup.
 5. **Routing**, once, or `--restart N` more times from the same start with the nets left open
    promoted, keeping the best board:
-   `--topo` (`route_topological`, 40% of the time), `--topo-first`, `--first` (priority nets,
+   `--first` (priority nets,
    by `route_open` tier by tier or, with `--first-negotiate`, negotiated among themselves),
    `--negotiate` (`route_negotiated`, half the timeout), `route_open` to finish (always),
    `prune_closed_escapes`, `--rip-up` (`rip_up`), the escapes join `laid`.
-6. **Rescue**: `--shove` (`shove_escape` passes); `--topo-trapped` or
-   `--topo-trapped-rip` on what is still open; `--nudge` (`nudge`).
+6. **Rescue**: `--shove` (`shove_escape` passes); `--nudge` (`nudge`).
 7. **Finish**: `--tighten` (`pull_tight`); pair copper joins `laid`; `drop_duplicates`;
    `prune_dangling`; with `--diff-pairs`, `match_lengths`; `--blame` prints what blocks each open
    connection.

@@ -35,7 +35,6 @@ usage:
   feature_film rip-up     BOARD.kicad_pcb OUT.json [--prepare-route] [--seconds S]
   feature_film tighten    BOARD.kicad_pcb OUT.json [--prepare-route]
   feature_film cleanup    BOARD.kicad_pcb OUT.json [--prepare-messy|--prepare-route]
-  feature_film topo       BOARD.kicad_pcb OUT.json [--strip-all] [--rip-passes N] [--seconds S]
   feature_film prefanout  BOARD.kicad_pcb OUT.json [--part REF,..|auto]
   feature_film pairs      BOARD.kicad_pcb OUT.json
   feature_film tune       BOARD.kicad_pcb OUT.json
@@ -2192,133 +2191,6 @@ fn run_cleanup(cli: &Cli) {
     fb.write(&out_path);
 }
 
-// --- 14. Topo ------------------------------------------------------------------------------
-
-fn run_topo(cli: &Cli) {
-    let pos = cli.positional();
-    assert!(pos.len() >= 2, "{USAGE}");
-    let (board_path, out_path) = (&pos[0], PathBuf::from(&pos[1]));
-    let pours_block = cli.has("--pours-block");
-    let strip_all = cli.has("--strip-all");
-    let rip_passes: usize = cli.flag("--rip-passes").map_or(4, |s| s.parse().expect("--rip-passes"));
-    let max_s: Option<f64> = cli.flag("--seconds").map(|s| s.parse().expect("--seconds")).or(Some(35.0));
-    let max_frames = cli.flag("--max-frames").map_or(200, |s| s.parse().expect("--max-frames"));
-
-    let (mut board, _) = Board::load(Path::new(board_path)).unwrap_or_else(|e| panic!("{e}"));
-    if prepared(cli, &mut board, pours_block).is_none() && strip_all {
-        strip_unlocked(&mut board, true);
-    }
-    let window = cli.crop_override().unwrap_or_else(|| board_bounds(&board));
-    let mut fb = FilmBuilder::new(
-        FilmSpec {
-            feature: "topo",
-            out_path: &out_path,
-            board_path,
-            cropped: cli.crop_override().is_some(),
-            max_frames,
-            title: cli.flag("--title").unwrap_or_else(|| "Topological rubber-band router (topo)".to_string()),
-            subtitle: cli.flag("--subtitle").unwrap_or_else(|| format!("Delaunay channel search + funnel shortest paths, {rip_passes} rip-up passes")),
-        },
-        &board,
-        window,
-        pours_block,
-    );
-
-    let init_copper = fb.snapshot_copper(&board);
-    let open0 = open_airlines(&board, pours_block).len();
-    fb.push_frame(
-        &board,
-        format!("Start of topological routing: {open0} open connections"),
-        FrameOverlays {
-            initial: true,
-            important: true,
-            stats: vec![("connections".into(), json!(open0)), ("routed".into(), json!(0))],
-            ..Default::default()
-        },
-    );
-
-    let latest_act: Arc<Mutex<(String, String, Option<grid::Focus>)>> =
-        Arc::new(Mutex::new((String::new(), String::new(), None)));
-    let shared = latest_act.clone();
-    let log = grid::Log(Arc::new(move |act| {
-        if matches!(act.phase, "routing" | "ripping up") {
-            let mut g = shared.lock().unwrap();
-            let focus = act.focus.or_else(|| g.2.clone());
-            *g = (act.phase.to_string(), act.text, focus);
-        }
-    }));
-
-    let mut prev = init_copper.clone();
-    let mut step_n = 0usize;
-    let t_stats = topo::route_topological(
-        &mut board,
-        &topo::Options {
-            deadline: grid::Deadline::max_seconds(max_s),
-            rip_passes,
-            pours_block,
-            log: Some(log),
-            ..Default::default()
-        },
-        &mut |now| {
-            step_n += 1;
-            let (phase, text, focus) = latest_act.lock().unwrap().clone();
-            let is_rip_phase = phase == "ripping up";
-            if !is_rip_phase && step_n > 12 && !step_n.is_multiple_of(4) {
-                return;
-            }
-            let cur = fb.snapshot_copper(now);
-            let (gone, came) = diff_pools(&prev, &cur);
-            prev = cur;
-            let open_now = open_airlines(now, pours_block).len();
-            let is_rip = is_rip_phase || !gone.is_empty();
-            let f_json = match focus {
-                Some(grid::Focus::Connection { net, from, to }) => json!({"net": net, "from": xy(from), "to": xy(to)}),
-                _ => Value::Null,
-            };
-            fb.push_frame(
-                now,
-                format!("Topo #{step_n} ({phase}): {text}; {open_now} open"),
-                FrameOverlays {
-                    important: is_rip,
-                    ripped: gone,
-                    laid: came,
-                    focus: f_json,
-                    stats: vec![
-                        ("step".into(), json!(step_n)),
-                        ("mode".into(), json!(if is_rip { "rip-up" } else { "rubber band" })),
-                        ("open".into(), json!(open_now)),
-                    ],
-                    ..Default::default()
-                },
-            );
-        },
-    );
-
-    let end_copper = fb.snapshot_copper(&board);
-    let (_, total_laid) = diff_pools(&init_copper, &end_copper);
-    let open_end = open_airlines(&board, pours_block).len();
-    fb.push_frame(
-        &board,
-        format!(
-            "Topological router complete: {} of {} routed ({} rip-ups, {} vias); {open_end} open",
-            t_stats.routed, t_stats.connections, t_stats.rip_ups, t_stats.vias
-        ),
-        FrameOverlays {
-            important: true,
-            summary: true,
-            laid: total_laid,
-            stats: vec![
-                ("routed".into(), json!(t_stats.routed)),
-                ("rip-ups".into(), json!(t_stats.rip_ups)),
-                ("vias".into(), json!(t_stats.vias)),
-                ("open".into(), json!(open_end)),
-            ],
-            ..Default::default()
-        },
-    );
-    fb.write(&out_path);
-}
-
 // --- 15. Prefanout -------------------------------------------------------------------------
 
 fn focus_json(board: &Board, focus: Option<&grid::Focus>, failed: bool) -> Value {
@@ -2812,7 +2684,6 @@ fn main() {
         "rip-up" => run_rip_up(&cli),
         "tighten" => run_tighten(&cli),
         "cleanup" => run_cleanup(&cli),
-        "topo" => run_topo(&cli),
         "prefanout" => run_prefanout(&cli),
         "pairs" => run_pairs(&cli),
         "tune" => run_tune(&cli),
