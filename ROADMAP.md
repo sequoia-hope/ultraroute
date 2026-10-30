@@ -172,7 +172,7 @@ leans on copperroute's push-and-shove (a freerouting port) and is rewritten fres
 The router reads most of a KiCad 9 board but only seven shapes of custom rule; the audit and the
 order of work are in `docs/kicad-coverage.md`.
 
-- [ ] Dropped rules and board warnings in the `--report` JSON; a board loads without a
+- [x] Dropped rules and board warnings in the `--report` JSON; a board loads without a
       `.kicad_pro`; `solder_mask_to_copper_clearance` read.
 - [ ] KiCad 9 net classes: every class a net has, combined by priority; missing fields from
       Default.

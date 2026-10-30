@@ -62,7 +62,9 @@ pub struct Summary {
 #[derive(Debug, Clone, Serialize)]
 pub struct Finding {
     pub severity: &'static str,
-    /// `open`, `neck`, `region`, `length`, `deadline`, or `crash`.
+    /// `open`, `neck`, `region`, `length`, `deadline`, `crash`, `rule` (a project or custom rule
+    /// left out or not applied) or `board` (something in the board file, such as an outline that
+    /// does not close).
     pub kind: &'static str,
     pub message: String,
     /// The parts it is about, by reference, and the nets, by name.

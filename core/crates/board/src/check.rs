@@ -137,7 +137,7 @@ impl Limits {
         // The widest solder mask opening round a pad beyond its copper, twice over with the web
         // between two openings, or pad clearance.
         let widest = board.mask_openings.values().chain([&board.via_openings]).map(|o| o.1).max().unwrap_or(0);
-        let mask = (2 * widest + MASK_MARGIN + board.mask_web).max(board.pad_clearances.values().copied().max().unwrap_or(0));
+        let mask = (2 * widest + board.mask_margin() + board.mask_web).max(board.pad_clearances.values().copied().max().unwrap_or(0));
         Limits {
             max_clearance: rules
                 .classes
@@ -160,6 +160,14 @@ impl Limits {
 /// outside the opening, not on its edge.
 pub const MASK_MARGIN: Nm = 1_000;
 
+impl Board {
+    /// How far beyond a solder mask opening other nets' copper keeps: the project's solder mask
+    /// to copper clearance, and [`MASK_MARGIN`] past it.
+    pub fn mask_margin(&self) -> Nm {
+        MASK_MARGIN + nm(self.rules.solder_mask_to_copper_clearance)
+    }
+}
+
 /// The gap copper of another net must keep on `layer` from `own` (item `id`) so as not to be
 /// bared in its solder mask opening, for solder to bridge the two: a pad's opening, or a bare
 /// via's; 0 where that does not apply. Two pads are the footprints' affair.
@@ -171,7 +179,7 @@ pub fn mask_gap(board: &Board, id: ItemId, own: &Item, other: &Item, layer: usiz
         _ => None,
     };
     match opening {
-        Some((layers, by)) if layers & (1 << layer) != 0 => by + MASK_MARGIN,
+        Some((layers, by)) if layers & (1 << layer) != 0 => by + board.mask_margin(),
         _ => 0,
     }
 }
@@ -183,7 +191,7 @@ pub fn mask_gap(board: &Board, id: ItemId, own: &Item, other: &Item, layer: usiz
 pub fn mask_pair_gap(board: &Board, a_id: ItemId, a: &Item, b_id: ItemId, b: &Item, layer: usize) -> Nm {
     let (x, y) = (mask_gap(board, a_id, a, b, layer), mask_gap(board, b_id, b, a, layer));
     if x > 0 && y > 0 {
-        x + y - MASK_MARGIN + board.mask_web
+        x + y - board.mask_margin() + board.mask_web
     } else {
         x.max(y)
     }
@@ -234,8 +242,9 @@ fn item_checks(
     // A track or via of another net bared in an opening drawn in the mask would bridge there.
     if matches!(item.kind, Kind::Track | Kind::Via) {
         for (shape, layers, net) in &board.mask_areas {
-            if layers & item.layers != 0 && (*net != item.net || *net == 0) && item.shape.gap_within(shape, MASK_MARGIN as f64) < MASK_MARGIN as f64 {
-                found.push(Violation { rule: Rule::Keepout, a: id, b: None, layer: Some(layers.trailing_zeros() as usize), gap: 0.0, required: MASK_MARGIN });
+            let margin = board.mask_margin();
+            if layers & item.layers != 0 && (*net != item.net || *net == 0) && item.shape.gap_within(shape, margin as f64) < margin as f64 {
+                found.push(Violation { rule: Rule::Keepout, a: id, b: None, layer: Some(layers.trailing_zeros() as usize), gap: 0.0, required: margin });
             }
         }
     }

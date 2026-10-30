@@ -766,6 +766,15 @@ pub(crate) fn open_findings(board: &Board, open: &[board::Airline], blamed: &[St
     out
 }
 
+/// A finding per warning from loading the board: of kind `rule` for what its project and custom
+/// rules leave out or the router does not apply, `board` for the board's own file and outline,
+/// so a designer sees a dropped rule wherever the report goes, not only on stderr.
+pub(crate) fn load_findings(board: &Board) -> Vec<Finding> {
+    let rules = board.rules.warnings.iter().map(|w| ("rule", w));
+    let own = board.warnings.iter().map(|w| ("board", w));
+    rules.chain(own).map(|(kind, w)| Finding { severity: "warning", kind, message: w.clone(), refs: Vec::new(), nets: Vec::new(), ends: None }).collect()
+}
+
 /// The board written: the router's copper as tracks and vias, what it took out removed, moved
 /// parts at their new places, stale pour fills dropped; with the regions' and the necks' reports.
 pub struct Write;

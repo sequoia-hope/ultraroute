@@ -43,6 +43,10 @@ pub struct Rules {
     /// name for it (`Circle` or `Arc`), where it is more than the board's.
     #[serde(default)]
     pub edge_clearances: Vec<(String, f64)>,
+    /// How far other nets' copper keeps outside a solder mask opening (KiCad's "solder mask to
+    /// copper clearance"); 0, KiCad's default, where the project leaves it out.
+    #[serde(default)]
+    pub solder_mask_to_copper_clearance: f64,
     pub warnings: Vec<String>,
 }
 
@@ -103,10 +107,18 @@ const KICAD_DEFAULT_CLASS: NetClass = NetClass {
 };
 
 impl Rules {
-    /// Reads a `.kicad_pro`, noting a `.kicad_dru` beside it.
+    /// Reads a `.kicad_pro`, noting a `.kicad_dru` beside it. With no project there, the rules
+    /// are KiCad's defaults, as KiCad opens a board alone.
     pub fn read(path: &Path) -> Result<Rules, RulesError> {
-        let text = std::fs::read_to_string(path).map_err(|e| RulesError::Io(path.display().to_string(), e.to_string()))?;
-        let mut rules = Rules::parse(&text)?;
+        let mut rules = match std::fs::read_to_string(path) {
+            Ok(text) => Rules::parse(&text)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let mut rules = Rules::parse("{}")?;
+                rules.warnings = vec![format!("{}: not found; KiCad's default rules are used", path.display())];
+                rules
+            }
+            Err(e) => return Err(RulesError::Io(path.display().to_string(), e.to_string())),
+        };
         let dru = path.with_extension("kicad_dru");
         if let Ok(custom) = std::fs::read_to_string(&dru) {
             rules.apply_custom(&custom, &dru.display().to_string());
@@ -193,6 +205,7 @@ impl Rules {
             smd_pad_clearance: 0.0,
             min_widths: Vec::new(),
             edge_clearances: Vec::new(),
+            solder_mask_to_copper_clearance: rules["solder_mask_to_copper_clearance"].as_f64().unwrap_or(0.0) * MM,
             warnings,
         })
     }
@@ -449,6 +462,30 @@ mod tests {
         let r = Rules::parse(full).unwrap();
         assert!(r.warnings.is_empty(), "{:?}", r.warnings);
         near(r.min_copper_edge_clearance, 0.3e-3);
+    }
+
+    #[test]
+    fn a_board_alone_takes_kicads_defaults_and_its_custom_rules() {
+        let near = |a: f64, b: f64| assert!((a - b).abs() < 1e-12, "{a} vs {b}");
+        let dir = std::env::temp_dir().join(format!("kicad-alone-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pro = dir.join("b.kicad_pro");
+        let r = Rules::read(&pro).unwrap();
+        near(r.min_copper_edge_clearance, 0.5e-3);
+        near(r.class_of("GND").unwrap().clearance, 0.2e-3);
+        assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
+        assert!(r.warnings[0].contains("not found; KiCad's default rules"), "{:?}", r.warnings);
+        std::fs::write(dir.join("b.kicad_dru"), "(version 1)\n(rule \"w\" (condition \"A.NetName == 'VBUS'\") (constraint track_width (min 0.5mm)))\n").unwrap();
+        near(Rules::read(&pro).unwrap().min_track_width_of("VBUS"), 0.5e-3);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn solder_mask_to_copper_clearance_is_read() {
+        let near = |a: f64, b: f64| assert!((a - b).abs() < 1e-12, "{a} vs {b}");
+        near(Rules::parse("{}").unwrap().solder_mask_to_copper_clearance, 0.0);
+        let r = Rules::parse(r#"{"board":{"design_settings":{"rules":{"solder_mask_to_copper_clearance":0.005}}}}"#).unwrap();
+        near(r.solder_mask_to_copper_clearance, 0.005e-3);
     }
 
     #[test]

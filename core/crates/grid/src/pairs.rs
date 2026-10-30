@@ -443,7 +443,7 @@ fn ends_joined(conn: &board::Connectivity, a: PinPair, b: PinPair) -> bool {
 /// `diff_pair_via_gap` comes first where wider than the board's clearance and hole rules.
 fn via_pitches(board: &Board, pair: &Pair, profile: &Profile) -> (Nm, Nm) {
     let clr = board.clearance(pair.p, pair.n);
-    let mask = if board.via_openings.0 != 0 { board.via_openings.1 + board::MASK_MARGIN } else { 0 };
+    let mask = if board.via_openings.0 != 0 { board.via_openings.1 + board.mask_margin() } else { 0 };
     let via_clr = clr.max(mask);
     let h2h = nm(board.rules.min_hole_to_hole);
     let min_vp = (2 * profile.via_radius + via_clr)
@@ -693,7 +693,7 @@ fn coupled_grid(board: &Board, options: &PairOptions, pair: &Pair, profile: &Pro
     for &pad_id in &end_pads {
         let Some(item) = board.item(pad_id) else { continue };
         let clr = map.clearance_to(board, item.net).max(board.pad_clearances.get(&pad_id).copied().unwrap_or(0));
-        let mask_keep = board.mask_openings.get(&pad_id).map_or(0, |(_, by)| by + board::MASK_MARGIN);
+        let mask_keep = board.mask_openings.get(&pad_id).map_or(0, |(_, by)| by + board.mask_margin());
         let eff_clr = clr.max(mask_keep);
         if item.is_copper() {
             let own_track = (pair.width / 2 + eff_clr - pair.pitch() / 2).max(0) + reach;
@@ -1353,7 +1353,7 @@ fn lay_coupled_stretches(
         return None;
     }
     let clr = board.clearance(pair.p, pair.n);
-    let mask = if board.via_openings.0 != 0 { board.via_openings.1 + board::MASK_MARGIN } else { 0 };
+    let mask = if board.via_openings.0 != 0 { board.via_openings.1 + board.mask_margin() } else { 0 };
     let via_clr = clr.max(mask);
     let need = (profile.via_radius + pair.width / 2 + via_clr) as f64;
     let base = (vp + pair.pitch()) as f64 / 2.0;

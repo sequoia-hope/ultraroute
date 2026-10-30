@@ -99,7 +99,9 @@ limited. Once the run's time has gone, no timed stage starts.
 `--stats FILE` (or `--report FILE`) writes the run as JSON: per stage its wall time, work counts
 and open connections before and after; the input's hash, the router's version and commit, the
 settings, peak memory, whether the deadline fired and in which stage, every connection given up
-with its stage and reason, and findings. `--verbose` prints the same as a table.
+with its stage and reason, and findings: connections left open, forced necks, regions,
+lengths, the deadline, and, of kind `rule`, every project or custom rule left out or not applied
+(the same lines the run prints as warnings). `--verbose` prints the same as a table.
 
 ## Every flag
 

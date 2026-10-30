@@ -429,7 +429,7 @@ impl ObstacleMap {
             [r.min_copper_edge_clearance, r.min_clearance, r.min_hole_clearance, r.pth_hole_clearance, r.min_hole_to_hole].map(f64::to_bits).hash(h);
             board.outline.hash(h);
             board.outline_edges.iter().map(|&(a, b, _, c)| (a, b, c)).collect::<Vec<_>>().hash(h);
-            (board.via_openings, board.mask_web).hash(h);
+            (board.via_openings, board.mask_web, board.mask_margin()).hash(h);
             for &id in fixed {
                 let Some(it) = board.item(id) else { continue };
                 (id, it.net, it.layers, it.refilled(), it.hole, self.clearance_to(board, it.net)).hash(h);
@@ -457,7 +457,7 @@ impl ObstacleMap {
     /// none or several. False if `deadline` passes first: a board can draw thousands.
     fn stamp_mask_areas(&mut self, board: &Board, deadline: &Deadline) -> bool {
         let cells = self.nx * self.ny;
-        let (track, via) = (self.profile.half_width + board::MASK_MARGIN + self.reach(), self.profile.via_radius + board::MASK_MARGIN);
+        let (track, via) = (self.profile.half_width + board.mask_margin() + self.reach(), self.profile.via_radius + board.mask_margin());
         for (k, (shape, layers, net)) in board.mask_areas.iter().enumerate() {
             if k % MASKS_PER_CHECK == MASKS_PER_CHECK - 1 && deadline.expired() {
                 return false;
@@ -751,9 +751,9 @@ impl ObstacleMap {
             // Where the mask leaves vias bare, a via of this net may not open over this copper:
             // it keeps the opening's reach from it.
             let (bare, by) = board.via_openings;
-            if bare & item.layers != 0 && by + board::MASK_MARGIN > clearance {
+            if bare & item.layers != 0 && by + board.mask_margin() > clearance {
                 let mut hit = Vec::new();
-                self.cells_near(&item.shape, via_radius + by + board::MASK_MARGIN, &mut |c| hit.push(c));
+                self.cells_near(&item.shape, via_radius + by + board.mask_margin(), &mut |c| hit.push(c));
                 for c in hit {
                     ObstacleMap::claim(&mut self.via_owner[c], item.net);
                 }
@@ -766,7 +766,7 @@ impl ObstacleMap {
                 _ => None,
             };
             if let Some((layers, by)) = opening {
-                let keep = by + board::MASK_MARGIN;
+                let keep = by + board.mask_margin();
                 // A bare via's own opening keeps the mask's narrowest web from this one too.
                 let via_keep = if layers & bare != 0 { keep + board.via_openings.1 + board.mask_web } else { keep };
                 if keep > clearance {
