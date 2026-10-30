@@ -159,24 +159,27 @@ pub fn trace_back(
 /// so a short connection explores a small patch instead of the whole board. It gives up (`None`)
 /// when the grid's deadline passes.
 pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_cost: u32) -> Option<GridPath> {
+    /// Per node: `cost`, valid where `gen` is this search's epoch, and `flags` (target, source,
+    /// in the pocket), cleared after each search by `touched`, the nodes given any: 9 bytes a node.
     struct Buffers {
         cost: Vec<u32>,
         gen: Vec<u32>,
-        is_target: Vec<u32>,
-        is_source: Vec<u32>,
-        pocket_gen: Vec<u32>,
+        flags: Vec<u8>,
+        touched: Vec<usize>,
         pocket_queue: Vec<usize>,
         epoch: u32,
         heap: BinaryHeap<Reverse<(u32, usize)>>,
     }
+    const TARGET: u8 = 1;
+    const SOURCE: u8 = 2;
+    const POCKET: u8 = 4;
     thread_local! {
         static BUFS: std::cell::RefCell<Buffers> = const {
             std::cell::RefCell::new(Buffers {
                 cost: Vec::new(),
                 gen: Vec::new(),
-                is_target: Vec::new(),
-                is_source: Vec::new(),
-                pocket_gen: Vec::new(),
+                flags: Vec::new(),
+                touched: Vec::new(),
                 pocket_queue: Vec::new(),
                 epoch: 0,
                 heap: BinaryHeap::new(),
@@ -189,18 +192,24 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
         if b.cost.len() < nodes {
             b.cost.resize(nodes, UNREACHED);
             b.gen.resize(nodes, 0);
-            b.is_target.resize(nodes, 0);
-            b.is_source.resize(nodes, 0);
-            b.pocket_gen.resize(nodes, 0);
+            b.flags.resize(nodes, 0);
         }
         b.epoch = b.epoch.wrapping_add(1);
         if b.epoch == 0 {
             b.gen.fill(0);
-            b.is_target.fill(0);
-            b.is_source.fill(0);
-            b.pocket_gen.fill(0);
             b.epoch = 1;
         }
+        let b = &mut *b;
+        for &n in &b.touched {
+            b.flags[n] = 0;
+        }
+        b.touched.clear();
+        let mark = |flags: &mut [u8], touched: &mut Vec<usize>, n: usize, bit: u8| {
+            if flags[n] == 0 {
+                touched.push(n);
+            }
+            flags[n] |= bit;
+        };
         let epoch = b.epoch;
         let cells = grid.cell_count();
         let (mut lo_i, mut lo_j, mut hi_i, mut hi_j) = (usize::MAX, usize::MAX, 0, 0);
@@ -209,9 +218,8 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
             if grid.blocked[t] {
                 continue;
             }
-            if b.is_target[t] != epoch {
-                b.is_target[t] = epoch;
-                b.pocket_gen[t] = epoch;
+            if b.flags[t] & TARGET == 0 {
+                mark(&mut b.flags, &mut b.touched, t, TARGET | POCKET);
                 b.pocket_queue.push(t);
             }
             let c = t % cells;
@@ -229,8 +237,8 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
         for &s in sources {
             if !grid.blocked[s] {
                 has_source = true;
-                b.is_source[s] = epoch;
-                if b.is_target[s] == epoch {
+                mark(&mut b.flags, &mut b.touched, s, SOURCE);
+                if b.flags[s] & TARGET != 0 {
                     overlap = true;
                 }
             }
@@ -257,12 +265,12 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
                         continue;
                     }
                     let next = grid.index(layer, ni as usize, nj as usize);
-                    if !grid.blocked[next] && b.pocket_gen[next] != epoch {
-                        if b.is_source[next] == epoch {
+                    if !grid.blocked[next] && b.flags[next] & POCKET == 0 {
+                        if b.flags[next] & SOURCE != 0 {
                             found_source = true;
                             break;
                         }
-                        b.pocket_gen[next] = epoch;
+                        mark(&mut b.flags, &mut b.touched, next, POCKET);
                         b.pocket_queue.push(next);
                     }
                 }
@@ -273,12 +281,12 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
                     for other in 0..grid.layers.len() {
                         if other != layer {
                             let next = other * cells + cell;
-                            if !grid.blocked[next] && b.pocket_gen[next] != epoch {
-                                if b.is_source[next] == epoch {
+                            if !grid.blocked[next] && b.flags[next] & POCKET == 0 {
+                                if b.flags[next] & SOURCE != 0 {
                                     found_source = true;
                                     break;
                                 }
-                                b.pocket_gen[next] = epoch;
+                                mark(&mut b.flags, &mut b.touched, next, POCKET);
                                 b.pocket_queue.push(next);
                             }
                         }
@@ -314,7 +322,7 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
             if f > c.saturating_add(estimate(index)) {
                 continue;
             }
-            if b.is_target[index] == epoch {
+            if b.flags[index] & TARGET != 0 {
                 reached = Some(index);
                 break;
             }
@@ -361,8 +369,8 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
         let mut at = reached?;
         let cost_at = |b: &Buffers, n: usize| if b.gen[n] == epoch { b.cost[n] } else { UNREACHED };
         let mut path = vec![at];
-        while cost_at(&b, at) > 0 {
-            let c_at = cost_at(&b, at);
+        while cost_at(b, at) > 0 {
+            let c_at = cost_at(b, at);
             let layer = at / cells;
             let cell = at % cells;
             let (i, j) = ((cell % grid.nx) as i32, (cell / grid.nx) as i32);
@@ -373,7 +381,7 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
                     continue;
                 }
                 let n = grid.index(layer, ni as usize, nj as usize);
-                let cn = cost_at(&b, n);
+                let cn = cost_at(b, n);
                 let actual = step_cost(grid.directional, layer, di, dj, step);
                 if cn != UNREACHED && cn + actual + grid.penalty_at(at) == c_at {
                     previous = Some(n);
@@ -385,7 +393,7 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
                     .filter(|&other| other != layer)
                     .map(|other| other * cells + cell)
                     .find(|&n| {
-                        let cn = cost_at(&b, n);
+                        let cn = cost_at(b, n);
                         cn != UNREACHED && cn + via_cost + grid.via_penalty_at(cell) + grid.penalty_at(at) == c_at
                     });
             }
