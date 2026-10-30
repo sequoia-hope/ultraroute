@@ -49,7 +49,8 @@ pub enum Severity {
     Exclusion,
 }
 
-/// One `(constraint KIND …)`: lengths in metres, a bare number where the constraint takes one
+/// One `(constraint KIND …)`: lengths in metres, counts (`via_count`) as they are, a bare number
+/// where the constraint takes one
 /// (`min_resolved_spokes 1`) in `min`, and the words that follow the kind (`disallow track via`,
 /// `zone_connection solid`) in `words`.
 #[derive(Debug, Clone, PartialEq)]
@@ -323,7 +324,9 @@ impl Constraint {
             match (arg.head(), arg) {
                 (Some(bound @ ("min" | "opt" | "max")), _) => {
                     let text = arg.args().first().and_then(Node::text).ok_or(format!("{} {bound} with no value", c.kind))?;
-                    let v = quantity(text).ok_or(format!("{} {bound} {text}: not a length", c.kind))?;
+                    // A count is a plain number; anything else a length.
+                    let count = matches!(c.kind.as_str(), "via_count" | "min_resolved_spokes");
+                    let v = if count { text.trim().parse().ok() } else { quantity(text) }.ok_or(format!("{} {bound} {text}: not a number", c.kind))?;
                     match bound {
                         "min" => c.min = Some(v),
                         "opt" => c.opt = Some(v),
@@ -752,6 +755,8 @@ mod tests {
         assert!((set.rules[2].constraints[0].opt.unwrap() - 0.14e-3).abs() < 1e-12);
         assert_eq!(set.rules[3].constraints[0].words, ["track", "via"]);
         assert_eq!(set.rules[4].constraints[0].min, Some(1.0));
+        let counted = RuleSet::parse("(rule \"v\" (constraint via_count (max 3)))").unwrap();
+        assert_eq!(counted.rules[0].constraints[0].max, Some(3.0));
     }
 
     #[test]

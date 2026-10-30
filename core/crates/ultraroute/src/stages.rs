@@ -804,6 +804,11 @@ impl Stage for Write {
             ctx.stats.findings.push(Finding { severity: "warning", kind, message: line.clone(), refs: Vec::new(), nets, ends: None });
             ctx.say("regions", line);
         }
+        for (line, net) in ctx.board.rule_limits() {
+            eprintln!("rules: {line}");
+            ctx.stats.findings.push(Finding { severity: "warning", kind: "length", message: line.clone(), refs: Vec::new(), nets: vec![net], ends: None });
+            ctx.say("rules", line);
+        }
         let board = &mut *ctx.board;
         for neck in grid::necks::necks(board, &laid) {
             eprintln!("neck: {}", neck.line);

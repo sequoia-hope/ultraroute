@@ -108,7 +108,7 @@ fn rules_the_router_does_not_keep_are_said_by_constraint() {
     );
     let custom: Vec<&String> = b.rules.warnings.iter().filter(|w| w.contains("test.kicad_dru")).collect();
     assert_eq!(custom.len(), 2, "{custom:?}");
-    assert!(custom.iter().any(|w| w.contains("\"clock\": length, via_count not applied")), "{custom:?}");
+    assert!(custom.iter().any(|w| w.contains("\"clock\": length, via_count checked after routing")), "{custom:?}");
     assert!(custom.iter().any(|w| w.contains("bad") && w.contains("not applied")), "{custom:?}");
 }
 
@@ -145,4 +145,18 @@ fn a_pads_own_clearance_outranks_the_classes_and_the_rules() {
     assert!(clearance_hits(&b, t).is_empty(), "over a custom rule's 0.3 mm");
     let (b, t) = pad_and_track(0.4, 0.25, 0.05, "(version 1)\n(rule lo (constraint clearance (min 0.1mm)))");
     assert_eq!(clearance_hits(&b, t), [nm(0.4e-3)], "a custom rule's 0.1 mm does not lower it");
+}
+
+#[test]
+fn a_nets_length_and_vias_over_a_rules_maximum_are_reported() {
+    let mut b = board("", "(version 1)\n(rule \"short\" (condition \"A.NetName == 'B'\") (constraint length (max 20mm)) (constraint via_count (max 0)))");
+    assert!(b.rule_limits().is_empty());
+    track(&mut b, 2, 1, 10.0);
+    b.insert(Item { kind: Kind::Via, net: 2, layers: 3, shape: Shape::Capsule { a: Point::new(nm(10e-3), nm(2e-3)), b: Point::new(nm(10e-3), nm(2e-3)), r: nm(0.3e-3) }, hole: Some((Point::new(nm(10e-3), nm(2e-3)), nm(0.15e-3))), locked: false, span: None });
+    let found: Vec<String> = b.rule_limits().into_iter().map(|(line, _)| line).collect();
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert!(found[0].starts_with("length: B is 26.00 mm"), "{found:?}");
+    assert!(found[1].starts_with("vias: B has 1"), "{found:?}");
+    track(&mut b, 1, 1, 20.0);
+    assert_eq!(b.rule_limits().len(), 2, "net A has no limit");
 }

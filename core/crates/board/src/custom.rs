@@ -15,6 +15,9 @@ use crate::geom::{nm, Nm};
 /// unless it is about something the router never lays (silkscreen, text, courtyards, parts).
 pub const APPLIED: [&str; 7] = ["clearance", "hole_clearance", "hole_to_hole", "edge_clearance", "physical_hole_clearance", "track_width", "disallow"];
 
+/// Constraints the router checks once it has routed and reports, but does not yet route to.
+pub const REPORTED: [&str; 2] = ["length", "via_count"];
+
 /// Constraints on things the router neither lays nor moves: KiCad checks them as before.
 const ELSEWHERE: [&str; 9] = ["silk_clearance", "text_height", "text_thickness", "courtyard_clearance", "assertion", "solder_mask_expansion", "solder_paste_abs_margin", "solder_paste_rel_margin", "creepage"];
 
@@ -104,6 +107,41 @@ impl Board {
             .unwrap_or(floor)
     }
 
+    /// The nets whose copper breaks a custom rule's `length` or `via_count` maximum, one line
+    /// each with the net's name: its tracks' total length (vias' heights not counted), its vias.
+    pub fn rule_limits(&self) -> Vec<(String, String)> {
+        let (length, vias) = (self.custom.has("length"), self.custom.has("via_count"));
+        if !length && !vias {
+            return Vec::new();
+        }
+        let mut per_net: std::collections::BTreeMap<u32, (f64, usize)> = std::collections::BTreeMap::new();
+        for (_, it) in self.items().filter(|(_, it)| it.net != 0) {
+            match (&it.kind, &it.shape) {
+                (Kind::Track, crate::geom::Shape::Capsule { a, b, .. }) => per_net.entry(it.net).or_default().0 += a.distance(*b) * 1e-6,
+                (Kind::Via, _) => per_net.entry(it.net).or_default().1 += 1,
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for (net, (mm, count)) in per_net {
+            let class = self.class_name(net);
+            let thing = Thing::New { board: self, via: false, net: Some(net), class, width: 0, drill: 0, layer: None, area: Area::Unknown };
+            let sure = |kind: &str| self.custom.resolve(kind, &thing, None, "", self.layers.len()).sure.filter(|(r, _)| r.severity != Severity::Ignore);
+            let name = self.net_name(net);
+            if let Some((rule, c)) = sure("length").filter(|_| length) {
+                if let Some(max) = c.max.filter(|max| mm > max * 1e3 + 1e-6) {
+                    out.push((format!("length: {name} is {mm:.2} mm, over rule \"{}\"'s {:.2} mm", rule.name, max * 1e3), name.to_string()));
+                }
+            }
+            if let Some((rule, c)) = sure("via_count").filter(|_| vias) {
+                if let Some(max) = c.max.filter(|max| count as f64 > *max + 1e-9) {
+                    out.push((format!("vias: {name} has {count}, over rule \"{}\"'s {max}", rule.name), name.to_string()));
+                }
+            }
+        }
+        out
+    }
+
     /// Whether a rule tells nets apart by name (`A.NetName`, `A.inDiffPair`), so copper the
     /// router lays must be asked about as its own net, not only as one of its class.
     pub fn rules_name_nets(&self) -> bool {
@@ -121,8 +159,12 @@ impl Board {
         let mut out: Vec<String> = set.errors.iter().map(|e| format!("{source}: {e}; not applied")).collect();
         for rule in &set.rules {
             let kinds: Vec<&str> = rule.constraints.iter().map(|c| c.kind.as_str()).filter(|k| !APPLIED.contains(k) && !ELSEWHERE.contains(k)).collect();
-            if !kinds.is_empty() {
-                out.push(format!("{source}: custom rule \"{}\": {} not applied", rule.name, kinds.join(", ")));
+            let (reported, dropped): (Vec<&str>, Vec<&str>) = kinds.into_iter().partition(|k| REPORTED.contains(k));
+            if !dropped.is_empty() {
+                out.push(format!("{source}: custom rule \"{}\": {} not applied", rule.name, dropped.join(", ")));
+            }
+            if !reported.is_empty() {
+                out.push(format!("{source}: custom rule \"{}\": {} checked after routing, not routed to", rule.name, reported.join(", ")));
             }
         }
         out
