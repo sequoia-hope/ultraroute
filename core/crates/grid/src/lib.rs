@@ -4,7 +4,6 @@
 #[cfg(feature = "gpu")]
 pub mod gpu;
 pub mod blame;
-pub mod chase;
 pub mod cleanup;
 pub mod clock;
 pub mod grid;
@@ -29,7 +28,6 @@ pub mod vias;
 pub mod sweep;
 
 pub use blame::{blame, Blame, BlameOptions, BlameReport};
-pub use chase::{chase, ChaseOptions, ChaseStats};
 pub use cleanup::{drop_duplicates, drop_duplicates_watch, prune_dangling, prune_dangling_watch, pull_tight, pull_tight_watch, split_at_joins, CleanStats};
 pub use grid::{ObstacleMap, Profile, RouteGrid, ViaSpec};
 pub use nudge::{nudge, nudge_watch, NudgeEvent, NudgeOptions, NudgeStats};

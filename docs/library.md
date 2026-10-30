@@ -17,7 +17,7 @@ Read it beside this guide.
 |---|---|
 | `kicad-pcb` | Reads `.kicad_pcb` text into a neutral record (`Pcb`, `Copper`), the rules from `.kicad_pro` and `.kicad_dru` (`Rules`), and writes edits back into the text (`apply`, `Edit`). Metres. |
 | `board` | The routing model: every piece of copper, hole, keepout and the outline as `Item`s in a spatial index (`Board`), the rule check (`check_item`), connectivity (`connectivity`), zone fills for display. Nanometres. |
-| `grid` | The grid routers and everything that reworks routed copper: `route_open`, `route_negotiated`, `rip_up`, `chase`, `prefanout`, `route_pairs`, `join_planes`, `shove_escape` (the plough), `push`, `nudge`, `pull_tight`, cleanup, `match_lengths`, `blame`. Also the grid itself (`ObstacleMap`, `RouteGrid`, `Profile`) and the `FieldSolver` trait with CPU and GPU solvers. |
+| `grid` | The grid routers and everything that reworks routed copper: `route_open`, `route_negotiated`, `rip_up`, `prefanout`, `route_pairs`, `join_planes`, `shove_escape` (the plough), `push`, `nudge`, `pull_tight`, cleanup, `match_lengths`, `blame`. Also the grid itself (`ObstacleMap`, `RouteGrid`, `Profile`) and the `FieldSolver` trait with CPU and GPU solvers. |
 | `morph` | Moving copper smoothly: the harmonic `WarpField`, `flow` (copper carried along with moving parts), `shift_copper` (any per-point move that keeps joints joined), and `fine_pitch` (the parts whose escapes are hard). |
 | `topo` | Topological routing: rubber bands pulled taut through a triangulation of the copper. |
 | `ultraroute` | The command: `parse` turns flags into `Args`, `run` drives the whole pipeline from text to text, `Live` streams the studio's frames. |
@@ -127,7 +127,7 @@ for id in ids_of_unlocked_tracks_and_vias {
 }
 ```
 
-**Soft copper.** The grid's stages differ in what they may touch. `rip_up`, `chase`,
+**Soft copper.** The grid's stages differ in what they may touch. `rip_up`,
 `pull_tight`, `drop_duplicates`, `prune_dangling` and `match_lengths` work only on the ids in
 `soft`. `push`, `nudge`, `shove_escape`, `rip_broken`, `morph::flow` and `morph::shift_copper`
 move or rip any unlocked track or via, file copper included, and add what they move to `soft`.
@@ -249,18 +249,13 @@ than `route_open` alone, which is then left to finish. `trials` sees each round'
 `NegotiationStats`: `connections`, `rounds`, `conflicted`, `committed`, `unroutable`, `vias`,
 `laid`.
 
-### rip_up and chase
+### rip_up
 
 `rip_up(board, solver, &RipOptions, soft, watch) -> RipStats` tries each open connection
 through the router's own copper at a price (`rip_cost`, default 400), rips what the new path
 meets, routes what that opened, and keeps the board only if fewer connections are open.
 Rounds repeat while any closes. `RipOptions`: `cell` 50,000, `via_cost` 80, `rip_cost` 400,
 `reroute_seconds` 10 (per attempt), `max_seconds`, `pours_block`, `cancel`, `log`.
-
-`chase(board, solver, &ChaseOptions, soft, watch) -> ChaseStats` is rip-up that chains: what
-one link rips is laid the same way and may rip in turn, never undoing an earlier link.
-`ChaseOptions`: `rip_cost` 400, `chain_cost` 3,000 (crossing the chain's own new copper),
-`links` 24, plus the usual.
 
 ### prefanout, planes and pairs
 
@@ -491,7 +486,7 @@ it runs `route_open` and the cleanup only; each flag adds a stage. In order:
    `--topo` (`route_topological`, 40% of the time), `--topo-first`, `--first` (priority nets,
    by `route_open` tier by tier or, with `--first-negotiate`, negotiated among themselves),
    `--negotiate` (`route_negotiated`, half the timeout), `route_open` to finish (always),
-   `prune_closed_escapes`, `--rip-up` (`rip_up`), `--chase` (`chase`), the escapes join `laid`.
+   `prune_closed_escapes`, `--rip-up` (`rip_up`), the escapes join `laid`.
 6. **Rescue**: `--shove` (`shove_escape` passes); `--topo-trapped` or
    `--topo-trapped-rip` on what is still open; `--nudge` (`nudge`).
 7. **Finish**: `--tighten` (`pull_tight`); pair copper joins `laid`; `drop_duplicates`;

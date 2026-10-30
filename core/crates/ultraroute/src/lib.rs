@@ -28,7 +28,7 @@ mod regions;
 
 pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--no-negotiate-vias] [--no-negotiate-rip] [--no-negotiate-tree] [--negotiate-jacobi] [--negotiate-reroute-all] [--negotiate-legacy] [--diff-pairs] [--diff-pairs-legacy] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner|same] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--via-cost MM[,OPEN_MM]] [--no-directional] [--no-reduce-vias] [--gpu] \
 [--timeout SECONDS] [--cell MM] [--first NET,...] [--first-negotiate] [--first-weight W] [--restart N] [--topo-first REF,...|auto] [--topo-trapped] [--topo-trapped-rip] [--topo-sample MM] \
-[--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--uuid-seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
+[--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--uuid-seed N] [--adopt] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
 [--recipe default|bench|minimal] [--live PATH|-] [--live-fps N] [--live-step MS] [--blame]
 --place takes millimetres with y pointing up: give KiCad's y negated (KiCad y 127.5 is -127.5).";
 
@@ -150,14 +150,10 @@ pub struct Args {
     /// Treat the board's unlocked tracks and vias as the router's own: free to rip, move and
     /// rewrite, as if this run had laid them.
     pub adopt: bool,
-    /// Chained rip-up after rip-up: what a blocked connection rips may rip in turn.
-    pub chase: bool,
     /// Everything the router says it is doing, on standard error.
     pub verbose: bool,
     /// Least time between the live stream's step frames, in its clock: see [`Live::with_step`].
     pub live_step: u64,
-    /// The chase's prices for ripping the router's copper and copper its chain laid, per cell.
-    pub chase_costs: Option<(u32, u32, Option<usize>)>,
     pub blame: bool,
 }
 
@@ -169,7 +165,7 @@ pub const RECIPE: &str = "--negotiate --rip-up --tighten --prefanout --diff-pair
 /// gets those alone, as before there was a default.
 const STAGE_FLAGS: &[&str] = &[
     "--negotiate", "--rip-up", "--tighten", "--prefanout", "--diff-pairs", "--shove", "--shove-plough", "--nudge", "--topo", "--topo-first",
-    "--topo-trapped", "--topo-trapped-rip", "--chase", "--restart", "--first",
+    "--topo-trapped", "--topo-trapped-rip", "--restart", "--first",
     // Loading a board to look at it names no stage to run, and wants none.
     "--no-route",
 ];
@@ -275,10 +271,8 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
         pour_cost: None,
         auto_planes: false,
         adopt: false,
-        chase: false,
         verbose: false,
         live_step: 0,
-        chase_costs: None,
         blame: false,
     };
     let mut it = args[1..].iter();
@@ -441,17 +435,7 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
             "--seed" => a.seed = value()?.parse().map_err(|e| format!("--seed: {e}"))?,
             "--uuid-seed" => a.uuid_seed = Some(value()?.parse().map_err(|e| format!("--uuid-seed: {e}"))?),
             "--adopt" => a.adopt = true,
-            "--chase" => a.chase = true,
             "--verbose" | "-v" => a.verbose = true,
-            "--chase-costs" => {
-                let v = value()?;
-                let n: Vec<u32> = v.split(',').map(|x| x.trim().parse().map_err(|_| format!("--chase-costs: {v} is not RIP,CHAIN[,LINKS]"))).collect::<Result<_, _>>()?;
-                a.chase_costs = match n[..] {
-                    [rip, chain] => Some((rip, chain, None)),
-                    [rip, chain, links] => Some((rip, chain, Some(links as usize))),
-                    _ => return Err(format!("--chase-costs: {v} is not RIP,CHAIN[,LINKS]")),
-                };
-            }
             "--blame" => a.blame = true,
             "--via-avoid" => {
                 let v = value()?;
@@ -1973,35 +1957,6 @@ pub fn run_with_solver(
                 r.no_path,
                 r.hard_conflict,
                 r.no_better,
-                started.elapsed().as_secs_f64()
-            );
-        }
-        if a.chase && timeline.enter(&run, "chase") {
-            let c = grid::chase(
-                &mut board,
-                solver.as_mut(),
-                &grid::ChaseOptions {
-                    cell: a.cell.unwrap_or(grid::ChaseOptions::default().cell),
-                    rip_cost: a.chase_costs.map_or(grid::ChaseOptions::default().rip_cost, |c| c.0),
-                    chain_cost: a.chase_costs.map_or(grid::ChaseOptions::default().chain_cost, |c| c.1),
-                    links: a.chase_costs.and_then(|c| c.2).unwrap_or(grid::ChaseOptions::default().links),
-                    deadline: round_deadline.clone(),
-                    pours_block: a.pours_block,
-                    log: log.clone(),
-                    ..Default::default()
-                },
-                &mut laid,
-                &mut |b: &Board| step(b),
-            );
-            eprintln!(
-                "chase: {} chains, {} kept ({} links); lost {} with no way through, {} to copper it may not rip, {} too long, {} no better; {:.1} s",
-                c.attempts,
-                c.kept,
-                c.links,
-                c.no_path,
-                c.hard_conflict,
-                c.too_long,
-                c.no_better,
                 started.elapsed().as_secs_f64()
             );
         }

@@ -33,7 +33,6 @@ usage:
   feature_film negotiate  BOARD.kicad_pcb OUT.json [--strip-all] [--rounds N] [--threads N] [--seed N]
   feature_film route      BOARD.kicad_pcb OUT.json [--strip-all] [--after-negotiate] [--seconds S] [--seed N]
   feature_film rip-up     BOARD.kicad_pcb OUT.json [--prepare-route] [--seconds S]
-  feature_film chase      BOARD.kicad_pcb OUT.json [--prepare-route] [--links N] [--seconds S]
   feature_film tighten    BOARD.kicad_pcb OUT.json [--prepare-route]
   feature_film cleanup    BOARD.kicad_pcb OUT.json [--prepare-messy|--prepare-route]
   feature_film topo       BOARD.kicad_pcb OUT.json [--strip-all] [--rip-passes N] [--seconds S]
@@ -1936,145 +1935,6 @@ fn run_rip_up(cli: &Cli) {
     fb.write(&out_path);
 }
 
-// --- 11. Chase -----------------------------------------------------------------------------
-
-fn run_chase(cli: &Cli) {
-    let pos = cli.positional();
-    assert!(pos.len() >= 2, "{USAGE}");
-    let (board_path, out_path) = (&pos[0], PathBuf::from(&pos[1]));
-    let pours_block = cli.has("--pours-block");
-    let prep = cli.has("--prepare-route");
-    let links: usize = cli.flag("--links").map_or(20, |s| s.parse().expect("--links"));
-    let max_s: f64 = cli.flag("--seconds").map_or(25.0, |s| s.parse().expect("--seconds"));
-    let max_frames = cli.flag("--max-frames").map_or(200, |s| s.parse().expect("--max-frames"));
-
-    let (mut board, _) = Board::load(Path::new(board_path)).unwrap_or_else(|e| panic!("{e}"));
-    let mut soft = if let Some(s) = prepared(cli, &mut board, pours_block) {
-        s
-    } else if prep {
-        strip_unlocked(&mut board, true);
-        let r = grid::route_open(
-            &mut board,
-            &mut grid::CpuSolver,
-            &grid::Options { deadline: grid::Deadline::max_seconds(Some(20.0)), pours_block, ..Default::default() },
-            &mut |_| {},
-        );
-        r.laid
-    } else {
-        adopt_soft(&mut board)
-    };
-    let open_init = open_airlines(&board, pours_block);
-    let window = cli.crop_override().unwrap_or_else(|| {
-        if !open_init.is_empty() {
-            open_init
-                .iter()
-                .map(|a| BBox::of([a.from, a.to]))
-                .reduce(BBox::union)
-                .unwrap()
-                .grow(4_500_000)
-        } else {
-            board_bounds(&board)
-        }
-    });
-
-    let mut fb = FilmBuilder::new(
-        FilmSpec {
-            feature: "chase",
-            out_path: &out_path,
-            board_path,
-            cropped: true,
-            max_frames,
-            title: cli.flag("--title").unwrap_or_else(|| "Chained rip-up (chase)".to_string()),
-            subtitle: cli.flag("--subtitle").unwrap_or_else(|| format!("up to {links} links per chain; ripped nets rip in turn")),
-        },
-        &board,
-        window,
-        pours_block,
-    );
-
-    let init_copper = fb.snapshot_copper(&board);
-    let open0 = open_init.len();
-    fb.push_frame(
-        &board,
-        format!("Before chase: {open0} open connections"),
-        FrameOverlays {
-            initial: true,
-            important: true,
-            stats: vec![("open".into(), json!(open0)), ("max links".into(), json!(links))],
-            ..Default::default()
-        },
-    );
-
-    let latest_msg: Arc<Mutex<(String, Option<grid::Focus>)>> = Arc::new(Mutex::new((String::new(), None)));
-    let m_shared = latest_msg.clone();
-    let log = grid::Log(Arc::new(move |act| {
-        if act.phase == "chasing" {
-            *m_shared.lock().unwrap() = (act.text.trim().to_string(), act.focus);
-        }
-    }));
-
-    let mut prev = init_copper.clone();
-    let c_stats = grid::chase(
-        &mut board,
-        &mut grid::CpuSolver,
-        &grid::ChaseOptions { links, deadline: grid::Deadline::max_seconds(Some(max_s)), pours_block, log: Some(log), ..Default::default() },
-        &mut soft,
-        &mut |now| {
-            let cur = fb.snapshot_copper(now);
-            let (gone, came) = diff_pools(&prev, &cur);
-            prev = cur;
-            let (msg, focus) = latest_msg.lock().unwrap().clone();
-            let put_back = msg.contains("put back");
-            let open_now = open_airlines(now, pours_block).len();
-            let f_json = match focus {
-                Some(grid::Focus::Connection { net, from, to }) => json!({"net": net, "from": xy(from), "to": xy(to), "failed": put_back}),
-                _ => Value::Null,
-            };
-            fb.push_frame(
-                now,
-                format!("Chase: {msg} ({open_now} open)"),
-                FrameOverlays {
-                    important: put_back || msg.contains("kept"),
-                    moved_from: if put_back { gone.clone() } else { Vec::new() },
-                    ripped: if put_back { Vec::new() } else { gone },
-                    laid: if put_back { Vec::new() } else { came },
-                    focus: f_json,
-                    stats: vec![
-                        ("open".into(), json!(open_now)),
-                        ("event".into(), json!(if put_back { "reverted" } else { "link" })),
-                    ],
-                    ..Default::default()
-                },
-            );
-        },
-    );
-
-    let end_copper = fb.snapshot_copper(&board);
-    let (gone_total, came_total) = diff_pools(&init_copper, &end_copper);
-    let open_end = open_airlines(&board, pours_block).len();
-    fb.push_frame(
-        &board,
-        format!(
-            "Chase complete: {} chains tried, {} kept ({} links); open {open0} -> {open_end}",
-            c_stats.attempts, c_stats.kept, c_stats.links
-        ),
-        FrameOverlays {
-            important: true,
-            summary: true,
-            ripped: gone_total,
-            laid: came_total,
-            stats: vec![
-                ("chains".into(), json!(c_stats.attempts)),
-                ("kept".into(), json!(c_stats.kept)),
-                ("links".into(), json!(c_stats.links)),
-                ("open".into(), json!(open_end)),
-            ],
-            ..Default::default()
-        },
-    );
-    fb.write(&out_path);
-}
-
 // --- 12. Tighten ---------------------------------------------------------------------------
 
 fn run_tighten(cli: &Cli) {
@@ -2950,7 +2810,6 @@ fn main() {
         "negotiate" => run_negotiate(&cli),
         "route" => run_route(&cli),
         "rip-up" => run_rip_up(&cli),
-        "chase" => run_chase(&cli),
         "tighten" => run_tighten(&cli),
         "cleanup" => run_cleanup(&cli),
         "topo" => run_topo(&cli),
