@@ -75,6 +75,18 @@ impl Profile {
         // width all the way into its pads, however tight; only signals neck to the minimum.
         let signal = rules.classes.iter().find(|c| c.name == "Default").map_or(0.0, |c| c.track_width).max(rules.min_track_width);
         let power = class.is_some_and(|c| c.track_width > signal + 1e-9);
+        // A class's via may leave a thinner ring round its drill than the board allows; the via
+        // grows to keep the ring, the drill as the class has it. Custom rules on vias of the net
+        // (hole_size, via_diameter, annular_width) may ask more of either; never less.
+        let drill = take(class.map(|c| c.via_drill), rules.min_via_drill);
+        let diameter = take(class.map(|c| c.via_diameter), rules.min_via_diameter);
+        let (drill, diameter, ring) = if ["hole_size", "via_diameter", "annular_width"].iter().any(|k| board.custom.has(k)) {
+            let via = board::Thing::New { board, via: true, net: Some(net), class: board.class_name(net), width: diameter, drill, layer: None, area: board::custom::Area::Unknown };
+            let rule = |kind: &str, floor: Nm| (0..board.layers.len()).map(|l| board.rule_min(kind, &via, None, l, floor)).max().unwrap_or(floor).max(floor);
+            (rule("hole_size", drill), rule("via_diameter", diameter), rule("annular_width", nm(rules.min_via_annular_width)))
+        } else {
+            (drill, diameter, nm(rules.min_via_annular_width))
+        };
         Profile {
             class: class.map_or_else(String::new, |c| c.name.clone()),
             half_width,
@@ -84,11 +96,8 @@ impl Profile {
             // sets another (a fab's 0.15 mm on outer layers over a board minimum of 0.12).
             board_min_half_width: (nm(min_width) / 2).clamp(1, half_width.max(1)),
             clearance: take(class.map(|c| c.clearance), rules.min_clearance),
-            // A class's via may leave a thinner ring round its drill than the board allows; the
-            // via grows to keep the ring, the drill as the class has it.
-            via_radius: (take(class.map(|c| c.via_diameter), rules.min_via_diameter) / 2)
-                .max(take(class.map(|c| c.via_drill), rules.min_via_drill) / 2 + nm(rules.min_via_annular_width)),
-            drill_radius: take(class.map(|c| c.via_drill), rules.min_via_drill) / 2,
+            via_radius: (diameter / 2).max(drill / 2 + ring),
+            drill_radius: drill / 2,
             net: board.rules_name_nets().then_some(net),
         }
     }

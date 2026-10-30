@@ -294,6 +294,13 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
         warnings: Vec::new(),
     };
     let mut copper_graphics = 0;
+    // What the reader does not model, said so a designer knows the router judged without it:
+    // copper drawn as a curve, a text box, a dimension or a table; KiCad 9 per-layer padstacks;
+    // annular rings removed from unused layers (the router keeps every layer's ring).
+    let on_copper = |n: &Node| n.find("layer").and_then(|l| l.args().first()).and_then(Node::text).is_some_and(|l| l.ends_with(".Cu"));
+    let unread_kind = |n: &Node| matches!(n.head(), Some("gr_curve" | "fp_curve" | "gr_text_box" | "fp_text_box" | "dimension" | "table")) && on_copper(n);
+    let unused_layers = |n: &Node| n.find("remove_unused_layers").is_some_and(|r| r.args().first().and_then(Node::text) != Some("no"));
+    let (mut unread, mut padstacks, mut rings) = (0, 0, 0);
     let mut footprint = 0;
     for child in root.args() {
         match child.head() {
@@ -318,7 +325,9 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
                 uuid: uuid(child),
                 span: child.pos().into(),
             }),
+            _ if unread_kind(child) => unread += 1,
             Some("via") => {
+                rings += usize::from(unused_layers(child));
                 let names: Vec<String> = required(child, "layers")?
                     .args()
                     .iter()
@@ -358,6 +367,11 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
                 copper.footprint_at.push(child.find("at").map(|a| a.pos().into()));
                 copper.courtyards.push(courtyard(child, fp)?);
                 for g in child.args() {
+                    unread += usize::from(unread_kind(g));
+                    if g.head() == Some("pad") {
+                        padstacks += usize::from(g.find("padstack").is_some());
+                        rings += usize::from(unused_layers(g));
+                    }
                     if matches!(g.head(), Some("fp_line" | "fp_arc" | "fp_circle" | "fp_rect" | "fp_poly" | "fp_text" | "property")) {
                         match graphic(g, &|p| fp.place(p), fp.rotation_deg) {
                             Ok(Some(g)) if g.layer.ends_with(".Mask") => copper.mask_graphics.push(g),
@@ -389,6 +403,15 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
             }
             _ => {}
         }
+    }
+    if unread > 0 {
+        copper.warnings.push(format!("{unread} curve(s), text box(es), dimension(s) or table(s) on copper layers are not read as copper"));
+    }
+    if padstacks > 0 {
+        copper.warnings.push(format!("{padstacks} pad(s) have a KiCad 9 padstack: each is taken as its front layer's shape on every layer"));
+    }
+    if rings > 0 {
+        copper.warnings.push(format!("{rings} pad(s) or via(s) remove their rings on unused layers: the router keeps clear of a ring on every layer"));
     }
     if copper_graphics > 0 {
         copper.warnings.push(format!(

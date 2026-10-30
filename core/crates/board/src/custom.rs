@@ -13,7 +13,9 @@ use crate::geom::{nm, Nm};
 
 /// The constraints the router keeps to; a rule with only others is reported as not applied,
 /// unless it is about something the router never lays (silkscreen, text, courtyards, parts).
-pub const APPLIED: [&str; 7] = ["clearance", "hole_clearance", "hole_to_hole", "edge_clearance", "physical_hole_clearance", "track_width", "disallow"];
+/// (`hole_size`, `via_diameter` and `annular_width` are kept by the router's vias; on the board's
+/// own pads they are the designer's.)
+pub const APPLIED: [&str; 10] = ["clearance", "hole_clearance", "hole_to_hole", "edge_clearance", "physical_hole_clearance", "track_width", "disallow", "hole_size", "via_diameter", "annular_width"];
 
 /// Constraints the router checks once it has routed and reports, but does not yet route to.
 pub const REPORTED: [&str; 2] = ["length", "via_count"];
