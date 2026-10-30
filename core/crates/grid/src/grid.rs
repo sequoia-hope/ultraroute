@@ -704,9 +704,17 @@ impl ObstacleMap {
         let reach = self.reach();
         let rules = &board.rules;
         if let Kind::Keepout { forbids, .. } = &item.kind {
+            // Its cutouts forbid nothing: a cell well inside one is left as it is.
+            let holes = board.keepout_holes.get(&id);
+            let (x0, y0, nx, h) = (self.x0, self.y0, self.nx, self.h);
+            let open = |c: usize, margin: Nm| {
+                let centre = Point::new(x0 + (2 * (c % nx) as Nm + 1) * h / 2, y0 + (2 * (c / nx) as Nm + 1) * h / 2);
+                holes.is_some_and(|hs| hs.iter().any(|hole| board::within(hole, &Shape::Capsule { a: centre, b: centre, r: 0 }, margin)))
+            };
             if forbids.tracks {
                 let mut hit = Vec::new();
                 self.cells_near(&item.shape, half_width + reach, &mut |c| hit.push(c));
+                hit.retain(|&c| !open(c, half_width + reach));
                 for l in (0..self.layers).filter(|l| item.on(*l)) {
                     for &c in &hit {
                         self.owner[l * cells + c] = SEVERAL;
@@ -716,6 +724,7 @@ impl ObstacleMap {
             if forbids.vias && item.layers != 0 {
                 let mut hit = Vec::new();
                 self.cells_near(&item.shape, via_radius, &mut |c| hit.push(c));
+                hit.retain(|&c| !open(c, via_radius + reach));
                 for c in hit {
                     self.via_owner[c] = SEVERAL;
                 }

@@ -53,6 +53,24 @@ pub(crate) struct Limits {
     smd_pad_clearance: Nm,
 }
 
+/// Whether `shape` lies inside the polygon `area`, more than `margin` from its edge: a point of
+/// it inside, and no edge within `margin` (none touching, when `margin` is 0).
+pub fn within(area: &Shape, shape: &Shape, margin: Nm) -> bool {
+    let Shape::Polygon(poly) = area else { return false };
+    let first = match shape {
+        Shape::Capsule { a, .. } => *a,
+        Shape::Polygon(p) => match p.first() {
+            Some(q) => *q,
+            None => return false,
+        },
+    };
+    area.contains(first)
+        && (0..poly.len()).all(|k| {
+            let edge = Shape::Capsule { a: poly[k], b: poly[(k + 1) % poly.len()], r: 0 };
+            shape.gap_within(&edge, margin as f64 + 1.0) > margin as f64
+        })
+}
+
 /// Whether a net tie lets the two touch, as KiCad does: two members of one tie (its pads and the
 /// copper drawn in it), or a member and a track of one of its nets that ends inside one of its
 /// pads (checked with kicad-cli 9.0.8: such a track may cross the tie's bar; one ending short of
@@ -235,7 +253,8 @@ fn item_checks(
                             Kind::Pour { .. } => forbids.copperpour,
                             Kind::Keepout { .. } => false,
                         };
-                        if banned && intrudes(&item.shape, &o.shape) {
+                        let in_a_hole = board.keepout_holes.get(&other).is_some_and(|holes| holes.iter().any(|h| within(h, &item.shape, 0)));
+                        if banned && intrudes(&item.shape, &o.shape) && !in_a_hole {
                             found.push(Violation { rule: Rule::Keepout, a: id, b: Some(other), layer: Some(layer), gap: 0.0, required: 0 });
                         }
                     }

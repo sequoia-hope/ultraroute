@@ -9,7 +9,7 @@ pub mod fill;
 pub mod regions;
 
 pub use model::{Block, Board, FootprintInfo, Item, ItemId, Kind, LoadError, DRAWN};
-pub use check::{check, check_item, check_item_with_pours, intrudes, mask_gap, mask_pair_gap, Rule, Violation, MASK_MARGIN};
+pub use check::{check, check_item, check_item_with_pours, intrudes, mask_gap, mask_pair_gap, within, Rule, Violation, MASK_MARGIN};
 pub use connect::{anchors, connectivity, connectivity_without_pours, joined, net_connectivity, Airline, Connectivity};
 pub use fill::{fill_zones, Fill};
 pub use regions::{Region, RegionKind, RegionRule};

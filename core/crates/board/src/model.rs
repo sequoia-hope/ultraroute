@@ -294,6 +294,8 @@ pub struct Board {
     /// Net ties: each pad of a tie group, and each piece of copper drawn in a footprint with one,
     /// with its footprint and the nets the tie joins. Members of one tie may touch.
     pub ties: HashMap<ItemId, (usize, Vec<u32>)>,
+    /// A keepout's cutouts, where it forbids nothing.
+    pub keepout_holes: HashMap<ItemId, Vec<Shape>>,
     /// Areas where a via costs the router dearly but is allowed, on every layer: rule areas
     /// whose name starts `soft-novia`, and boxes given on the command line. Room kept for silk.
     pub via_avoid: Vec<Shape>,
@@ -406,6 +408,7 @@ impl Board {
             pad_clearances: HashMap::new(),
             hole_ends: HashMap::new(),
             ties: HashMap::new(),
+            keepout_holes: HashMap::new(),
             via_avoid: Vec::new(),
             via_avoid_cost: 3_000,
             regions: Vec::new(),
@@ -607,7 +610,7 @@ impl Board {
             }
             if let Some(keepout) = zone.keepout {
                 if zone.outline.len() >= 3 {
-                    board.insert(Item {
+                    let id = board.insert(Item {
                         kind: Kind::Keepout { forbids: keepout, footprint: zone.footprint },
                         net: 0,
                         layers: mask(&zone.layers),
@@ -616,6 +619,10 @@ impl Board {
                         locked: true,
                         span: Some(zone.span),
                     });
+                    let holes: Vec<Shape> = zone.cutouts.iter().filter(|c| c.len() >= 3).map(|c| Shape::Polygon(c.iter().copied().map(Point::from_m).collect())).collect();
+                    if !holes.is_empty() {
+                        board.keepout_holes.insert(id, holes);
+                    }
                 }
                 continue;
             }

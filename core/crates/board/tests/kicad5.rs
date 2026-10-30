@@ -293,3 +293,34 @@ fn copper_at_the_clearance_from_an_arc_track_is_judged_as_from_the_true_arc() {
     assert!(!breaks(&mut b, 4.65), "exactly the clearance inside the arc");
     assert!(breaks(&mut b, 4.651), "1 um closer inside");
 }
+
+/// A rule area keeping tracks and vias off F.Cu over (2, 2)-(22, 22) but for a cutout over
+/// (7, 7)-(17, 17), as KiCad writes one: the outline, then the cutout.
+pub const KEEPOUT_WITH_CUTOUT: &str = "(zone (net 0) (net_name \"\") (layer \"F.Cu\") (uuid \"cccccccc-0000-4000-8000-000000000001\") (hatch edge 0.5)
+    (connect_pads (clearance 0)) (min_thickness 0.25)
+    (keepout (tracks not_allowed) (vias not_allowed) (pads allowed) (copperpour allowed) (footprints allowed))
+    (fill (thermal_gap 0.5) (thermal_bridge_width 0.5))
+    (polygon (pts (xy 2 2) (xy 22 2) (xy 22 22) (xy 2 22)))
+    (polygon (pts (xy 7 7) (xy 17 7) (xy 17 17) (xy 7 17))))";
+
+#[test]
+fn a_keepouts_cutout_forbids_nothing() {
+    let mut b = board(KEEPOUT_WITH_CUTOUT);
+    let keepout_hit = |b: &mut Board, a: (f64, f64), z: (f64, f64)| {
+        let id = b.insert(Item {
+            kind: Kind::Track,
+            net: 2,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(nm(a.0 * 1e-3), nm(a.1 * 1e-3)), b: Point::new(nm(z.0 * 1e-3), nm(z.1 * 1e-3)), r: nm(0.1e-3) },
+            hole: None,
+            locked: false,
+            span: None,
+        });
+        let hit = check_item(b, id).iter().any(|v| v.rule == Rule::Keepout);
+        b.remove(id);
+        hit
+    };
+    assert!(!keepout_hit(&mut b, (10.0, 10.0), (14.0, 10.0)), "inside the cutout");
+    assert!(keepout_hit(&mut b, (10.0, 10.0), (19.0, 10.0)), "out across the cutout's edge into the keepout");
+    assert!(keepout_hit(&mut b, (3.0, 3.0), (5.0, 3.0)), "in the keepout");
+}

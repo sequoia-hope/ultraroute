@@ -142,6 +142,9 @@ pub struct Zone {
     /// Layer names as written, wildcards (`*.Cu`, `F&B.Cu`) included; see [`Copper::expand`].
     pub layers: Vec<String>,
     pub outline: Vec<[f64; 2]>,
+    /// Holes in the outline, where the zone (a keepout's rule, a pour's copper) is not.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cutouts: Vec<Vec<[f64; 2]>>,
     /// The poured copper KiCad last computed, per layer; empty for a keepout or an unfilled zone.
     pub filled: Vec<(String, Vec<[f64; 2]>)>,
     /// Where each of `filled` is written, so a stale fill can be taken out of the file.
@@ -545,7 +548,10 @@ fn read_zone(z: &Node, footprint: Option<usize>) -> Result<Zone, KicadParse> {
             footprints: forbids("footprints"),
         }
     });
-    let outline = z.find("polygon").and_then(|p| p.find("pts")).map(pts).transpose()?.unwrap_or_default();
+    // The first polygon is the outline, each one after it a cutout, as KiCad writes them.
+    let mut polygons = z.find_all("polygon").into_iter().filter_map(|p| p.find("pts")).map(pts);
+    let outline = polygons.next().transpose()?.unwrap_or_default();
+    let cutouts = polygons.collect::<Result<Vec<_>, _>>()?;
     let (mut filled, mut fill_spans) = (Vec::new(), Vec::new());
     for f in z.find_all("filled_polygon") {
         let layer = f.find("layer").and_then(|l| l.args().first()).and_then(Node::text).unwrap_or("").to_string();
@@ -560,6 +566,7 @@ fn read_zone(z: &Node, footprint: Option<usize>) -> Result<Zone, KicadParse> {
         net_name: z.find("net_name").and_then(|n| n.args().first()).and_then(Node::text).unwrap_or("").to_string(),
         layers,
         outline,
+        cutouts,
         filled,
         fill_spans,
         keepout,
