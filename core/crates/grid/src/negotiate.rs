@@ -162,6 +162,9 @@ struct Connection {
     hole_ring: Vec<u32>,
     /// Whether its path or vias ran into another claim in the last round.
     colliding: bool,
+    /// A search with time left found no way between its ends. Within a pass the maps never
+    /// change, only prices, which block nothing: no later round finds one either.
+    walled: bool,
 }
 
 impl Connection {
@@ -699,6 +702,7 @@ fn run_pass(
             vias: Vec::new(),
             hole_ring: Vec::new(),
             colliding: false,
+            walled: false,
         })
         .collect();
     crate::jitter::shuffle(&mut connections, options.seed);
@@ -795,7 +799,7 @@ fn run_pass(
                     break;
                 }
                 let c = &mut connections[k];
-                if round > 0 && !options.reroute_all && !c.colliding && c.path.is_some() {
+                if c.walled || round > 0 && !options.reroute_all && !c.colliding && c.path.is_some() {
                     continue;
                 }
                 if report {
@@ -847,6 +851,7 @@ fn run_pass(
                 }
                 let (sources, targets) = &ends[k];
                 c.path = solver.route(grid_buf, &cells_of(sources), &cells_of(targets), options.via_cost);
+                c.walled = c.path.is_none() && !grid_buf.deadline.expired();
                 settle(k, c, claimer);
                 if let Some(r) = c.route() {
                     let t = zones.add(claimer, r);
