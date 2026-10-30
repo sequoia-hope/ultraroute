@@ -36,8 +36,9 @@ fn every_stage_the_recipe_runs_is_in_the_stats() {
     // A coarse grid and four threads keep it to a few seconds; every stage still runs.
     let s = stats(&["--cell", "0.1", "--threads", "4"]);
     let names: Vec<&str> = s["stages"].as_array().unwrap().iter().map(|st| st["name"].as_str().unwrap()).collect();
-    // The earring has no planes, no planner's regions, and the recipe does not nudge.
-    let expected: Vec<&str> = ultraroute::STAGES.iter().map(|e| e.stage.name()).filter(|n| !["planes", "first", "nudge"].contains(n)).collect();
+    // The earring has no planes, no planner's regions, and the recipe does not nudge or route
+    // globally.
+    let expected: Vec<&str> = ultraroute::STAGES.iter().map(|e| e.stage.name()).filter(|n| !["planes", "first", "nudge", "global", "global-release"].contains(n)).collect();
     assert_eq!(names, expected);
     for stage in s["stages"].as_array().unwrap() {
         let mut ns = Vec::new();
@@ -83,4 +84,22 @@ fn every_open_connection_is_a_finding() {
     // Only the stages that run whatever the time ran.
     let names: Vec<&str> = s["stages"].as_array().unwrap().iter().map(|st| st["name"].as_str().unwrap()).collect();
     assert_eq!(names, ["set-up", "cleaning", "result", "write"]);
+}
+
+#[test]
+fn the_global_stage_lays_corridors_until_negotiation_is_done_and_tells_its_congestion() {
+    let s = stats(&["--cell", "0.1", "--threads", "4", "--global"]);
+    let stages = s["stages"].as_array().unwrap();
+    let at = |name: &str| stages.iter().position(|st| st["name"] == name).unwrap_or_else(|| panic!("no {name} stage"));
+    assert!(at("global") < at("negotiation") && at("negotiation") < at("global-release") && at("global-release") < at("finishing"));
+    let g = &stages[at("global")]["detail"];
+    assert!(g["routed"].as_u64().unwrap() > 0 && g["nets"].as_u64().unwrap() > 0 && g["corridors"].as_u64().unwrap() > 0, "{g}");
+    assert_eq!(stages[at("global-release")]["detail"]["corridors"], g["corridors"]);
+    let (nx, ny) = (g["nx"].as_u64().unwrap() as usize, g["ny"].as_u64().unwrap() as usize);
+    for layer in ["F.Cu", "B.Cu"] {
+        for what in ["demand", "capacity"] {
+            let rows = g["congestion"][layer][what].as_array().unwrap_or_else(|| panic!("{layer} {what}"));
+            assert!(rows.len() == ny && rows.iter().all(|r| r.as_array().unwrap().len() == 2 * nx), "{layer} {what}");
+        }
+    }
 }

@@ -1,7 +1,8 @@
 //! Routing regions: areas of the board with rules for which nets may run there, as a planner
 //! (circuit-composer's constraint compiler) hands them to the router beside the board. A rule
 //! names the nets it holds for and says `never` (keep out), `must` (stay within, on the region's
-//! layers), `avoid` or `prefer` (a cost per length inside, or outside), for tracks or for vias.
+//! layers), `avoid` or `prefer` (a cost per length inside, or outside), for tracks or for vias;
+//! the router's own global stage adds `corridor`s.
 //! The board holds them resolved to net numbers; the grid applies them to each net's view.
 
 use std::collections::HashSet;
@@ -38,6 +39,10 @@ pub enum RegionKind {
     Avoid(f64),
     /// As `Avoid`, outside the region.
     Prefer(f64),
+    /// As `Prefer`, but a net's corridors on a layer are one: its track pays `weight` times its
+    /// length outside all of them. The global stage's (`--global`) way of keeping a net to its
+    /// path and layers, a corridor of several rectangles.
+    Corridor(f64),
 }
 
 impl RegionRule {

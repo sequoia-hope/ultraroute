@@ -31,6 +31,8 @@ pub struct Ledger {
     pub(crate) lengths: Vec<regions::MaxLength>,
     pub(crate) first: HashSet<u32>,
     pub(crate) costs: ViaCosts,
+    /// The global stage's corridors among the board's regions, taken out after negotiation.
+    pub(crate) corridors: std::ops::Range<usize>,
     /// What routing one connection at a time after negotiation did.
     pub(crate) routed: grid::Stats,
     /// Tightening's figures, told once the via pass has pulled tight again.
@@ -331,6 +333,85 @@ impl Stage for Routing {
 
     fn run(&self, _: &mut StageCtx) -> Value {
         Value::Null
+    }
+}
+
+/// `--global`: every open connection routed on GCells under their capacity, and each net whose
+/// connections all found a way given corridors on its layers ([`grid::global_route`]), which
+/// the grids of the stages up to negotiation price through the board's regions. Its stats carry
+/// each layer's congestion: per GCell side, the nets across it and how many tracks fit.
+pub struct Global;
+
+impl Stage for Global {
+    fn name(&self) -> &'static str {
+        "global"
+    }
+
+    fn enabled(&self, a: &Args, _: &Board, _: &Ledger) -> bool {
+        a.global
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let a = ctx.args;
+        let defaults = grid::GlobalOptions::default();
+        let options = grid::GlobalOptions {
+            cell: a.global_cell.unwrap_or(defaults.cell),
+            via_cost_mm: crate::via_mm(a, ctx.board).0,
+            pours_block: a.pours_block,
+            deadline: ctx.deadline(),
+            ..defaults
+        };
+        let open = ctx.open();
+        let Some(plan) = grid::global_route(ctx.board, &open, &options) else {
+            eprintln!("global: no time to map the board, {:.1} s", ctx.elapsed());
+            return json!({"mapped": false});
+        };
+        let at = ctx.board.regions.len();
+        ctx.ledger.corridors = at..at + plan.regions.len();
+        ctx.board.regions.extend(plan.regions);
+        let gc = &plan.cells;
+        let over = plan.overflow.last().copied().unwrap_or(0);
+        ctx.say("global", format!("{} of {} connections on {} mm GCells, {} tracks over capacity; corridors for {} nets", plan.routed, plan.connections, gc.g as f64 / 1e6, over, plan.nets));
+        eprintln!(
+            "global: {} of {} connections on {}x{} GCells of {} mm, {} rounds, {} over capacity, {} vias, {:.0} mm, corridors for {} nets, {:.1} s",
+            plan.routed,
+            plan.connections,
+            gc.nx,
+            gc.ny,
+            gc.g as f64 / 1e6,
+            plan.overflow.len(),
+            over,
+            plan.vias,
+            plan.length_mm,
+            plan.nets,
+            ctx.elapsed()
+        );
+        // Per layer, a row per GCell row: the side to the next GCell along x, then along y.
+        let rows = |v: &[u16], p: usize| (0..gc.ny).map(|j| v[2 * (p * gc.cells() + j * gc.nx)..][..2 * gc.nx].to_vec()).collect::<Vec<_>>();
+        let congestion: serde_json::Map<String, Value> =
+            gc.layers.iter().enumerate().map(|(p, &l)| (ctx.board.layers[l].clone(), json!({"demand": rows(&plan.demand, p), "capacity": rows(&gc.capacity, p)}))).collect();
+        json!({
+            "cell_mm": gc.g as f64 / 1e6, "nx": gc.nx, "ny": gc.ny, "connections": plan.connections, "routed": plan.routed,
+            "rounds": plan.overflow.len(), "overflow": plan.overflow, "nets": plan.nets, "corridors": ctx.ledger.corridors.len(),
+            "vias": plan.vias, "length_mm": plan.length_mm, "congestion": congestion,
+        })
+    }
+}
+
+/// The global stage's corridors taken out once negotiation is done: the stages that rescue what
+/// it left open route free of them.
+pub struct GlobalRelease;
+
+impl Stage for GlobalRelease {
+    fn name(&self) -> &'static str {
+        "global-release"
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let corridors = std::mem::take(&mut ctx.ledger.corridors);
+        let n = corridors.len();
+        ctx.board.regions.drain(corridors);
+        json!({"corridors": n})
     }
 }
 

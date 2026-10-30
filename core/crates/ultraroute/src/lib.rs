@@ -39,7 +39,7 @@ pub use watch::{Cleaned, Flow, StageEvent, Unwatched, Watch};
 
 pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--negotiate-jacobi] [--negotiate-reroute-all] [--diff-pairs] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner|same] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--negotiate] [--rip-up] [--nudge] [--tighten] [--via-cost MM[,OPEN_MM]] [--gpu] \
 [--timeout SECONDS] [--cell MM] [--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--uuid-seed N] [--adopt] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
-[--recipe default|bench|minimal] [--live PATH|-] [--live-fps N] [--live-step MS] [--blame] [--stats FILE]
+[--recipe default|bench|minimal] [--global] [--global-cell MM] [--live PATH|-] [--live-fps N] [--live-step MS] [--blame] [--stats FILE]
 --place takes millimetres with y pointing up: give KiCad's y negated (KiCad y 127.5 is -127.5).";
 
 pub struct Args {
@@ -133,6 +133,12 @@ pub struct Args {
     /// Where to write the run's stats and findings as JSON (`--stats`, or `--report` as Studio
     /// names it).
     pub stats: Option<String>,
+    /// `--global` (experimental, off by default): before negotiation, every open connection is
+    /// routed on GCells of `--global-cell` millimetres (1 mm unless given) under their capacity,
+    /// and each net is given a corridor on its layers that negotiation prices it to keep to
+    /// ([`stages::Global`]).
+    pub global: bool,
+    pub global_cell: Option<Nm>,
     /// The command line as read, the recipe's flags put in.
     pub line: Vec<String>,
 }
@@ -235,6 +241,8 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
         live_step: 0,
         blame: false,
         stats: None,
+        global: false,
+        global_cell: None,
         line: args.to_vec(),
     };
     let mut it = args[1..].iter();
@@ -309,6 +317,15 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
                 };
             }
             "--gpu" => a.gpu = true,
+            "--global" => a.global = true,
+            "--global-cell" => {
+                a.global = true;
+                let mm: f64 = value()?.parse().map_err(|e| format!("--global-cell: {e}"))?;
+                if !(0.25..=5.0).contains(&mm) {
+                    return Err(format!("--global-cell: {mm} mm is outside 0.25 to 5 mm"));
+                }
+                a.global_cell = Some((mm * 1e6).round() as Nm);
+            }
             "--pours-block" => a.pours_block = true,
             "--no-route" => a.no_route = true,
             "--threads" => a.threads = Some(value()?.parse().map_err(|e| format!("--threads: {e}"))?),
@@ -833,12 +850,17 @@ pub const VIA_COST_MM: f64 = 5.0;
 fn via_costs(a: &Args, board: &Board) -> ViaCosts {
     let cell = a.cell.unwrap_or(grid::Options::default().cell);
     let at = |mm: f64| grid::via_cost_mm(cell, mm);
-    let (negotiate, open, rip) = match a.via_cost {
+    let (negotiate, open, rip) = via_mm(a, board);
+    ViaCosts { negotiate: at(negotiate), open: at(open), rip: at(rip) }
+}
+
+/// [`via_costs`] in millimetres: negotiation's, routing one at a time's and rip-up's.
+fn via_mm(a: &Args, board: &Board) -> (f64, f64, f64) {
+    match a.via_cost {
         Some((neg, open)) => (neg, open.unwrap_or(neg * 1.2), open.unwrap_or(neg * 0.8)),
         None if board.planes != 0 => (1.0, 0.4, 0.4),
         None => (VIA_COST_MM, VIA_COST_MM * 1.2, VIA_COST_MM * 0.8),
-    };
-    ViaCosts { negotiate: at(negotiate), open: at(open), rip: at(rip) }
+    }
 }
 
 /// The share of the board one net's pour must cover on an inner layer for the layer to be taken
@@ -931,9 +953,10 @@ const fn row(stage: &'static dyn Stage, clock: Clock, budget: Budget, within: Op
 
 /// Every stage of a run, in order, with its budget: the one place both live. Pre-fanout and
 /// joining plane pads take shares of what is left; coupling pairs runs until a quarter of the
-/// run has gone; negotiation takes half the run (half of what the length-limited nets leave);
-/// the routing and rescue stages stop in time for the via pass's tenth of the run; the clean-up
-/// and the write run whatever the time.
+/// run has gone; with `--global`, the global stage takes a twentieth of the run and its corridors
+/// hold until negotiation is done; negotiation takes half the run (half of what the
+/// length-limited nets leave); the routing and rescue stages stop in time for the via pass's
+/// tenth of the run; the clean-up and the write run whatever the time.
 pub const STAGES: &[Entry] = &[
     row(&stages::SetUp, Clock::Untold, Budget::Untimed, None),
     row(&stages::Prefanout, Clock::Timed, Budget::Left(0.15), None),
@@ -941,8 +964,10 @@ pub const STAGES: &[Entry] = &[
     row(&stages::Pairs, Clock::Timed, Budget::Until(0.25), None),
     row(&stages::PairEscapes, Clock::Untold, Budget::Left(0.15), Some("pairs")),
     row(&stages::Routing, Clock::Timed, Budget::Untimed, None),
+    row(&stages::Global, Clock::Timed, Budget::Timeout(0.05), Some("routing")),
     row(&stages::First, Clock::Timed, Budget::RescueLeft(0.25), Some("routing")),
     row(&stages::Negotiation, Clock::Timed, Budget::First { alone: &Budget::Timeout(0.5), after_first: &Budget::RescueLeft(0.5) }, Some("routing")),
+    row(&stages::GlobalRelease, Clock::Untold, Budget::Untimed, Some("global")),
     row(&stages::Finishing, Clock::Timed, Budget::Rescue, Some("routing")),
     row(&stages::PruneEscapes, Clock::Untold, Budget::Untimed, Some("routing")),
     row(&stages::RipUp, Clock::Timed, Budget::Rescue, Some("routing")),
@@ -1570,6 +1595,18 @@ mod tests {
         let dp = parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--diff-pairs"])).unwrap();
         assert!(dp.diff_pairs);
         assert!(parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--negotiate-legacy"])).is_err());
+    }
+
+    #[test]
+    fn global_flags_parse_and_validate() {
+        let line = |extra: &[&str]| parse(&vec_args(&[&["route", "in.kicad_pcb", "-o", "out.kicad_pcb"], extra].concat()));
+        let plain = line(&[]).unwrap();
+        assert!(!plain.global && plain.global_cell.is_none(), "off by default");
+        let g = line(&["--recipe", "default", "--global"]).unwrap();
+        assert!(g.global && g.negotiate, "a step of the recipe, not a recipe of its own");
+        let cell = line(&["--global-cell", "2"]).unwrap();
+        assert_eq!((cell.global, cell.global_cell), (true, Some(2_000_000)));
+        assert!(line(&["--global-cell", "0.1"]).is_err() && line(&["--global-cell", "x"]).is_err());
     }
 
     // Pins today's via prices on purpose, to document them. Stage 7 of REMEDIATION.md replaces

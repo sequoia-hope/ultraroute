@@ -6,6 +6,7 @@ pub mod gpu;
 pub mod blame;
 pub mod cleanup;
 pub mod clock;
+pub mod global;
 pub mod grid;
 pub mod jitter;
 pub mod memory;
@@ -28,6 +29,7 @@ pub mod work;
 
 pub use blame::{blame, Blame, BlameOptions, BlameReport};
 pub use cleanup::{drop_duplicates, drop_duplicates_watch, prune_dangling, prune_dangling_watch, pull_tight, pull_tight_watch, split_at_joins, CleanStats};
+pub use global::{capacities, corridor_regions, global_route, GCells, GlobalOptions, GlobalPlan};
 pub use grid::{ObstacleMap, Profile, RouteGrid, ViaSpec};
 pub use nudge::{nudge, nudge_watch, NudgeEvent, NudgeOptions, NudgeStats};
 pub use push::{push, push_watch, rip_broken, rip_broken_items, PushOptions, PushStats, PushStep};

@@ -2,8 +2,9 @@
 //! touches, worked out once per obstacle map, and applied to the view of every net it holds for.
 //! `never` blocks the cells a track (or via) there would reach into the region; `must` blocks
 //! every cell but those deep enough inside it; `avoid` and `prefer` price cells inside or
-//! outside it. Costs go in `RouteGrid::region_cost` (tracks) and `via_penalty` (vias), which
-//! the CPU searches add to every step; the GPU and the browser's worker pool do not see them yet.
+//! outside it; a net's `corridor`s on a layer price every cell outside all of them. Costs go in
+//! `RouteGrid::region_cost` (tracks) and `via_penalty` (vias), which the CPU searches add to
+//! every step; the GPU and the browser's worker pool do not see them yet.
 
 use board::{Board, RegionKind};
 
@@ -37,16 +38,19 @@ impl ObstacleMap {
                 let reach = if rule.vias { self.profile.via_radius } else { self.profile.half_width + self.reach() };
                 let mut near = Vec::new();
                 self.cells_near(&region.shape, reach, &mut |c| near.push(c as u32));
+                // Only `must` keeps to the cells inside.
                 let mut inside = Vec::new();
-                self.cells_near(&region.shape, 0, &mut |c| {
-                    let (i, j) = (c % self.nx, c / self.nx);
-                    if region.shape.depth(self.centre(i, j)) >= reach as f64 {
-                        inside.push(c as u32);
-                    }
-                });
+                if rule.kind == RegionKind::Must {
+                    self.cells_near(&region.shape, 0, &mut |c| {
+                        let (i, j) = (c % self.nx, c / self.nx);
+                        if region.shape.depth(self.centre(i, j)) >= reach as f64 {
+                            inside.push(c as u32);
+                        }
+                    });
+                }
                 let cost = match rule.kind {
                     RegionKind::Avoid(w) | RegionKind::Prefer(w) if rule.vias => (w * 1e6 / self.h as f64 * STRAIGHT as f64).round() as u32,
-                    RegionKind::Avoid(w) | RegionKind::Prefer(w) => (w * STRAIGHT as f64).round() as u32,
+                    RegionKind::Avoid(w) | RegionKind::Prefer(w) | RegionKind::Corridor(w) => (w * STRAIGHT as f64).round() as u32,
                     _ => 0,
                 };
                 out.push(RegionRaster { layers: region.layers, kind: rule.kind, vias: rule.vias, nets: rule.nets.clone(), except: None, near, inside, cost });
@@ -70,6 +74,8 @@ impl ObstacleMap {
     /// Applies the region rules that hold for `net` to its view.
     pub(crate) fn apply_regions(&self, net: u32, grid: &mut RouteGrid) {
         let cells = self.nx * self.ny;
+        // Per layer: the cells inside the net's corridors there, and what a cell outside costs.
+        let mut corridors: Vec<Option<(Vec<bool>, u32)>> = vec![None; self.layers];
         for raster in &self.regions {
             if raster.nets.as_ref().is_some_and(|n| !n.contains(&net)) || raster.except == Some(net) {
                 continue;
@@ -105,6 +111,15 @@ impl ObstacleMap {
                         }
                     }
                 }
+                (RegionKind::Corridor(_), _) => {
+                    for l in (0..self.layers).filter(|l| on(*l)) {
+                        let (keep, cost) = corridors[l].get_or_insert_with(|| (vec![false; cells], 0));
+                        for &c in &raster.near {
+                            keep[c as usize] = true;
+                        }
+                        *cost = (*cost).max(raster.cost);
+                    }
+                }
                 (RegionKind::Avoid(_) | RegionKind::Prefer(_), vias) => {
                     // The cells charged: the region's own for avoid, every other for prefer.
                     let charged: Vec<usize> = if matches!(raster.kind, RegionKind::Avoid(_)) {
@@ -135,6 +150,16 @@ impl ObstacleMap {
                         }
                     }
                 }
+            }
+        }
+        for (l, corridor) in corridors.into_iter().enumerate() {
+            let Some((keep, cost)) = corridor else { continue };
+            if grid.region_cost.len() != self.layers * cells {
+                grid.region_cost = vec![0; self.layers * cells];
+            }
+            for (c, _) in keep.iter().enumerate().filter(|(_, k)| !**k) {
+                let n = l * cells + c;
+                grid.region_cost[n] = grid.region_cost[n].saturating_add(cost);
             }
         }
     }
@@ -188,5 +213,24 @@ mod tests {
         assert!(!bnet.blocked[bnet.index(1, corner.0, corner.1)], "B.Cu is not the region's layer");
         let at = |g: &RouteGrid, (i, j): (usize, usize)| g.via_penalty_at(j * g.nx + i);
         assert!(at(&a, centre) > 0 && at(&a, corner) == 0, "every net's vias pay inside");
+    }
+
+    #[test]
+    fn a_nets_corridors_on_a_layer_are_one() {
+        let mut b = board();
+        let p = |x: i64, y: i64| Point::new(x * 1_000_000, y * 1_000_000);
+        let rect = |x0, y0, x1, y1| Shape::Polygon(vec![p(x0, y0), p(x1, y0), p(x1, y1), p(x0, y1)]);
+        let corridor = |shape| Region { name: "global A".into(), shape, layers: 1, rules: vec![RegionRule { nets: Some([1].into()), kind: RegionKind::Corridor(3.0), vias: false }] };
+        b.regions = vec![corridor(rect(2, 2, 6, 6)), corridor(rect(6, 2, 10, 6))];
+        let map = ObstacleMap::new(&b, Profile::for_net(&b, 1), 250_000, false);
+        let a = map.view(1);
+        let cost = |g: &RouteGrid, l: usize, x: i64, y: i64| {
+            let (i, j) = g.cell_at(p(x, y)).unwrap();
+            g.region_cost.get(g.index(l, i, j)).copied().unwrap_or(0)
+        };
+        assert_eq!((cost(&a, 0, 4, 4), cost(&a, 0, 8, 4)), (0, 0), "inside either rectangle is free");
+        assert_eq!(cost(&a, 0, 15, 15), 3 * STRAIGHT, "outside both pays its weight");
+        assert_eq!(cost(&a, 1, 15, 15), 0, "B.Cu is not the corridor's layer");
+        assert_eq!(cost(&map.view(2), 0, 15, 15), 0, "nor B its net");
     }
 }
