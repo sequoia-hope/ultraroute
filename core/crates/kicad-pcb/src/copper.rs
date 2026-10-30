@@ -618,6 +618,13 @@ fn read_pad(p: &Node, footprint: usize, index: usize, fp: &Footprint) -> Result<
             if let Some(prims) = p.find("primitives") {
                 polys.extend(primitives(prims)?);
             }
+            // `(options (clearance convexhull))`: other copper keeps its clearance from the hull of
+            // all the pad's shapes, not from each; the hull stands for the pad (a little more copper
+            // than it has, never less).
+            let hull = p.find("options").and_then(|o| o.find("clearance")).and_then(|c| c.args().first()).and_then(Node::text) == Some("convexhull");
+            if hull {
+                polys = vec![convex_hull(polys.into_iter().flatten().collect())];
+            }
             Some(polys)
         }
     };
@@ -661,10 +668,38 @@ fn primitives(prims: &Node) -> Result<Vec<Vec<[f64; 2]>>, KicadParse> {
                 out.push(vec![[a[0], a[1]], [b[0], a[1]], [b[0], b[1]], [a[0], b[1]]]);
             }
             Some("gr_line") => out.push(capsule(point(g, "start")?, point(g, "end")?, width / 2.0)),
+            // An arc is drawn by its width along it.
+            Some("gr_arc") if width > 0.0 => {
+                let along = arc_points(point(g, "start")?, point(g, "mid")?, point(g, "end")?);
+                out.extend(along.windows(2).map(|w| capsule(w[0], w[1], width / 2.0)));
+            }
             _ => {}
         }
     }
     Ok(out)
+}
+
+/// The convex hull of `points`, anticlockwise (Andrew's monotone chain).
+fn convex_hull(mut points: Vec<[f64; 2]>) -> Vec<[f64; 2]> {
+    points.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
+    points.dedup();
+    if points.len() < 3 {
+        return points;
+    }
+    let cross = |o: [f64; 2], a: [f64; 2], b: [f64; 2]| (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    let mut hull: Vec<[f64; 2]> = Vec::new();
+    for pass in [false, true] {
+        let start = hull.len();
+        let ordered: Vec<[f64; 2]> = if pass { points.iter().rev().copied().collect() } else { points.clone() };
+        for p in ordered {
+            while hull.len() >= start + 2 && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0 {
+                hull.pop();
+            }
+            hull.push(p);
+        }
+        hull.pop();
+    }
+    hull
 }
 
 fn rect(size: [f64; 2]) -> Vec<[f64; 2]> {

@@ -407,3 +407,27 @@ fn a_pads_zero_clearance_and_margin_are_its_footprints() {
     near(copper.pads[1].clearance, 0.4e-3);
     near(copper.pads[1].mask_margin, 0.05e-3);
 }
+
+#[test]
+fn a_custom_pads_arcs_are_copper_and_a_convex_hull_is_one_shape() {
+    let pad = |options: &str| {
+        format!(
+            "(kicad_pcb (version 20240108) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal))
+              (net 0 \"\") (net 1 \"A\")
+              (footprint \"X:Y\" (layer \"F.Cu\") (uuid \"u\") (at 0 0)
+                (pad \"1\" smd custom (at 0 0) (size 0.5 0.5) (layers \"F.Cu\") (net 1 \"A\") {options}
+                  (primitives (gr_arc (start 1 0) (mid 0 1) (end -1 0) (width 0.2)) (gr_rect (start 2 -0.2) (end 2.4 0.2))))))"
+        )
+    };
+    let (_, copper) = parse_board(&pad("(options (clearance outline) (anchor rect))")).unwrap();
+    let Outline::Polygons(polys) = &copper.pads[0].outline else { panic!("a custom pad is polygons") };
+    // The arc's outer edge reaches 1.1 mm up (KiCad's y down: -1.1 is y = 1.1 in the file's terms).
+    let reach = polys.iter().flatten().map(|p| p[1].abs()).fold(0.0, f64::max);
+    assert!((reach - 1.1e-3).abs() < 0.01e-3, "the arc reaches {reach}");
+    assert!(polys.len() > 3, "anchor, arc pieces and the rectangle: {}", polys.len());
+    let (_, copper) = parse_board(&pad("(options (clearance convexhull) (anchor rect))")).unwrap();
+    let Outline::Polygons(polys) = &copper.pads[0].outline else { panic!("a custom pad is polygons") };
+    assert_eq!(polys.len(), 1, "one hull");
+    let xs = polys[0].iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max);
+    assert!((xs - 2.4e-3).abs() < 1e-9, "the hull takes in the rectangle: {xs}");
+}
