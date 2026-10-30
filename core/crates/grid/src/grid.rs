@@ -63,6 +63,7 @@ impl Profile {
     pub fn for_net(board: &Board, net: u32) -> Profile {
         let rules = &board.rules;
         let class = rules.class_of(board.net_name(net));
+        let class = class.as_ref();
         let take = |v: Option<f64>, floor: f64| nm(v.unwrap_or(floor).max(floor));
         let min_width = rules.min_track_width_of(board.net_name(net));
         let half_width = take(class.map(|c| c.track_width), min_width) / 2;

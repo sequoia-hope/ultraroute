@@ -116,6 +116,7 @@ pub fn diff_pairs(board: &Board) -> Vec<Pair> {
         for (n, nn) in board.nets.iter().enumerate() {
             if p != n && !pn.is_empty() && pair_names(pn, nn) {
                 let class = board.rules.class_of(pn);
+                let class = class.as_ref();
                 let profile = Profile::for_net(board, p as u32);
                 let width = class.map(|c| nm(c.diff_pair_width)).filter(|w| *w > 0).unwrap_or(2 * profile.half_width);
                 let gap = class.map(|c| nm(c.diff_pair_gap)).filter(|g| *g > 0).unwrap_or(profile.clearance);

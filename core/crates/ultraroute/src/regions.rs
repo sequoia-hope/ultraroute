@@ -78,7 +78,7 @@ pub fn load(path: &str, board: &mut Board) -> Result<Vec<MaxLength>, String> {
                     }
                 }
                 for n in 1..board.nets.len() as u32 {
-                    if board.rules.class_of(board.net_name(n)).is_some_and(|c| classes.contains(&c.name)) {
+                    if classes.iter().any(|c| board.rules.in_class(board.net_name(n), c)) {
                         set.insert(n);
                     }
                 }

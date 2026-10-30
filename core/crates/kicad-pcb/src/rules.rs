@@ -63,6 +63,30 @@ pub struct NetClass {
     pub diff_pair_via_gap: f64,
     /// Lower wins when several classes match one net.
     pub priority: i64,
+    /// The fields above the project leaves out of this class (bits in the order they are listed,
+    /// `clearance` first), which a net takes from its next class instead, as KiCad 9 does.
+    #[serde(default)]
+    pub unset: u8,
+}
+
+impl NetClass {
+    const FIELDS: usize = 7;
+
+    fn field(&mut self, k: usize) -> &mut f64 {
+        match k {
+            0 => &mut self.clearance,
+            1 => &mut self.track_width,
+            2 => &mut self.via_diameter,
+            3 => &mut self.via_drill,
+            4 => &mut self.diff_pair_width,
+            5 => &mut self.diff_pair_gap,
+            _ => &mut self.diff_pair_via_gap,
+        }
+    }
+
+    fn get(&self, k: usize) -> f64 {
+        [self.clearance, self.track_width, self.via_diameter, self.via_drill, self.diff_pair_width, self.diff_pair_gap, self.diff_pair_via_gap][k]
+    }
 }
 
 /// The nets a custom rule holds for: one by name, or every net of a class.
@@ -104,6 +128,7 @@ const KICAD_DEFAULT_CLASS: NetClass = NetClass {
     diff_pair_gap: 0.25 * MM,
     diff_pair_via_gap: 0.25 * MM,
     priority: i64::MAX,
+    unset: 0,
 };
 
 impl Rules {
@@ -129,7 +154,6 @@ impl Rules {
     pub fn parse(text: &str) -> Result<Rules, RulesError> {
         let project: Value = serde_json::from_str(text).map_err(|e| RulesError::Json(e.to_string()))?;
         let rules = &project["board"]["design_settings"]["rules"];
-        let mm = |v: &Value, name: &str| v[name].as_f64().unwrap_or(0.0) * MM;
         // A rule the project leaves out is KiCad's, as its own check takes it, not zero.
         let mut assumed: Vec<String> = Vec::new();
         let mut rule = |name: &str| match rules[name].as_f64() {
@@ -141,20 +165,26 @@ impl Rules {
             }
         };
         let net = &project["net_settings"];
+        const FIELDS: [&str; NetClass::FIELDS] = ["clearance", "track_width", "via_diameter", "via_drill", "diff_pair_width", "diff_pair_gap", "diff_pair_via_gap"];
         let mut classes: Vec<NetClass> = net["classes"]
             .as_array()
             .into_iter()
             .flatten()
-            .map(|c| NetClass {
-                name: c["name"].as_str().unwrap_or("").to_string(),
-                clearance: mm(c, "clearance"),
-                track_width: mm(c, "track_width"),
-                via_diameter: mm(c, "via_diameter"),
-                via_drill: mm(c, "via_drill"),
-                diff_pair_width: mm(c, "diff_pair_width"),
-                diff_pair_gap: mm(c, "diff_pair_gap"),
-                diff_pair_via_gap: mm(c, "diff_pair_via_gap"),
-                priority: c["priority"].as_i64().unwrap_or(i64::MAX),
+            .map(|c| {
+                let name = c["name"].as_str().unwrap_or("").to_string();
+                let mut class = NetClass { name, priority: c["priority"].as_i64().unwrap_or(i64::MAX), unset: 0, ..KICAD_DEFAULT_CLASS };
+                for (k, field) in FIELDS.iter().enumerate() {
+                    match c[*field].as_f64() {
+                        Some(v) => *class.field(k) = v * MM,
+                        // Default's own gaps are KiCad's; another class's are its next class's.
+                        None if class.name == "Default" => {}
+                        None => {
+                            *class.field(k) = 0.0;
+                            class.unset |= 1 << k;
+                        }
+                    }
+                }
+                class
             })
             .collect();
         let pairs = |v: &Value, key: &str| -> Vec<(String, String)> {
@@ -167,9 +197,12 @@ impl Rules {
         let assignments = match &net["netclass_assignments"] {
             Value::Object(map) => map
                 .iter()
-                .filter_map(|(net, class)| {
-                    let class = class.as_str().or_else(|| class.as_array()?.first()?.as_str())?;
-                    Some((net.clone(), class.to_string()))
+                .flat_map(|(net, class)| {
+                    let names: Vec<&str> = match class {
+                        Value::Array(a) => a.iter().filter_map(Value::as_str).collect(),
+                        v => v.as_str().into_iter().collect(),
+                    };
+                    names.into_iter().map(|c| (net.clone(), c.to_string())).collect::<Vec<_>>()
                 })
                 .collect(),
             _ => Vec::new(),
@@ -264,30 +297,66 @@ impl Rules {
         }
     }
 
-    /// The class a net belongs to: assigned by name, else the matching pattern of the lowest
-    /// priority, else `Default`.
-    pub fn class_of(&self, net: &str) -> Option<&NetClass> {
-        let named = |name: &str| self.classes.iter().find(|c| c.name == name);
-        if let Some((_, class)) = self.assignments.iter().find(|(n, _)| n == net) {
-            return named(class);
+    /// The classes a net is in, as KiCad 9 finds them: every class assigned to it by name and
+    /// every class whose pattern matches it, the lowest priority first, ties in the project's
+    /// order of classes. `Default` is not among them; it stands behind them all.
+    pub fn classes_of(&self, net: &str) -> Vec<&NetClass> {
+        let named = self.assignments.iter().filter(|(n, _)| n == net).map(|(_, c)| c);
+        let matched = self.patterns.iter().filter(|(pattern, _)| wildcard(pattern, net)).map(|(_, c)| c);
+        let mut found: Vec<(usize, &NetClass)> = Vec::new();
+        for name in named.chain(matched) {
+            if let Some(k) = self.classes.iter().position(|c| &c.name == name && c.name != "Default") {
+                if !found.iter().any(|(j, _)| *j == k) {
+                    found.push((k, &self.classes[k]));
+                }
+            }
         }
-        self.patterns
-            .iter()
-            .filter(|(pattern, _)| wildcard(pattern, net))
-            .filter_map(|(_, class)| named(class))
-            .min_by_key(|c| c.priority)
-            .or_else(|| named("Default"))
+        found.sort_by_key(|&(k, c)| (c.priority, k));
+        found.into_iter().map(|(_, c)| c).collect()
+    }
+
+    /// The class a net routes by, as KiCad 9 makes it: each field from the first of the net's
+    /// classes that sets it, else from `Default`; named, as KiCad names it, by the net's classes
+    /// joined with commas, `Default` last where it gave a field (alone for a net in no class).
+    pub fn class_of(&self, net: &str) -> Option<NetClass> {
+        let default = self.classes.iter().find(|c| c.name == "Default");
+        let found = self.classes_of(net);
+        let Some(first) = found.first() else { return default.cloned() };
+        let mut class = (*first).clone();
+        let mut names: Vec<&str> = found.iter().map(|c| c.name.as_str()).collect();
+        let take = |class: &mut NetClass, next: &NetClass| {
+            for k in 0..NetClass::FIELDS {
+                if class.unset & !next.unset & (1 << k) != 0 {
+                    *class.field(k) = next.get(k);
+                    class.unset &= !(1 << k);
+                }
+            }
+        };
+        for next in &found[1..] {
+            take(&mut class, next);
+        }
+        if let Some(default) = default.filter(|_| class.unset != 0) {
+            take(&mut class, default);
+            names.push("Default");
+        }
+        class.name = names.join(",");
+        Some(class)
+    }
+
+    /// Whether `class` names a class of `net`, as a rule's `A.NetClass == 'X'` tests it in KiCad
+    /// 9: any class the net is in, `Default` where it stands behind them, or the whole name.
+    pub fn in_class(&self, net: &str, class: &str) -> bool {
+        self.class_of(net).is_some_and(|c| c.name == class || c.name.split(',').any(|n| n == class))
     }
 
     /// The narrowest track `net` may have: the board minimum, or a custom rule's for the net or
     /// its class where that is wider.
     pub fn min_track_width_of(&self, net: &str) -> f64 {
-        let class = self.class_of(net).map(|c| c.name.as_str());
         self.min_widths
             .iter()
             .filter(|(s, _)| match s {
                 Select::Net(n) => n == net,
-                Select::Class(c) => Some(c.as_str()) == class,
+                Select::Class(c) => self.in_class(net, c),
             })
             .map(|(_, v)| *v)
             .fold(self.min_track_width, f64::max)
@@ -462,6 +531,57 @@ mod tests {
         let r = Rules::parse(full).unwrap();
         assert!(r.warnings.is_empty(), "{:?}", r.warnings);
         near(r.min_copper_edge_clearance, 0.3e-3);
+    }
+
+    /// KiCad 9.0.8's own answers (`GetEffectiveNetClass`, and kicad-cli DRC for `A.NetClass`) on
+    /// the same projects, 2026-10-30.
+    #[test]
+    fn a_net_in_several_classes_takes_each_field_from_the_first_that_sets_it() {
+        let near = |a: f64, b: f64| assert!((a - b).abs() < 1e-12, "{a} vs {b}");
+        let v4 = r#"{"net_settings":{"meta":{"version":4},"classes":[
+            {"name":"Default","priority":2147483647,"clearance":0.2,"track_width":0.2,"via_diameter":0.4,"via_drill":0.2},
+            {"name":"A","priority":0,"clearance":0.3},
+            {"name":"B","priority":1,"clearance":0.1,"track_width":0.5,"via_diameter":0.8},
+            {"name":"C","priority":5,"clearance":0.4,"track_width":0.35}],
+            "netclass_patterns":[{"netclass":"B","pattern":"3V3"},{"netclass":"A","pattern":"3*"},{"netclass":"C","pattern":"BTN*"}],
+            "netclass_assignments":{"BOOTSEL":["B","A"],"BTN_N":"B"}}}"#;
+        let r = Rules::parse(v4).unwrap();
+        for (net, name, clearance, track, via) in [
+            ("3V3", "A,B,Default", 0.3, 0.5, 0.8),
+            ("BOOTSEL", "A,B,Default", 0.3, 0.5, 0.8),
+            ("BTN_N", "B,C,Default", 0.1, 0.5, 0.8),
+            ("BOOTSEL_SW", "Default", 0.2, 0.2, 0.4),
+        ] {
+            let c = r.class_of(net).unwrap();
+            assert_eq!(c.name, name, "{net}");
+            near(c.clearance, clearance * MM);
+            near(c.track_width, track * MM);
+            near(c.via_diameter, via * MM);
+        }
+        near(r.class_of("3V3").unwrap().via_drill, 0.2 * MM);
+        for (class, is) in [("A", true), ("B", true), ("Default", true), ("A,B,Default", true), ("A,B", false), ("C", false)] {
+            assert_eq!(r.in_class("3V3", class), is, "3V3 in {class}");
+        }
+        // A KiCad 8 project has no priorities: ties go by the order of its classes, and a class
+        // that sets every field leaves nothing to Default.
+        let v3 = |first: &str, second: &str| {
+            let class = |name: &str| match name {
+                "Z" => r#"{"name":"Z","clearance":0.3,"track_width":0.25,"via_diameter":0.4,"via_drill":0.2,"diff_pair_width":0.2,"diff_pair_gap":0.25,"diff_pair_via_gap":0.25}"#,
+                _ => r#"{"name":"B","clearance":0.1,"track_width":0.5,"via_diameter":0.4,"via_drill":0.2,"diff_pair_width":0.2,"diff_pair_gap":0.25,"diff_pair_via_gap":0.25}"#,
+            };
+            format!(
+                r#"{{"net_settings":{{"meta":{{"version":3}},"classes":[{{"name":"Default","clearance":0.2,"track_width":0.2}},{},{}],
+                "netclass_patterns":[{{"netclass":"B","pattern":"3V3"}},{{"netclass":"Z","pattern":"3*"}}]}}}}"#,
+                class(first),
+                class(second)
+            )
+        };
+        let zb = Rules::parse(&v3("Z", "B")).unwrap().class_of("3V3").unwrap();
+        assert_eq!(zb.name, "Z,B");
+        near(zb.clearance, 0.3 * MM);
+        let bz = Rules::parse(&v3("B", "Z")).unwrap().class_of("3V3").unwrap();
+        assert_eq!(bz.name, "B,Z");
+        near(bz.clearance, 0.1 * MM);
     }
 
     #[test]

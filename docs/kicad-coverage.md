@@ -87,7 +87,7 @@ way Stage 9 did; steps 1-3 also add the `~/pcb` rule files above as parser tests
 1. **Done (2026-10-30): say what is dropped, and load without a project.** Put rule and board warnings in the
    `--report` JSON (`findings` of kind `rule`) so Studio and Boardroom show them; load a board
    with no `.kicad_pro` on KiCad's defaults; read `solder_mask_to_copper_clearance`. Small.
-2. **KiCad 9 net classes.** Composite classes by priority, missing fields from Default, with
+2. **Done (2026-10-30): KiCad 9 net classes.** Composite classes by priority, missing fields from Default, with
    KiCad's own resolution checked on the corpus projects (kicad-cli DRC on a probe board).
 3. **A real custom-rules engine.** Parse the rule language (conditions as expressions over
    `A`/`B` properties and functions, `(layer …)`, `(severity …)`, last-match-wins) and resolve

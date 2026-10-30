@@ -174,7 +174,7 @@ order of work are in `docs/kicad-coverage.md`.
 
 - [x] Dropped rules and board warnings in the `--report` JSON; a board loads without a
       `.kicad_pro`; `solder_mask_to_copper_clearance` read.
-- [ ] KiCad 9 net classes: every class a net has, combined by priority; missing fields from
+- [x] KiCad 9 net classes: every class a net has, combined by priority; missing fields from
       Default.
 - [ ] A custom-rules engine: the `.kicad_dru` language (conditions, `layer`, `severity`, last
       match wins) resolved into clearance tables, widths, `disallow` regions and hole checks,
