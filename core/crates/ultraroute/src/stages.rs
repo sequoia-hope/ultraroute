@@ -802,7 +802,7 @@ impl Stage for Write {
             ctx.say("necks", neck.line);
         }
         let (board, ledger) = (&mut *ctx.board, &mut *ctx.ledger);
-        let replace = crate::moved_parts(board, &ledger.original_at);
+        let replace = crate::moved_parts(board, &ledger.original_at, ctx.text);
         grid::keep_orphans(board, &ledger.removed, &mut laid);
         let (tracks, vias) = grid::edits(board, &laid);
         let stale = crate::stale_fills(board, &laid, ctx.text, !replace.is_empty());

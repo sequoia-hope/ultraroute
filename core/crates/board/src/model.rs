@@ -288,6 +288,17 @@ pub struct Board {
     pub mask_areas: Vec<(Shape, u64, u32)>,
     /// Pads' own clearances, where wider than their nets' (KiCad's local clearance).
     pub pad_clearances: HashMap<ItemId, Nm>,
+    /// Slotted holes: the two ends of a slot's centre line, its radius the item's `hole`'s. A
+    /// slot is longer than the circle `hole` holds; [`Board::hole_shape`] gives all of it.
+    pub hole_ends: HashMap<ItemId, (Point, Point)>,
+    /// Net ties: each pad of a tie group, and each piece of copper drawn in a footprint with one,
+    /// with its footprint and the nets the tie joins. Members of one tie may touch.
+    pub ties: HashMap<ItemId, (usize, Vec<u32>)>,
+    /// A keepout's cutouts, where it forbids nothing.
+    pub keepout_holes: HashMap<ItemId, Vec<Shape>>,
+    /// Zones of a net saved with no fill (KiCad not having filled them): their zone, net, layers
+    /// and outline, to stand in for their copper where it must be there, on a plane.
+    pub unfilled: Vec<(usize, u32, u64, Shape)>,
     /// Areas where a via costs the router dearly but is allowed, on every layer: rule areas
     /// whose name starts `soft-novia`, and boxes given on the command line. Room kept for silk.
     pub via_avoid: Vec<Shape>,
@@ -299,6 +310,9 @@ pub struct Board {
     /// What crossing another net's pour (one refilled round new copper, not a plane) costs, as a
     /// multiple of the length inside: crossing cuts the pour into pieces. 0 for nothing.
     pub pour_cost: f64,
+    /// What reading the board found and could not take as given: the reader's own warnings
+    /// (drawings it skips, values it assumed) and an outline that does not close.
+    pub warnings: Vec<String>,
     /// Clearances per net number, in nanometres, so `clearance(a, b)` is two array lookups.
     net_clearances: Vec<Nm>,
     min_clearance_nm: Nm,
@@ -324,6 +338,20 @@ impl std::fmt::Display for LoadError {
 }
 
 impl std::error::Error for LoadError {}
+
+/// The two ends of a slotted drill's centre line, in the board frame: a pad at `position`
+/// (metres) turned `rotation_deg`, drilled `d` (metres, x by y in the pad's frame); `None` for a
+/// round hole.
+fn slot_ends(position: [f64; 2], rotation_deg: f64, d: [f64; 2]) -> Option<(Point, Point)> {
+    if (d[0] - d[1]).abs() <= 1e-6 {
+        return None;
+    }
+    let (s, c) = rotation_deg.to_radians().sin_cos();
+    let half = (d[0].max(d[1]) - d[0].min(d[1])) / 2.0;
+    let along = if d[0] > d[1] { [c, -s] } else { [s, c] };
+    let end = |k: f64| Point::from_m([position[0] + k * half * along[0], position[1] + k * half * along[1]]);
+    Some((end(-1.0), end(1.0)))
+}
 
 impl Board {
     /// Reads a `.kicad_pcb` and the `.kicad_pro` beside it.
@@ -381,10 +409,15 @@ impl Board {
             mask_web: nm(copper.solder_mask_min_width),
             mask_areas: Vec::new(),
             pad_clearances: HashMap::new(),
+            hole_ends: HashMap::new(),
+            ties: HashMap::new(),
+            keepout_holes: HashMap::new(),
+            unfilled: Vec::new(),
             via_avoid: Vec::new(),
             via_avoid_cost: 3_000,
             regions: Vec::new(),
             pour_cost: 0.0,
+            warnings: pcb.warnings.iter().chain(&copper.warnings).cloned().collect(),
             net_clearances,
             min_clearance_nm,
             limits: Default::default(),
@@ -393,10 +426,14 @@ impl Board {
             bboxes: Vec::new(),
             cells: HashMap::new(),
         };
-        if let Ok(loops) = pcb.outline_loops() {
-            for l in std::iter::once(&loops.outer).chain(&loops.holes) {
-                board.outline.push(l.points(MAX_ERROR_M).into_iter().map(Point::from_m).collect());
+        match pcb.outline_loops() {
+            Ok(loops) => {
+                for l in std::iter::once(&loops.outer).chain(&loops.holes) {
+                    board.outline.push(l.points(MAX_ERROR_M).into_iter().map(Point::from_m).collect());
+                }
             }
+            // Copper still keeps clear of every edge primitive (below); the map covers the items.
+            Err(e) => board.warnings.push(format!("board outline: {e}; the board's extent is taken from its parts")),
         }
         // Copper keeps clear of every Edge.Cuts and Margin primitive, whether it closes into the
         // board's loops or not: a slot drawn as an open line, or a cutout the loops missed.
@@ -493,21 +530,21 @@ impl Board {
                     board.insert(Item { kind: Kind::Pour { zone: DRAWN, kept: true }, net: base.net, layers: unjoined, shape: shape.clone(), hole: None, locked: true, span: None });
                 }
             }
-            ids.push(board.insert(base));
+            let id = board.insert(base);
+            ids.push(id);
+            if let Some(ends) = model.drill.and_then(|d| slot_ends(model.position, model.rotation_deg, d)) {
+                board.hole_ends.insert(id, ends);
+            }
             // A slot's hole is longer than the circle `hole` holds: an unplated one keeps tracks
             // and vias clear of all of it, by the edge clearance, as KiCad takes an unplated slot
             // for board edge. (A plated one's copper covers it.)
             if let (Some(d), false) = (model.drill, plated) {
-                if (d[0] - d[1]).abs() > 1e-6 {
-                    let (s, c) = model.rotation_deg.to_radians().sin_cos();
-                    let half = (d[0].max(d[1]) - d[0].min(d[1])) / 2.0;
-                    let along = if d[0] > d[1] { [c, -s] } else { [s, c] };
-                    let end = |k: f64| Point::from_m([model.position[0] + k * half * along[0], model.position[1] + k * half * along[1]]);
+                if let Some((a, b)) = slot_ends(model.position, model.rotation_deg, d) {
                     board.insert(Item {
                         kind: Kind::Keepout { forbids: Keepout { tracks: true, vias: true, ..Keepout::default() }, footprint: Some(pad.footprint) },
                         net: 0,
                         layers: (1u64 << board.layers.len()) - 1,
-                        shape: Shape::Capsule { a: end(-1.0), b: end(1.0), r: nm(d[0].min(d[1]) / 2.0 + board.rules.min_hole_clearance.max(board.rules.min_copper_edge_clearance)) },
+                        shape: Shape::Capsule { a, b, r: nm(d[0].min(d[1]) / 2.0 + board.rules.min_hole_clearance.max(board.rules.min_copper_edge_clearance)) },
                         hole: None,
                         locked: true,
                         span: None,
@@ -537,13 +574,13 @@ impl Board {
             });
         }
         for arc in &copper.arcs {
-            let pts = arc_chords(arc.start, arc.mid, arc.end, arc.width / 2.0);
+            let (pts, sag) = arc_chords(arc.start, arc.mid, arc.end, arc.width / 2.0);
             for w in pts.windows(2) {
                 board.insert(Item {
                     kind: Kind::Track,
                     net: arc.net,
                     layers: one(&arc.layer),
-                    shape: Shape::Capsule { a: w[0], b: w[1], r: nm(arc.width / 2.0) },
+                    shape: Shape::Capsule { a: w[0], b: w[1], r: nm(arc.width / 2.0 + sag) },
                     hole: None,
                     locked: arc.locked,
                     span: Some(arc.span),
@@ -577,7 +614,7 @@ impl Board {
             }
             if let Some(keepout) = zone.keepout {
                 if zone.outline.len() >= 3 {
-                    board.insert(Item {
+                    let id = board.insert(Item {
                         kind: Kind::Keepout { forbids: keepout, footprint: zone.footprint },
                         net: 0,
                         layers: mask(&zone.layers),
@@ -586,13 +623,29 @@ impl Board {
                         locked: true,
                         span: Some(zone.span),
                     });
+                    let holes: Vec<Shape> = zone.cutouts.iter().filter(|c| c.len() >= 3).map(|c| Shape::Polygon(c.iter().copied().map(Point::from_m).collect())).collect();
+                    if !holes.is_empty() {
+                        board.keepout_holes.insert(id, holes);
+                    }
                 }
                 continue;
+            }
+            let kept = blocks.iter().any(|b| b.zones.contains(&z));
+            // A zone saved unfilled has no copper to read. Kept, as a block's, its outline stands
+            // for it, as it would for a plane's (`set_planes`); a pour refilled round the routes
+            // needs none.
+            if zone.filled.is_empty() && zone.net != 0 && zone.outline.len() >= 3 {
+                let outline = Shape::Polygon(zone.outline.iter().copied().map(Point::from_m).collect());
+                board.unfilled.push((z, zone.net, mask(&zone.layers), outline.clone()));
+                if kept {
+                    board.insert(Item { kind: Kind::Pour { zone: z, kept: true }, net: zone.net, layers: mask(&zone.layers), shape: outline, hole: None, locked: true, span: None });
+                    board.warnings.push(format!("zone {} of {} is not filled: its outline stands for its copper; refill it in KiCad", zone.name, zone.net_name));
+                }
             }
             for (layer, poly) in &zone.filled {
                 if poly.len() >= 3 {
                     board.insert(Item {
-                        kind: Kind::Pour { zone: z, kept: blocks.iter().any(|b| b.zones.contains(&z)) },
+                        kind: Kind::Pour { zone: z, kept },
                         net: zone.net,
                         layers: one(layer),
                         shape: Shape::Polygon(poly.iter().copied().map(Point::from_m).collect()),
@@ -635,9 +688,17 @@ impl Board {
             });
             board.mask_areas.extend(shapes.into_iter().map(|shape| (shape, layer, net)));
         }
+        // A net tie's groups: its footprint, and the nets each joins.
+        let tie_nets = |fp: usize| -> Vec<(Vec<String>, Vec<u32>)> {
+            let f = &pcb.footprints[fp];
+            f.net_tie_groups
+                .iter()
+                .map(|g| (g.clone(), f.pads.iter().filter(|p| g.contains(&p.number)).filter_map(|p| p.net.as_ref().map(|n| n.number)).collect()))
+                .collect()
+        };
         for g in &copper.graphics {
             for poly in &g.polygons {
-                board.insert(Item {
+                let id = board.insert(Item {
                     kind: Kind::Pour { zone: DRAWN, kept: true },
                     net: g.net,
                     layers: one(&g.layer),
@@ -646,7 +707,26 @@ impl Board {
                     locked: true,
                     span: None,
                 });
+                // Copper drawn in a net tie is the tie itself, between all its nets.
+                if let Some(fp) = g.footprint {
+                    let nets: Vec<u32> = tie_nets(fp).into_iter().flat_map(|(_, n)| n).collect();
+                    if !nets.is_empty() {
+                        board.ties.insert(id, (fp, nets));
+                    }
+                }
             }
+        }
+        let tie_pads: Vec<(ItemId, usize, Vec<u32>)> = board
+            .items()
+            .filter_map(|(id, it)| match &it.kind {
+                Kind::Pad { footprint, number, .. } => {
+                    tie_nets(*footprint).into_iter().find(|(g, _)| g.contains(number)).map(|(_, nets)| (id, *footprint, nets))
+                }
+                _ => None,
+            })
+            .collect();
+        for (id, fp, nets) in tie_pads {
+            board.ties.insert(id, (fp, nets));
         }
         board.limits = crate::check::Limits::of(&board);
         board
@@ -692,6 +772,13 @@ impl Board {
 
     pub fn bbox(&self, id: ItemId) -> Option<BBox> {
         self.items.get(id).and_then(Option::as_ref).map(|_| self.shape_bboxes[id])
+    }
+
+    /// The item's hole as a shape: a slot's whole length, or the drilled circle.
+    pub fn hole_shape(&self, id: ItemId, item: &Item) -> Option<Shape> {
+        let (centre, r) = item.hole?;
+        let (a, b) = self.hole_ends.get(&id).copied().unwrap_or((centre, centre));
+        Some(Shape::Capsule { a, b, r })
     }
 
     pub fn items(&self) -> impl Iterator<Item = (ItemId, &Item)> {
@@ -856,6 +943,9 @@ impl Board {
             if let Some(mut item) = self.remove(m) {
                 item.shape = item.shape.translated(by);
                 item.hole = item.hole.map(|(c, r)| (Point::new(c.x + by.x, c.y + by.y), r));
+                if let Some((a, b)) = self.hole_ends.get_mut(&m) {
+                    (*a, *b) = (Point::new(a.x + by.x, a.y + by.y), Point::new(b.x + by.x, b.y + by.y));
+                }
                 self.restore(m, item);
             }
         }
@@ -877,6 +967,12 @@ impl Board {
     /// them, vias still passing, and their pours join their nets (see [`crate::connectivity_without_pours`]).
     pub fn set_planes(&mut self, mask: u64) {
         self.planes |= mask;
+        // A plane's zone saved unfilled: its outline stands for its pour, which joins its net.
+        let unfilled: Vec<(usize, u32, u64, Shape)> = self.unfilled.iter().filter(|u| u.2 & mask != 0).cloned().collect();
+        for (zone, net, layers, outline) in unfilled {
+            self.insert(Item { kind: Kind::Pour { zone, kept: true }, net, layers: layers & mask, shape: outline, hole: None, locked: true, span: None });
+            self.warnings.push(format!("a plane's zone (net {}) is not filled: its outline stands for its copper; refill it in KiCad", self.net_name(net)));
+        }
         let Some(outer) = self.outline.first().cloned() else { return };
         for layer in (0..self.layers.len()).filter(|l| mask & (1 << l) != 0) {
             self.insert(Item {
@@ -904,21 +1000,30 @@ impl Board {
     }
 }
 
-fn arc_chords(s: [f64; 2], m: [f64; 2], e: [f64; 2], half_width: f64) -> Vec<Point> {
+/// How far an arc track's chords may sag inside it, in metres: below the checks' slack, so the
+/// copper is judged as near the true arc as can be told.
+const ARC_SAG_M: f64 = 0.2e-6;
+
+/// An arc track as chords between points on its centre line, and how much each chord's half
+/// width grows by its sag, so the copper covers the whole arc on both sides: never less than it
+/// is, and at most twice [`ARC_SAG_M`] more.
+fn arc_chords(s: [f64; 2], m: [f64; 2], e: [f64; 2], half_width: f64) -> (Vec<Point>, f64) {
     let Some(c) = kicad_pcb::circumcenter(s, m, e) else {
-        return vec![Point::from_m(s), Point::from_m(e)];
+        return (vec![Point::from_m(s), Point::from_m(e)], 0.0);
     };
     let r = (s[0] - c[0]).hypot(s[1] - c[1]);
     let angle = |p: [f64; 2]| (p[1] - c[1]).atan2(p[0] - c[0]);
     let wrap = |a: f64| a.rem_euclid(std::f64::consts::TAU);
     let (a0, am, a1) = (angle(s), angle(m), angle(e));
     let sweep = if wrap(am - a0) < wrap(a1 - a0) { wrap(a1 - a0) } else { -wrap(a0 - a1) };
-    let per = 2.0 * (1.0 - (MAX_ERROR_M / (r + half_width)).min(1.0)).acos();
+    let per = 2.0 * (1.0 - (ARC_SAG_M / (r + half_width)).min(1.0)).acos();
     let n = ((sweep.abs() / per.max(1e-6)).ceil() as usize).max(1);
-    (0..=n)
+    let sag = r * (1.0 - (sweep.abs() / n as f64 / 2.0).cos());
+    let points = (0..=n)
         .map(|k| {
             let a = a0 + sweep * k as f64 / n as f64;
             Point::from_m([c[0] + r * a.cos(), c[1] + r * a.sin()])
         })
-        .collect()
+        .collect();
+    (points, sag)
 }

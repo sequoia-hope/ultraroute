@@ -679,17 +679,56 @@ fn stale_fills(board: &Board, laid: &[ItemId], text: &str, moved: bool) -> Vec<k
         .collect()
 }
 
-fn moved_parts(board: &Board, original_at: &[Point]) -> Vec<(kicad_pcb::Span, String)> {
-    board
+fn moved_parts(board: &Board, original_at: &[Point], text: &str) -> Vec<(kicad_pcb::Span, String)> {
+    let moved: Vec<(usize, Point)> = board
         .footprints
         .iter()
         .zip(original_at)
-        .filter(|(f, at)| f.at != **at)
-        .filter_map(|(f, _)| {
+        .enumerate()
+        .filter(|(_, (f, at))| f.at != **at)
+        .map(|(k, (f, at))| (k, Point::new(f.at.x - at.x, f.at.y - at.y)))
+        .collect();
+    let mut out: Vec<(kicad_pcb::Span, String)> = moved
+        .iter()
+        .filter_map(|&(k, _)| {
+            let f = &board.footprints[k];
             let angle = if f.rotation_deg == 0.0 { String::new() } else { format!(" {}", f.rotation_deg) };
             Some((f.at_span?, format!("(at {} {}{angle})", mm(f.at.x as f64 * 1e-9), mm(f.at.y as f64 * 1e-9))))
         })
-        .collect()
+        .collect();
+    // A footprint's zones and rule areas are written in the board's frame, not the part's: each
+    // point moves with the part. The board keeps no spans of them, so they are read again.
+    if !moved.is_empty() {
+        if let Ok((_, copper)) = kicad_pcb::parse_board(text) {
+            for zone in &copper.zones {
+                let Some(&(_, by)) = zone.footprint.and_then(|fp| moved.iter().find(|(k, _)| *k == fp)) else { continue };
+                let (start, end) = (zone.span.start, zone.span.end);
+                out.push((zone.span, shift_points(&text[start..end], by)));
+            }
+        }
+    }
+    out
+}
+
+/// `text` with every `(xy X Y)` in it moved by `by`.
+fn shift_points(text: &str, by: Point) -> String {
+    let (dx, dy) = (by.x as f64 * 1e-6, by.y as f64 * 1e-6);
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find("(xy ") {
+        out.push_str(&rest[..i + 4]);
+        rest = &rest[i + 4..];
+        let close = rest.find(')').unwrap_or(rest.len());
+        let nums: Vec<f64> = rest[..close].split_whitespace().filter_map(|v| v.parse().ok()).collect();
+        if let [x, y] = nums[..] {
+            out.push_str(&format!("{} {}", kicad_pcb::write::mm((x + dx) * 1e-3), kicad_pcb::write::mm((y + dy) * 1e-3)));
+        } else {
+            out.push_str(&rest[..close]);
+        }
+        rest = &rest[close..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Every connection left open and what is in the way of it, one line each, on standard error so
@@ -1211,6 +1250,9 @@ fn prepare(a: &Args, board: &mut Board, ledger: &mut Ledger) {
     for f in board.footprints.iter_mut().filter(|f| a.lock.contains(&f.reference)) {
         f.locked = true;
     }
+    for name in a.lock.iter().filter(|n| !board.footprints.iter().any(|f| &f.reference == *n)) {
+        eprintln!("warning: --lock {name}: no such part on the board");
+    }
     for (name, x, y) in &a.place {
         let Some(fp) = board.footprints.iter().position(|f| &f.reference == name) else {
             eprintln!("warning: --place {name}: no such part on the board");
@@ -1252,7 +1294,11 @@ fn prepare(a: &Args, board: &mut Board, ledger: &mut Ledger) {
                 None => panic!("--planes: the board has no copper layer {name} (it has {})", board.layers.join(", ")),
             }
         }
+        let said = board.warnings.len();
         board.set_planes(mask);
+        for w in &board.warnings[said..] {
+            eprintln!("warning: {w}");
+        }
     }
 }
 
@@ -1261,7 +1307,7 @@ fn prepare(a: &Args, board: &mut Board, ledger: &mut Ledger) {
 fn unrouted(a: &Args, mut board: Board, text: &str, mut ledger: Ledger, live: &Arc<Mutex<Option<Live>>>, mut stats: RunStats, begun: Instant) -> Routed {
     let open = open_airlines(a, &board);
     let blamed = if a.blame { print_blame(&mut board, a.pours_block) } else { Vec::new() };
-    let replace = moved_parts(&board, &ledger.original_at);
+    let replace = moved_parts(&board, &ledger.original_at, text);
     ledger.removed.extend(stale_fills(&board, &[], text, !replace.is_empty()));
     let out = apply(text, &Edit { remove: std::mem::take(&mut ledger.removed), replace, ..Edit::default() });
     if let Some(l) = lock(live).as_mut() {

@@ -465,3 +465,58 @@ fn an_arcs_other_chords_are_written_when_one_goes() {
     let (tracks, _) = edits(&b, &laid);
     assert_eq!(tracks.len(), chords.len() - 1);
 }
+
+#[test]
+fn a_net_ties_pads_are_routed_to() {
+    // A tie of nets A and B at (10, 10), each net's other pad 8 mm away.
+    let src = r#"(kicad_pcb (version 20241229) (generator "pcbnew") (general (thickness 1.6))
+      (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+      (net 0 "") (net 1 "A") (net 2 "B")
+      (footprint "NetTie:NetTie-2_SMD_Pad0.5mm" (layer "F.Cu") (uuid "11111111-1111-4111-8111-111111111111") (at 10 10)
+        (property "Reference" "NT1" (at 0 -1.2 0) (layer "F.SilkS") (uuid "11111111-1111-4111-8111-111111111112"))
+        (net_tie_pad_groups "1, 2")
+        (fp_poly (pts (xy -0.5 -0.25) (xy 0.5 -0.25) (xy 0.5 0.25) (xy -0.5 0.25)) (stroke (width 0) (type solid)) (fill yes) (layer "F.Cu"))
+        (pad "1" smd circle (at -0.5 0) (size 0.5 0.5) (layers "F.Cu") (net 1 "A"))
+        (pad "2" smd circle (at 0.5 0) (size 0.5 0.5) (layers "F.Cu") (net 2 "B")))
+      (footprint "t:P" (layer "F.Cu") (uuid "22222222-2222-4222-8222-222222222221") (at 2 10)
+        (property "Reference" "J1" (at 0 -2 0) (layer "F.SilkS") (uuid "22222222-2222-4222-8222-222222222222"))
+        (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "A")))
+      (footprint "t:P" (layer "F.Cu") (uuid "33333333-3333-4333-8333-333333333331") (at 18 10)
+        (property "Reference" "J2" (at 0 -2 0) (layer "F.SilkS") (uuid "33333333-3333-4333-8333-333333333332"))
+        (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 2 "B")))
+      (gr_rect (start 0 5) (end 20 15) (layer "Edge.Cuts") (width 0.1)))"#;
+    let (pcb, copper) = kicad_pcb::parse_board(src).unwrap();
+    let rules = r#"{"board":{"design_settings":{"rules":{"min_clearance":0.2,"min_copper_edge_clearance":0.5}}},"net_settings":{"classes":[{"name":"Default","clearance":0.2,"track_width":0.2,"via_diameter":0.6,"via_drill":0.3}]}}"#;
+    let mut b = Board::new(&pcb, &copper, kicad_pcb::Rules::parse(rules).unwrap());
+    assert_eq!(open(&b), 2);
+    let stats = route_open(&mut b, &mut CpuSolver, &Options { cell: CELL, pours_block: true, ..Default::default() }, &mut |_| {});
+    assert_eq!(open(&b), 0, "both of the tie's pads are reached: {stats:?}");
+    assert!(check(&b).is_empty(), "{:?}", check(&b));
+}
+
+#[test]
+fn pads_inside_a_keepouts_cutout_are_routed_together() {
+    let src = r#"(kicad_pcb (version 20241229) (generator "pcbnew") (general (thickness 1.6))
+      (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+      (net 0 "") (net 1 "A")
+      (footprint "t:P" (layer "F.Cu") (uuid "22222222-2222-4222-8222-222222222221") (at 9 12)
+        (property "Reference" "J1" (at 0 -2 0) (layer "F.SilkS") (uuid "22222222-2222-4222-8222-222222222222"))
+        (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "A")))
+      (footprint "t:P" (layer "F.Cu") (uuid "33333333-3333-4333-8333-333333333331") (at 15 12)
+        (property "Reference" "J2" (at 0 -2 0) (layer "F.SilkS") (uuid "33333333-3333-4333-8333-333333333332"))
+        (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "A")))
+      (zone (net 0) (net_name "") (layers "F.Cu" "B.Cu") (uuid "cccccccc-0000-4000-8000-000000000001") (hatch edge 0.5)
+        (connect_pads (clearance 0)) (min_thickness 0.25)
+        (keepout (tracks not_allowed) (vias not_allowed) (pads allowed) (copperpour allowed) (footprints allowed))
+        (fill (thermal_gap 0.5) (thermal_bridge_width 0.5))
+        (polygon (pts (xy 2 2) (xy 22 2) (xy 22 22) (xy 2 22)))
+        (polygon (pts (xy 7 7) (xy 17 7) (xy 17 17) (xy 7 17))))
+      (gr_rect (start 0 0) (end 24 24) (layer "Edge.Cuts") (width 0.1)))"#;
+    let (pcb, copper) = kicad_pcb::parse_board(src).unwrap();
+    let rules = r#"{"board":{"design_settings":{"rules":{"min_clearance":0.2,"min_copper_edge_clearance":0.5}}},"net_settings":{"classes":[{"name":"Default","clearance":0.2,"track_width":0.2,"via_diameter":0.6,"via_drill":0.3}]}}"#;
+    let mut b = Board::new(&pcb, &copper, kicad_pcb::Rules::parse(rules).unwrap());
+    assert_eq!(open(&b), 1);
+    let stats = route_open(&mut b, &mut CpuSolver, &Options { cell: CELL, pours_block: true, ..Default::default() }, &mut |_| {});
+    assert_eq!(open(&b), 0, "routed inside the cutout: {stats:?}");
+    assert!(check(&b).is_empty(), "{:?}", check(&b));
+}

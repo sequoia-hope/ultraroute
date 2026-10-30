@@ -3,6 +3,11 @@
 
 use board::*;
 
+/// Rules asking no clearance, so what keeps copper away is the mask opening alone.
+fn no_clearance() -> kicad_pcb::Rules {
+    kicad_pcb::Rules::parse(r#"{"net_settings":{"classes":[{"name":"Default","clearance":0.0,"track_width":0.2}]}}"#).unwrap()
+}
+
 /// A board with one pad of net A whose mask opens `margin` mm beyond it (the board's
 /// `pad_to_mask_clearance` when `None`), and a track of net B `gap` mm from the pad on `layer`.
 fn board(margin: Option<f64>, gap: f64, layer: &str) -> (Board, ItemId) {
@@ -17,7 +22,7 @@ fn board(margin: Option<f64>, gap: f64, layer: &str) -> (Board, ItemId) {
          (gr_rect (start 0 0) (end 20 20) (layer \"Edge.Cuts\") (width 0.1)))"
     );
     let (pcb, copper) = kicad_pcb::parse_board(&text).unwrap();
-    let mut b = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+    let mut b = Board::new(&pcb, &copper, no_clearance());
     let x = nm(10.5e-3 + 0.1e-3 + gap * 1e-3);
     let l = b.layers.iter().position(|n| n == layer).unwrap();
     let track = b.insert(Item {
@@ -63,7 +68,7 @@ fn plain(setup: &str, drawn: &str) -> Board {
          {drawn})"
     );
     let (pcb, copper) = kicad_pcb::parse_board(&text).unwrap();
-    Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap())
+    Board::new(&pcb, &copper, no_clearance())
 }
 
 fn via(b: &mut Board, net: u32, x: f64, y: f64) -> ItemId {

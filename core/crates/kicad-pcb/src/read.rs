@@ -152,7 +152,7 @@ pub fn read(root: &Node) -> Result<Pcb, KicadParse> {
             continue;
         };
         match head {
-            "gr_line" | "gr_arc" | "gr_circle" | "gr_rect" | "gr_poly" => {
+            "gr_line" | "gr_arc" | "gr_circle" | "gr_rect" | "gr_poly" | "gr_curve" => {
                 if layer_of(child) == Some("Edge.Cuts") {
                     read_graphic(child, None, &mut outline, &mut warnings)?;
                 } else if layer_of(child) == Some("Margin") {
@@ -160,9 +160,14 @@ pub fn read(root: &Node) -> Result<Pcb, KicadParse> {
                 }
             }
             "footprint" => {
-                let fp = read_footprint(child, &mut outline, &mut margin, &mut warnings)?;
+                let mut fp = read_footprint(child, &mut outline, &mut margin, &mut warnings)?;
+                // Two parts with one uuid (a copy KiCad did not renumber): the second gets one of
+                // its place in the file, in memory only; the file is left as it is.
                 if !seen_uuids.insert(fp.uuid.clone()) {
-                    return Err(KicadParse::DuplicateFootprintUuid { uuid: fp.uuid });
+                    let p = child.pos();
+                    warnings.push(format!("footprint {} at line {} has the uuid {} of another; it is told apart by its place", fp.reference, p.line, fp.uuid));
+                    fp.uuid = format!("duplicate-{}-{}", p.line, p.col);
+                    seen_uuids.insert(fp.uuid.clone());
                 }
                 footprints.push(fp);
             }
@@ -303,6 +308,26 @@ impl Placement {
     }
 }
 
+/// How far a curve's lines may stray from it, in metres.
+const CURVE_TOLERANCE_M: f64 = 5e-6;
+
+/// The points of lines within [`CURVE_TOLERANCE_M`] of the cubic Bezier `a b c d`: as many even
+/// steps as its control points' bend asks (a step's chord strays at most 3/4 of the largest
+/// second difference over the steps squared).
+fn flatten_cubic(a: [f64; 2], b: [f64; 2], c: [f64; 2], d: [f64; 2]) -> Vec<[f64; 2]> {
+    let second = |p: [f64; 2], q: [f64; 2], r: [f64; 2]| ((p[0] - 2.0 * q[0] + r[0]).powi(2) + (p[1] - 2.0 * q[1] + r[1]).powi(2)).sqrt();
+    let bend = second(a, b, c).max(second(b, c, d));
+    let steps = (0.75 * bend / CURVE_TOLERANCE_M).sqrt().ceil().clamp(1.0, 1000.0) as usize;
+    (0..=steps)
+        .map(|k| {
+            let t = k as f64 / steps as f64;
+            let u = 1.0 - t;
+            let w = [u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t];
+            [w[0] * a[0] + w[1] * b[0] + w[2] * c[0] + w[3] * d[0], w[0] * a[1] + w[1] * b[1] + w[2] * c[1] + w[3] * d[1]]
+        })
+        .collect()
+}
+
 fn read_graphic(
     n: &Node,
     placement: Option<(&Placement, &str)>,
@@ -361,6 +386,19 @@ fn read_graphic(
                     start: corners[i],
                     end: corners[(i + 1) % 4],
                 });
+            }
+        }
+        "gr_curve" | "fp_curve" => {
+            // A cubic Bezier, `(pts (xy start) (xy control) (xy control) (xy end))`, as lines.
+            let pts = required(n, "pts", form)?;
+            let p: Vec<[f64; 2]> = pts.args().iter().filter(|i| i.head() == Some("xy")).map(|i| point(i, "xy").map(|q| pl.apply(q))).collect::<Result<_, _>>()?;
+            let [a, b, c, d] = p[..] else {
+                let at = pts.pos();
+                return Err(KicadParse::Syntax { line: at.line, col: at.col, expected: "four (xy …) in a curve's pts".to_string() });
+            };
+            let points = flatten_cubic(a, b, c, d);
+            for w in points.windows(2) {
+                push(OutlineShape::Line { start: w[0], end: w[1] });
             }
         }
         "gr_poly" | "fp_poly" => {
@@ -539,7 +577,7 @@ fn read_footprint(
     for child in n.args() {
         if matches!(
             child.head(),
-            Some("fp_line" | "fp_arc" | "fp_circle" | "fp_rect" | "fp_poly")
+            Some("fp_line" | "fp_arc" | "fp_circle" | "fp_rect" | "fp_poly" | "fp_curve")
         ) {
             match layer_of(child) {
                 Some("Edge.Cuts") => read_graphic(child, Some((&placement, &uuid)), outline, warnings)?,
@@ -562,6 +600,10 @@ fn read_footprint(
         attrs,
         pads,
         models,
+        net_tie_groups: n
+            .find("net_tie_pad_groups")
+            .map(|g| g.args().iter().filter_map(Node::text).map(|t| t.split(',').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect()).collect())
+            .unwrap_or_default(),
     })
 }
 
