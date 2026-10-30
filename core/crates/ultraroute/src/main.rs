@@ -10,10 +10,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use board::Board;
-use ultraroute::{fit_memory, parse, peak_memory_mb, route, Finding, Live, RunStats};
+use ultraroute::{fit_memory, parse, peak_memory_mb, route, Finding, Live, RunStats, USAGE};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // Asked for: the flags on standard output, and success. A mistake prints them as an error.
+    if args.iter().any(|a| a == "-h" || a == "--help") {
+        println!("{USAGE}");
+        return;
+    }
     let mut a = match parse(&args) {
         Ok(a) => a,
         Err(e) => {
