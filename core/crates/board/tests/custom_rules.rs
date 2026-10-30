@@ -111,3 +111,38 @@ fn rules_the_router_does_not_keep_are_said_by_constraint() {
     assert!(custom.iter().any(|w| w.contains("\"clock\": length, via_count not applied")), "{custom:?}");
     assert!(custom.iter().any(|w| w.contains("bad") && w.contains("not applied")), "{custom:?}");
 }
+
+/// A 1 mm SMD pad of net A at (10, 10) with its own clearance, and a track of net B whose copper
+/// is `gap` mm from the pad's right edge, on a board whose minimum clearance is `min`.
+fn pad_and_track(own: f64, gap: f64, min: f64, custom: &str) -> (Board, ItemId) {
+    let text = format!(
+        "(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))
+         (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user))
+         (net 0 \"\") (net 1 \"A\") (net 2 \"B\")
+         (gr_rect (start 0 0) (end 30 30) (layer \"Edge.Cuts\") (width 0.1))
+         (footprint \"R\" (layer \"F.Cu\") (at 10 10) (property \"Reference\" \"R1\")
+           (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\") (net 1 \"A\") (clearance {own}))))"
+    );
+    let (pcb, copper) = kicad_pcb::parse_board(&text).unwrap();
+    let mut rules = kicad_pcb::Rules::parse(&format!(r#"{{"board":{{"design_settings":{{"rules":{{"min_clearance":{min}}}}}}},"net_settings":{{"classes":[{{"name":"Default","clearance":0.2,"track_width":0.2}}]}}}}"#)).unwrap();
+    if !custom.is_empty() {
+        rules.apply_custom(custom, "test.kicad_dru");
+    }
+    let mut b = Board::new(&pcb, &copper, rules);
+    let t = track(&mut b, 2, 1, 10.5 + gap + 0.1);
+    (b, t)
+}
+
+/// kicad-cli 9.0.8 on the same boards: a pad's own clearance stands in for the net classes and
+/// the custom rules, lower or higher, and only the board's minimum holds under it.
+#[test]
+fn a_pads_own_clearance_outranks_the_classes_and_the_rules() {
+    let (b, t) = pad_and_track(0.1, 0.15, 0.05, "");
+    assert!(clearance_hits(&b, t).is_empty(), "0.1 mm of its own below the class's 0.2 mm");
+    let (b, t) = pad_and_track(0.1, 0.15, 0.2, "");
+    assert_eq!(clearance_hits(&b, t), [nm(0.2e-3)], "the board's minimum holds");
+    let (b, t) = pad_and_track(0.1, 0.15, 0.05, "(version 1)\n(rule hi (constraint clearance (min 0.3mm)))");
+    assert!(clearance_hits(&b, t).is_empty(), "over a custom rule's 0.3 mm");
+    let (b, t) = pad_and_track(0.4, 0.25, 0.05, "(version 1)\n(rule lo (constraint clearance (min 0.1mm)))");
+    assert_eq!(clearance_hits(&b, t), [nm(0.4e-3)], "a custom rule's 0.1 mm does not lower it");
+}

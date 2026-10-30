@@ -695,8 +695,13 @@ fn coupled_grid(board: &Board, options: &PairOptions, pair: &Pair, profile: &Pro
     let rules = &board.rules;
     for &pad_id in &end_pads {
         let Some(item) = board.item(pad_id) else { continue };
-        let implicit = map.clearance_to(board, item.net).max(board.pad_clearances.get(&pad_id).copied().unwrap_or(0));
-        let clr = map.rule_to(board, "clearance", pad_id, item, false, implicit).max(map.rule_to(board, "clearance", pad_id, item, true, implicit));
+        let clr = match board.pad_clearances.get(&pad_id) {
+            Some(&own) => own.max(nm(rules.min_clearance)),
+            None => {
+                let implicit = map.clearance_to(board, item.net);
+                map.rule_to(board, "clearance", pad_id, item, false, implicit).max(map.rule_to(board, "clearance", pad_id, item, true, implicit))
+            }
+        };
         let mask_keep = board.mask_openings.get(&pad_id).map_or(0, |(_, by)| by + board.mask_margin());
         let eff_clr = clr.max(mask_keep);
         if item.is_copper() {

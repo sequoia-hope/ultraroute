@@ -286,7 +286,9 @@ pub struct Board {
     /// Openings drawn in the solder mask: the shape, the copper layer it bares, and the one net
     /// whose pads it bares, which alone may run there; 0 where it bares none or several.
     pub mask_areas: Vec<(Shape, u64, u32)>,
-    /// Pads' own clearances, where wider than their nets' (KiCad's local clearance).
+    /// Pads' own clearances, or their footprints' (KiCad's local clearance), wider or narrower
+    /// than their nets': one stands in for the net classes and custom rules (see
+    /// [`Board::clearance_between`]).
     pub pad_clearances: HashMap<ItemId, Nm>,
     /// Slotted holes: the two ends of a slot's centre line, its radius the item's `hole`'s. A
     /// slot is longer than the circle `hole` holds; [`Board::hole_shape`] gives all of it.
@@ -584,8 +586,7 @@ impl Board {
                     });
                 }
             }
-            let net = board.items.get(*ids.last().unwrap()).and_then(Option::as_ref).map_or(0, |it| it.net);
-            let own = pad.clearance.map(nm).filter(|c| *c > board.net_clearances.get(net as usize).copied().unwrap_or(0));
+            let own = pad.clearance.map(nm).filter(|c| *c > 0);
             for id in ids {
                 if let Some(o) = opening.filter(|o| o.1 > 0) {
                     board.mask_openings.insert(id, o);
@@ -1026,6 +1027,30 @@ impl Board {
     /// Whether an item is a plane's pour.
     pub fn is_plane(&self, item: &Item) -> bool {
         matches!(item.kind, Kind::Pour { .. }) && item.layers & self.planes != 0
+    }
+
+    /// The clearance KiCad keeps between items `a` and `b` on `layer`, as kicad-cli 9.0.8 judges
+    /// it: a pad's own clearance (or its footprint's), where either has one, the larger, and the
+    /// board's minimum under it, whatever the net classes and custom rules say; otherwise the last
+    /// custom rule that holds, or the larger of the two nets' class clearances and the board's
+    /// minimum.
+    pub fn clearance_between(&self, a: &crate::custom::Thing, b: &crate::custom::Thing, layer: usize) -> Nm {
+        let local = |t: &crate::custom::Thing| match t {
+            crate::custom::Thing::Item(_, id, _) => self.pad_clearances.get(id).copied(),
+            _ => None,
+        };
+        match local(a).max(local(b)) {
+            Some(own) => own.max(self.min_clearance_nm),
+            None => {
+                let net = |t: &crate::custom::Thing| match t {
+                    crate::custom::Thing::Item(_, _, it) => Some(it.net),
+                    crate::custom::Thing::New { net, .. } => *net,
+                    _ => None,
+                };
+                let class = |t: &crate::custom::Thing| net(t).and_then(|n| self.net_clearances.get(n as usize).copied()).unwrap_or(self.min_clearance_nm);
+                self.rule_min("clearance", a, Some(b), layer, class(a).max(class(b)))
+            }
+        }
     }
 
     /// The clearance the rules ask between two nets' copper, in nanometres.

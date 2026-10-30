@@ -824,9 +824,15 @@ impl ObstacleMap {
             return;
         }
         if item.is_copper() && (self.pours_block || !item.refilled()) {
-            let implicit = self.clearance_to(board, item.net).max(board.pad_clearances.get(&id).copied().unwrap_or(0));
-            let clearance = self.rule_to(board, "clearance", id, item, false, implicit);
-            let via_clearance = self.rule_to(board, "clearance", id, item, true, implicit);
+            // A pad's own clearance stands in for the classes and the custom rules (KiCad's order;
+            // see `Board::clearance_between`), the board's minimum under it.
+            let (clearance, via_clearance) = match board.pad_clearances.get(&id) {
+                Some(&own) => (own.max(nm(rules.min_clearance)), own.max(nm(rules.min_clearance))),
+                None => {
+                    let implicit = self.clearance_to(board, item.net);
+                    (self.rule_to(board, "clearance", id, item, false, implicit), self.rule_to(board, "clearance", id, item, true, implicit))
+                }
+            };
             let mut hit = Vec::new();
             self.cells_near(&item.shape, half_width + clearance + reach, &mut |c| hit.push(c));
             for l in (0..self.layers).filter(|l| item.on(*l)) {
