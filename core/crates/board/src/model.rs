@@ -655,7 +655,8 @@ impl Board {
                     }
                 }
             }
-            if let Some((&net, &a)) = by_net.iter().max_by(|x, y| x.1.total_cmp(y.1)) {
+            // Equal areas go to the lower net, not to the hash map's order.
+            if let Some((&net, &a)) = by_net.iter().max_by(|x, y| x.1.total_cmp(y.1).then(y.0.cmp(x.0))) {
                 if board_area > 0.0 && a >= share * board_area {
                     out.push((l, net));
                 }

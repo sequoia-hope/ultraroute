@@ -9,14 +9,15 @@ baselines (FreeRouting, PcbRouter, RL-MCTS; PCBench/Baselines/Results_all.csv).
                                              runs $RESERVED_CORES routes at once)
     pcbench.py report RUN [RUN ...]          success, wirelength and vias against the baselines
     pcbench.py rescore RUN [RUN ...]         judge saved reports again (after the rules change)
-    pcbench.py compare A B [C ...] [--noise N|auto] [--noise-from A B] [--json OUT]
+    pcbench.py compare A B [C ...] [--noise N|auto] [--noise-from A B] [--json OUT] [--exact]
                                              each later run against A, board by board: boards
                                              lost and won, error types gained, vias, wirelength,
                                              time limit, referee failures, peak memory; exits 1
                                              when one loses more than N boards (auto: the boards
                                              whose verdict differs between remed-0-base-s0 and
                                              remed-0-base-s0b, the same binary and seed twice: 3)
-                                             or a board gains an error type
+                                             or a board gains an error type; with --exact, also
+                                             when a board no deadline touched differs at all
     pcbench.py note RUN TEXT                 add a dated note to the run's run.json
 
 A board succeeds when KiCad finds nothing unconnected after a zone refill and no DRC error that
@@ -201,12 +202,13 @@ def route_one(b, run_dir, recipe, timeout, seed):
     out = d / "out.kicad_pcb"
     res = {"id": b}
     timing = d / "time.txt"
-    args = ["/usr/bin/time", "-f", "%e %M", "-o", str(timing), str(ROUTER), "route", str(src / "board.kicad_pcb"), "-o", str(out), "--strip-all", *recipe.split(), "--seed", str(seed), "--threads", "1", "--timeout", str(timeout)]
+    args = ["/usr/bin/time", "-f", "%e %M", "-o", str(timing), str(ROUTER), "route", str(src / "board.kicad_pcb"), "-o", str(out), "--strip-all", *recipe.split(), "--seed", str(seed), "--uuid-seed", str(seed), "--threads", "1", "--timeout", str(timeout)]
     started = time.time()
     try:
         r = subprocess.run(CAP + args, capture_output=True, text=True, timeout=timeout * 3 + 300)
         (d / "log.txt").write_text(r.stderr[-200_000:])
         res["code"] = r.returncode
+        res["time_limited"], res["hard_deadline"] = deadlines(r.stderr)
     except subprocess.TimeoutExpired:
         res["code"] = "hung"
     res["seconds"] = round(time.time() - started, 1)
@@ -227,6 +229,13 @@ def route_one(b, run_dir, recipe, timeout, seed):
             res["referee_error"] = str(e)
     (d / "result.json").write_text(json.dumps(res, indent=1))
     return res
+
+
+def deadlines(log):
+    """The stages whose time ran out, and whether the run's hard deadline passed, as the router
+    reports them: a result the clock cut short may differ from run to run."""
+    limited = [m for line in log.splitlines() if line.startswith("deadline: time ran out in ") for m in line.split(" in ", 1)[1].split(", ")]
+    return limited, any(line.startswith("deadline: the run's hard limit passed") for line in log.splitlines())
 
 
 def score(res, run_dir, b):
@@ -392,7 +401,14 @@ def compare(a):
             print(f"   peak memory: max {peaks[top]} MB ({top}); over 2 GB: {len(big)}" + (f" {big}" if big else ""))
         else:
             print("   peak memory: not recorded")
-        ok = len(lost) <= floor and not gained
+        # Boards no deadline touched in either run route the same every time: any difference there is
+        # the change's, not the clock's.
+        same = lambda r: (r.get("success"), r.get("unconnected"), sorted(r.get("new_errors") or {}), r.get("vias"), round(r.get("wirelength") or 0, 3))
+        untouched = [i for i in common if all("time_limited" in rs[i] and not rs[i]["time_limited"] and not rs[i]["hard_deadline"] for rs in (base, new))]
+        moved = [i for i in untouched if same(base[i]) != same(new[i])]
+        if any("time_limited" in rs[i] for rs in (base, new) for i in common):
+            print(f"   untouched by any deadline in both: {len(untouched)} boards, {len(moved)} differ" + "".join(f"\n      {i}: vias {base[i].get('vias')} -> {new[i].get('vias')}, open {base[i].get('unconnected')} -> {new[i].get('unconnected')}" for i in moved))
+        ok = len(lost) <= floor and not gained and not (a.exact and moved)
         passed &= ok
         print(f"   verdict: {'PASS' if ok else 'FAIL'}: lost {len(lost)} (noise {floor}), won {len(won)}, boards gaining an error type {len(gained)}")
         keys = ("success", "unconnected", "new_errors", "vias", "wirelength", "seconds", "code", "peak_mb", "referee_error")
@@ -475,6 +491,7 @@ def main():
     s.add_argument("--noise", default="0", help="boards a run may lose and still pass, or auto")
     s.add_argument("--noise-from", nargs=2, metavar=("A", "B"), help="the two runs --noise auto measures")
     s.add_argument("--json", help="write the per-board table here")
+    s.add_argument("--exact", action="store_true", help="fail when a board no deadline touched differs at all (same binary twice)")
     s = sub.add_parser("note")
     s.add_argument("run")
     s.add_argument("text")

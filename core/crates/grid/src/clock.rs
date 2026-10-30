@@ -20,6 +20,9 @@ pub struct Deadline {
     pub hard: Option<Instant>,
     /// Set from outside (the studio's stop button) to stop everything at the next check.
     pub cancel: Arc<AtomicBool>,
+    /// Set when a check finds the time gone, shared by every deadline made from one: a result the
+    /// clock cut short is not the same every run, and the run says so.
+    pub fired: Arc<AtomicBool>,
 }
 
 impl Default for Deadline {
@@ -30,12 +33,12 @@ impl Default for Deadline {
 
 impl Deadline {
     pub fn unlimited(cancel: Arc<AtomicBool>) -> Self {
-        Deadline { at: None, hard: None, cancel }
+        Deadline { at: None, hard: None, cancel, fired: Arc::default() }
     }
 
     /// A deadline for the whole run, ending at `end`.
     pub fn until(end: Instant, cancel: Arc<AtomicBool>) -> Self {
-        Deadline { at: Some(end), hard: Some(end), cancel }
+        Deadline { at: Some(end), hard: Some(end), cancel, fired: Arc::default() }
     }
 
     /// `seconds` from now, or no limit; for tests and callers that have no run to share.
@@ -49,12 +52,26 @@ impl Deadline {
 
     /// Whether this stage's time or the run's has gone, or the run was cancelled.
     pub fn expired(&self) -> bool {
-        self.cancelled() || self.hard_passed() || self.at.is_some_and(|at| Instant::now() >= at)
+        if self.cancelled() {
+            return true;
+        }
+        let now = Instant::now();
+        let gone = self.hard.is_some_and(|hard| now >= hard) || self.at.is_some_and(|at| now >= at);
+        if gone {
+            self.fired.store(true, Ordering::Relaxed);
+        }
+        gone
     }
 
     /// Whether the run as a whole must stop: its hard deadline passed, or it was cancelled.
     pub fn hard_passed(&self) -> bool {
         self.cancelled() || self.hard.is_some_and(|hard| Instant::now() >= hard)
+    }
+
+    /// Whether a check has found the time gone since this was last asked, on this deadline or any
+    /// made from it; asking clears it.
+    pub fn take_fired(&self) -> bool {
+        self.fired.swap(false, Ordering::Relaxed)
     }
 
     pub fn cancelled(&self) -> bool {
@@ -70,7 +87,7 @@ impl Deadline {
     pub fn share(&self, fraction: f64) -> Deadline {
         let now = Instant::now();
         let at = self.remaining().map(|left| now + left.mul_f64(fraction.clamp(0.0, 1.0)));
-        Deadline { at, hard: self.hard, cancel: self.cancel.clone() }
+        Deadline { at, hard: self.hard, cancel: self.cancel.clone(), fired: self.fired.clone() }
     }
 
     /// A sub-stage's deadline `s` seconds from now, or this one's if it comes sooner.
@@ -79,19 +96,19 @@ impl Deadline {
         if let Some(at) = self.at.or(self.hard) {
             end = end.min(at);
         }
-        Deadline { at: Some(end), hard: self.hard, cancel: self.cancel.clone() }
+        Deadline { at: Some(end), hard: self.hard, cancel: self.cancel.clone(), fired: self.fired.clone() }
     }
 
     /// A sub-stage's deadline at `end`, or this one's if it comes sooner.
     pub fn until_at(&self, end: Instant) -> Deadline {
         let end = self.at.map_or(end, |at| at.min(end));
-        Deadline { at: Some(end), hard: self.hard, cancel: self.cancel.clone() }
+        Deadline { at: Some(end), hard: self.hard, cancel: self.cancel.clone(), fired: self.fired.clone() }
     }
 
     /// This deadline with the stage's own end taken off: only the run's hard end and the cancel flag
     /// stop it.
     pub fn to_hard(&self) -> Deadline {
-        Deadline { at: self.hard, hard: self.hard, cancel: self.cancel.clone() }
+        Deadline { at: self.hard, hard: self.hard, cancel: self.cancel.clone(), fired: self.fired.clone() }
     }
 }
 
@@ -119,6 +136,11 @@ mod tests {
         assert!(open.seconds(60.0).at.unwrap() <= run.hard.unwrap());
         assert!(open.share(0.5).at.is_none());
         assert!(!run.expired());
+        assert!(!run.take_fired());
+        let gone = run.until_at(Instant::now());
+        assert!(gone.expired());
+        assert!(run.take_fired(), "a sub-deadline's firing is the run's");
+        assert!(!run.take_fired(), "asking clears it");
         cancel.store(true, Ordering::Relaxed);
         assert!(half.expired() && long.hard_passed());
     }

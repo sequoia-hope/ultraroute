@@ -26,9 +26,9 @@ use serde_json::{json, Value};
 
 mod regions;
 
-pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--no-negotiate-vias] [--no-negotiate-rip] [--no-negotiate-tree] [--negotiate-legacy] [--diff-pairs] [--diff-pairs-legacy] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--via-cost MM[,OPEN_MM]] [--no-directional] [--no-reduce-vias] [--gpu] \
+pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--no-negotiate-vias] [--no-negotiate-rip] [--no-negotiate-tree] [--negotiate-jacobi] [--negotiate-legacy] [--diff-pairs] [--diff-pairs-legacy] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--via-cost MM[,OPEN_MM]] [--no-directional] [--no-reduce-vias] [--gpu] \
 [--timeout SECONDS] [--cell MM] [--first NET,...] [--first-negotiate] [--first-weight W] [--restart N] [--topo-first REF,...|auto] [--topo-trapped] [--topo-trapped-rip] [--topo-sample MM] \
-[--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--push-decay D] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough warp|linear|rip|gentle|dipole|region] [--shove-steps N] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-late] [--shove-seconds S] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
+[--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--push-decay D] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough warp|linear|rip|gentle|dipole|region] [--shove-steps N] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-late] [--shove-seconds S] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--uuid-seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
 [--live PATH|-] [--live-fps N] [--live-step MS] [--blame]
 --push and --place take millimetres with y pointing up: give KiCad's y negated (KiCad y 127.5 is -127.5).";
 
@@ -59,6 +59,9 @@ pub struct Args {
     pub negotiate_vias: bool,
     pub negotiate_rip: bool,
     pub negotiate_tree: bool,
+    /// Negotiation routes each round against the last on `--threads` threads
+    /// (`NegotiationOptions::jacobi`), instead of one connection after another.
+    pub negotiate_jacobi: bool,
     pub prefanout: bool,
     pub prefanout_mode: Option<grid::EscapeMode>,
     pub prefanout_order: Option<grid::EscapeOrder>,
@@ -132,6 +135,9 @@ pub struct Args {
     pub shove_late: bool,
     /// Reorders the connections negotiation and the grid router take, for a search over runs.
     pub seed: u64,
+    /// The new copper's uuids drawn from this seed, so that a run's output is the same every time;
+    /// random when `None`.
+    pub uuid_seed: Option<u64>,
     /// Seconds nudging leaves for a plough that runs after it.
     pub shove_seconds: f64,
     /// Connections a plough try knocked loose that are ploughed out in turn.
@@ -183,6 +189,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         negotiate_vias: true,
         negotiate_rip: true,
         negotiate_tree: true,
+        negotiate_jacobi: false,
         prefanout: false,
         prefanout_mode: None,
         prefanout_order: None,
@@ -232,6 +239,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         shove_ties: false,
         shove_late: false,
         seed: 0,
+        uuid_seed: None,
         shove_seconds: 30.0,
         shove_cascade: None,
         shove_patience: 1,
@@ -277,6 +285,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             "--no-negotiate-vias" => a.negotiate_vias = false,
             "--no-negotiate-rip" => a.negotiate_rip = false,
             "--no-negotiate-tree" => a.negotiate_tree = false,
+            "--negotiate-jacobi" => a.negotiate_jacobi = true,
             "--negotiate-legacy" => {
                 a.negotiate_repasses = Some(0);
                 a.negotiate_vias = false;
@@ -418,6 +427,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             "--shove-cascade" => a.shove_cascade = Some(value()?.parse().map_err(|e| format!("--shove-cascade: {e}"))?),
             "--shove-patience" => a.shove_patience = value()?.parse().map_err(|e| format!("--shove-patience: {e}"))?,
             "--seed" => a.seed = value()?.parse().map_err(|e| format!("--seed: {e}"))?,
+            "--uuid-seed" => a.uuid_seed = Some(value()?.parse().map_err(|e| format!("--uuid-seed: {e}"))?),
             "--adopt" => a.adopt = true,
             "--chase" => a.chase = true,
             "--verbose" | "-v" => a.verbose = true,
@@ -699,7 +709,8 @@ impl Live {
         let now: HashMap<ItemId, Shape> = board.items().map(|(id, it)| (id, it.shape.clone())).collect();
         let mut add: Vec<Value> =
             board.items().filter(|(id, it)| self.sent.get(id) != Some(&it.shape)).map(|(id, it)| item_json(board, id, it)).collect();
-        let del: Vec<ItemId> = self.sent.keys().filter(|id| !now.contains_key(id)).copied().collect();
+        let mut del: Vec<ItemId> = self.sent.keys().filter(|id| !now.contains_key(id)).copied().collect();
+        del.sort_unstable();
         if self.seq == 0 {
             let polys: Vec<Vec<f64>> = board.outline.iter().map(|p| flat(p)).collect();
             add.push(json!({"id": u32::MAX, "k": "outline", "polys": polys}));
@@ -1039,15 +1050,20 @@ fn sooner(deadline: &grid::Deadline, seconds: f64) -> grid::Deadline {
     }
 }
 
-/// Which stage is running, and the one that was when the run's hard deadline passed.
+/// Which stage is running, the stages the clock stopped short, and the one that was running when
+/// the run's hard deadline passed.
 struct Timeline {
     stage: &'static str,
+    limited: Vec<&'static str>,
     overran_in: Option<&'static str>,
 }
 
 impl Timeline {
     /// `stage` starts. Whether it may run: not once the hard deadline has passed.
     fn enter(&mut self, run: &grid::Deadline, stage: &'static str) -> bool {
+        if run.take_fired() && !self.limited.contains(&self.stage) {
+            self.limited.push(self.stage);
+        }
         let passed = run.hard_passed();
         if passed && self.overran_in.is_none() && !run.cancelled() {
             self.overran_in = Some(self.stage);
@@ -1322,7 +1338,7 @@ pub fn run_with_solver(
     let run = run_deadline(started, a.timeout, cancel.clone());
     // Routing, and the stages that rescue what it left open, stop in time for the via pass.
     let rescue = if a.no_reduce_vias { run.clone() } else { sooner(&run, a.timeout.map_or(0.0, |t| t * VIAS_SHARE)) };
-    let mut timeline = Timeline { stage: "set-up", overran_in: None };
+    let mut timeline = Timeline { stage: "set-up", limited: Vec::new(), overran_in: None };
     let mut solver: Box<dyn grid::FieldSolver> = match custom_solver {
         Some(s) => s,
         None => {
@@ -1680,6 +1696,7 @@ pub fn run_with_solver(
                         repasses: a.negotiate_repasses.unwrap_or(grid::NegotiationOptions::default().repasses),
                         rip_blocked: a.negotiate_rip,
                         reachable_tree: a.negotiate_tree,
+                        jacobi: a.negotiate_jacobi,
                         seed: a.seed,
                         log: log.clone(),
                         ..Default::default()
@@ -1773,6 +1790,7 @@ pub fn run_with_solver(
                     repasses: a.negotiate_repasses.unwrap_or(grid::NegotiationOptions::default().repasses),
                     rip_blocked: a.negotiate_rip,
                     reachable_tree: a.negotiate_tree,
+                    jacobi: a.negotiate_jacobi,
                     ..Default::default()
                 },
                 &mut watch,
@@ -2258,8 +2276,13 @@ pub fn run_with_solver(
         eprintln!("dropped {} pour fills new copper cuts; KiCad refills them", stale.len());
     }
     removed.extend(stale);
-    let routed = apply(text, &Edit { remove: removed, replace, tracks, vias });
+    let routed = apply(text, &Edit { remove: removed, replace, tracks, vias, uuid_seed: a.uuid_seed });
     timeline.enter(&run, "done");
+    // A stage the clock stopped may stop elsewhere next run: the result is not the same every
+    // time, which the benchmark's comparisons need to know.
+    if !timeline.limited.is_empty() {
+        eprintln!("deadline: time ran out in {}", timeline.limited.join(", "));
+    }
     if let Some(stage) = timeline.overran_in {
         let over = a.timeout.map_or(0.0, |t| started.elapsed().as_secs_f64() - t);
         let by = if over > 0.0 { format!("the run overran --timeout by {over:.1} s") } else { "the run still ended within --timeout".to_string() };

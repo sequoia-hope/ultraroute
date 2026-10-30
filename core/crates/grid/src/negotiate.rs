@@ -49,9 +49,14 @@ pub struct NegotiationOptions {
     /// When to stop: between rounds, between connections, inside a search, and in the set-up
     /// before the first round.
     pub deadline: crate::clock::Deadline,
-    /// Above one, every connection routes against the previous round's congestion at once on
-    /// this many CPU threads (Jacobi PathFinder) instead of one after another (Gauss-Seidel).
+    /// CPU threads for `jacobi` rounds; the default rounds run on one, whatever this says.
     pub threads: usize,
+    /// Every connection routes against the previous round's congestion at once, on `threads`
+    /// threads (Jacobi PathFinder), instead of one after another against the round so far
+    /// (Gauss-Seidel). Faster per round on many cores, and the same however many, but on the
+    /// fixtures it does not settle: 30 rounds where Gauss-Seidel takes 7. A GPU solver always
+    /// routes this way.
+    pub jacobi: bool,
     /// Rounds without fewer collisions than the best so far before negotiation gives up.
     pub patience: usize,
     /// Nets whose open connections participate; every net when `None`.
@@ -97,6 +102,7 @@ impl Default for NegotiationOptions {
             history_step: 10,
             deadline: Default::default(),
             threads: 1,
+            jacobi: false,
             patience: 4,
             nets: None,
             net_weight: HashMap::new(),
@@ -685,7 +691,7 @@ fn run_pass(
             break;
         }
         summary.rounds = round + 1;
-        if solver.batch_size() > 1 || options.threads > 1 {
+        if solver.batch_size() > 1 || options.jacobi {
             if solver.batch_size() > 1 {
                 route_round_in_batches(&mut connections, maps, &ends, &zones, &history, &via_history, present, via_scale, weights, options, solver);
             } else {
@@ -1435,41 +1441,47 @@ fn route_round_in_parallel(
     let jobs: Vec<(u32, &str, f64, &[u32])> =
         connections.iter().map(|c| (c.net, c.class.as_str(), weights.get(&c.net).copied().unwrap_or(1.0), c.hole_ring.as_slice())).collect();
     let paths: Vec<std::sync::Mutex<Option<Option<GridPath>>>> = (0..connections.len()).map(|_| std::sync::Mutex::new(None)).collect();
-    std::thread::scope(|scope| {
-        for _ in 0..options.threads {
-            scope.spawn(|| {
-                // One grid per worker, refilled for each connection: a large board's views run
-                // to tens of megabytes, too much to allocate and free hundreds of times a round.
-                let mut grid: Option<RouteGrid> = None;
-                loop {
-                    // A round cut short keeps the paths of the connections it did not reach.
-                    if options.deadline.expired() {
-                        break;
-                    }
-                    let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    if k >= jobs.len() {
-                        break;
-                    }
-                    let (net, class, weight, own_ring) = jobs[k];
-                    let grid = match &mut grid {
-                        Some(g) => {
-                            maps[class].view_into(net, g);
-                            g
-                        }
-                        None => grid.insert(RouteGrid { deadline: options.deadline.clone(), ..maps[class].view(net) }),
-                    };
-                    grid.directional = options.directional && grid.layers.len() == 2;
-                    penalties_into(zones.trace.seen_by(class), history, present, net, weight, &mut grid.penalty);
-                    if options.via_zones {
-                        via_penalties_into(zones, class, own_ring, via_history, present * via_scale, net, weight, &mut grid.via_penalty);
-                    }
-                    let (sources, targets) = &ends[k];
-                    let s: Vec<usize> = sources.iter().map(|t| t.0).collect();
-                    let t: Vec<usize> = targets.iter().map(|t| t.0).collect();
-                    *paths[k].lock().expect("no worker panics") = Some(route_astar(grid, &s, &t, options.via_cost));
-                    done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // One worker's share of the round, taking connections until none are left.
+    let work = || {
+        // One grid per worker, refilled for each connection: a large board's views run
+        // to tens of megabytes, too much to allocate and free hundreds of times a round.
+        let mut grid: Option<RouteGrid> = None;
+        loop {
+            // A round cut short keeps the paths of the connections it did not reach.
+            if options.deadline.expired() {
+                break;
+            }
+            let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if k >= jobs.len() {
+                break;
+            }
+            let (net, class, weight, own_ring) = jobs[k];
+            let grid = match &mut grid {
+                Some(g) => {
+                    maps[class].view_into(net, g);
+                    g
                 }
-            });
+                None => grid.insert(RouteGrid { deadline: options.deadline.clone(), ..maps[class].view(net) }),
+            };
+            grid.directional = options.directional && grid.layers.len() == 2;
+            penalties_into(zones.trace.seen_by(class), history, present, net, weight, &mut grid.penalty);
+            if options.via_zones {
+                via_penalties_into(zones, class, own_ring, via_history, present * via_scale, net, weight, &mut grid.via_penalty);
+            }
+            let (sources, targets) = &ends[k];
+            let s: Vec<usize> = sources.iter().map(|t| t.0).collect();
+            let t: Vec<usize> = targets.iter().map(|t| t.0).collect();
+            *paths[k].lock().expect("no worker panics") = Some(route_astar(grid, &s, &t, options.via_cost));
+            done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    };
+    std::thread::scope(|scope| {
+        if options.threads <= 1 {
+            work();
+            return;
+        }
+        for _ in 0..options.threads {
+            scope.spawn(work);
         }
         while done.load(std::sync::atomic::Ordering::Relaxed) < jobs.len() && !options.deadline.expired() {
             std::thread::sleep(TRIAL_INTERVAL);
