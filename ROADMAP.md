@@ -9,8 +9,8 @@ The MIT core (Phase 2c) is the router: the command, the studio and the benchmark
 and copperroute is a legacy reference. Stages 0 to 11 of a staged remediation plan
 (`REMEDIATION.md`, not tracked) have been worked through; Stage 7's move of the copperroute-era
 files waits on a decision, and Stage 12 (a global routing stage) has not begun. Each stage's
-measurements are in `~/Software/ultraroute-lab/pcbench/runs/remed-N-notes.md`. On the 200-board PCBench sample (`--sample 200 --sample-seed 1`, 120 s a
-board, one thread, judged by KiCad 9):
+measurements are in `~/Software/ultraroute-lab/pcbench/runs/remed-N-notes.md`. On the 200-board
+PCBench sample (`--sample 200 --sample-seed 1`, 120 s a board, one thread, judged by KiCad 9):
 
 - Stage 0 baseline (commit 184f640, on loaf, four runs): 160 to 161 boards clean. The same
   binary and seed twice disagreed on 3 boards, all at the time limit. The slowest board took
@@ -23,7 +23,7 @@ board, one thread, judged by KiCad 9):
   on the server (Stage 6); vias -6% from a 5 mm via price (Stage 7); the GPU solver parked
   (Stage 10).
 
-The two numbers come from different machines; each stage was compared with the one before on
+Stage 0's and Stage 9's counts come from different machines; each stage was compared with the one before on
 the same machine (`tools/pcbench.py compare`).
 
 ## Phase 1 — Topological routing with rip-up
@@ -119,8 +119,9 @@ natively and, compiled to WebAssembly, in the browser tab, on the CPU in both. E
       off by default (`--features gpu` builds it in, `--gpu` warns), kept for a frontier or
       windowed kernel; the browser's WebGPU copy was deleted. What runs: A* on the CPU, natively
       and in the tab's worker pool.
-- [x] Topo with rip-up (`topo`), rip-up and nudge on the core (below). The command no longer
-      links `topo` (REMEDIATION Stage 7); the crate builds and tests in the workspace.
+- [x] Topological routing with its own rip-up (`topo`), and rip-up and nudge in the grid
+      router (below). The command no longer links `topo` (REMEDIATION Stage 7); the crate
+      builds and tests in the workspace.
 - [x] A* search on the CPU (routes as cheap as the full field, a fraction of the work), zones
       sized per pair of net classes, legs necked down to the narrowest track out of crowded pads,
       and a rip-up finisher: a blocked connection may cross copper the router laid, which is
