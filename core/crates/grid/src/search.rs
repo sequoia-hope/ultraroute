@@ -3,6 +3,7 @@
 
 
 use crate::grid::RouteGrid;
+use crate::work;
 
 pub const STRAIGHT: u32 = 10;
 pub const DIAGONAL: u32 = 14;
@@ -132,6 +133,8 @@ pub fn cost_field(grid: &RouteGrid, sources: &[usize], via_cost: u32) -> Vec<u32
         popped += 1;
         if popped.is_multiple_of(CHECK_EVERY) && grid.deadline.expired() {
             cost.fill(UNREACHED);
+            work::add(&work::FIELDS, 1);
+            work::add(&work::FIELD_SETTLED, popped);
             return cost;
         }
         let layer = index / cells;
@@ -159,6 +162,8 @@ pub fn cost_field(grid: &RouteGrid, sources: &[usize], via_cost: u32) -> Vec<u32
             }
         }
     }
+    work::add(&work::FIELDS, 1);
+    work::add(&work::FIELD_SETTLED, popped);
     cost
 }
 
@@ -284,6 +289,7 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
             })
         };
     }
+    work::add(&work::ASTAR, 1);
     BUFS.with(|bufs| {
         let mut b = bufs.borrow_mut();
         let nodes = grid.blocked.len();
@@ -429,6 +435,7 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
                 }
             }
         }
+        work::add(&work::ASTAR_EXPANDED, expanded);
         let mut at = reached?;
         let cost_at = |b: &Buffers, n: usize| if b.gen[n] == epoch { b.cost[n] } else { UNREACHED };
         let mut path = vec![at];

@@ -14,9 +14,22 @@ use crate::report::item_name;
 /// Widths within this of a limit meet it: rounding to whole nanometres.
 const SLACK: Nm = 2;
 
+/// One line of the report, with the net and the part it is about.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Neck {
+    pub line: String,
+    pub net: String,
+    pub part: Option<String>,
+}
+
 /// One line per forced neck in `laid`, naming its net, width, length and pin, then one KiCad
 /// rule per net and part that would allow the necks that break a width rule there.
 pub fn report(board: &Board, laid: &[ItemId]) -> Vec<String> {
+    necks(board, laid).into_iter().map(|n| n.line).collect()
+}
+
+/// [`report`]'s lines, each with the net and the part it is about.
+pub fn necks(board: &Board, laid: &[ItemId]) -> Vec<Neck> {
     // To the micron, rounded down so a rule's minimum stays at or under the neck it allows.
     let mm = |v: Nm| (v / 1_000) as f64 / 1e3;
     let mut lines = Vec::new();
@@ -59,15 +72,20 @@ pub fn report(board: &Board, laid: &[ItemId]) -> Vec<String> {
         } else {
             format!("thinner than the {} mm pin it feeds", mm(side))
         };
-        lines.push(format!(
+        let part = match &pad.kind {
+            Kind::Pad { footprint, .. } => Some(board.footprints[*footprint].reference.clone()),
+            _ => None,
+        };
+        let line = format!(
             "{name} {} mm wide for {:.2} mm into {}, {why}: no wider leg reaches the pin",
             mm(width),
             a.distance(b) / 1e6,
             item_name(board, pin)
-        ));
+        );
+        lines.push(Neck { line, net: name.clone(), part: part.clone() });
         if breaks_rule {
-            if let Kind::Pad { footprint, .. } = &pad.kind {
-                exceptions.insert((name, board.footprints[*footprint].reference.clone(), width));
+            if let Some(part) = part {
+                exceptions.insert((name, part, width));
             }
         }
     }
@@ -75,10 +93,11 @@ pub fn report(board: &Board, laid: &[ItemId]) -> Vec<String> {
     let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
     for (net, part, width) in exceptions {
         if seen.insert((net.clone(), part.clone())) {
-            lines.push(format!(
+            let line = format!(
                 "KiCad allows {net}'s necks into {part} with this rule after the net's own: (rule \"{net} neck into {part}\" (condition \"A.NetName == '{net}' && A.intersectsCourtyard('{part}')\") (constraint track_width (min {}mm)))",
                 mm(width)
-            ));
+            );
+            lines.push(Neck { line, net, part: Some(part) });
         }
     }
     lines

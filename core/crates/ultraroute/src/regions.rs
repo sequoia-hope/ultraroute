@@ -14,7 +14,7 @@
 //! all. Keys the router does not use (`generator`, `why`, ...) are ignored. Lengths are checked
 //! and reported, not yet routed to.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use board::{Board, Kind, Point, Region, RegionKind, RegionRule, Shape};
 use serde_json::Value;
@@ -115,11 +115,13 @@ pub fn load(path: &str, board: &mut Board) -> Result<Vec<MaxLength>, String> {
 
 /// What breaks the regions' hard rules or the length limits, one line each, naming the region
 /// or net: routed copper (`laid`) of a `never` net inside its region, or of a `must` net outside.
-pub fn report(board: &Board, lengths: &[MaxLength], laid: &[board::ItemId]) -> Vec<String> {
+/// Each line comes with the names of the nets it is about.
+pub fn report(board: &Board, lengths: &[MaxLength], laid: &[board::ItemId]) -> Vec<(String, Vec<String>)> {
     let mut out = Vec::new();
     for region in &board.regions {
         for rule in &region.rules {
             let mut broken = 0;
+            let mut nets: BTreeSet<u32> = BTreeSet::new();
             for it in laid.iter().filter_map(|id| board.item(*id)) {
                 let vias_rule = it.kind == Kind::Via;
                 if vias_rule != rule.vias || !rule.holds_for(it.net) || it.layers & region.layers == 0 {
@@ -135,14 +137,19 @@ pub fn report(board: &Board, lengths: &[MaxLength], laid: &[board::ItemId]) -> V
                     Shape::Capsule { a, b, r } => region.shape.depth(*a) + TOLERANCE >= *r as f64 && region.shape.depth(*b) + TOLERANCE >= *r as f64,
                     Shape::Polygon(_) => false,
                 };
-                broken += match rule.kind {
-                    RegionKind::Never => usize::from(touches),
-                    RegionKind::Must => usize::from(!inside),
-                    _ => 0,
+                let breaks = match rule.kind {
+                    RegionKind::Never => touches,
+                    RegionKind::Must => !inside,
+                    _ => false,
                 };
+                if breaks {
+                    broken += 1;
+                    nets.insert(it.net);
+                }
             }
             if broken > 0 {
-                out.push(format!("region {}: {broken} pieces break its {:?}{} rule", region.name, rule.kind, if rule.vias { " (vias)" } else { "" }));
+                let line = format!("region {}: {broken} pieces break its {:?}{} rule", region.name, rule.kind, if rule.vias { " (vias)" } else { "" });
+                out.push((line, nets.iter().map(|n| board.net_name(*n).to_string()).collect()));
             }
         }
     }
@@ -157,7 +164,8 @@ pub fn report(board: &Board, lengths: &[MaxLength], laid: &[board::ItemId]) -> V
             .sum();
         if length > m.mm {
             let names: Vec<&str> = m.nets.iter().map(|n| board.net_name(*n)).collect();
-            out.push(format!("length: {} is {length:.2} mm, over its {} mm", names.join("+"), m.mm));
+            let line = format!("length: {} is {length:.2} mm, over its {} mm", names.join("+"), m.mm);
+            out.push((line, names.iter().map(|n| n.to_string()).collect()));
         }
     }
     out

@@ -24,6 +24,7 @@ pub mod search;
 pub mod shove;
 pub mod tune;
 pub mod vias;
+pub mod work;
 
 pub use blame::{blame, Blame, BlameOptions, BlameReport};
 pub use cleanup::{drop_duplicates, drop_duplicates_watch, prune_dangling, prune_dangling_watch, pull_tight, pull_tight_watch, split_at_joins, CleanStats};

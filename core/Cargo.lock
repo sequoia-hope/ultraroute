@@ -510,6 +510,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lab-films"
+version = "0.1.0"
+dependencies = [
+ "board",
+ "grid",
+ "kicad-pcb",
+ "morph",
+ "serde_json",
+ "ultraroute",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1215,6 +1227,7 @@ dependencies = [
  "kicad-pcb",
  "morph",
  "pprof",
+ "serde",
  "serde_json",
  "web-time",
 ]

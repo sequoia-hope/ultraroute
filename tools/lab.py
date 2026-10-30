@@ -10,7 +10,7 @@
 `run` routes every board at once with the core router (wrap it in ~/.claude/bin/reserve), streaming
 each log into the lab as it is written, then refills the zones, asks KiCad's DRC what is open and
 broken, and counts copper cut into blocks. `ingest` records runs made by hand: DIR/NAME.log,
-DIR/NAME.drc.json and DIR/NAME.out.kicad_pcb, whichever exist. The lab lives in
+DIR/NAME.stats.json, DIR/NAME.drc.json and DIR/NAME.out.kicad_pcb, whichever exist. The lab lives in
 $ULTRAROUTE_LAB or ~/Software/ultraroute-lab, outside the repository, so the Pages site never
 carries it; its pages are lab/*.html here, copied in on every write.
 """
@@ -99,9 +99,43 @@ SUMMARIES = [
 VERBOSE = re.compile(r"^\s+\[\s*(?P<t>[\d.]+) s\] (?P<phase>[^:]+): (?P<text>.*)$")
 
 
-def parse_log(text):
-    """Each stage's summary, and each phase's span and count from the verbose lines."""
-    stats, phases, other = {}, {}, []
+def summaries(stats_path):
+    """SUMMARIES's figures, read from the router's stats file (`--stats`) instead of its lines."""
+    run = json.loads(Path(stats_path).read_text())
+    stages = {s["name"]: s for s in run["stages"]}
+    out = {}
+
+    def at(s):
+        return round(s["started"] + s["seconds"], 1)
+
+    if "negotiation" in stages:
+        s = stages["negotiation"]
+        d = s["detail"]
+        out["negotiate"] = {"done": d["committed"], "total": d["connections"], "rounds": d["rounds"], "vias": d["vias"], "t": at(s)}
+    if "rip-up" in stages:
+        s = stages["rip-up"]
+        out["rip-up"] = {k: s["detail"][k] for k in ("tries", "kept", "ripped")} | {"t": at(s)}
+    if "nudge" in stages:
+        s = stages["nudge"]
+        out["nudge"] = {k: s["detail"][k] for k in ("tried", "illegal", "kept", "guided", "moved")} | {"t": at(s)}
+    if "tightening" in stages:
+        # Told after the via pass, which may pull the copper tight again.
+        s, d = stages["tightening"], stages["tightening"]["detail"]
+        out["tighten"] = {"before": d["segments_before"], "after": d["segments_after"], "mm_before": round(d["mm_before"]), "mm_after": round(d["mm_after"]), "t": at(stages.get("vias", s))}
+    if "cleaning" in stages and (stages["cleaning"]["detail"]["doubled"] or stages["cleaning"]["detail"]["pruned"]):
+        s = stages["cleaning"]
+        out["cleanup"] = {"doubled": s["detail"]["doubled"], "pruned": s["detail"]["pruned"], "open_before": s["open_before"], "open_after": s["open_after"], "t": at(s)}
+    if "result" in stages:
+        s = stages["result"]
+        out["result"] = {"routed": s["detail"]["routed"], "failed": s["detail"]["failed"], "open": s["detail"]["open"], "t": at(s)}
+    return out
+
+
+def parse_log(text, stats=None):
+    """Each stage's summary, and each phase's span and count from the verbose lines. With
+    `stats`, the router's stats file (`--stats`), the summaries come from it; without, from the
+    lines, as logs from before the stats file have them."""
+    from_lines, phases, other = {}, {}, []
     for line in text.splitlines():
         m = VERBOSE.match(line)
         if m:
@@ -112,12 +146,17 @@ def parse_log(text):
         for name, pattern in SUMMARIES:
             m = re.search(pattern, line)
             if m:
-                stats[name] = {k: (v if not re.fullmatch(r"[\d.]+", v) else float(v) if "." in v else int(v)) for k, v in m.groupdict().items()}
+                from_lines[name] = {k: (v if not re.fullmatch(r"[\d.]+", v) else float(v) if "." in v else int(v)) for k, v in m.groupdict().items()}
                 break
         else:
-            if line.strip():
+            if line.strip() and not line.startswith("stats: "):
                 other.append(line)
-    return {"stats": stats, "phases": sorted(phases.values(), key=lambda p: p["first"]), "other": other[:50]}
+    use_file = stats is not None and Path(stats).exists()
+    out = {"stats": summaries(stats) if use_file else from_lines, "phases": sorted(phases.values(), key=lambda p: p["first"]), "other": other[:50]}
+    if use_file:
+        run = json.loads(Path(stats).read_text())
+        out["summary"], out["findings"] = run["summary"], run["findings"][:200]
+    return out
 
 
 def judge(pcb, out_dir):
@@ -197,7 +236,7 @@ def run(a):
         for src in [board, board.with_suffix(".kicad_pro"), board.with_suffix(".kicad_dru")]:
             if src.exists():
                 shutil.copy(src, rd / ("input" + src.suffix))
-        args = shlex.split(a.recipe) + shlex.split(extra) + ["--threads", str(a.threads), "--timeout", str(a.timeout), "--verbose"]
+        args = shlex.split(a.recipe) + shlex.split(extra) + ["--threads", str(a.threads), "--timeout", str(a.timeout), "--verbose", "--stats", str(rd / "stats.json")]
         cmd = ["/usr/bin/time", "-f", "%e %M", "-o", rd / "time.txt", ROUTER, "route", rd / "input.kicad_pcb", "-o", rd / "out.kicad_pcb", *args]
         log = open(rd / "log.txt", "w")
         procs.append((name, rd, subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=log), log))
@@ -236,7 +275,7 @@ def run(a):
 def finish(r, rd, code):
     r["status"] = "done" if code == 0 else f"exit {code}"
     r["finished"] = now()
-    r |= parse_log((rd / "log.txt").read_text())
+    r |= parse_log((rd / "log.txt").read_text(), rd / "stats.json")
     t = (rd / "time.txt").read_text().split() if (rd / "time.txt").exists() else []
     if len(t) >= 2:
         r["wall_s"], r["peak_mb"] = float(t[-2]), round(int(t[-1]) / 1024)
@@ -253,9 +292,11 @@ def ingest(a):
         if r not in e["runs"]:
             e["runs"].append(r)
         r.update(args=shlex.split(a.args or ""), status="done", board=str(src / f"{name}.kicad_pcb"))
+        if (src / f"{name}.stats.json").exists():
+            shutil.copy(src / f"{name}.stats.json", rd / "stats.json")
         if (src / f"{name}.log").exists():
             shutil.copy(src / f"{name}.log", rd / "log.txt")
-            r |= parse_log((rd / "log.txt").read_text())
+            r |= parse_log((rd / "log.txt").read_text(), rd / "stats.json")
         if (src / f"{name}.drc.json").exists():
             r["drc"] = summarise_drc(json.loads((src / f"{name}.drc.json").read_text()))
         if (src / f"{name}.out.kicad_pcb").exists() and BLOCK_CHECK.exists():

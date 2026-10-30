@@ -1,0 +1,21 @@
+[package]
+name = "lab-films"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+# The lab's feature films (lab/features.html): one router stage filmed step by step as the router
+# runs it, through ultraroute's stage hooks.
+
+[[bin]]
+name = "feature_film"
+path = "src/main.rs"
+
+[dependencies]
+board = { path = "../board" }
+grid = { path = "../grid" }
+morph = { path = "../morph" }
+kicad-pcb = { path = "../kicad-pcb" }
+ultraroute = { path = "../ultraroute", default-features = false }
+serde_json = "1"
