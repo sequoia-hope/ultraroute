@@ -323,6 +323,9 @@ pub struct Board {
     /// The checks' limits, worked out once from the rules and the pads' openings and clearances,
     /// which only [`Board::new`] sets: a check of one item no longer walks every pad.
     pub(crate) limits: crate::check::Limits,
+    /// Every zone and rule area with a name, for the custom rules' `intersectsArea('name')`:
+    /// its name, outline and copper layers.
+    pub areas: Vec<(String, Shape, u64)>,
     /// The custom rules (`.kicad_dru`), read; empty without one.
     pub custom: std::sync::Arc<kicad_pcb::dru::RuleSet>,
     items: Vec<Option<Item>>,
@@ -444,6 +447,7 @@ impl Board {
             names_nets: false,
             min_clearance_nm,
             limits: Default::default(),
+            areas: Vec::new(),
             custom: std::sync::Arc::new(custom),
             items: Vec::new(),
             shape_bboxes: Vec::new(),
@@ -632,6 +636,9 @@ impl Board {
                 locked: v.locked,
                 span: Some(v.span),
             });
+        }
+        for zone in copper.zones.iter().filter(|z| !z.name.is_empty() && z.outline.len() >= 3) {
+            board.areas.push((zone.name.clone(), Shape::Polygon(zone.outline.iter().copied().map(Point::from_m).collect()), mask(&zone.layers)));
         }
         for (z, zone) in copper.zones.iter().enumerate() {
             // A soft via keepout forbids nothing; the router only avoids putting vias in it.

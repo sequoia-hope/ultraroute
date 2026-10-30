@@ -234,6 +234,14 @@ fn item_checks(
     let item_bbox = board.bbox(id).unwrap_or_else(|| item.shape.bbox());
     let partner = |other: ItemId| other != id && (everyone || other > id);
     let holes = board.layers.len();
+    // A custom rule may forbid tracks or vias of a net on a layer or in a named area.
+    if matches!(item.kind, Kind::Track | Kind::Via) && board.custom.has("disallow") {
+        let word = if item.kind == Kind::Via { "via" } else { "track" };
+        let me = Thing::Item(board, id, item);
+        if let Some(layer) = (0..board.layers.len()).find(|&l| item.on(l) && board.disallowed(word, &me, l) == kicad_pcb::dru::Tri::True) {
+            found.push(Violation { rule: Rule::Keepout, a: id, b: None, layer: Some(layer), gap: 0.0, required: 0 });
+        }
+    }
     // A track or via of another net bared in an opening drawn in the mask would bridge there.
     if matches!(item.kind, Kind::Track | Kind::Via) {
         for (shape, layers, net) in &board.mask_areas {

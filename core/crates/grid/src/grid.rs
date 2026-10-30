@@ -617,8 +617,69 @@ impl ObstacleMap {
         }
     }
 
-    /// Everything outside the board, and a band inside its edge, is nobody's.
+    /// Everything outside the board, and a band inside its edge, is nobody's; and wherever the
+    /// custom rules forbid this map's tracks or vias.
     fn stamp_outline(&mut self, board: &Board) {
+        self.stamp_edges(board);
+        if board.custom.has("disallow") {
+            self.stamp_disallowed(board);
+        }
+    }
+
+    /// Where a custom rule's `disallow` forbids this map's tracks or vias: a whole layer, or a
+    /// named area of it. A rule that may hold (on something the router cannot answer) forbids.
+    fn stamp_disallowed(&mut self, board: &Board) {
+        use board::custom::Area;
+        use kicad_pcb::dru::Tri;
+        let cells = self.nx * self.ny;
+        let p = self.profile.clone();
+        let class = p.net.map_or(p.class.as_str(), |n| board.class_name(n)).to_string();
+        let thing = |via: bool, layer: usize, area: Area| board::Thing::New {
+            board,
+            via,
+            net: p.net,
+            class: &class,
+            width: if via { 2 * p.via_radius } else { 2 * p.half_width },
+            drill: if via { 2 * p.drill_radius } else { 0 },
+            layer: Some(layer),
+            area,
+        };
+        let forbids = |word: &str, via: bool, layer: usize, area: Area| board.disallowed(word, &thing(via, layer, area), layer) != Tri::False;
+        let reach = self.reach();
+        // A via stands on every layer: any layer that forbids it forbids it.
+        let via_anywhere = (0..self.layers).any(|l| forbids("via", true, l, Area::Outside));
+        if via_anywhere {
+            self.via_owner.iter_mut().for_each(|c| *c = SEVERAL);
+        }
+        for l in 0..self.layers {
+            if forbids("track", false, l, Area::Outside) {
+                self.owner[l * cells..(l + 1) * cells].iter_mut().for_each(|c| *c = SEVERAL);
+                continue;
+            }
+            for (k, (_, shape, layers)) in board.areas.iter().enumerate() {
+                if layers & (1 << l) == 0 {
+                    continue;
+                }
+                if forbids("track", false, l, Area::In(k)) {
+                    let mut hit = Vec::new();
+                    self.cells_near(shape, p.half_width + reach, &mut |c| hit.push(c));
+                    for c in hit {
+                        self.owner[l * cells + c] = SEVERAL;
+                    }
+                }
+                if !via_anywhere && forbids("via", true, l, Area::In(k)) {
+                    let mut hit = Vec::new();
+                    self.cells_near(shape, p.via_radius, &mut |c| hit.push(c));
+                    for c in hit {
+                        self.via_owner[c] = SEVERAL;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Everything outside the board, and a band inside its edge, is nobody's.
+    fn stamp_edges(&mut self, board: &Board) {
         let rules = &board.rules;
         let edge = nm(rules.min_copper_edge_clearance);
         if board.outline.is_empty() && board.outline_edges.is_empty() {
@@ -708,7 +769,7 @@ impl ObstacleMap {
         let p = &self.profile;
         let (width, drill) = if via { (2 * p.via_radius, 2 * p.drill_radius) } else { (2 * p.half_width, 0) };
         let class = p.net.map_or(p.class.as_str(), |n| board.class_name(n));
-        board::Thing::New { board, via, net: p.net, class, width, drill, layer: Some(layer) }
+        board::Thing::New { board, via, net: p.net, class, width, drill, layer: Some(layer), area: board::custom::Area::Unknown }
     }
 
     /// A custom rule's minimum `kind` between this map's track (or via) and item `id`, on the

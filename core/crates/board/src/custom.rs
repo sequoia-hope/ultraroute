@@ -6,14 +6,14 @@
 //! fabrication property) is unknown, and a rule that hangs on it may hold: the strictest
 //! minimum it could be is taken, so the router keeps at least what KiCad will check.
 
-use kicad_pcb::dru::{wildcard, Object, Resolved, RuleSet, Value};
+use kicad_pcb::dru::{eval, wildcard, Object, Resolved, RuleSet, Severity, Tri, Value};
 
 use crate::model::{Board, Item, ItemId, Kind, DRAWN};
 use crate::geom::{nm, Nm};
 
 /// The constraints the router keeps to; a rule with only others is reported as not applied,
 /// unless it is about something the router never lays (silkscreen, text, courtyards, parts).
-pub const APPLIED: [&str; 6] = ["clearance", "hole_clearance", "hole_to_hole", "edge_clearance", "physical_hole_clearance", "track_width"];
+pub const APPLIED: [&str; 7] = ["clearance", "hole_clearance", "hole_to_hole", "edge_clearance", "physical_hole_clearance", "track_width", "disallow"];
 
 /// Constraints on things the router neither lays nor moves: KiCad checks them as before.
 const ELSEWHERE: [&str; 9] = ["silk_clearance", "text_height", "text_thickness", "courtyard_clearance", "assertion", "solder_mask_expansion", "solder_paste_abs_margin", "solder_paste_rel_margin", "creepage"];
@@ -25,8 +25,9 @@ pub enum Thing<'a> {
     /// A track (`drill` 0) or via the router may lay, of the given width or diameter: of a net
     /// of `class` (KiCad's name for the net's classes), and of `net` where the rules name nets
     /// (see [`Board::rules_name_nets`]); with no net it is of a net other than any it meets.
-    /// A track lies on `layer` where that is known.
-    New { board: &'a Board, via: bool, net: Option<u32>, class: &'a str, width: Nm, drill: Nm, layer: Option<usize> },
+    /// A track lies on `layer` where that is known; `area` says which of the board's named
+    /// areas it would cross.
+    New { board: &'a Board, via: bool, net: Option<u32>, class: &'a str, width: Nm, drill: Nm, layer: Option<usize>, area: Area },
     /// A primitive of the board's edge: KiCad's name for its shape (`Segment` for any run of
     /// lines, `Arc`, `Circle`) and its layer (`Edge.Cuts`, `Margin`).
     Edge { shape: &'a str, layer: &'a str },
@@ -35,7 +36,40 @@ pub enum Thing<'a> {
     Copper(&'a Board),
 }
 
+/// Which of the board's named areas ([`Board::areas`]) new copper would cross.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Area {
+    /// Not known: wherever it may go.
+    Unknown,
+    /// None of them.
+    Outside,
+    /// This one alone.
+    In(usize),
+}
+
 impl Board {
+    /// Whether the custom rules forbid `thing`, an object of KiCad's disallow kind `word`
+    /// (`track`, `via`), on `layer`: a rule with a `disallow` naming it whose layer clause takes
+    /// the layer and whose condition holds. Any such rule forbids it, not only the last.
+    pub fn disallowed(&self, word: &str, thing: &Thing, layer: usize) -> Tri {
+        let name = self.layers.get(layer).map_or("", String::as_str);
+        let mut out = Tri::False;
+        for rule in self.custom.rules.iter().filter(|r| r.severity != Severity::Ignore) {
+            if !rule.constraints.iter().any(|c| c.kind == "disallow" && c.words.iter().any(|w| w == word)) {
+                continue;
+            }
+            if !rule.layer.as_ref().is_none_or(|l| l.takes(name, self.layers.len())) {
+                continue;
+            }
+            match rule.condition.as_ref().map_or(Tri::True, |c| eval(c, thing, None)) {
+                Tri::True => return Tri::True,
+                Tri::Unknown => out = Tri::Unknown,
+                Tri::False => {}
+            }
+        }
+        out
+    }
+
     /// The minimum the custom rules set for a constraint `kind` between `a` and `b` (the edge for
     /// `edge_clearance`) on `layer`, where `implicit` is what the net classes and the board's own
     /// rules ask: the last rule that holds replaces it, as in KiCad, lower or higher; a rule
@@ -65,7 +99,7 @@ impl Board {
         }
         let class = self.class_names.get(net as usize).map_or("", String::as_str);
         (0..self.layers.len())
-            .map(|l| self.rule_min("track_width", &Thing::New { board: self, via: false, net: Some(net), class, width: 0, drill: 0, layer: Some(l) }, None, l, floor))
+            .map(|l| self.rule_min("track_width", &Thing::New { board: self, via: false, net: Some(net), class, width: 0, drill: 0, layer: Some(l), area: Area::Unknown }, None, l, floor))
             .max()
             .unwrap_or(floor)
     }
@@ -204,6 +238,7 @@ impl Object for Thing<'_> {
             }),
             "existsonlayer" => self.layer_names().map_or(Value::Unknown, |ls| Value::Bool(ls.iter().any(|l| wildcard(arg, l, true)))),
             "hasnetclass" => self.class().map_or(Value::Unknown, |c| Value::Bool(c == arg || c.split(',').any(|n| n == arg))),
+            "intersectsarea" | "insidearea" | "enclosedbyarea" => self.in_area(board, name, arg),
             "memberoffootprint" => match self {
                 Thing::Item(_, _, Item { kind: Kind::Pad { footprint, .. }, .. }) => Value::Bool(wildcard(arg, &board.footprints[*footprint].reference, true)),
                 Thing::Item(_, _, Item { kind: Kind::Track | Kind::Via, .. }) | Thing::New { .. } => Value::Bool(false),
@@ -215,6 +250,22 @@ impl Object for Thing<'_> {
 }
 
 impl Thing<'_> {
+    /// `intersectsArea(name)` and its kin: by the item's copper against the named areas on the
+    /// layers they share, or by what new copper is said to cross.
+    fn in_area(&self, board: &Board, function: &str, name: &str) -> Value {
+        match self {
+            Thing::New { area: Area::Unknown, .. } => Value::Unknown,
+            Thing::New { area: Area::Outside, .. } => Value::Bool(false),
+            Thing::New { area: Area::In(k), .. } => Value::Bool(board.areas.get(*k).is_some_and(|(n, ..)| n == name)),
+            Thing::Item(_, _, it) => Value::Bool(board.areas.iter().any(|(n, shape, layers)| {
+                n == name
+                    && (layers & it.layers != 0 || it.layers == 0)
+                    && if function == "enclosedbyarea" { crate::check::within(shape, &it.shape, 0) } else { it.shape.gap(shape) == 0.0 }
+            })),
+            _ => Value::Unknown,
+        }
+    }
+
     /// A property of a board item or new copper of `net` (0 for new copper of no net named).
     fn known(&self, board: &Board, net: u32, name: &str) -> Value {
         let str = |s: &str| Value::Str(s.to_string());
