@@ -271,3 +271,25 @@ fn a_curved_edge_closes_the_outline_and_keeps_copper_clear() {
     assert!(at(&mut b, 37.3), "0.15 mm inside the curve's bulge");
     assert!(!at(&mut b, 36.0), "1.45 mm inside it");
 }
+
+#[test]
+fn copper_at_the_clearance_from_an_arc_track_is_judged_as_from_the_true_arc() {
+    // A quarter arc of radius 5 mm round (10, 10), 0.2 mm wide, net A; clearance 0.2 mm.
+    let mut b = board("(arc (start 15 10) (mid 13.5355339 13.5355339) (end 10 15) (width 0.2) (layer \"F.Cu\") (net 1) (uuid \"aaaaaaaa-0000-4000-8000-000000000001\"))");
+    let c = Point::new(nm(10e-3), nm(10e-3));
+    // A dot of copper of net B at `radius` mm from the centre, 37 degrees round: between chords.
+    let breaks = |b: &mut Board, radius: f64| {
+        let t = 37f64.to_radians();
+        let p = Point::new(c.x + nm(radius * 1e-3 * t.cos()), c.y + nm(radius * 1e-3 * t.sin()));
+        let id = b.insert(Item { kind: Kind::Track, net: 2, layers: 1, shape: Shape::Capsule { a: p, b: p, r: nm(0.05e-3) }, hole: None, locked: false, span: None });
+        let hit = check_item(b, id).iter().any(|v| v.rule == Rule::Clearance);
+        b.remove(id);
+        hit
+    };
+    // Outside: the arc's edge at 5.1 mm, the dot's at radius - 0.05, so clear at 5.35.
+    assert!(!breaks(&mut b, 5.35), "exactly the clearance outside the arc");
+    assert!(breaks(&mut b, 5.349), "1 um closer outside");
+    // Inside: the arc's edge at 4.9 mm, so clear at 4.65.
+    assert!(!breaks(&mut b, 4.65), "exactly the clearance inside the arc");
+    assert!(breaks(&mut b, 4.651), "1 um closer inside");
+}

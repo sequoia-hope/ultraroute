@@ -563,13 +563,13 @@ impl Board {
             });
         }
         for arc in &copper.arcs {
-            let pts = arc_chords(arc.start, arc.mid, arc.end, arc.width / 2.0);
+            let (pts, sag) = arc_chords(arc.start, arc.mid, arc.end, arc.width / 2.0);
             for w in pts.windows(2) {
                 board.insert(Item {
                     kind: Kind::Track,
                     net: arc.net,
                     layers: one(&arc.layer),
-                    shape: Shape::Capsule { a: w[0], b: w[1], r: nm(arc.width / 2.0) },
+                    shape: Shape::Capsule { a: w[0], b: w[1], r: nm(arc.width / 2.0 + sag) },
                     hole: None,
                     locked: arc.locked,
                     span: Some(arc.span),
@@ -940,21 +940,30 @@ impl Board {
     }
 }
 
-fn arc_chords(s: [f64; 2], m: [f64; 2], e: [f64; 2], half_width: f64) -> Vec<Point> {
+/// How far an arc track's chords may sag inside it, in metres: below the checks' slack, so the
+/// copper is judged as near the true arc as can be told.
+const ARC_SAG_M: f64 = 0.2e-6;
+
+/// An arc track as chords between points on its centre line, and how much each chord's half
+/// width grows by its sag, so the copper covers the whole arc on both sides: never less than it
+/// is, and at most twice [`ARC_SAG_M`] more.
+fn arc_chords(s: [f64; 2], m: [f64; 2], e: [f64; 2], half_width: f64) -> (Vec<Point>, f64) {
     let Some(c) = kicad_pcb::circumcenter(s, m, e) else {
-        return vec![Point::from_m(s), Point::from_m(e)];
+        return (vec![Point::from_m(s), Point::from_m(e)], 0.0);
     };
     let r = (s[0] - c[0]).hypot(s[1] - c[1]);
     let angle = |p: [f64; 2]| (p[1] - c[1]).atan2(p[0] - c[0]);
     let wrap = |a: f64| a.rem_euclid(std::f64::consts::TAU);
     let (a0, am, a1) = (angle(s), angle(m), angle(e));
     let sweep = if wrap(am - a0) < wrap(a1 - a0) { wrap(a1 - a0) } else { -wrap(a0 - a1) };
-    let per = 2.0 * (1.0 - (MAX_ERROR_M / (r + half_width)).min(1.0)).acos();
+    let per = 2.0 * (1.0 - (ARC_SAG_M / (r + half_width)).min(1.0)).acos();
     let n = ((sweep.abs() / per.max(1e-6)).ceil() as usize).max(1);
-    (0..=n)
+    let sag = r * (1.0 - (sweep.abs() / n as f64 / 2.0).cos());
+    let points = (0..=n)
         .map(|k| {
             let a = a0 + sweep * k as f64 / n as f64;
             Point::from_m([c[0] + r * a.cos(), c[1] + r * a.sin()])
         })
-        .collect()
+        .collect();
+    (points, sag)
 }
