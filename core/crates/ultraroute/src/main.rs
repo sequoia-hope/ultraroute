@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use board::Board;
-use ultraroute::{fit_memory, parse, peak_memory_mb, run, Live};
+use ultraroute::{fit_memory, parse, peak_memory_mb, route, Finding, Live, RunStats};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -78,20 +78,28 @@ fn main() {
         (path, guard)
     });
     // A crash still leaves the caller a board: the input as it came, and a failing exit.
-    let routed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&a, board, &text, live, cancel)));
-    let (out, code) = match routed {
-        Ok(routed) => (routed, 0),
+    let routed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| route(&a, board, &text, live, cancel, None, None)));
+    let (out, stats, code) = match routed {
+        Ok(routed) => (routed.text, routed.stats, 0),
         Err(_) => {
             eprintln!("error: the router crashed; {} is the input board, unrouted", a.output);
-            (text, 1)
+            (text.clone(), crashed(&a, &text), 1)
         }
     };
     #[cfg(feature = "profile")]
     if let Some((path, guard)) = profiler {
         write_profile(&path, &guard);
     }
-    if let Some(mb) = peak_memory_mb() {
+    let peak = peak_memory_mb();
+    if let Some(mb) = peak {
         eprintln!("memory: peak {mb} MB");
+    }
+    if let Some(path) = &a.stats {
+        let stats = RunStats { memory: ultraroute::stats::Memory { peak_mb: peak, ..stats.memory }, ..stats };
+        let json = serde_json::to_string_pretty(&stats).expect("the stats are plain data");
+        if let Err(e) = std::fs::write(path, json + "\n") {
+            eprintln!("{path}: {e}");
+        }
     }
     if let Err(e) = std::fs::write(&a.output, out) {
         eprintln!("{}: {e}", a.output);
@@ -100,6 +108,17 @@ fn main() {
     std::process::exit(code);
 }
 
+/// The stats of a run that crashed: what it was asked, and the crash as its one finding.
+fn crashed(a: &ultraroute::Args, text: &str) -> RunStats {
+    let (version, commit) = ultraroute::stats::version();
+    RunStats {
+        router: ultraroute::stats::Router { version: version.to_string(), commit: commit.map(String::from) },
+        input: ultraroute::stats::Input { path: a.input.clone(), sha256: ultraroute::stats::sha256(text.as_bytes()), bytes: text.len() },
+        settings: ultraroute::stats::Settings { flags: a.line.clone(), seed: a.seed, uuid_seed: a.uuid_seed, timeout: a.timeout, ..Default::default() },
+        findings: vec![Finding { severity: "error", kind: "crash", message: "the router crashed; the output is the input board, unrouted".into(), refs: Vec::new(), nets: Vec::new(), ends: None }],
+        ..Default::default()
+    }
+}
 
 /// The profile's stacks in the collapsed format, root first: one line per stack, its frames joined
 /// by `;`, then its sample count.

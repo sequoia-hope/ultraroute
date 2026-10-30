@@ -1215,6 +1215,7 @@ dependencies = [
  "kicad-pcb",
  "morph",
  "pprof",
+ "serde",
  "serde_json",
  "web-time",
 ]
