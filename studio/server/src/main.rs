@@ -11,8 +11,10 @@ use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use tungstenite::Message;
+
+mod project;
 
 const STOP_GRACE: Duration = Duration::from_secs(8);
 /// How long past its time limit a run may go before it is stopped from outside.
@@ -226,7 +228,7 @@ fn connection(stream: TcpStream, config: &Config, runner: &Arc<Runner>) -> std::
     let head = String::from_utf8_lossy(&head[..seen]).to_string();
     let mut words = head.split_whitespace();
     let (method, target) = (words.next().unwrap_or(""), words.next().unwrap_or("/"));
-    let path = target.split('?').next().unwrap_or("/");
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
     if path == "/ws" {
         return socket(stream, config, runner);
     }
@@ -238,6 +240,17 @@ fn connection(stream: TcpStream, config: &Config, runner: &Arc<Runner>) -> std::
     }
     if path == "/api/jobs" {
         return respond(&mut stream, 200, "application/json", jobs(&config.root).to_string().as_bytes());
+    }
+    if path == "/api/project" {
+        let (status, body) = match project_boards(&query_value(query, "project").unwrap_or_default(), query) {
+            Ok(body) => (200, body),
+            Err(error) => (400, json!({"error": error})),
+        };
+        return respond(&mut stream, status, "application/json", body.to_string().as_bytes());
+    }
+    // Boardroom opens a project's board at the server's root, as the platform spec has it.
+    if path == "/" && query_value(query, "project").is_some() {
+        return redirect(&mut stream, &format!("studio/?{query}"));
     }
     let file = match path.strip_prefix("/studio") {
         Some("") => return redirect(&mut stream, "/studio/"),
@@ -325,6 +338,7 @@ fn respond(stream: &mut TcpStream, status: u16, kind: &str, body: &[u8]) -> std:
     let reason = match status {
         200 => "OK",
         301 => "Moved Permanently",
+        400 => "Bad Request",
         404 => "Not Found",
         _ => "Error",
     };
@@ -337,7 +351,47 @@ fn respond(stream: &mut TcpStream, status: u16, kind: &str, body: &[u8]) -> std:
 }
 
 fn redirect(stream: &mut TcpStream, to: &str) -> std::io::Result<()> {
-    write!(stream, "HTTP/1.1 301 Moved Permanently\r\nLocation: {to}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+    write!(
+        stream,
+        "HTTP/1.1 301 Moved Permanently\r\nLocation: {to}\r\nContent-Length: 0\r\nCross-Origin-Opener-Policy: same-origin\r\nCross-Origin-Embedder-Policy: require-corp\r\nCross-Origin-Resource-Policy: same-origin\r\nConnection: close\r\n\r\n"
+    )
+}
+
+/// A query parameter's value, decoded as a form's: `+` is a space.
+fn query_value(query: &str, name: &str) -> Option<String> {
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('=').or(Some((pair, ""))))
+        .find(|(key, _)| percent_decode(key) == name)
+        .map(|(_, value)| percent_decode(&value.replace('+', " ")))
+        .filter(|v| !v.is_empty())
+}
+
+/// A project's boards, and the one the query names when it names one, or when there is one.
+fn project_boards(path: &str, query: &str) -> Result<Value, String> {
+    let dir = project::open(path)?;
+    let boards = project::boards(&dir);
+    let chosen = project::choose(&boards, query_value(query, "board").as_deref(), query_value(query, "variant").as_deref());
+    Ok(json!({
+        "project": dir,
+        "name": dir.file_name().map(|n| n.to_string_lossy()),
+        "boards": boards.iter().map(project::Board::summary).collect::<Vec<_>>(),
+        "chosen": chosen.as_ref().ok().map(|b| b.summary()),
+        "choose": chosen.err(),
+    }))
+}
+
+/// The project board a request names, which must be exactly one of the project's boards.
+fn project_board(request: &Value) -> Result<(PathBuf, project::Board), String> {
+    let name = |key: &str| match request[key].as_str() {
+        Some(n) if project::plain_name(n) => Ok(Some(n)),
+        Some(n) => Err(format!("bad {key} name {n}")),
+        None => Ok(None),
+    };
+    let (board, variant) = (name("board")?, name("variant")?);
+    let dir = project::open(request["project"].as_str().ok_or("no project")?)?;
+    let board = project::choose(&project::boards(&dir), board, variant)?.clone();
+    Ok((dir, board))
 }
 
 /// Every job with a board, and the recipes from its config files as presets, with the score
@@ -481,6 +535,13 @@ fn serve_socket(stream: TcpStream, config: &Config, runner: &Arc<Runner>, owner:
     ws.get_mut().set_read_timeout(Some(Duration::from_millis(8)))?;
     ws.get_mut().set_nodelay(true)?;
     let mut relay: Option<Receiver<String>> = None;
+    // The run being relayed, the open connections its last `done` frame gave, the project board
+    // as this page last loaded it (its file and fingerprint), and the last finished project
+    // route, which is what a save writes.
+    let mut started: Option<Started> = None;
+    let mut open: Option<u64> = None;
+    let mut base: Option<(PathBuf, String)> = None;
+    let mut routed: Option<Routed> = None;
     loop {
         match ws.read() {
             Ok(Message::Text(text)) => {
@@ -489,10 +550,26 @@ fn serve_socket(stream: TcpStream, config: &Config, runner: &Arc<Runner>, owner:
                     Some("run" | "load") => {
                         relay = None;
                         runner.stop();
+                        (started, open, routed) = (None, None, None);
                         match start(&request, config, runner, owner) {
-                            Ok(rx) => relay = Some(rx),
+                            Ok((rx, run)) => {
+                                if let (true, Some(p)) = (run.load, &run.project) {
+                                    base = Some((p.board.pcb.clone(), p.read.clone()));
+                                }
+                                relay = Some(rx);
+                                started = Some(run);
+                            }
                             Err(error) => send(&mut ws, &json!({"t": "error", "message": error}).to_string())?,
                         }
+                    }
+                    Some("save") => {
+                        let reply = if relay.is_some() {
+                            Err("the router is still running: save when it has finished".to_string())
+                        } else {
+                            save_routed(routed.as_ref(), &mut base, config)
+                        };
+                        let reply = reply.unwrap_or_else(|error| json!({"t": "saved", "ok": false, "message": error}));
+                        send(&mut ws, &reply.to_string())?;
                     }
                     Some("stop") => runner.request_stop(),
                     _ => {}
@@ -509,12 +586,28 @@ fn serve_socket(stream: TcpStream, config: &Config, runner: &Arc<Runner>, owner:
             loop {
                 match rx.try_recv() {
                     Ok(line) => {
+                        if line.ends_with("\"t\":\"done\"}") {
+                            open = serde_json::from_str::<Value>(&line).ok().and_then(|v| v["open"].as_u64()).or(open);
+                        }
                         ws.write(Message::text(line)).map_err(|e| std::io::Error::other(e.to_string()))?;
                         sent = true;
                     }
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
                         relay = None;
+                        if let Some(run) = started.take()
+                            && !run.load
+                            && let Some(p) = run.project
+                        {
+                            let done = Routed { project: p, output: run.output, open, at: project::now_iso() };
+                            let fields = studio_status(&done, false, config);
+                            let status = project::update_status(&done.project.dir, &done.project.board.board, fields, project::LOCK_WAIT).err();
+                            let saveable = done.output.metadata().is_ok_and(|m| m.len() > 0);
+                            let reply = json!({"t": "routed", "saveable": saveable, "open": open, "status_error": status});
+                            ws.write(Message::text(reply.to_string())).map_err(|e| std::io::Error::other(e.to_string()))?;
+                            sent = true;
+                            routed = saveable.then_some(done);
+                        }
                         break;
                     }
                 }
@@ -526,6 +619,56 @@ fn serve_socket(stream: TcpStream, config: &Config, runner: &Arc<Runner>, owner:
     }
 }
 
+/// A project board a run was started on, and the board file's fingerprint as the run began.
+struct ProjectRun {
+    dir: PathBuf,
+    board: project::Board,
+    read: String,
+}
+
+/// What a socket keeps of the run it started: where its board goes and what it came from.
+struct Started {
+    output: PathBuf,
+    load: bool,
+    project: Option<ProjectRun>,
+}
+
+/// A finished project route: what a save writes back, and what the status file is told.
+struct Routed {
+    project: ProjectRun,
+    output: PathBuf,
+    open: Option<u64>,
+    at: String,
+}
+
+/// The studio's entry for a board in `status.json`: what is known of it, nothing made up.
+fn studio_status(routed: &Routed, saved: bool, config: &Config) -> Map<String, Value> {
+    let mut fields = Map::new();
+    if let Some(open) = routed.open {
+        fields.insert("opens".into(), json!(open));
+    }
+    fields.insert("last_route".into(), json!(routed.at));
+    if let Some(commit) = project::router_commit(&config.root) {
+        fields.insert("router".into(), json!(commit));
+    }
+    fields.insert("saved".into(), json!(saved));
+    fields.insert("updated".into(), json!(project::now_iso()));
+    fields
+}
+
+/// Writes the last finished route over the project's board, if that board is still the one this
+/// page loaded, then records the save in the project's status.
+fn save_routed(routed: Option<&Routed>, base: &mut Option<(PathBuf, String)>, config: &Config) -> Result<Value, String> {
+    let routed = routed.ok_or("nothing routed to save: route the project's board first")?;
+    let board = &routed.project.board;
+    let loaded = base.as_ref().filter(|(pcb, _)| *pcb == board.pcb).ok_or("load the project's board before saving to it")?;
+    let now = project::save(board, &routed.output, &loaded.1)?;
+    *base = Some((board.pcb.clone(), now));
+    let fields = studio_status(routed, true, config);
+    let status = project::update_status(&routed.project.dir, &board.board, fields, project::LOCK_WAIT).err();
+    Ok(json!({"t": "saved", "ok": true, "path": board.pcb, "status_error": status}))
+}
+
 fn send(ws: &mut tungstenite::WebSocket<TcpStream>, text: &str) -> std::io::Result<()> {
     ws.send(Message::text(text.to_string())).map_err(|e| std::io::Error::other(e.to_string()))
 }
@@ -534,20 +677,36 @@ fn strings(v: &Value) -> Vec<String> {
     v.as_array().into_iter().flatten().filter_map(|s| s.as_str().map(str::to_string)).collect()
 }
 
-/// Starts the router on the job, with the client's arguments, environment and placements. A
-/// `load` is a run that only shows the board; its session is kept apart from the routed ones.
-fn start(request: &Value, config: &Config, runner: &Arc<Runner>, owner: u64) -> Result<Receiver<String>, String> {
-    let job = request["job"].as_str().ok_or("no job")?;
-    if job.contains('/') || job.starts_with('.') {
-        return Err(format!("bad job name {job}"));
-    }
-    let dir = config.root.join("jobs").join(job);
-    let input = job_input(&dir).ok_or(format!("job {job} has no input board"))?;
-    let runs = config.runs.join(job);
-    std::fs::create_dir_all(&runs).map_err(|e| e.to_string())?;
-    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+/// Starts the router on the job, or on a project's board, with the client's arguments,
+/// environment and placements. A `load` is a run that only shows the board; its session is kept
+/// apart from the routed ones.
+fn start(request: &Value, config: &Config, runner: &Arc<Runner>, owner: u64) -> Result<(Receiver<String>, Started), String> {
     let load = request["cmd"].as_str() == Some("load");
     let core = request["engine"].as_str() == Some("core");
+    // A project's board is routed where it lies; its runs are kept in the studio, by project.
+    let (job, input, settings, runs, from_project) = if request["project"].is_string() {
+        let (dir, board) = project_board(request)?;
+        if !core {
+            return Err("a project's board is routed by the core router".into());
+        }
+        let read = project::fingerprint(&std::fs::read(&board.pcb).map_err(|e| format!("{}: {e}", board.pcb.display()))?);
+        let name = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let key = &project::fingerprint(dir.as_os_str().as_encoded_bytes())[..8];
+        let runs = config.runs.join("projects").join(format!("{name}-{key}")).join(format!("{}-{}", board.board, board.variant));
+        let input = Input { dsn: None, pcb: Some(board.pcb.clone()), project: board.project.clone() };
+        let job = format!("{name} {}/{}", board.board, board.variant);
+        (job, input, Value::Null, runs, Some(ProjectRun { dir, board, read }))
+    } else {
+        let job = request["job"].as_str().ok_or("no job")?;
+        if job.contains('/') || job.starts_with('.') {
+            return Err(format!("bad job name {job}"));
+        }
+        let dir = config.root.join("jobs").join(job);
+        let input = job_input(&dir).ok_or(format!("job {job} has no input board"))?;
+        (job.to_string(), input, job_settings(&dir), config.runs.join(job), None)
+    };
+    std::fs::create_dir_all(&runs).map_err(|e| e.to_string())?;
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     let extension = if core { "kicad_pcb" } else { "ses" };
     let output = if load {
         std::fs::create_dir_all(runs.join("loaded")).map_err(|e| e.to_string())?;
@@ -563,6 +722,9 @@ fn start(request: &Value, config: &Config, runner: &Arc<Runner>, owner: u64) -> 
         if let Some(project) = &input.project {
             std::fs::copy(project, output.with_extension("kicad_pro")).map_err(|e| e.to_string())?;
         }
+        if let Some(rules) = from_project.as_ref().and_then(|p| p.board.rules.as_ref()) {
+            std::fs::copy(rules, output.with_extension("kicad_dru")).map_err(|e| e.to_string())?;
+        }
         let from = if !load && request["continue"].as_bool() == Some(true) {
             latest_session(&runs, &output, "kicad_pcb").unwrap_or_else(|| pcb.clone())
         } else {
@@ -572,13 +734,16 @@ fn start(request: &Value, config: &Config, runner: &Arc<Runner>, owner: u64) -> 
         args.extend(["-o".into(), output.display().to_string()]);
         // A run continuing from an earlier result keeps that result's copper.
         if from == *pcb {
-            match &job_settings(&dir)["strip"] {
+            match &settings["strip"] {
                 Value::String(s) if s == "all" => args.push("--strip-all".into()),
                 Value::Bool(true) => args.push("--strip".into()),
                 _ => {}
             }
         }
-        args.extend(job_settings(&dir)["args"].as_str().unwrap_or("").split_whitespace().map(String::from));
+        args.extend(settings["args"].as_str().unwrap_or("").split_whitespace().map(String::from));
+        if let Some(regions) = from_project.as_ref().and_then(|p| p.board.regions.as_ref()) {
+            args.extend(["--regions".into(), regions.display().to_string()]);
+        }
         if load {
             args.push("--no-route".into());
         }
@@ -632,7 +797,7 @@ fn start(request: &Value, config: &Config, runner: &Arc<Runner>, owner: u64) -> 
     if let Some(timeout) = request["timeout"].as_u64() {
         runner.watch_deadline(id, Duration::from_secs(timeout));
     }
-    Ok(rx)
+    Ok((rx, Started { output, load, project: from_project }))
 }
 
 fn relay_lines(source: impl Read + Send + 'static, tx: SyncSender<String>, wrap: impl Fn(String) -> String + Send + 'static) {
@@ -657,4 +822,26 @@ fn latest_session(runs: &Path, except: &Path, extension: &str) -> Option<PathBuf
         .map(|e| e.path())
         .filter(|p| p != except && p.extension().is_some_and(|e| e == extension) && p.metadata().is_ok_and(|m| m.len() > 0))
         .max_by_key(|p| p.metadata().and_then(|m| m.modified()).ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn query_values_decode_as_a_form() {
+        let query = "project=%2Fhome%2Fme%2Fmy+board&board=easy2350&variant=&flag";
+        assert_eq!(query_value(query, "project").as_deref(), Some("/home/me/my board"));
+        assert_eq!(query_value(query, "board").as_deref(), Some("easy2350"));
+        assert_eq!(query_value(query, "variant"), None);
+        assert_eq!(query_value(query, "flag"), None);
+        assert_eq!(query_value("", "project"), None);
+    }
+
+    #[test]
+    fn a_request_names_a_project_board_by_plain_names() {
+        let error = project_board(&json!({"project": "/nowhere", "board": "../etc"})).unwrap_err();
+        assert!(error.contains("bad board name"), "{error}");
+        assert!(project_board(&json!({"board": "b"})).unwrap_err().contains("no project"));
+    }
 }
