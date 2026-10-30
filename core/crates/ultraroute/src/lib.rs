@@ -1375,7 +1375,6 @@ fn vias_on(board: &Board) -> usize {
 }
 
 /// The field solver: the caller's, or the CPU's, or with `--gpu` the GPU's where there is one.
-#[cfg_attr(not(feature = "gpu"), allow(unused_variables))]
 fn solver_for(a: &Args, custom_solver: Option<Box<dyn grid::FieldSolver>>) -> Box<dyn grid::FieldSolver> {
     match custom_solver {
         Some(s) => s,
