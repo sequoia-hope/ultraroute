@@ -641,14 +641,54 @@ struct Routed {
     at: String,
 }
 
-/// The studio's entry for a board in `status.json`: what is known of it, nothing made up.
+/// Where a core run's report goes: beside its board.
+fn report_path(output: &std::path::Path) -> PathBuf {
+    output.with_extension("report.json")
+}
+
+/// The studio's entry for a board in `status.json`: what is known of it, nothing made up. A core
+/// run's report gives the opens, the findings by severity and the router's commit, and its path
+/// for the findings themselves.
 fn studio_status(routed: &Routed, saved: bool, config: &Config) -> Map<String, Value> {
     let mut fields = Map::new();
-    if let Some(open) = routed.open {
+    let report_file = report_path(&routed.output);
+    let report: Option<Value> = std::fs::read_to_string(&report_file).ok().and_then(|t| serde_json::from_str(&t).ok());
+    let opens = report.as_ref().and_then(|r| r["summary"]["opens"].as_u64()).or(routed.open);
+    if let Some(open) = opens {
         fields.insert("opens".into(), json!(open));
     }
+    if let Some(r) = &report {
+        let findings = r["findings"].as_array().cloned().unwrap_or_default();
+        let count = |severity: &str| findings.iter().filter(|x| x["severity"] == severity).count();
+        fields.insert("findings".into(), json!({"error": count("error"), "warning": count("warning")}));
+        for key in ["connections", "routed"] {
+            if let Some(v) = r["summary"][key].as_u64() {
+                fields.insert(key.into(), json!(v));
+            }
+        }
+        // A run that crashed, or that the clock stopped with connections left open, needs the
+        // person: Boardroom's inbox raises it.
+        let crashed = findings.iter().any(|f| f["kind"] == "crash");
+        let cut = r["deadline"]["limited"].as_array().is_some_and(|l| !l.is_empty()) || !r["deadline"]["hard_passed_in"].is_null();
+        let failed = if crashed {
+            json!("crash")
+        } else if cut && opens.unwrap_or(0) > 0 {
+            json!("deadline")
+        } else {
+            Value::Null
+        };
+        fields.insert("failed".into(), failed);
+        // The full report goes into the project, in the studio's own directory, so the checks
+        // panel can list its findings.
+        let relative = PathBuf::from("route").join(&routed.project.board.board).join("report.json");
+        let into = routed.project.dir.join(&relative);
+        if into.parent().is_some_and(|d| std::fs::create_dir_all(d).is_ok()) && std::fs::copy(&report_file, &into).is_ok() {
+            fields.insert("report".into(), json!(relative.display().to_string()));
+        }
+    }
     fields.insert("last_route".into(), json!(routed.at));
-    if let Some(commit) = project::router_commit(&config.root) {
+    let commit = report.as_ref().and_then(|r| r["router"]["commit"].as_str().map(String::from)).or_else(|| project::router_commit(&config.root));
+    if let Some(commit) = commit {
         fields.insert("router".into(), json!(commit));
     }
     fields.insert("saved".into(), json!(saved));
@@ -746,6 +786,9 @@ fn start(request: &Value, config: &Config, runner: &Arc<Runner>, owner: u64) -> 
         }
         if load {
             args.push("--no-route".into());
+        } else {
+            // The run's numbers and findings, for the project's status (Boardroom reads them).
+            args.extend(["--report".into(), report_path(&output).display().to_string()]);
         }
     } else {
         let dsn = input.dsn.as_ref().ok_or(format!("job {job} has no .dsn for copperroute"))?;
@@ -836,6 +879,41 @@ mod tests {
         assert_eq!(query_value(query, "variant"), None);
         assert_eq!(query_value(query, "flag"), None);
         assert_eq!(query_value("", "project"), None);
+    }
+
+    #[test]
+    fn a_core_runs_report_fills_the_studios_status_and_lands_in_the_project() {
+        let dir = std::env::temp_dir().join(format!("studio-report-{}", std::process::id()));
+        let project = dir.join("proj");
+        std::fs::create_dir_all(project.join("design")).unwrap();
+        let output = dir.join("run.kicad_pcb");
+        let report = |opens: u64, limited: Value, crash: bool| {
+            let mut findings = vec![json!({"severity": "error", "kind": "open"}), json!({"severity": "warning", "kind": "neck"})];
+            if crash {
+                findings.push(json!({"severity": "error", "kind": "crash"}));
+            }
+            let r = json!({"router": {"commit": "abc1234"}, "summary": {"connections": 414, "routed": 414 - opens, "opens": opens},
+                           "deadline": {"limited": limited, "hard_passed_in": null}, "findings": findings});
+            std::fs::write(report_path(&output), r.to_string()).unwrap();
+        };
+        let config = Config { root: dir.clone(), router: dir.clone(), core: dir.clone(), runs: dir.clone() };
+        let board = project::Board { board: "b".into(), variant: "a".into(), pcb: project.join("hw/b/a/b.kicad_pcb"), project: None, rules: None, regions: None };
+        let routed = Routed { project: ProjectRun { dir: project.clone(), board, read: String::new() }, output: output.clone(), open: Some(9), at: "t".into() };
+
+        report(2, json!(["negotiation"]), false);
+        let f = studio_status(&routed, false, &config);
+        assert_eq!((f["opens"].clone(), f["connections"].clone(), f["routed"].clone()), (json!(2), json!(414), json!(412)), "the report's, not the live line's");
+        assert_eq!(f["findings"], json!({"error": 1, "warning": 1}));
+        assert_eq!(f["failed"], json!("deadline"), "cut short with connections open");
+        assert_eq!(f["router"], json!("abc1234"));
+        assert_eq!(f["report"], json!("route/b/report.json"));
+        assert!(project.join("route/b/report.json").is_file());
+
+        report(0, json!(["negotiation"]), false);
+        assert_eq!(studio_status(&routed, false, &config)["failed"], Value::Null, "cut short but finished: nothing to raise");
+        report(0, json!([]), true);
+        assert_eq!(studio_status(&routed, false, &config)["failed"], json!("crash"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
