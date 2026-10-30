@@ -26,7 +26,7 @@ use serde_json::{json, Value};
 
 mod regions;
 
-pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--no-negotiate-vias] [--no-negotiate-rip] [--no-negotiate-tree] [--negotiate-jacobi] [--negotiate-reroute-all] [--negotiate-legacy] [--diff-pairs] [--diff-pairs-legacy] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--via-cost MM[,OPEN_MM]] [--no-directional] [--no-reduce-vias] [--gpu] \
+pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--no-negotiate-vias] [--no-negotiate-rip] [--no-negotiate-tree] [--negotiate-jacobi] [--negotiate-reroute-all] [--negotiate-legacy] [--diff-pairs] [--diff-pairs-legacy] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner|same] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--via-cost MM[,OPEN_MM]] [--no-directional] [--no-reduce-vias] [--gpu] \
 [--timeout SECONDS] [--cell MM] [--first NET,...] [--first-negotiate] [--first-weight W] [--restart N] [--topo-first REF,...|auto] [--topo-trapped] [--topo-trapped-rip] [--topo-sample MM] \
 [--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--push-decay D] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough warp|linear|rip|gentle|dipole|region] [--shove-steps N] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-late] [--shove-seconds S] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--uuid-seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
 [--recipe default|bench|minimal] [--live PATH|-] [--live-fps N] [--live-step MS] [--blame]
@@ -353,7 +353,8 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
                     "dogbone" => grid::EscapeMode::Dogbone,
                     "grid" => grid::EscapeMode::GridRing,
                     "inner" => grid::EscapeMode::GridInner,
-                    _ => return Err(format!("--prefanout-mode: {v} is not stub, dogbone, grid or inner")),
+                    "same" => grid::EscapeMode::GridSame,
+                    _ => return Err(format!("--prefanout-mode: {v} is not stub, dogbone, grid, inner or same")),
                 });
             }
             "--prefanout-order" => {
