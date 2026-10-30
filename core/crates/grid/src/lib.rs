@@ -46,7 +46,7 @@ pub use tune::{match_lengths, match_lengths_watch, pair_lengths, TuneBump, TuneS
 pub use clock::Deadline;
 pub use memory::{memory_estimate, MemoryEstimate};
 pub use vias::{reduce_vias, reduce_vias_all, ViaOptions, ViaStats};
-pub use shove::{plough_fields, shove_escape, shove_escape_steps, Plough, ShoveEvent, ShoveOptions, ShoveRound, ShoveStats, ShoveTry};
+pub use shove::{shove_escape, Plough, ShoveEvent, ShoveOptions, ShoveRound, ShoveStats, ShoveTry};
 #[cfg(feature = "gpu")]
 pub use gpu::GpuSolver;
 #[cfg(feature = "gpu")]

@@ -1,4 +1,4 @@
-//! `fanout_trace ROUTED.kicad_pcb OUT.json [--parts auto|REF,...] [--reroute SECONDS] [--trials N] [--pours-block] [--plough warp|linear|rip|gentle|dipole] [--cascade N]`:
+//! `fanout_trace ROUTED.kicad_pcb OUT.json [--parts auto|REF,...] [--reroute SECONDS] [--trials N] [--pours-block] [--plough rip|region] [--cascade N]`:
 //! the escape pass, step by step, on a routed board, for the lab's fan-out views.
 //!
 //! For each fine-pitch part (or each named one), on its own copy of the board: the part's edges
@@ -229,12 +229,9 @@ fn main() {
         let mut s = soft.clone();
         let fine_set: HashSet<usize> = fine.iter().copied().collect();
         let plough = match flag("--plough").as_deref() {
-            None | Some("warp") => grid::Plough::Warp,
-            Some("linear") => grid::Plough::Linear,
-            Some("rip") => grid::Plough::Rip,
-            Some("gentle") => grid::Plough::Gentle,
-            Some("dipole") => grid::Plough::Dipole,
-            Some(other) => panic!("--plough {other}: warp, linear, rip, gentle or dipole"),
+            None | Some("rip") => grid::Plough::Rip,
+            Some("region") => grid::Plough::Region,
+            Some(other) => panic!("--plough {other}: rip or region"),
         };
         let cascade = flag("--cascade").map_or(grid::ShoveOptions::default().cascade, |s| s.parse().expect("--cascade N"));
         let opts = grid::ShoveOptions { parts: Some(fine_set), reroute_seconds: 20.0, pours_block, plough, cascade, ..Default::default() };

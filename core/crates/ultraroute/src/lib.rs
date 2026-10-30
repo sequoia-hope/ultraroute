@@ -28,7 +28,7 @@ mod regions;
 
 pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--no-negotiate-vias] [--no-negotiate-rip] [--no-negotiate-tree] [--negotiate-jacobi] [--negotiate-reroute-all] [--negotiate-legacy] [--diff-pairs] [--diff-pairs-legacy] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner|same] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--via-cost MM[,OPEN_MM]] [--no-directional] [--no-reduce-vias] [--gpu] \
 [--timeout SECONDS] [--cell MM] [--first NET,...] [--first-negotiate] [--first-weight W] [--restart N] [--topo-first REF,...|auto] [--topo-trapped] [--topo-trapped-rip] [--topo-sample MM] \
-[--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--push-decay D] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough warp|linear|rip|gentle|dipole|region] [--shove-steps N] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-late] [--shove-seconds S] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--uuid-seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
+[--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--push-decay D] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--uuid-seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
 [--recipe default|bench|minimal] [--live PATH|-] [--live-fps N] [--live-step MS] [--blame]
 --push and --place take millimetres with y pointing up: give KiCad's y negated (KiCad y 127.5 is -127.5).";
 
@@ -130,23 +130,18 @@ pub struct Args {
     pub clear_lanes: bool,
     /// Plough a way out for each open connection trapped at a fine-pitch part's pads.
     pub shove: bool,
-    /// How the plough moves copper in the way, its steps and reach, the rip-up repair after each
-    /// try, how many passes, whether a try that frees its connection without losing ground is
-    /// kept, and whether it runs after nudging rather than before.
+    /// How the plough clears the copper in the way, its reach, the rip-up repair after each try,
+    /// how many passes, and whether a try that frees its connection without losing ground is kept.
     pub shove_plough: Option<grid::Plough>,
-    pub shove_steps: Option<usize>,
     pub shove_reach: Option<f64>,
     pub shove_repair: Option<f64>,
     pub shove_passes: usize,
     pub shove_ties: bool,
-    pub shove_late: bool,
     /// Reorders the connections negotiation and the grid router take, for a search over runs.
     pub seed: u64,
     /// The new copper's uuids drawn from this seed, so that a run's output is the same every time;
     /// random when `None`.
     pub uuid_seed: Option<u64>,
-    /// Seconds nudging leaves for a plough that runs after it.
-    pub shove_seconds: f64,
     /// Connections a plough try knocked loose that are ploughed out in turn.
     pub shove_cascade: Option<usize>,
     /// Plough passes in a row that free nothing before the plough stops.
@@ -282,15 +277,12 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
         clear_lanes: false,
         shove: false,
         shove_plough: None,
-        shove_steps: None,
         shove_reach: None,
         shove_repair: None,
         shove_passes: 1,
         shove_ties: false,
-        shove_late: false,
         seed: 0,
         uuid_seed: None,
-        shove_seconds: 30.0,
         shove_cascade: None,
         shove_patience: 1,
         rip_regions: Vec::new(),
@@ -462,22 +454,15 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
             "--shove-plough" => {
                 a.shove = true;
                 a.shove_plough = Some(match value()?.as_str() {
-                    "warp" => grid::Plough::Warp,
-                    "linear" => grid::Plough::Linear,
                     "rip" => grid::Plough::Rip,
-                    "gentle" => grid::Plough::Gentle,
-                    "dipole" => grid::Plough::Dipole,
                     "region" => grid::Plough::Region,
-                    other => return Err(format!("--shove-plough {other}: warp, linear, rip, gentle, dipole or region")),
+                    other => return Err(format!("--shove-plough {other}: rip or region")),
                 });
             }
-            "--shove-steps" => a.shove_steps = Some(value()?.parse().map_err(|e| format!("--shove-steps: {e}"))?),
             "--shove-reach" => a.shove_reach = Some(value()?.parse().map_err(|e| format!("--shove-reach: {e}"))?),
             "--shove-repair" => a.shove_repair = Some(value()?.parse().map_err(|e| format!("--shove-repair: {e}"))?),
             "--shove-passes" => a.shove_passes = value()?.parse().map_err(|e| format!("--shove-passes: {e}"))?,
             "--shove-ties" => a.shove_ties = true,
-            "--shove-late" => a.shove_late = true,
-            "--shove-seconds" => a.shove_seconds = value()?.parse().map_err(|e| format!("--shove-seconds: {e}"))?,
             "--shove-cascade" => a.shove_cascade = Some(value()?.parse().map_err(|e| format!("--shove-cascade: {e}"))?),
             "--shove-patience" => a.shove_patience = value()?.parse().map_err(|e| format!("--shove-patience: {e}"))?,
             "--seed" => a.seed = value()?.parse().map_err(|e| format!("--seed: {e}"))?,
@@ -1140,7 +1125,9 @@ fn shove_pass(
     log: &Option<grid::Log>,
     step: &dyn Fn(&Board),
 ) -> Vec<kicad_pcb::Span> {
-    let region = a.shove_plough == Some(grid::Plough::Region);
+    let defaults = grid::ShoveOptions::default();
+    let plough = a.shove_plough.unwrap_or(defaults.plough);
+    let region = plough == grid::Plough::Region;
     // On a board with planes, the region plough counts signal connections first: signal
     // connections open, then all, are what a pass must leave fewer of.
     let plane_nets: HashSet<u32> = if region && !a.pours_block && board.planes != 0 {
@@ -1154,7 +1141,6 @@ fn shove_pass(
     };
     let mut removed = Vec::new();
     let mut stalled = 0;
-    let defaults = grid::ShoveOptions::default();
     let reach = a.shove_reach.map_or(defaults.reach, |mm| (mm * 1e6).round() as Nm);
     let mut reaches: HashMap<ItemId, Nm> = HashMap::new();
     let mut net_reaches: HashMap<u32, Nm> = HashMap::new();
@@ -1172,9 +1158,8 @@ fn shove_pass(
             &grid::ShoveOptions {
                 cell: a.cell.unwrap_or(defaults.cell),
                 // Ripping and renegotiating round a path frees any connection, not only an escape.
-                parts: (a.shove_plough != Some(grid::Plough::Region)).then_some(fine),
-                plough: a.shove_plough.unwrap_or(defaults.plough),
-                steps: a.shove_steps.unwrap_or(defaults.steps),
+                parts: (!region).then_some(fine),
+                plough,
                 reach,
                 reaches: reaches.clone(),
                 net_reaches: net_reaches.clone(),
@@ -2237,7 +2222,7 @@ pub fn run_with_solver(
             stats = best_stats;
         }
     }
-    if a.shove && !a.shove_late && timeline.enter(&run, "shove") {
+    if a.shove && timeline.enter(&run, "shove") {
         // Rubber bands to come after keep a third of what is left.
         let until = if a.topo_trapped_rip { rescue.share(0.65) } else { rescue.clone() };
         let spans = shove_pass(a, &mut board, solver.as_mut(), &mut laid, started, &until, &log, &step);
@@ -2318,8 +2303,7 @@ pub fn run_with_solver(
             &grid::NudgeOptions {
                 cell: a.cell.unwrap_or(grid::NudgeOptions::default().cell),
                 blind: !a.nudge_guided,
-                // A plough to come after keeps its share of the time.
-                deadline: if a.shove && a.shove_late { sooner(&rescue, a.shove_seconds) } else { rescue.clone() },
+                deadline: rescue.clone(),
                 locked,
                 pours_block: a.pours_block,
                 log: log.clone(),
@@ -2331,18 +2315,6 @@ pub fn run_with_solver(
         removed.extend(n.ripped_spans.iter().copied());
         let names: Vec<&str> = n.moved.iter().map(|(f, _)| board.footprints[*f].reference.as_str()).collect();
         eprintln!("nudge: {} steps tried, {} illegal, {} kept ({} as blame asked), moved {names:?}, {:.1} s", n.tried, n.illegal, n.kept, n.guided, started.elapsed().as_secs_f64());
-    }
-    if a.shove && a.shove_late && timeline.enter(&run, "shove") {
-        let spans = shove_pass(a, &mut board, solver.as_mut(), &mut laid, started, &rescue, &log, &step);
-        removed.extend(spans);
-        if a.diff_pairs && !a.diff_pairs_legacy && !pair_laid.is_empty() {
-            let open = open_airlines(&board);
-            if unlock_pairs_near_open(&mut board, &pair_laid, &open) > 0 {
-                let spans = shove_pass(a, &mut board, solver.as_mut(), &mut laid, started, &rescue, &log, &step);
-                removed.extend(spans);
-                relock_pairs(&mut board, &pair_laid);
-            }
-        }
     }
     let mut tightened = (a.tighten && timeline.enter(&run, "tightening")).then(|| {
         say("tightening", "straightening the routed copper".to_string());

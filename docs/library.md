@@ -430,32 +430,29 @@ airline a courtyard must come), `parts_per_connection` 6, `reroute_seconds` 5, `
 `grid::shove_escape(board, solver, &ShoveOptions, soft, watch) -> ShoveStats` frees connections
 trapped at fine-pitch pads. For each open connection with an end on one of `parts` (every open
 connection when `None`), it finds the cheapest path with other nets' movable copper passable at a
-price (`soft_cost` 30 near it, `cross_cost` 400 on it), then moves that copper off the path.
-Copper crossing the path, and vias on it, are ripped. The trapped connection is routed first,
-then everything opened, and the try is kept only if fewer connections are open (or as many, with
-`accept_ties`). A round that leaves it trapped is followed by another along the new path, up to
-`rounds`, the later ones laying the path outright.
+price (`soft_cost` 30 near it, `cross_cost` 400 on it), then clears that copper off the path.
+The trapped connection is routed first, then everything opened, and the try is kept only if
+fewer connections are open (or as many, with `accept_ties`). A round that leaves it trapped is
+followed by another along the new path, up to `rounds`, laying the path outright.
 
-`Plough` picks how the copper in the way moves. `R` is the clearance a net's copper needs from
-the path (the path's half width or via radius, the two nets' clearance, the net's widest piece
-and `margin`); `reach` is how far from the path anything moves.
+`Plough` picks how the copper in the way is cleared.
 
-| `Plough` | move |
+| `Plough` | clearing |
 |---|---|
-| `Warp` (default) | Per layer, `plough_fields` builds a `WarpField` (60 µm cells): strips either side of the path move `R` away from it, pads, vias, keepouts, locked copper and kept pours hold still, harmonic between, zero at the reach. Copper squeezed against a pad moves only as far as there is room. |
-| `Linear` | Straight away from the path by `R (1 - d/W)`, `W = max(reach, 2R)`. Blind to what stays put, so it can press copper into pads. |
-| `Gentle` | The warp plough in `steps` small steps, routing after each; a net a step breaks goes back. Nothing is ripped until the steps run out. |
-| `Dipole` | As `Gentle`, but each step moves copper straight away from the trapped pad's centre by `R / steps * exp(-3d / reach)`, out to the reach. Despite the name it is one repulsor at the pad. |
-| `Rip` | No move: the path is laid outright, ripping exactly what its pieces would break a rule against. |
-| `Region` | No move: every other net's movable copper within the reach of the path is ripped, and the trapped connection and all it opened negotiate together, the trapped net's congestion at half price. |
+| `Region` (default) | Every other net's movable copper within the reach of where the path is pinched is ripped, and the trapped connection and all it opened negotiate together, the trapped net's congestion at half price. |
+| `Rip` | The path is laid outright, ripping exactly what its pieces would break a rule against. |
 
-`ShoveOptions`: `cell` 50,000, `via_cost` 80, `rounds` 4, `plough` `Warp`, `reach` 2,000,000
-nm, `reaches` (per-pad reach overrides), `steps` 8, `margin` 50,000 nm, `soft_cost` 30,
-`cross_cost` 400, `cascade` 0 (connections a try knocked open that are ploughed in turn),
-`parts` None, `reroute_seconds` 20, `repair_seconds` 10, `seed` 0, `accept_ties` false,
-`max_seconds`, `pours_block`, `cancel`, `log`. `ShoveStats` has a `ShoveTry` per connection
-(rounds, `routed`, `kept`, open before and after) and `removed_spans`. `shove_escape_steps`
-also reports each gentle or dipole step.
+Where a round cannot lay the path, copper crossing it, and vias on it, are ripped, and the rest
+moves straight away from it by `R (1 - d/W)`, `W = max(reach, 2R)`, with `morph::shift_copper`:
+`R` is the clearance a net's copper needs from the path (the path's half width or via radius, the
+two nets' clearance, the net's widest piece and `margin`).
+
+`ShoveOptions`: `cell` 50,000, `via_cost` 80, `rounds` 4, `plough` `Region`, `reach` 2,000,000
+nm, `reaches` and `net_reaches` (per-pad and per-net reach overrides), `margin` 50,000 nm,
+`soft_cost` 30, `cross_cost` 400, `cascade` 0 (connections a try knocked open that are ploughed
+in turn), `parts` None, `reroute_seconds` 20, `repair_seconds` 10, `seed` 0, `accept_ties`
+false, `deadline`, `pours_block`, `log`. `ShoveStats` has a `ShoveTry` per connection (rounds,
+`routed`, `kept`, open before and after) and `removed_spans`.
 
 The command runs passes in a new order each (`--shove-passes`, `--shove-patience`) and, for
 `Region`, doubles a failed pad's reach in `reaches` each pass up to 4 mm. That loop lives in
@@ -533,15 +530,15 @@ it runs `route_open` and the cleanup only; each flag adds a stage. In order:
    `--push` (`push`, then `route_open`), `--escape` (`comb`, `rip_broken`, `route_open`,
    `rip_up`; undone if no better), `--clear-lanes` (`clear_lane` per trapped pad, same
    pattern).
-6. **Rescue**: `--shove` (`shove_escape` passes) unless `--shove-late`; `--topo-trapped` or
-   `--topo-trapped-rip` on what is still open; `--nudge` (`nudge`); `--shove-late`.
+6. **Rescue**: `--shove` (`shove_escape` passes); `--topo-trapped` or
+   `--topo-trapped-rip` on what is still open; `--nudge` (`nudge`).
 7. **Finish**: `--tighten` (`pull_tight`); pair copper joins `laid`; `drop_duplicates`;
    `prune_dangling`; with `--diff-pairs`, `match_lengths`; `--blame` prints what blocks each open
    connection.
 8. **Write**: moved parts' `(at ...)`, `edits`, `apply`.
 
 The time limit (`--timeout`) is shared out: negotiation gets half, the stages after it what is
-left, and `--shove-late` keeps `--shove-seconds` (30) back from nudging for itself. A library pipeline sets each stage's `max_seconds`
+left. A library pipeline sets each stage's `max_seconds`
 itself. Two habits from `run` are worth copying. Hold copper you do not want ripped (escapes,
 pairs) out of `soft` until the end. And try any move that might make things worse on a clone:
 

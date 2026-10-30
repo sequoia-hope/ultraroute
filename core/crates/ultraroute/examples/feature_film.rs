@@ -32,7 +32,7 @@ usage:
   feature_film flow       BOARD.kicad_pcb OUT.json REF=DX,DY [--steps N] [--rip] [--reroute S]
   feature_film comb       BOARD.kicad_pcb OUT.json [--part REF|auto] [--zone MM] [--reroute S]
   feature_film clear-lane BOARD.kicad_pcb OUT.json [--part REF|auto] [--zone MM] [--trials N] [--reroute S]
-  feature_film shove      BOARD.kicad_pcb OUT.json [--plough warp|linear|rip|gentle|dipole] [--part REF|auto] [--cascade N] [--ties] [--repair S]
+  feature_film shove      BOARD.kicad_pcb OUT.json [--plough rip|region] [--part REF|auto] [--cascade N] [--ties] [--repair S]
   feature_film nudge      BOARD.kicad_pcb OUT.json [--prepare-route] [--guided-only] [--seconds S]
   feature_film negotiate  BOARD.kicad_pcb OUT.json [--strip-all] [--rounds N] [--threads N] [--seed N]
   feature_film route      BOARD.kicad_pcb OUT.json [--strip-all] [--after-negotiate] [--seconds S] [--seed N]
@@ -1883,13 +1883,9 @@ fn run_shove(cli: &Cli) {
     let (board_path, out_path) = (&pos[0], PathBuf::from(&pos[1]));
     let pours_block = cli.has("--pours-block");
     let max_frames = cli.flag("--max-frames").map_or(200, |s| s.parse().expect("--max-frames"));
-    let plough_name = cli.flag("--plough").unwrap_or_else(|| "warp".to_string());
+    let plough_name = cli.flag("--plough").unwrap_or_else(|| "region".to_string());
     let plough = match plough_name.as_str() {
-        "warp" => grid::Plough::Warp,
-        "linear" => grid::Plough::Linear,
         "rip" => grid::Plough::Rip,
-        "gentle" => grid::Plough::Gentle,
-        "dipole" => grid::Plough::Dipole,
         "region" => grid::Plough::Region,
         other => panic!("unknown --plough {other}"),
     };
@@ -1954,7 +1950,7 @@ fn run_shove(cli: &Cli) {
 
     let fb_cell = Mutex::new(fb);
     let prev = Mutex::new(init_copper.clone());
-    let stats = grid::shove_escape_steps(
+    let stats = grid::shove_escape(
         &mut board,
         &mut grid::CpuSolver,
         &opts,
@@ -2009,20 +2005,6 @@ fn run_shove(cli: &Cli) {
                             "points": r.path.iter().map(|(l, p)| json!([l, xy(*p)[0], xy(*p)[1]])).collect::<Vec<_>>(),
                         })]
                     };
-                    // Sample warp plough arrows when Warp mode ran on round 1.
-                    let arrows = if plough == grid::Plough::Warp && t.rounds.len() == 1 && !r.path.is_empty() {
-                        let fields = grid::plough_fields(now, &r.path, 250_000.0, opts.reach as f64, r.net);
-                        let path_bb = r.path.iter().map(|(_, p)| BBox::of([*p])).reduce(BBox::union).unwrap().grow(opts.reach);
-                        sample_arrows(path_bb, 16, |p| {
-                            fields
-                                .values()
-                                .map(|f| f.displacement(p))
-                                .max_by(|a, b| a.0.hypot(a.1).total_cmp(&b.0.hypot(b.1)))
-                                .unwrap_or((0.0, 0.0))
-                        })
-                    } else {
-                        Vec::new()
-                    };
                     let at = now.item(t.pad).map_or(t.to, |it| {
                         let bb = it.shape.bbox();
                         Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2)
@@ -2046,7 +2028,6 @@ fn run_shove(cli: &Cli) {
                             moved_to,
                             ripped,
                             laid,
-                            arrows,
                             paths: path_json,
                             focus: json!({"pad": t.pad, "net": t.net, "at": xy(at), "to": xy(t.to)}),
                             stats: vec![
@@ -2088,55 +2069,6 @@ fn run_shove(cli: &Cli) {
                     );
                 }
             }
-        },
-        &mut |now, t, r, step_idx| {
-            let mut fb = fb_cell.lock().unwrap();
-            let cur = fb.snapshot_copper(now);
-            let prev_snap = std::mem::replace(&mut *prev.lock().unwrap(), cur.clone());
-            let (gone, came) = diff_pools(&prev_snap, &cur);
-            let pad_name = grid::item_name(now, t.pad);
-            let net_name = now.net_name(t.net);
-            let at = now.item(t.pad).map_or(t.to, |it| {
-                let bb = it.shape.bbox();
-                Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2)
-            });
-            let poles = if plough == grid::Plough::Dipole {
-                vec![json!({"at": xy(at), "strength": 0.35, "radius": mm(opts.reach as f64)})]
-            } else {
-                Vec::new()
-            };
-            let path_json = if r.path.is_empty() {
-                Vec::new()
-            } else {
-                vec![json!({
-                    "net": r.net,
-                    "collides": false,
-                    "points": r.path.iter().map(|(l, p)| json!([l, xy(*p)[0], xy(*p)[1]])).collect::<Vec<_>>(),
-                })]
-            };
-            fb.push_frame(
-                now,
-                format!(
-                    "{pad_name} ({net_name}) {plough_name} micro-step {}/{}: {} cumulative shifted{}",
-                    step_idx + 1,
-                    opts.steps,
-                    r.moved,
-                    if r.routed { ", routed out" } else { "" }
-                ),
-                FrameOverlays {
-                    moved_from: gone,
-                    moved_to: came,
-                    paths: path_json,
-                    poles,
-                    focus: json!({"pad": t.pad, "net": t.net, "at": xy(at), "to": xy(t.to)}),
-                    stats: vec![
-                        ("micro-step".into(), json!(format!("{} / {}", step_idx + 1, opts.steps))),
-                        ("shifted".into(), json!(r.moved)),
-                        ("routed".into(), json!(if r.routed { "yes" } else { "no" })),
-                    ],
-                    ..Default::default()
-                },
-            );
         },
     );
     let mut fb = fb_cell.into_inner().unwrap();
