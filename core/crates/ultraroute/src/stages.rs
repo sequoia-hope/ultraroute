@@ -766,6 +766,15 @@ pub(crate) fn open_findings(board: &Board, open: &[board::Airline], blamed: &[St
     out
 }
 
+/// A finding per warning from loading the board: of kind `rule` for what its project and custom
+/// rules leave out or the router does not apply, `board` for the board's own file and outline,
+/// so a designer sees a dropped rule wherever the report goes, not only on stderr.
+pub(crate) fn load_findings(board: &Board) -> Vec<Finding> {
+    let rules = board.rules.warnings.iter().map(|w| ("rule", w));
+    let own = board.warnings.iter().map(|w| ("board", w));
+    rules.chain(own).map(|(kind, w)| Finding { severity: "warning", kind, message: w.clone(), refs: Vec::new(), nets: Vec::new(), ends: None }).collect()
+}
+
 /// The board written: the router's copper as tracks and vias, what it took out removed, moved
 /// parts at their new places, stale pour fills dropped; with the regions' and the necks' reports.
 pub struct Write;
@@ -788,12 +797,24 @@ impl Stage for Write {
         ledger.removed.extend(spans);
         if split > 0 {
             eprintln!("split {split} tracks where others end on them");
+            // A track that ran past a join leaves that overhang a piece of its own, leading
+            // nowhere, which KiCad reports as dangling.
+            let (pruned, spans) = grid::prune_dangling(board, &mut laid);
+            ledger.removed.extend(spans);
+            if pruned > 0 {
+                eprintln!("pruned {pruned} dangling after the split");
+            }
         }
         for (line, nets) in regions::report(board, &ledger.lengths, &laid) {
             eprintln!("regions: {line}");
             let kind = if line.starts_with("length:") { "length" } else { "region" };
             ctx.stats.findings.push(Finding { severity: "warning", kind, message: line.clone(), refs: Vec::new(), nets, ends: None });
             ctx.say("regions", line);
+        }
+        for (line, net) in ctx.board.rule_limits() {
+            eprintln!("rules: {line}");
+            ctx.stats.findings.push(Finding { severity: "warning", kind: "length", message: line.clone(), refs: Vec::new(), nets: vec![net], ends: None });
+            ctx.say("rules", line);
         }
         let board = &mut *ctx.board;
         for neck in grid::necks::necks(board, &laid) {

@@ -1,6 +1,7 @@
 //! The design-rule checks a router must not break: copper clearance between nets, copper to the
 //! board edge, copper to holes, hole to hole, and keepouts.
 
+use crate::custom::Thing;
 use std::collections::HashSet;
 
 use crate::model::{Board, Item, ItemId, Kind};
@@ -46,11 +47,8 @@ pub(crate) struct Limits {
     edge: Nm,
     hole_clearance: Nm,
     hole_to_hole: Nm,
-    /// From custom rules: hole clearance where either item is a through-hole pad, hole-to-hole
-    /// between two of them, and clearance between two SMD pads; never below the plain ones.
-    pth_hole_clearance: Nm,
-    pth_hole_to_hole: Nm,
-    smd_pad_clearance: Nm,
+    /// How far a hole may hold copper or another hole away, custom rules included.
+    hole_reach: Nm,
 }
 
 /// Whether `shape` lies inside the polygon `area`, more than `margin` from its edge: a point of
@@ -74,14 +72,24 @@ pub fn within(area: &Shape, shape: &Shape, margin: Nm) -> bool {
 /// Whether a net tie lets the two touch, as KiCad does: two members of one tie (its pads and the
 /// copper drawn in it), or a member and a track of one of its nets that ends inside one of its
 /// pads (checked with kicad-cli 9.0.8: such a track may cross the tie's bar; one ending short of
-/// the pads may not).
+/// the pads may not). Against a pad of the tie the track must end inside that pad: one that
+/// crosses the other net's pad to end in its own shorts the two (kicad-cli 9.0.8 again).
 fn tied(board: &Board, a: ItemId, item: &Item, b: ItemId, other: &Item) -> bool {
+    let joins = |member: &Item, track: &Item, f: usize, nets: &[u32]| match member.kind {
+        Kind::Pad { .. } => ends_inside(track, member) && nets.contains(&track.net) && track.kind == Kind::Track,
+        _ => ends_in_tie(board, track, f, nets),
+    };
     match (board.ties.get(&a), board.ties.get(&b)) {
         (Some((f, _)), Some((g, _))) => f == g,
-        (Some((f, nets)), None) => ends_in_tie(board, other, *f, nets),
-        (None, Some((f, nets))) => ends_in_tie(board, item, *f, nets),
+        (Some((f, nets)), None) => joins(item, other, *f, nets),
+        (None, Some((f, nets))) => joins(other, item, *f, nets),
         (None, None) => false,
     }
+}
+
+/// Whether a track has an end inside `pad`.
+fn ends_inside(track: &Item, pad: &Item) -> bool {
+    matches!(track.shape, Shape::Capsule { a, b, .. } if pad.shape.contains(a) || pad.shape.contains(b))
 }
 
 /// A track of one of a tie's `nets` with an end inside one of the pads of the tie in footprint `fp`.
@@ -95,35 +103,36 @@ fn ends_in_tie(board: &Board, track: &Item, fp: usize, nets: &[u32]) -> bool {
     })
 }
 
-/// A pad with a plated hole: KiCad's `Pad_Type == 'Through-hole'`.
-fn through_hole(item: &Item) -> bool {
-    matches!(item.kind, Kind::Pad { plated: true, .. }) && item.hole.is_some()
-}
-
-/// A pad without a hole: KiCad's `Pad_Type == 'SMD'`.
-fn smd(item: &Item) -> bool {
-    matches!(item.kind, Kind::Pad { .. }) && item.hole.is_none()
+/// The largest of `f` over the layers in `mask`: a rule asked on each layer two things share.
+fn over_layers(board: &Board, mask: u64, f: impl Fn(usize) -> Nm) -> Nm {
+    (0..board.layers.len()).filter(|l| mask & (1 << l) != 0).map(f).max().unwrap_or(0)
 }
 
 impl Limits {
-    /// The hole clearance between two items, one of whose holes is measured.
-    fn hole_clearance(&self, a: &Item, b: &Item) -> Nm {
-        if through_hole(a) || through_hole(b) { self.pth_hole_clearance } else { self.hole_clearance }
-    }
-
-    /// How far copper keeps from the hole of `hole` (item `id`): its hole clearance, and for a
-    /// track or via near an unplated hole, the hole's pad's own clearance where wider. (An
-    /// unplated slot is board edge to KiCad; its keepout holds the edge clearance.)
-    fn hole_keep(&self, board: &Board, id: ItemId, hole: &Item, other: &Item) -> Nm {
-        let base = self.hole_clearance(hole, other);
+    /// How far copper `other` keeps from the hole of `hole` (item `id`): the hole clearance the
+    /// rules set between them, and for a track or via near an unplated hole, the hole's pad's
+    /// own clearance where wider. (An unplated slot is board edge to KiCad; its keepout holds
+    /// the edge clearance.)
+    fn hole_keep(&self, board: &Board, id: ItemId, hole: &Item, other_id: ItemId, other: &Item) -> Nm {
+        let (a, b) = (Thing::Item(board, id, hole), Thing::Item(board, other_id, other));
+        let base = over_layers(board, other.layers, |l| board.rule_min("hole_clearance", &a, Some(&b), l, self.hole_clearance));
         if hole.plated_hole() || !matches!(other.kind, Kind::Track | Kind::Via) {
             return base;
         }
         base.max(board.pad_clearances.get(&id).copied().unwrap_or(0))
     }
 
-    fn hole_to_hole(&self, a: &Item, b: &Item) -> Nm {
-        if through_hole(a) && through_hole(b) { self.pth_hole_to_hole } else { self.hole_to_hole }
+    /// The physical hole clearance custom rules set between the hole of `hole` and copper
+    /// `other`, whatever their nets; 0 where none does.
+    fn physical_hole(&self, board: &Board, id: ItemId, hole: &Item, other_id: ItemId, other: &Item) -> Nm {
+        let (a, b) = (Thing::Item(board, id, hole), Thing::Item(board, other_id, other));
+        over_layers(board, other.layers, |l| board.rule_min("physical_hole_clearance", &a, Some(&b), l, 0))
+    }
+
+    fn hole_to_hole(&self, board: &Board, a_id: ItemId, a: &Item, b_id: ItemId, b: &Item) -> Nm {
+        let (x, y) = (Thing::Item(board, a_id, a), Thing::Item(board, b_id, b));
+        // A drill goes through every layer, whatever copper the two have.
+        over_layers(board, u64::MAX, |l| board.rule_min("hole_to_hole", &x, Some(&y), l, self.hole_to_hole))
     }
 }
 
@@ -131,27 +140,23 @@ impl Limits {
     pub(crate) fn of(board: &Board) -> Limits {
         let rules = &board.rules;
         let (hole_clearance, hole_to_hole) = (nm(rules.min_hole_clearance), nm(rules.min_hole_to_hole));
-        let pth_hole_clearance = hole_clearance.max(nm(rules.pth_hole_clearance));
-        let pth_hole_to_hole = hole_to_hole.max(nm(rules.pth_hole_to_hole));
-        let smd_pad_clearance = nm(rules.smd_pad_clearance);
+        let hole_reach = [hole_clearance, hole_to_hole, board.rule_reach("hole_clearance"), board.rule_reach("hole_to_hole"), board.rule_reach("physical_hole_clearance")].into_iter().max().unwrap_or(0);
         // The widest solder mask opening round a pad beyond its copper, twice over with the web
         // between two openings, or pad clearance.
         let widest = board.mask_openings.values().chain([&board.via_openings]).map(|o| o.1).max().unwrap_or(0);
-        let mask = (2 * widest + MASK_MARGIN + board.mask_web).max(board.pad_clearances.values().copied().max().unwrap_or(0));
+        let mask = (2 * widest + board.mask_margin() + board.mask_web).max(board.pad_clearances.values().copied().max().unwrap_or(0));
         Limits {
             max_clearance: rules
                 .classes
                 .iter()
                 .map(|c| nm(c.clearance))
-                .chain([nm(rules.min_clearance), pth_hole_clearance, pth_hole_to_hole, smd_pad_clearance, mask])
+                .chain([nm(rules.min_clearance), hole_reach, board.rule_reach("clearance"), mask])
                 .max()
                 .unwrap_or(0),
             edge: board.outline_edges.iter().map(|e| e.3).fold(nm(rules.min_copper_edge_clearance), Nm::max),
             hole_clearance,
             hole_to_hole,
-            pth_hole_clearance,
-            pth_hole_to_hole,
-            smd_pad_clearance,
+            hole_reach,
         }
     }
 }
@@ -159,6 +164,14 @@ impl Limits {
 /// How far beyond a pad's solder mask opening other nets' copper keeps, so it lies clearly
 /// outside the opening, not on its edge.
 pub const MASK_MARGIN: Nm = 1_000;
+
+impl Board {
+    /// How far beyond a solder mask opening other nets' copper keeps: the project's solder mask
+    /// to copper clearance, and [`MASK_MARGIN`] past it.
+    pub fn mask_margin(&self) -> Nm {
+        MASK_MARGIN + nm(self.rules.solder_mask_to_copper_clearance)
+    }
+}
 
 /// The gap copper of another net must keep on `layer` from `own` (item `id`) so as not to be
 /// bared in its solder mask opening, for solder to bridge the two: a pad's opening, or a bare
@@ -171,7 +184,7 @@ pub fn mask_gap(board: &Board, id: ItemId, own: &Item, other: &Item, layer: usiz
         _ => None,
     };
     match opening {
-        Some((layers, by)) if layers & (1 << layer) != 0 => by + MASK_MARGIN,
+        Some((layers, by)) if layers & (1 << layer) != 0 => by + board.mask_margin(),
         _ => 0,
     }
 }
@@ -183,7 +196,7 @@ pub fn mask_gap(board: &Board, id: ItemId, own: &Item, other: &Item, layer: usiz
 pub fn mask_pair_gap(board: &Board, a_id: ItemId, a: &Item, b_id: ItemId, b: &Item, layer: usize) -> Nm {
     let (x, y) = (mask_gap(board, a_id, a, b, layer), mask_gap(board, b_id, b, a, layer));
     if x > 0 && y > 0 {
-        x + y - MASK_MARGIN + board.mask_web
+        x + y - board.mask_margin() + board.mask_web
     } else {
         x.max(y)
     }
@@ -231,11 +244,20 @@ fn item_checks(
     let item_bbox = board.bbox(id).unwrap_or_else(|| item.shape.bbox());
     let partner = |other: ItemId| other != id && (everyone || other > id);
     let holes = board.layers.len();
+    // A custom rule may forbid tracks or vias of a net on a layer or in a named area.
+    if matches!(item.kind, Kind::Track | Kind::Via) && board.custom.has("disallow") {
+        let word = if item.kind == Kind::Via { "via" } else { "track" };
+        let me = Thing::Item(board, id, item);
+        if let Some(layer) = (0..board.layers.len()).find(|&l| item.on(l) && board.disallowed(word, &me, l) == kicad_pcb::dru::Tri::True) {
+            found.push(Violation { rule: Rule::Keepout, a: id, b: None, layer: Some(layer), gap: 0.0, required: 0 });
+        }
+    }
     // A track or via of another net bared in an opening drawn in the mask would bridge there.
     if matches!(item.kind, Kind::Track | Kind::Via) {
         for (shape, layers, net) in &board.mask_areas {
-            if layers & item.layers != 0 && (*net != item.net || *net == 0) && item.shape.gap_within(shape, MASK_MARGIN as f64) < MASK_MARGIN as f64 {
-                found.push(Violation { rule: Rule::Keepout, a: id, b: None, layer: Some(layers.trailing_zeros() as usize), gap: 0.0, required: MASK_MARGIN });
+            let margin = board.mask_margin();
+            if layers & item.layers != 0 && (*net != item.net || *net == 0) && item.shape.gap_within(shape, margin as f64) < margin as f64 {
+                found.push(Violation { rule: Rule::Keepout, a: id, b: None, layer: Some(layers.trailing_zeros() as usize), gap: 0.0, required: margin });
             }
         }
     }
@@ -261,14 +283,8 @@ fn item_checks(
                         }
                     }
                     _ if partner(other) && o.is_copper() && (o.net != item.net || item.net == 0) && !same_pad(item, o) && !tied(board, id, item, other, o) => {
-                        let mut required = board.clearance(item.net, o.net);
-                        if smd(item) && smd(o) {
-                            required = required.max(limits.smd_pad_clearance);
-                        }
-                        required = required.max(mask_pair_gap(board, id, item, other, o, layer));
-                        for p in [id, other] {
-                            required = required.max(board.pad_clearances.get(&p).copied().unwrap_or(0));
-                        }
+                        let (a, b) = (Thing::Item(board, id, item), Thing::Item(board, other, o));
+                        let required = board.clearance_kept(&a, &b, layer).max(mask_pair_gap(board, id, item, other, o, layer));
                         let other_bbox = board.bbox(other).unwrap_or_else(|| o.shape.bbox());
                         if !item_bbox.grow(required).overlaps(other_bbox) {
                             continue;
@@ -291,11 +307,14 @@ fn item_checks(
         }
         // Copper against the plated holes of others, when they are not walked themselves.
         if everyone {
-            for other in board.near(holes, item_bbox.grow(limits.pth_hole_clearance.max(limits.edge).max(limits.max_clearance))) {
+            for other in board.near(holes, item_bbox.grow(limits.hole_reach.max(limits.edge).max(limits.max_clearance))) {
                 let Some(o) = board.item(other) else { continue };
                 let Some(h) = board.hole_shape(other, o) else { continue };
-                let required = limits.hole_keep(board, other, o, item);
-                if other == id || !holds_clear(o, item) || same_pad(item, o) || (o.plated_hole() && o.net == item.net && item.net != 0) {
+                if other == id || !holds_clear(o, item) || same_pad(item, o) {
+                    continue;
+                }
+                let required = hole_required(board, limits, other, o, id, item);
+                if required == 0 {
                     continue;
                 }
                 if failed_pairs.contains(&(id.min(other), id.max(other))) {
@@ -309,14 +328,14 @@ fn item_checks(
         }
     }
     if let Some(shape) = board.hole_shape(id, item) {
-        let reach = shape.bbox().grow(limits.pth_hole_clearance.max(limits.pth_hole_to_hole).max(limits.edge).max(limits.max_clearance));
+        let reach = shape.bbox().grow(limits.hole_reach.max(limits.edge).max(limits.max_clearance));
         for other in board.near(holes, reach) {
             let Some(o) = board.item(other) else { continue };
             if !partner(other) || same_pad(item, o) {
                 continue;
             }
             if let Some(h) = board.hole_shape(other, o) {
-                let required = limits.hole_to_hole(item, o);
+                let required = limits.hole_to_hole(board, id, item, other, o);
                 let gap = shape.gap(&h);
                 if gap + SLACK < required as f64 {
                     found.push(Violation { rule: Rule::HoleToHole, a: id, b: Some(other), layer: None, gap, required });
@@ -331,16 +350,13 @@ fn item_checks(
                 }
                 // One violation per pair, as KiCad reports them: a pair already too close is not
                 // reported again for the hole.
-                if other == id
-                    || !o.is_copper()
-                    || !o.on(layer)
-                    || same_pad(item, o)
-                    || (item.plated_hole() && o.net == item.net && item.net != 0)
-                    || failed_pairs.contains(&(id.min(other), id.max(other)))
-                {
+                if other == id || !o.is_copper() || !o.on(layer) || same_pad(item, o) || failed_pairs.contains(&(id.min(other), id.max(other))) {
                     continue;
                 }
-                let required = limits.hole_keep(board, id, item, o);
+                let required = hole_required(board, limits, id, item, other, o);
+                if required == 0 {
+                    continue;
+                }
                 let gap = shape.gap_within(&o.shape, required as f64);
                 if gap + SLACK < required as f64 {
                     failed_pairs.insert((id.min(other), id.max(other)));
@@ -349,6 +365,19 @@ fn item_checks(
             }
         }
     }
+}
+
+/// How far copper `other` keeps from the hole of `hole` (item `id`): the hole clearance where
+/// their nets differ (or the hole is unplated), and any physical hole clearance a custom rule
+/// sets, which holds whatever the nets, between holes and the copper of other holes (a via
+/// beside a via of its own net), not the tracks that join them.
+fn hole_required(board: &Board, limits: &Limits, id: ItemId, hole: &Item, other_id: ItemId, other: &Item) -> Nm {
+    let joined = hole.plated_hole() && other.net == hole.net && hole.net != 0;
+    let clearance = if joined { 0 } else { limits.hole_keep(board, id, hole, other_id, other) };
+    if joined && other.hole.is_none() {
+        return clearance;
+    }
+    clearance.max(limits.physical_hole(board, id, hole, other_id, other))
 }
 
 /// Whether copper reaches into a keepout by more than the slack; touching its edge is allowed,

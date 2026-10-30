@@ -1315,6 +1315,7 @@ fn unrouted(a: &Args, mut board: Board, text: &str, mut ledger: Ledger, live: &A
         l.write(&json!({"t": "done", "open": open.len(), "passes": 0, "stopped": null}));
     }
     stats.findings = stages::open_findings(&board, &open, &blamed);
+    stats.findings.extend(stages::load_findings(&board));
     stats.summary = stats::Summary { connections: open.len(), opens: open.len(), vias: vias_on(&board), seconds: begun.elapsed().as_secs_f64(), ..Default::default() };
     stats.memory.peak_mb = peak_memory_mb();
     Routed { text: out, stats }
@@ -1336,6 +1337,7 @@ fn finish(a: &Args, board: &Board, ledger: &mut Ledger, live: &Arc<Mutex<Option<
         eprintln!("{line}");
         stats.findings.push(Finding { severity: "warning", kind: "deadline", message: line, refs: Vec::new(), nets: Vec::new(), ends: None });
     }
+    stats.findings.extend(stages::load_findings(board));
     for s in &mut stats.stages {
         s.cut = timeline.limited.contains(&s.name);
     }

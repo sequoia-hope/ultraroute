@@ -26,11 +26,16 @@ pub struct Profile {
     pub narrow_half_width: Nm,
     /// The board's minimum track, or the net's own from a custom rule: no neck goes below it.
     pub min_half_width: Nm,
-    /// The board's minimum track alone, the floor of a forced neck ([`Profile::forced_necks`]).
+    /// The narrowest track the rules allow for any net, the floor of a forced neck
+    /// ([`Profile::forced_necks`]): the board's minimum unless a custom rule for every net sets
+    /// another.
     pub board_min_half_width: Nm,
     pub clearance: Nm,
     pub via_radius: Nm,
     pub drill_radius: Nm,
+    /// The net, where the board's custom rules tell nets apart by name; else the map serves the
+    /// whole class and the rules are asked about a net of it.
+    pub net: Option<u32>,
 }
 
 impl Profile {
@@ -63,25 +68,38 @@ impl Profile {
     pub fn for_net(board: &Board, net: u32) -> Profile {
         let rules = &board.rules;
         let class = rules.class_of(board.net_name(net));
+        let class = class.as_ref();
         let take = |v: Option<f64>, floor: f64| nm(v.unwrap_or(floor).max(floor));
-        let min_width = rules.min_track_width_of(board.net_name(net));
+        let min_width = board.min_track_width_of(net) as f64 / 1e9;
         let half_width = take(class.map(|c| c.track_width), min_width) / 2;
         // A net whose class is wider than the board's default carries current: it keeps its
         // width all the way into its pads, however tight; only signals neck to the minimum.
         let signal = rules.classes.iter().find(|c| c.name == "Default").map_or(0.0, |c| c.track_width).max(rules.min_track_width);
         let power = class.is_some_and(|c| c.track_width > signal + 1e-9);
+        // A class's via may leave a thinner ring round its drill than the board allows; the via
+        // grows to keep the ring, the drill as the class has it. Custom rules on vias of the net
+        // (hole_size, via_diameter, annular_width) may ask more of either; never less.
+        let drill = take(class.map(|c| c.via_drill), rules.min_via_drill);
+        let diameter = take(class.map(|c| c.via_diameter), rules.min_via_diameter);
+        let (drill, diameter, ring) = if ["hole_size", "via_diameter", "annular_width"].iter().any(|k| board.custom.has(k)) {
+            let via = board::Thing::New { board, via: true, net: Some(net), class: board.class_name(net), width: diameter, drill, layer: None, area: board::custom::Area::Unknown };
+            let rule = |kind: &str, floor: Nm| (0..board.layers.len()).map(|l| board.rule_min(kind, &via, None, l, floor)).max().unwrap_or(floor).max(floor);
+            (rule("hole_size", drill), rule("via_diameter", diameter), rule("annular_width", nm(rules.min_via_annular_width)))
+        } else {
+            (drill, diameter, nm(rules.min_via_annular_width))
+        };
         Profile {
             class: class.map_or_else(String::new, |c| c.name.clone()),
             half_width,
             narrow_half_width: if power { half_width } else { (nm(min_width) / 2).clamp(1, half_width.max(1)) },
             min_half_width: (nm(min_width) / 2).clamp(1, half_width.max(1)),
-            board_min_half_width: (nm(rules.min_track_width) / 2).clamp(1, half_width.max(1)),
+            // The rules' floor for every net: the board's minimum, or a custom rule's that holds
+            // whatever the net (a fab's 0.15 mm over a board minimum of 0.12).
+            board_min_half_width: (board.min_track_width_any() / 2).clamp(1, half_width.max(1)),
             clearance: take(class.map(|c| c.clearance), rules.min_clearance),
-            // A class's via may leave a thinner ring round its drill than the board allows; the
-            // via grows to keep the ring, the drill as the class has it.
-            via_radius: (take(class.map(|c| c.via_diameter), rules.min_via_diameter) / 2)
-                .max(take(class.map(|c| c.via_drill), rules.min_via_drill) / 2 + nm(rules.min_via_annular_width)),
-            drill_radius: take(class.map(|c| c.via_drill), rules.min_via_drill) / 2,
+            via_radius: (diameter / 2).max(drill / 2 + ring),
+            drill_radius: drill / 2,
+            net: board.rules_name_nets().then_some(net),
         }
     }
 }
@@ -424,12 +442,13 @@ impl ObstacleMap {
         let feed = |h: &mut std::collections::hash_map::DefaultHasher| {
             (self.x0, self.y0, self.h, self.nx, self.ny, self.layers, self.pours_block).hash(h);
             let p = &self.profile;
-            (p.half_width, p.via_radius, p.drill_radius, p.clearance).hash(h);
+            (p.half_width, p.via_radius, p.drill_radius, p.clearance, p.net, &p.class).hash(h);
             let r = &board.rules;
-            [r.min_copper_edge_clearance, r.min_clearance, r.min_hole_clearance, r.pth_hole_clearance, r.min_hole_to_hole].map(f64::to_bits).hash(h);
+            [r.min_copper_edge_clearance, r.min_clearance, r.min_hole_clearance, r.min_hole_to_hole].map(f64::to_bits).hash(h);
+            r.custom.hash(h);
             board.outline.hash(h);
             board.outline_edges.iter().map(|&(a, b, _, c)| (a, b, c)).collect::<Vec<_>>().hash(h);
-            (board.via_openings, board.mask_web).hash(h);
+            (board.via_openings, board.mask_web, board.mask_margin()).hash(h);
             for &id in fixed {
                 let Some(it) = board.item(id) else { continue };
                 (id, it.net, it.layers, it.refilled(), it.hole, self.clearance_to(board, it.net)).hash(h);
@@ -457,7 +476,7 @@ impl ObstacleMap {
     /// none or several. False if `deadline` passes first: a board can draw thousands.
     fn stamp_mask_areas(&mut self, board: &Board, deadline: &Deadline) -> bool {
         let cells = self.nx * self.ny;
-        let (track, via) = (self.profile.half_width + board::MASK_MARGIN + self.reach(), self.profile.via_radius + board::MASK_MARGIN);
+        let (track, via) = (self.profile.half_width + board.mask_margin() + self.reach(), self.profile.via_radius + board.mask_margin());
         for (k, (shape, layers, net)) in board.mask_areas.iter().enumerate() {
             if k % MASKS_PER_CHECK == MASKS_PER_CHECK - 1 && deadline.expired() {
                 return false;
@@ -611,8 +630,69 @@ impl ObstacleMap {
         }
     }
 
-    /// Everything outside the board, and a band inside its edge, is nobody's.
+    /// Everything outside the board, and a band inside its edge, is nobody's; and wherever the
+    /// custom rules forbid this map's tracks or vias.
     fn stamp_outline(&mut self, board: &Board) {
+        self.stamp_edges(board);
+        if board.custom.has("disallow") {
+            self.stamp_disallowed(board);
+        }
+    }
+
+    /// Where a custom rule's `disallow` forbids this map's tracks or vias: a whole layer, or a
+    /// named area of it. A rule that may hold (on something the router cannot answer) forbids.
+    fn stamp_disallowed(&mut self, board: &Board) {
+        use board::custom::Area;
+        use kicad_pcb::dru::Tri;
+        let cells = self.nx * self.ny;
+        let p = self.profile.clone();
+        let class = p.net.map_or(p.class.as_str(), |n| board.class_name(n)).to_string();
+        let thing = |via: bool, layer: usize, area: Area| board::Thing::New {
+            board,
+            via,
+            net: p.net,
+            class: &class,
+            width: if via { 2 * p.via_radius } else { 2 * p.half_width },
+            drill: if via { 2 * p.drill_radius } else { 0 },
+            layer: Some(layer),
+            area,
+        };
+        let forbids = |word: &str, via: bool, layer: usize, area: Area| board.disallowed(word, &thing(via, layer, area), layer) != Tri::False;
+        let reach = self.reach();
+        // A via stands on every layer: any layer that forbids it forbids it.
+        let via_anywhere = (0..self.layers).any(|l| forbids("via", true, l, Area::Outside));
+        if via_anywhere {
+            self.via_owner.iter_mut().for_each(|c| *c = SEVERAL);
+        }
+        for l in 0..self.layers {
+            if forbids("track", false, l, Area::Outside) {
+                self.owner[l * cells..(l + 1) * cells].iter_mut().for_each(|c| *c = SEVERAL);
+                continue;
+            }
+            for (k, (_, shape, layers)) in board.areas.iter().enumerate() {
+                if layers & (1 << l) == 0 {
+                    continue;
+                }
+                if forbids("track", false, l, Area::In(k)) {
+                    let mut hit = Vec::new();
+                    self.cells_near(shape, p.half_width + reach, &mut |c| hit.push(c));
+                    for c in hit {
+                        self.owner[l * cells + c] = SEVERAL;
+                    }
+                }
+                if !via_anywhere && forbids("via", true, l, Area::In(k)) {
+                    let mut hit = Vec::new();
+                    self.cells_near(shape, p.via_radius, &mut |c| hit.push(c));
+                    for c in hit {
+                        self.via_owner[c] = SEVERAL;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Everything outside the board, and a band inside its edge, is nobody's.
+    fn stamp_edges(&mut self, board: &Board) {
         let rules = &board.rules;
         let edge = nm(rules.min_copper_edge_clearance);
         if board.outline.is_empty() && board.outline_edges.is_empty() {
@@ -697,6 +777,25 @@ impl ObstacleMap {
         self.profile.clearance.max(board.clearance(net, net))
     }
 
+    /// A track (or a via) of this map's nets on `layer`, as the custom rules are asked about it.
+    pub(crate) fn new_copper<'b>(&'b self, board: &'b Board, via: bool, layer: usize) -> board::Thing<'b> {
+        let p = &self.profile;
+        let (width, drill) = if via { (2 * p.via_radius, 2 * p.drill_radius) } else { (2 * p.half_width, 0) };
+        let class = p.net.map_or(p.class.as_str(), |n| board.class_name(n));
+        board::Thing::New { board, via, net: p.net, class, width, drill, layer: Some(layer), area: board::custom::Area::Unknown }
+    }
+
+    /// A custom rule's minimum `kind` between this map's track (or via) and item `id`, on the
+    /// layers they share, where `implicit` stands without one.
+    pub(crate) fn rule_to(&self, board: &Board, kind: &str, id: ItemId, item: &board::Item, via: bool, implicit: Nm) -> Nm {
+        if !board.custom.has(kind) {
+            return implicit;
+        }
+        let it = board::Thing::Item(board, id, item);
+        let layers = if item.layers == 0 { (1u64 << self.layers) - 1 } else { item.layers };
+        (0..self.layers).filter(|l| layers & (1 << l) != 0).map(|l| board.rule_min(kind, &it, Some(&self.new_copper(board, via, l)), l, implicit)).max().unwrap_or(implicit)
+    }
+
     /// Records what `id` claims.
     pub fn stamp(&mut self, board: &Board, id: ItemId) {
         let Some(item) = board.item(id) else { return };
@@ -735,7 +834,14 @@ impl ObstacleMap {
             return;
         }
         if item.is_copper() && (self.pours_block || !item.refilled()) {
-            let clearance = self.clearance_to(board, item.net).max(board.pad_clearances.get(&id).copied().unwrap_or(0));
+            // A pad's own clearance stands in for the classes and the custom rules in KiCad's
+            // judgement (`Board::clearance_between`), lower too; the router keeps the wider of the
+            // two, which KiCad always accepts: on PCBench, using a pad's narrower clearance let
+            // other nets box a pad in more often than it opened a way (2026-10-30).
+            let own = board.pad_clearances.get(&id).copied().unwrap_or(0);
+            let implicit = self.clearance_to(board, item.net);
+            let clearance = self.rule_to(board, "clearance", id, item, false, implicit).max(own);
+            let via_clearance = self.rule_to(board, "clearance", id, item, true, implicit).max(own);
             let mut hit = Vec::new();
             self.cells_near(&item.shape, half_width + clearance + reach, &mut |c| hit.push(c));
             for l in (0..self.layers).filter(|l| item.on(*l)) {
@@ -744,16 +850,16 @@ impl ObstacleMap {
                 }
             }
             hit.clear();
-            self.cells_near(&item.shape, via_radius + clearance, &mut |c| hit.push(c));
+            self.cells_near(&item.shape, via_radius + via_clearance, &mut |c| hit.push(c));
             for c in hit {
                 ObstacleMap::claim(&mut self.via_owner[c], item.net);
             }
             // Where the mask leaves vias bare, a via of this net may not open over this copper:
             // it keeps the opening's reach from it.
             let (bare, by) = board.via_openings;
-            if bare & item.layers != 0 && by + board::MASK_MARGIN > clearance {
+            if bare & item.layers != 0 && by + board.mask_margin() > via_clearance {
                 let mut hit = Vec::new();
-                self.cells_near(&item.shape, via_radius + by + board::MASK_MARGIN, &mut |c| hit.push(c));
+                self.cells_near(&item.shape, via_radius + by + board.mask_margin(), &mut |c| hit.push(c));
                 for c in hit {
                     ObstacleMap::claim(&mut self.via_owner[c], item.net);
                 }
@@ -766,7 +872,7 @@ impl ObstacleMap {
                 _ => None,
             };
             if let Some((layers, by)) = opening {
-                let keep = by + board::MASK_MARGIN;
+                let keep = by + board.mask_margin();
                 // A bare via's own opening keeps the mask's narrowest web from this one too.
                 let via_keep = if layers & bare != 0 { keep + board.via_openings.1 + board.mask_web } else { keep };
                 if keep > clearance {
@@ -778,7 +884,7 @@ impl ObstacleMap {
                         }
                     }
                 }
-                if via_keep > clearance {
+                if via_keep > via_clearance {
                     let mut hit = Vec::new();
                     self.cells_near(&item.shape, via_radius + via_keep, &mut |c| hit.push(c));
                     for c in hit {
@@ -787,21 +893,29 @@ impl ObstacleMap {
                 }
             }
         }
-        // A through-hole pad may carry a stricter hole clearance from custom rules, both ways
-        // round: from its hole to other copper, and from other holes (a via's) to its copper.
-        let through_hole = matches!(item.kind, Kind::Pad { plated: true, .. }) && item.hole.is_some();
-        let hole_clearance = if through_hole { nm(rules.min_hole_clearance.max(rules.pth_hole_clearance)) } else { nm(rules.min_hole_clearance) };
-        if through_hole && rules.pth_hole_clearance > rules.min_hole_clearance {
-            let mut hit = Vec::new();
-            self.cells_near(&item.shape, drill_radius + hole_clearance, &mut |c| hit.push(c));
-            for c in hit {
-                self.via_owner[c] = SEVERAL;
+        // Custom rules may hold a via's hole further from this copper than the board's hole
+        // clearance (a fab's rule for through-hole pads, say): vias of other nets keep it.
+        let plain_hole = nm(rules.min_hole_clearance);
+        if item.is_copper() && board.custom.has("hole_clearance") {
+            let via_hole = self.rule_to(board, "hole_clearance", id, item, true, plain_hole);
+            if via_hole > plain_hole {
+                let mut hit = Vec::new();
+                self.cells_near(&item.shape, drill_radius + via_hole, &mut |c| hit.push(c));
+                for c in hit {
+                    ObstacleMap::claim(&mut self.via_owner[c], item.net);
+                }
             }
         }
         if let Some(hole) = board.hole_shape(id, item) {
+            let hole_clearance = self.rule_to(board, "hole_clearance", id, item, true, plain_hole);
+            let track_hole = self.rule_to(board, "hole_clearance", id, item, false, plain_hole);
             // An unplated hole's pad may carry a clearance of its own, wider than the rule's.
+            let track_hole = if item.plated_hole() { track_hole } else { track_hole.max(board.pad_clearances.get(&id).copied().unwrap_or(0)) };
             let hole_clearance = if item.plated_hole() { hole_clearance } else { hole_clearance.max(board.pad_clearances.get(&id).copied().unwrap_or(0)) };
-            let margin = (drill_radius + nm(rules.min_hole_to_hole)).max(via_radius + hole_clearance);
+            let to_hole = self.rule_to(board, "hole_to_hole", id, item, true, nm(rules.min_hole_to_hole));
+            // A physical hole clearance holds whatever the nets: no via of any net comes closer.
+            let physical = self.rule_to(board, "physical_hole_clearance", id, item, true, 0);
+            let margin = (drill_radius + to_hole).max(via_radius + hole_clearance).max(via_radius + physical);
             let mut hit = Vec::new();
             self.cells_near(&hole, margin, &mut |c| hit.push(c));
             for c in hit {
@@ -810,7 +924,7 @@ impl ObstacleMap {
             }
             // Tracks keep the hole clearance from every hole, unplated ones too.
             let mut hit = Vec::new();
-            self.cells_near(&hole, half_width + hole_clearance + reach, &mut |c| hit.push(c));
+            self.cells_near(&hole, half_width + track_hole + reach, &mut |c| hit.push(c));
             for l in 0..self.layers {
                 for &c in &hit {
                     ObstacleMap::claim(&mut self.owner[l * cells + c], if item.plated_hole() { item.net } else { 0 });

@@ -172,19 +172,20 @@ leans on copperroute's push-and-shove (a freerouting port) and is rewritten fres
 The router reads most of a KiCad 9 board but only seven shapes of custom rule; the audit and the
 order of work are in `docs/kicad-coverage.md`.
 
-- [ ] Dropped rules and board warnings in the `--report` JSON; a board loads without a
+- [x] Dropped rules and board warnings in the `--report` JSON; a board loads without a
       `.kicad_pro`; `solder_mask_to_copper_clearance` read.
-- [ ] KiCad 9 net classes: every class a net has, combined by priority; missing fields from
+- [x] KiCad 9 net classes: every class a net has, combined by priority; missing fields from
       Default.
-- [ ] A custom-rules engine: the `.kicad_dru` language (conditions, `layer`, `severity`, last
-      match wins) resolved into clearance tables, widths, `disallow` regions and hole checks,
-      shared by the router and its checker.
-- [ ] Zone pad connection modes and thermal spokes on planes and unfilled zones.
-- [ ] Length and via-count limits: checked, then steered.
-- [ ] Pad geometry: KiCad 9 padstacks, `remove_unused_layers`, clearance overrides that lower,
-      curves.
-- [ ] Writer: arcs out; tuning patterns and teardrops handled when their tracks reroute.
-- [ ] A benchmark of KiCad 9 boards with `.kicad_dru` files, judged with their rules.
+- [x] A custom-rules engine: the `.kicad_dru` language (conditions, `layer`, `severity`, last
+      match wins) asked by the checker and the grid alike: clearances, holes, edges, widths, via
+      sizes, `disallow` by net, layer and named area; pad clearances over rules, as KiCad orders
+      them.
+- [ ] Zone connections and thermals: pads that no zone joins (done); thermal spokes kept free.
+- [ ] Length and via-count limits: reported after routing (done); routed to.
+- [ ] Pad geometry: KiCad 9 padstacks, `remove_unused_layers`, curves (warned of now).
+- [ ] Writer: arcs out (tuning patterns held, teardrops warned of, done).
+- [x] A benchmark of KiCad 9 boards with `.kicad_dru` files, judged with their rules
+      (`tools/rulebench.py`).
 
 ## Phase 3 — The test suite as a library
 

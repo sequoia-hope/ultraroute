@@ -286,8 +286,15 @@ pub struct Board {
     /// Openings drawn in the solder mask: the shape, the copper layer it bares, and the one net
     /// whose pads it bares, which alone may run there; 0 where it bares none or several.
     pub mask_areas: Vec<(Shape, u64, u32)>,
-    /// Pads' own clearances, where wider than their nets' (KiCad's local clearance).
+    /// Pads' own clearances, or their footprints' (KiCad's local clearance), wider or narrower
+    /// than their nets': one stands in for the net classes and custom rules (see
+    /// [`Board::clearance_between`]).
     pub pad_clearances: HashMap<ItemId, Nm>,
+    /// Pads no zone of their net joins (KiCad's zone connection "none", the pad's own, its
+    /// footprint's or the zone's).
+    pub pad_zone_connect: HashMap<ItemId, u8>,
+    /// Zones, by index, that join no pad of their net unless the pad says otherwise.
+    pub zones_without_pads: std::collections::HashSet<usize>,
     /// Slotted holes: the two ends of a slot's centre line, its radius the item's `hole`'s. A
     /// slot is longer than the circle `hole` holds; [`Board::hole_shape`] gives all of it.
     pub hole_ends: HashMap<ItemId, (Point, Point)>,
@@ -315,10 +322,19 @@ pub struct Board {
     pub warnings: Vec<String>,
     /// Clearances per net number, in nanometres, so `clearance(a, b)` is two array lookups.
     net_clearances: Vec<Nm>,
+    /// Each net's class as KiCad names it (`A,B,Default`), for the custom rules.
+    pub(crate) class_names: Vec<String>,
+    /// Whether a custom rule tells nets apart by name (see [`Board::rules_name_nets`]).
+    pub(crate) names_nets: bool,
     min_clearance_nm: Nm,
     /// The checks' limits, worked out once from the rules and the pads' openings and clearances,
     /// which only [`Board::new`] sets: a check of one item no longer walks every pad.
     pub(crate) limits: crate::check::Limits,
+    /// Every zone and rule area with a name, for the custom rules' `intersectsArea('name')`:
+    /// its name, outline and copper layers.
+    pub areas: Vec<(String, Shape, u64)>,
+    /// The custom rules (`.kicad_dru`), read; empty without one.
+    pub custom: std::sync::Arc<kicad_pcb::dru::RuleSet>,
     items: Vec<Option<Item>>,
     /// Cached shape bounding boxes (`item.shape.bbox()`) parallel to `items`.
     shape_bboxes: Vec<BBox>,
@@ -362,7 +378,21 @@ impl Board {
         Ok((Board::new(&pcb, &copper, rules), text))
     }
 
-    pub fn new(pcb: &Pcb, copper: &Copper, rules: Rules) -> Board {
+    pub fn new(pcb: &Pcb, copper: &Copper, mut rules: Rules) -> Board {
+        let custom = match &rules.custom {
+            Some((source, text)) => match kicad_pcb::dru::RuleSet::parse(text) {
+                Ok(set) => {
+                    let said = Board::custom_warnings(&set, source);
+                    rules.warnings.extend(said);
+                    set
+                }
+                Err(e) => {
+                    rules.warnings.push(format!("{source}: {e}; no custom rule is applied"));
+                    Default::default()
+                }
+            },
+            None => Default::default(),
+        };
         let layers: Vec<String> = copper.layers.iter().map(|l| l.name.clone()).collect();
         let mask = |names: &[String]| -> u64 {
             copper.expand(names).iter().filter_map(|n| layers.iter().position(|l| l == n)).fold(0, |m, i| m | 1 << i)
@@ -378,6 +408,7 @@ impl Board {
             .iter()
             .map(|name| nm(rules.class_of(name).map_or(0.0, |c| c.clearance)).max(min_clearance_nm))
             .collect();
+        let class_names: Vec<String> = nets.iter().map(|name| rules.class_of(name).map(|c| c.name).unwrap_or_default()).collect();
         let blocks = Block::of(pcb, copper);
         let mut board = Board {
             layers: layers.clone(),
@@ -409,6 +440,8 @@ impl Board {
             mask_web: nm(copper.solder_mask_min_width),
             mask_areas: Vec::new(),
             pad_clearances: HashMap::new(),
+            pad_zone_connect: HashMap::new(),
+            zones_without_pads: copper.zones.iter().enumerate().filter(|(_, z)| z.no_pads).map(|(i, _)| i).collect(),
             hole_ends: HashMap::new(),
             ties: HashMap::new(),
             keepout_holes: HashMap::new(),
@@ -419,13 +452,18 @@ impl Board {
             pour_cost: 0.0,
             warnings: pcb.warnings.iter().chain(&copper.warnings).cloned().collect(),
             net_clearances,
+            class_names,
+            names_nets: false,
             min_clearance_nm,
             limits: Default::default(),
+            areas: Vec::new(),
+            custom: std::sync::Arc::new(custom),
             items: Vec::new(),
             shape_bboxes: Vec::new(),
             bboxes: Vec::new(),
             cells: HashMap::new(),
         };
+        board.names_nets = crate::custom::names_nets(&board.custom);
         match pcb.outline_loops() {
             Ok(loops) => {
                 for l in std::iter::once(&loops.outer).chain(&loops.holes) {
@@ -437,15 +475,19 @@ impl Board {
         }
         // Copper keeps clear of every Edge.Cuts and Margin primitive, whether it closes into the
         // board's loops or not: a slot drawn as an open line, or a cutout the loops missed.
-        // Custom rules may hold copper further from Edge.Cuts primitives of one shape.
+        // Custom rules may set an edge clearance by the primitive's shape and layer; one that
+        // turns on the copper (a track, a net) is taken at its strictest for every copper item.
         let edge_cuts = pcb.outline.len();
+        let implicit = nm(board.rules.min_copper_edge_clearance);
         for (k, p) in pcb.outline.iter().chain(&pcb.margin).enumerate() {
             let shape = match p.shape {
                 kicad_pcb::OutlineShape::Line { .. } => "Segment",
                 kicad_pcb::OutlineShape::Arc { .. } => "Arc",
                 kicad_pcb::OutlineShape::Circle { .. } => "Circle",
             };
-            let clearance = nm(if k < edge_cuts { board.rules.edge_clearance_of(shape) } else { board.rules.min_copper_edge_clearance });
+            let edge = crate::custom::Thing::Edge { shape, layer: if k < edge_cuts { "Edge.Cuts" } else { "Margin" } };
+            let copper = crate::custom::Thing::Copper(&board);
+            let clearance = (0..board.layers.len()).map(|l| board.rule_min("edge_clearance", &copper, Some(&edge), l, implicit)).max().unwrap_or(implicit);
             for line in edge_polylines(&p.shape, p.width) {
                 let points: Vec<Point> = line.into_iter().map(Point::from_m).collect();
                 for w in points.windows(2) {
@@ -551,14 +593,16 @@ impl Board {
                     });
                 }
             }
-            let net = board.items.get(*ids.last().unwrap()).and_then(Option::as_ref).map_or(0, |it| it.net);
-            let own = pad.clearance.map(nm).filter(|c| *c > board.net_clearances.get(net as usize).copied().unwrap_or(0));
+            let own = pad.clearance.map(nm).filter(|c| *c > 0);
             for id in ids {
                 if let Some(o) = opening.filter(|o| o.1 > 0) {
                     board.mask_openings.insert(id, o);
                 }
                 if let Some(c) = own {
                     board.pad_clearances.insert(id, c);
+                }
+                if let Some(c) = pad.zone_connect {
+                    board.pad_zone_connect.insert(id, c);
                 }
             }
         }
@@ -603,6 +647,9 @@ impl Board {
                 locked: v.locked,
                 span: Some(v.span),
             });
+        }
+        for zone in copper.zones.iter().filter(|z| !z.name.is_empty() && z.outline.len() >= 3) {
+            board.areas.push((zone.name.clone(), Shape::Polygon(zone.outline.iter().copied().map(Point::from_m).collect()), mask(&zone.layers)));
         }
         for (z, zone) in copper.zones.iter().enumerate() {
             // A soft via keepout forbids nothing; the router only avoids putting vias in it.
@@ -987,9 +1034,62 @@ impl Board {
         }
     }
 
+    /// Whether zone copper `pour` joins pad `pad` (item `id`) of its net, as KiCad connects them:
+    /// not where the pad, its footprint or, failing those, the zone says "none". Copper drawn on
+    /// a copper layer is not a zone and joins as it touches.
+    pub fn pour_joins_pad(&self, pour: &Item, id: ItemId) -> bool {
+        let Kind::Pour { zone, .. } = pour.kind else { return true };
+        match self.pad_zone_connect.get(&id) {
+            Some(&c) => c != 0,
+            None => zone == DRAWN || !self.zones_without_pads.contains(&zone),
+        }
+    }
+
     /// Whether an item is a plane's pour.
     pub fn is_plane(&self, item: &Item) -> bool {
         matches!(item.kind, Kind::Pour { .. }) && item.layers & self.planes != 0
+    }
+
+    /// The clearance KiCad keeps between items `a` and `b` on `layer`, as kicad-cli 9.0.8 judges
+    /// it: a pad's own clearance (or its footprint's), where either has one, the larger, and the
+    /// board's minimum under it, whatever the net classes and custom rules say; otherwise the last
+    /// custom rule that holds, or the larger of the two nets' class clearances and the board's
+    /// minimum.
+    pub fn clearance_between(&self, a: &crate::custom::Thing, b: &crate::custom::Thing, layer: usize) -> Nm {
+        let local = |t: &crate::custom::Thing| match t {
+            crate::custom::Thing::Item(_, id, _) => self.pad_clearances.get(id).copied(),
+            _ => None,
+        };
+        match local(a).max(local(b)) {
+            Some(own) => own.max(self.min_clearance_nm),
+            None => {
+                let net = |t: &crate::custom::Thing| match t {
+                    crate::custom::Thing::Item(_, _, it) => Some(it.net),
+                    crate::custom::Thing::New { net, .. } => *net,
+                    _ => None,
+                };
+                let class = |t: &crate::custom::Thing| net(t).and_then(|n| self.net_clearances.get(n as usize).copied()).unwrap_or(self.min_clearance_nm);
+                self.rule_min("clearance", a, Some(b), layer, class(a).max(class(b)))
+            }
+        }
+    }
+
+    /// The clearance the router keeps between items `a` and `b` on `layer`: KiCad's
+    /// ([`Board::clearance_between`]) where a pad's own clearance raises it, but never below what
+    /// the classes and custom rules ask, as the grid keeps it (KiCad accepts the wider).
+    pub fn clearance_kept(&self, a: &crate::custom::Thing, b: &crate::custom::Thing, layer: usize) -> Nm {
+        let local = |t: &crate::custom::Thing| match t {
+            crate::custom::Thing::Item(_, id, _) => self.pad_clearances.get(id).copied(),
+            _ => None,
+        };
+        let own = local(a).max(local(b)).unwrap_or(0);
+        let net = |t: &crate::custom::Thing| match t {
+            crate::custom::Thing::Item(_, _, it) => Some(it.net),
+            crate::custom::Thing::New { net, .. } => *net,
+            _ => None,
+        };
+        let class = |t: &crate::custom::Thing| net(t).and_then(|n| self.net_clearances.get(n as usize).copied()).unwrap_or(self.min_clearance_nm);
+        self.rule_min("clearance", a, Some(b), layer, class(a).max(class(b))).max(own)
     }
 
     /// The clearance the rules ask between two nets' copper, in nanometres.

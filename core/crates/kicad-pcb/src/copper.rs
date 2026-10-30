@@ -154,6 +154,9 @@ pub struct Zone {
     pub priority: u32,
     /// `(connect_pads (clearance …))`: the gap the pour keeps from other nets, in metres; 0 when unset.
     pub clearance: f64,
+    /// `(connect_pads no …)`: the zone joins no pad of its net (unless the pad says otherwise).
+    #[serde(default)]
+    pub no_pads: bool,
     /// `(min_thickness …)`: the narrowest copper the fill keeps, in metres; 0 when unset.
     pub min_thickness: f64,
     /// Inside a footprint, the footprint's index in `Pcb::footprints`.
@@ -185,10 +188,15 @@ pub struct PadCopper {
     /// reaches beyond its copper; `None` where the board's `pad_to_mask_clearance` holds.
     #[serde(default)]
     pub mask_margin: Option<f64>,
-    /// `(clearance X)` of the pad, else of its footprint: a clearance of its own, kept where it
-    /// is wider than its net class's.
+    /// `(clearance X)` of the pad, else of its footprint: a clearance of its own, which stands
+    /// in for its net class's.
     #[serde(default)]
     pub clearance: Option<f64>,
+    /// `(zone_connect N)` of the pad, else of its footprint: how zones of its net join it (0
+    /// none, 1 thermal reliefs, 2 solid, 3 reliefs for through-hole pads); `None` where the
+    /// zone decides.
+    #[serde(default)]
+    pub zone_connect: Option<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -286,6 +294,16 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
         warnings: Vec::new(),
     };
     let mut copper_graphics = 0;
+    // What the reader does not model, said so a designer knows the router judged without it:
+    // copper drawn as a curve, a text box, a dimension or a table; KiCad 9 per-layer padstacks;
+    // annular rings removed from unused layers (the router keeps every layer's ring).
+    let on_copper = |n: &Node| n.find("layer").and_then(|l| l.args().first()).and_then(Node::text).is_some_and(|l| l.ends_with(".Cu"));
+    let unread_kind = |n: &Node| matches!(n.head(), Some("gr_curve" | "fp_curve" | "gr_text_box" | "fp_text_box" | "dimension" | "table")) && on_copper(n);
+    let unused_layers = |n: &Node| n.find("remove_unused_layers").is_some_and(|r| r.args().first().and_then(Node::text) != Some("no"));
+    let (mut unread, mut padstacks, mut rings, mut teardrops) = (0, 0, 0, 0);
+    // A tuning pattern's tracks were tuned to a length by hand: they are held as they are.
+    let mut tuned: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut patterns = 0;
     let mut footprint = 0;
     for child in root.args() {
         match child.head() {
@@ -310,7 +328,15 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
                 uuid: uuid(child),
                 span: child.pos().into(),
             }),
+            _ if unread_kind(child) => unread += 1,
+            Some("generated") => {
+                if child.find("type").and_then(|t| t.args().first()).and_then(Node::text) == Some("tuning_pattern") {
+                    patterns += 1;
+                    tuned.extend(child.find("members").into_iter().flat_map(|m| m.args().iter().filter_map(Node::text).map(str::to_string)));
+                }
+            }
             Some("via") => {
+                rings += usize::from(unused_layers(child));
                 let names: Vec<String> = required(child, "layers")?
                     .args()
                     .iter()
@@ -330,7 +356,10 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
                     span: child.pos().into(),
                 });
             }
-            Some("zone") => copper.zones.push(read_zone(child, None)?),
+            Some("zone") => {
+                teardrops += usize::from(child.find("attr").is_some_and(|a| a.find("teardrop").is_some()));
+                copper.zones.push(read_zone(child, None)?)
+            }
             Some("group") => copper.groups.push(Group {
                 name: child.args().first().and_then(Node::text).unwrap_or("").to_string(),
                 uuid: uuid(child),
@@ -350,6 +379,11 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
                 copper.footprint_at.push(child.find("at").map(|a| a.pos().into()));
                 copper.courtyards.push(courtyard(child, fp)?);
                 for g in child.args() {
+                    unread += usize::from(unread_kind(g));
+                    if g.head() == Some("pad") {
+                        padstacks += usize::from(g.find("padstack").is_some());
+                        rings += usize::from(unused_layers(g));
+                    }
                     if matches!(g.head(), Some("fp_line" | "fp_arc" | "fp_circle" | "fp_rect" | "fp_poly" | "fp_text" | "property")) {
                         match graphic(g, &|p| fp.place(p), fp.rotation_deg) {
                             Ok(Some(g)) if g.layer.ends_with(".Mask") => copper.mask_graphics.push(g),
@@ -364,8 +398,12 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
                 let local = |n: &Node, name: &str| n.find(name).and_then(|m| m.number_arg(0, name).ok()).filter(|v| *v != 0.0);
                 let margin = local(child, "solder_mask_margin");
                 let clearance = local(child, "clearance");
+                // Zero is a setting here (no connection), not "none set".
+                let connect = |n: &Node| n.find("zone_connect").and_then(|m| m.number_arg(0, "zone_connect").ok()).map(|v| v as u8);
+                let fp_connect = connect(child);
                 for (index, pad) in child.find_all("pad").enumerate() {
                     let mut pad_copper = read_pad(pad, footprint, index, fp)?;
+                    pad_copper.zone_connect = connect(pad).or(fp_connect);
                     pad_copper.mask_margin = local(pad, "solder_mask_margin").or(margin).map(|mm| mm * MM);
                     pad_copper.clearance = local(pad, "clearance").or(clearance).map(|mm| mm * MM).filter(|c| *c > 0.0);
                     copper.pads.push(pad_copper);
@@ -377,6 +415,30 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
             }
             _ => {}
         }
+    }
+    if patterns > 0 {
+        let mut held = 0;
+        for t in copper.tracks.iter_mut().filter(|t| tuned.contains(&t.uuid)) {
+            t.locked = true;
+            held += 1;
+        }
+        for a in copper.arcs.iter_mut().filter(|a| tuned.contains(&a.uuid)) {
+            a.locked = true;
+            held += 1;
+        }
+        copper.warnings.push(format!("{patterns} tuning pattern(s): their {held} track(s) are held as tuned (locked)"));
+    }
+    if teardrops > 0 {
+        copper.warnings.push(format!("{teardrops} teardrop zone(s) are kept as zones: tracks the router lays get none; regenerate teardrops in KiCad"));
+    }
+    if unread > 0 {
+        copper.warnings.push(format!("{unread} curve(s), text box(es), dimension(s) or table(s) on copper layers are not read as copper"));
+    }
+    if padstacks > 0 {
+        copper.warnings.push(format!("{padstacks} pad(s) have a KiCad 9 padstack: each is taken as its front layer's shape on every layer"));
+    }
+    if rings > 0 {
+        copper.warnings.push(format!("{rings} pad(s) or via(s) remove their rings on unused layers: the router keeps clear of a ring on every layer"));
     }
     if copper_graphics > 0 {
         copper.warnings.push(format!(
@@ -576,6 +638,7 @@ fn read_zone(z: &Node, footprint: Option<usize>) -> Result<Zone, KicadParse> {
             .and_then(|c| c.find("clearance"))
             .and_then(|c| c.number_arg(0, "clearance").ok())
             .map_or(0.0, |mm| mm * MM),
+        no_pads: z.find("connect_pads").is_some_and(|c| c.args().first().and_then(Node::text) == Some("no")),
         min_thickness: z.find("min_thickness").and_then(|t| t.number_arg(0, "min_thickness").ok()).map_or(0.0, |mm| mm * MM),
         footprint,
         uuid: uuid(z),
@@ -645,7 +708,7 @@ fn read_pad(p: &Node, footprint: usize, index: usize, fp: &Footprint) -> Result<
         None => Outline::Circle { centre: shifted([0.0, 0.0]), radius: size[0] / 2.0 },
         Some(polys) => Outline::Polygons(polys.into_iter().map(|poly| poly.into_iter().map(shifted).collect()).collect()),
     };
-    Ok(PadCopper { footprint, pad: index, layers, shape, outline, mask_margin: None, clearance: None })
+    Ok(PadCopper { footprint, pad: index, layers, shape, outline, mask_margin: None, clearance: None, zone_connect: None })
 }
 
 /// A custom pad's extra shapes, in the pad's own frame. Lines and arcs with a width become their

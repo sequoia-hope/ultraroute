@@ -558,7 +558,9 @@ the grid router and the clean-up. `--stats FILE` writes what the run did as JSON
 (`ultraroute::RunStats`): each stage's time, work and open connections, the settings, peak
 memory, the connections given up and why, and findings.
 
-The `.kicad_pro` (and `.kicad_dru`) beside the input give the rules. Progress goes to standard
+The `.kicad_pro` (and `.kicad_dru`) beside the input give the rules; with no `.kicad_pro` the
+rules are KiCad's defaults. A custom rule the router does not apply is a warning and a `rule`
+finding (`docs/kicad-coverage.md` says which it applies). Progress goes to standard
 error. `ultraroute route --help` prints every flag; `core/README.md` explains each.
 
 `--live -` streams the run to standard output as newline-delimited JSON, the studio's format: a
