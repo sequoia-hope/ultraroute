@@ -3,8 +3,8 @@
   import { Renderer } from 'board-draw';
 
   // studio: the WASM scene. version: bumped whenever the scene changed.
-  // mode: 'all', 'top', 'bottom' or 'split' (top and bottom side by side, the bottom seen
-  // from below). layers: the layer names, front to back.
+  // mode: 'all', 'top', 'bottom', 'split' (top and bottom side by side, the bottom seen
+  // from below) or 'layer:N' (copper layer N alone). layers: the layer names, front to back.
   // flipped: the whole board seen from below, as KiCad's Flip Board View.
   let { studio, version, mode = 'all', flipped = false, layers = [], editable = true, ondrop, onselect, onhover } = $props();
 
@@ -32,6 +32,11 @@
 
   const top = () => 1;
   const bottom = () => (layers.length > 1 ? 1 << (layers.length - 1) : 1);
+  // The layer a 'layer:N' view shows, while the board has it.
+  const inner = () => {
+    const n = mode.startsWith('layer:') ? Number(mode.slice(6)) : NaN;
+    return n >= 0 && n < layers.length ? n : null;
+  };
 
   // The panes the canvas is split into, each with its layers and whether it is mirrored.
   function panes() {
@@ -43,7 +48,8 @@
         { rect: { x: half, y: 0, w: w - half, h }, mask: bottom(), mirror: true },
       ];
     }
-    const mask = mode === 'top' ? top() : mode === 'bottom' ? bottom() : ALL;
+    const one = inner();
+    const mask = one != null ? 1 << one : mode === 'top' ? top() : mode === 'bottom' ? bottom() : ALL;
     return [{ rect: { x: 0, y: 0, w, h }, mask, mirror: mode === 'bottom' || (mode === 'all' && flipped) }];
   }
 
@@ -295,6 +301,8 @@
     <span class="side left">Bottom, seen from below</span>
   {:else if mode === 'top'}
     <span class="side left">Top</span>
+  {:else if inner() != null}
+    <span class="side left">{layers[inner()]} alone{flipped ? ', seen from below' : ''}</span>
   {:else if flipped}
     <span class="side left">Flipped: seen from below</span>
   {/if}
