@@ -122,5 +122,5 @@ The brief above covers diffusion only for *placement*. Upstream CopperRoute alre
 | **Learned priors / diffusion for routing** (U-Net A*; generative VLSI global routers such as HubRouter (NeurIPS 2023) and DSBRouter, a diffusion Schrödinger bridge (ICML 2025), which work on grid overflow and not PCB detailed routing) | Decline (N17–N19): no published DRC-clean wins on real boards | Revisit only as *guidance costs* for the GPU search, scored by the same referee. Upstream declined partly over its determinism and no-new-dependency constraints, which our fork relaxes |
 
 Two cheap, research-backed habits apply to every board now:
-- **Portfolio routing.** Run several cost configurations and keep the best by the referee. `tools/route_job.py` does this one governed run at a time, and saves the best session and its recipe.
+- **Portfolio routing.** Run several cost configurations and keep the best by the referee. `legacy/tools/route_job.py` does this one governed run at a time, and saves the best session and its recipe.
 - **Same-referee scoring.** Every candidate is judged by the same DRC against the bare input, so "new violations" and "unconnected" are comparable across routers.

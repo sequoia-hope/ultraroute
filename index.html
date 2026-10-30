@@ -57,12 +57,7 @@
   .boards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
   .board { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; }
   .board .name { font-weight: 600; }
-  .board .score { display: flex; align-items: baseline; gap: 8px; }
-  .board .open { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
-  .board .unit { color: var(--muted); font-size: 13px; }
-  .board .recipe { font: 12px ui-monospace, monospace; color: var(--muted); word-break: break-all; }
   .board .links { display: flex; gap: 4px 12px; flex-wrap: wrap; font-size: 13px; margin-top: auto; padding-top: 6px; white-space: nowrap; }
-  .bad { color: var(--warn); }
 
   .phases { display: grid; gap: 8px; }
   details.phase { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
@@ -80,20 +75,12 @@
   .phase li.todo { list-style: "○  "; }
   .phase .lead { color: var(--muted); font-size: 14px; margin: 0 16px 6px 16px; }
 
-  .runs { display: grid; gap: 8px; }
-  .run { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; display: grid; grid-template-columns: 110px 1fr; gap: 12px; }
-  .run .when { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
-  .run .title { font-weight: 600; }
-  .run .result { font-size: 14px; }
-  .run .links { font-size: 13px; display: flex; gap: 12px; flex-wrap: wrap; }
-  .more { margin-top: 12px; font-size: 14px; }
   .muted { color: var(--muted); }
 
   @media (max-width: 760px) {
     .hero { grid-template-columns: 1fr; }
     details.phase summary { grid-template-columns: 1fr 70px; }
     details.phase summary .bar { display: none; }
-    .run { grid-template-columns: 1fr; gap: 2px; }
     .studio .traces { display: none; }
   }
 </style>
@@ -103,21 +90,21 @@
   <header>
     <div>
       <h1>Ultraroute</h1>
-      <p class="tagline">A GPU autorouter for KiCad boards, and a layout tool built around it.</p>
+      <p class="tagline">An autorouter for KiCad boards, and a layout tool built around it.</p>
     </div>
     <nav>
       <a href="ROADMAP.md">Roadmap</a>
-      <a href="jobs/leaderboard.html">Leaderboards</a>
-      <a href="history.html">Experiment history</a>
-      <a href="https://github.com/sequoia-hope/copperroute/tree/governance">Router fork</a>
+      <a href="docs/library.md">Library guide</a>
+      <a href="docs/pcbench.md">Benchmark</a>
+      <a href="https://github.com/sequoia-hope/ultraroute">Source</a>
     </nav>
   </header>
 
   <section class="hero">
     <div class="studio">
       <h3>Studio</h3>
-      <p>Watch the router lay copper live, drag parts and let it reroute around them. Every scored
-        recipe from the leaderboards is one click away.</p>
+      <p>Watch the router lay copper live, in your browser: the router is compiled to WebAssembly
+        and runs in the tab. Open one of the boards below, or a KiCad file of your own.</p>
       <a class="button" href="studio/">Open Studio</a>
       <svg class="traces" viewBox="0 0 230 150" aria-hidden="true">
         <g fill="none" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
@@ -129,26 +116,27 @@
       </svg>
     </div>
     <div class="side">
-      <a class="tile" href="morph-frames/">
-        <h3>Morph viewer</h3>
-        <p>Boards reshaped along an outline plan, frame by frame, with the router repairing at keyframes.</p>
+      <a class="tile" href="docs/pcbench.md">
+        <h3>Benchmark</h3>
+        <p>164 of 200 PCBench boards routed with no DRC errors, judged by KiCad 9.</p>
       </a>
-      <a class="tile" href="jobs/leaderboard.html">
-        <h3>Leaderboards</h3>
-        <p>Every recipe tried on every board, scored by KiCad's DRC.</p>
+      <a class="tile" href="docs/library.md">
+        <h3>Library</h3>
+        <p>The router's stages, its one recipe and its options, for use from Rust.</p>
       </a>
     </div>
   </section>
 
   <h2>Where it stands</h2>
   <div class="now">
-    <p>The router streams its work live, and the <a href="studio/">Studio</a> shows it: pick a board and a
-      recipe, watch copper go down, drag a part and the board reroutes with it there. The router runs in its
-      own process behind the studio server, so the studio's code stays separate from the router's GPL code.</p>
-    <p>Best on bluebuzz-1024 is still 10 open connections with no new errors (grid router with negotiated
-      congestion). Physics diffusion placement made every board worse; the reasons are in the roadmap.</p>
-    <p>Next: the grid router's rounds shown live, steering a run without restarting it, then the test suite as
-      a library. Later: boards whose outline grows until they route, offered as several complete layouts.</p>
+    <p>The router is our own MIT code in <code>core/</code>: a grid router with negotiated congestion,
+      fan-out, shoving and a via pass, run as one fixed recipe. It reads and writes KiCad boards and
+      follows KiCad's own rules for clearances, slots, net ties and keepouts.</p>
+    <p>On a 200-board sample of PCBench it leaves 164 boards with no DRC errors, a median board in
+      about nine seconds on one thread. Runs are repeatable byte for byte, and memory is estimated
+      before routing and kept under a cap.</p>
+    <p>Next: fewer vias, and boards that are unfinishable today. The <a href="ROADMAP.md">roadmap</a>
+      has the plan.</p>
   </div>
 
   <h2>Boards</h2>
@@ -157,9 +145,6 @@
   <h2>Roadmap</h2>
   <div class="phases" id="phases"><p class="muted">Loading…</p></div>
 
-  <h2>Recent runs</h2>
-  <div class="runs" id="runs"><p class="muted">Loading…</p></div>
-  <p class="more"><a href="history.html">Older experiments, the PCBench baseline and the full log →</a></p>
 </div>
 
 <script>
@@ -171,17 +156,11 @@ async function boards() {
   try {
     const jobs = await (await fetch("api/jobs", { cache: "no-store" })).json();
     el.innerHTML = jobs.map((job) => {
-      const best = job.presets.find((p) => p.open != null);
-      const studio = `studio/?job=${encodeURIComponent(job.name)}${best ? `&recipe=${encodeURIComponent(best.name)}` : ""}`;
+      const studio = `studio/?job=${encodeURIComponent(job.name)}`;
       return `<div class="board">
         <div class="name">${esc(job.name)}</div>
-        <div class="score">${best
-          ? `<span class="open">${best.open}</span><span class="unit">open${best.new_errors ? `, <span class="bad">${best.new_errors} new errors</span>` : ""}</span>`
-          : `<span class="unit">not scored yet</span>`}</div>
-        ${best ? `<div class="recipe">${esc(best.name)}${best.seconds ? ` · ${Math.round(best.seconds)} s` : ""}</div>` : ""}
         <div class="links">
           <a href="${studio}">Open in Studio</a>
-          <a href="jobs/leaderboard.html?job=${encodeURIComponent(job.name)}">Leaderboard</a>
           ${job.notes ? `<a href="jobs/${encodeURIComponent(job.name)}/README.md">Notes</a>` : ""}
         </div>
       </div>`;
@@ -234,24 +213,8 @@ async function roadmap() {
   }).join("");
 }
 
-async function runs() {
-  const el = document.getElementById("runs");
-  const data = await (await fetch("experiments.json", { cache: "no-store" })).json();
-  const items = data.groups.flatMap((g) => g.items.map((it) => ({ ...it, group: g.title })));
-  items.sort((a, b) => String(b.when).localeCompare(String(a.when)));
-  el.innerHTML = items.slice(0, 6).map((it) => `<div class="run">
-      <div class="when">${esc(String(it.when).replace("T", " "))}</div>
-      <div>
-        <div class="title">${esc(it.title)} <span class="muted">· ${esc(it.group)}</span></div>
-        <div class="result">${esc(it.result)}</div>
-        <div class="links">${(it.links || []).map((l) => `<a href="${esc(l.href)}">${esc(l.label)}</a>`).join("")}</div>
-      </div>
-    </div>`).join("");
-}
-
 boards();
 roadmap();
-runs();
 </script>
 </body>
 </html>

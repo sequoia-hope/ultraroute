@@ -64,18 +64,16 @@ disk since it was loaded, and records the route and the router's report under
 
 ## Legacy: copperroute
 
-Before the core, the router was [copperroute](https://github.com/sequoia-hope/copperroute)
-(branch `governance`, forked from emshotton/copperroute), a Rust port of freerouting, run as a
-separate program from a checkout at `copperroute/`. It is kept as a reference router. The studio
-can still run it on the jobs that have a Specctra `.dsn` when its binary is at
-`target-topo/release/copperroute` (or given with `--router PATH`); without it the studio routes on
-the core alone. The tools of that
-era stay in this repository: `tools/route_job.py` (route a job many ways, keep a leaderboard),
-`tools/kicad_bench.py` (the core and copperroute on one board, judged by KiCad), `jobs/<board>/`,
-`morph-frames/`, `experiments.json` and `history.html`. Whether they move to a `legacy/`
-directory is not yet decided. copperroute is GPL-3.0-only (a derivative of freerouting, with
-parts of KiCad's design-rule checker); ultraroute does not include or link its code and runs it
-only as a separate process.
+Before the core, the router was [copperroute](https://github.com/sequoia-hope/copperroute) (branch
+`governance`, forked from emshotton/copperroute), a Rust port of freerouting, run as a separate
+program from a checkout at `copperroute/`. It is kept as a reference router. The studio can still
+run it on the jobs that have a Specctra `.dsn` when its binary is at `target-
+topo/release/copperroute` (or given with `--router PATH`); without it the studio routes on the core
+alone. The tools of that era are kept under [`legacy/`](legacy/README.md): the leaderboard runner,
+the two-router KiCad bench, the morph viewer and the experiment history. They are not maintained and
+not on the Pages site. copperroute is GPL-3.0-only (a derivative of freerouting, with parts of
+KiCad's design-rule checker); ultraroute does not include or link its code and runs it only as a
+separate process.
 
 ## License
 

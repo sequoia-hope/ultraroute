@@ -40,12 +40,13 @@ jobs:
           VITE_LOCAL=1 npx vite build
       # The site is the repository as it is, with the built studio in place of its sources and
       # the board list the studio server would serve written out as a file, less the copperroute
-      # recipes, which only the server can run.
+      # recipes, which only the server can run. The lab pages and the copperroute-era files under
+      # legacy/ stay out.
       - name: Assemble the site
         run: |
           mkdir -p _site
           git archive HEAD | tar -x -C _site
-          rm -rf _site/studio _site/.github _site/lab
+          rm -rf _site/studio _site/.github _site/lab _site/legacy
           mkdir -p _site/studio _site/api
           cp -r studio/web/dist/. _site/studio/
           studio/target/release/studio-server --root . --dump-jobs _site/api/jobs
