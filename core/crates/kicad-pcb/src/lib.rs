@@ -10,6 +10,8 @@
 //! Everything the reader does not understand is counted into one warning;
 //! everything that would make the board silently wrong is a typed error.
 //! `write::apply` puts edits back into the text and keeps every other byte.
+//! `place::apply` moves, turns and flips footprints to the other side as pcbnew 9 does, byte
+//! for byte, and also keeps every byte it does not move.
 //!
 //! No workspace dependency: the reader began as waffle-iron's (same
 //! author), and the router's `board` crate builds its model from this one.
@@ -17,6 +19,7 @@
 pub mod copper;
 pub mod model;
 pub mod outline;
+pub mod place;
 pub mod read;
 pub mod rules;
 pub mod sexpr;
