@@ -77,6 +77,10 @@ pub fn joined(board: &Board, a: ItemId, b: ItemId) -> bool {
     let (Some(x), Some(y)) = (board.item(a), board.item(b)) else { return false };
     let pour = |it: &crate::model::Item| matches!(it.kind, Kind::Pour { .. });
     let poly_pad = |it: &crate::model::Item| matches!(it.kind, Kind::Pad { .. }) && matches!(it.shape, Shape::Polygon(_));
+    let pad = |it: &crate::model::Item| matches!(it.kind, Kind::Pad { .. });
+    if (pour(x) && pad(y) && !board.pour_joins_pad(x, b)) || (pour(y) && pad(x) && !board.pour_joins_pad(y, a)) {
+        return false;
+    }
     if pour(x) || pour(y) || (poly_pad(x) && poly_pad(y)) {
         return x.shape.gap_within(&y.shape, 0.0) == 0.0;
     }

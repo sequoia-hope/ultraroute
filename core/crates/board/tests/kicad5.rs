@@ -344,3 +344,23 @@ fn a_planes_unfilled_zone_stands_in_by_its_outline() {
     assert_eq!(connectivity_without_pours(&b).airlines.len(), 0, "the plane's outline joins them");
     assert!(b.warnings.iter().any(|w| w.contains("not filled")), "{:?}", b.warnings);
 }
+
+/// Two pads of net A inside a filled pour of A: joined by it, unless one says no zone joins it
+/// (`zone_connect 0`, KiCad's "none"), when it still needs a connection.
+#[test]
+fn a_pad_whose_zone_connection_is_none_is_not_joined_by_the_pour() {
+    let with = |connect: &str| {
+        board(&format!(
+            "(footprint \"R\" (layer \"F.Cu\") (at 10 10) (property \"Reference\" \"R1\")
+               (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\") (net 1 \"A\") {connect})
+               (pad \"2\" smd rect (at 5 0) (size 1 1) (layers \"F.Cu\") (net 1 \"A\")))
+             (zone (net 1) (net_name \"A\") (layer \"F.Cu\") (hatch edge 0.5) (connect_pads (clearance 0.2)) (min_thickness 0.25)
+               (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5))
+               (polygon (pts (xy 5 5) (xy 20 5) (xy 20 15) (xy 5 15)))
+               (filled_polygon (layer \"F.Cu\") (pts (xy 5 5) (xy 20 5) (xy 20 15) (xy 5 15))))"
+        ))
+    };
+    assert!(connectivity(&with("")).airlines.is_empty(), "the pour joins both pads");
+    assert_eq!(connectivity(&with("(zone_connect 0)")).airlines.len(), 1, "pad 1 joins nothing");
+    assert!(connectivity(&with("(zone_connect 2)")).airlines.is_empty(), "solid joins");
+}

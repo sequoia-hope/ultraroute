@@ -154,6 +154,9 @@ pub struct Zone {
     pub priority: u32,
     /// `(connect_pads (clearance …))`: the gap the pour keeps from other nets, in metres; 0 when unset.
     pub clearance: f64,
+    /// `(connect_pads no …)`: the zone joins no pad of its net (unless the pad says otherwise).
+    #[serde(default)]
+    pub no_pads: bool,
     /// `(min_thickness …)`: the narrowest copper the fill keeps, in metres; 0 when unset.
     pub min_thickness: f64,
     /// Inside a footprint, the footprint's index in `Pcb::footprints`.
@@ -185,10 +188,15 @@ pub struct PadCopper {
     /// reaches beyond its copper; `None` where the board's `pad_to_mask_clearance` holds.
     #[serde(default)]
     pub mask_margin: Option<f64>,
-    /// `(clearance X)` of the pad, else of its footprint: a clearance of its own, kept where it
-    /// is wider than its net class's.
+    /// `(clearance X)` of the pad, else of its footprint: a clearance of its own, which stands
+    /// in for its net class's.
     #[serde(default)]
     pub clearance: Option<f64>,
+    /// `(zone_connect N)` of the pad, else of its footprint: how zones of its net join it (0
+    /// none, 1 thermal reliefs, 2 solid, 3 reliefs for through-hole pads); `None` where the
+    /// zone decides.
+    #[serde(default)]
+    pub zone_connect: Option<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -364,8 +372,12 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
                 let local = |n: &Node, name: &str| n.find(name).and_then(|m| m.number_arg(0, name).ok()).filter(|v| *v != 0.0);
                 let margin = local(child, "solder_mask_margin");
                 let clearance = local(child, "clearance");
+                // Zero is a setting here (no connection), not "none set".
+                let connect = |n: &Node| n.find("zone_connect").and_then(|m| m.number_arg(0, "zone_connect").ok()).map(|v| v as u8);
+                let fp_connect = connect(child);
                 for (index, pad) in child.find_all("pad").enumerate() {
                     let mut pad_copper = read_pad(pad, footprint, index, fp)?;
+                    pad_copper.zone_connect = connect(pad).or(fp_connect);
                     pad_copper.mask_margin = local(pad, "solder_mask_margin").or(margin).map(|mm| mm * MM);
                     pad_copper.clearance = local(pad, "clearance").or(clearance).map(|mm| mm * MM).filter(|c| *c > 0.0);
                     copper.pads.push(pad_copper);
@@ -576,6 +588,7 @@ fn read_zone(z: &Node, footprint: Option<usize>) -> Result<Zone, KicadParse> {
             .and_then(|c| c.find("clearance"))
             .and_then(|c| c.number_arg(0, "clearance").ok())
             .map_or(0.0, |mm| mm * MM),
+        no_pads: z.find("connect_pads").is_some_and(|c| c.args().first().and_then(Node::text) == Some("no")),
         min_thickness: z.find("min_thickness").and_then(|t| t.number_arg(0, "min_thickness").ok()).map_or(0.0, |mm| mm * MM),
         footprint,
         uuid: uuid(z),
@@ -645,7 +658,7 @@ fn read_pad(p: &Node, footprint: usize, index: usize, fp: &Footprint) -> Result<
         None => Outline::Circle { centre: shifted([0.0, 0.0]), radius: size[0] / 2.0 },
         Some(polys) => Outline::Polygons(polys.into_iter().map(|poly| poly.into_iter().map(shifted).collect()).collect()),
     };
-    Ok(PadCopper { footprint, pad: index, layers, shape, outline, mask_margin: None, clearance: None })
+    Ok(PadCopper { footprint, pad: index, layers, shape, outline, mask_margin: None, clearance: None, zone_connect: None })
 }
 
 /// A custom pad's extra shapes, in the pad's own frame. Lines and arcs with a width become their

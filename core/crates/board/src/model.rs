@@ -290,6 +290,11 @@ pub struct Board {
     /// than their nets': one stands in for the net classes and custom rules (see
     /// [`Board::clearance_between`]).
     pub pad_clearances: HashMap<ItemId, Nm>,
+    /// Pads no zone of their net joins (KiCad's zone connection "none", the pad's own, its
+    /// footprint's or the zone's).
+    pub pad_zone_connect: HashMap<ItemId, u8>,
+    /// Zones, by index, that join no pad of their net unless the pad says otherwise.
+    pub zones_without_pads: std::collections::HashSet<usize>,
     /// Slotted holes: the two ends of a slot's centre line, its radius the item's `hole`'s. A
     /// slot is longer than the circle `hole` holds; [`Board::hole_shape`] gives all of it.
     pub hole_ends: HashMap<ItemId, (Point, Point)>,
@@ -435,6 +440,8 @@ impl Board {
             mask_web: nm(copper.solder_mask_min_width),
             mask_areas: Vec::new(),
             pad_clearances: HashMap::new(),
+            pad_zone_connect: HashMap::new(),
+            zones_without_pads: copper.zones.iter().enumerate().filter(|(_, z)| z.no_pads).map(|(i, _)| i).collect(),
             hole_ends: HashMap::new(),
             ties: HashMap::new(),
             keepout_holes: HashMap::new(),
@@ -593,6 +600,9 @@ impl Board {
                 }
                 if let Some(c) = own {
                     board.pad_clearances.insert(id, c);
+                }
+                if let Some(c) = pad.zone_connect {
+                    board.pad_zone_connect.insert(id, c);
                 }
             }
         }
@@ -1021,6 +1031,17 @@ impl Board {
                 locked: true,
                 span: None,
             });
+        }
+    }
+
+    /// Whether zone copper `pour` joins pad `pad` (item `id`) of its net, as KiCad connects them:
+    /// not where the pad, its footprint or, failing those, the zone says "none". Copper drawn on
+    /// a copper layer is not a zone and joins as it touches.
+    pub fn pour_joins_pad(&self, pour: &Item, id: ItemId) -> bool {
+        let Kind::Pour { zone, .. } = pour.kind else { return true };
+        match self.pad_zone_connect.get(&id) {
+            Some(&c) => c != 0,
+            None => zone == DRAWN || !self.zones_without_pads.contains(&zone),
         }
     }
 
