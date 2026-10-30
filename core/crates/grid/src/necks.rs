@@ -4,7 +4,7 @@
 //! rules reaches a pin, so each is told: the designer widens the pin's approach, moves a part, or
 //! writes the exception into the rules, the way KiCad allows a neck.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use board::{nm, Board, ItemId, Kind, Nm, Shape};
 
@@ -21,10 +21,16 @@ pub fn report(board: &Board, laid: &[ItemId]) -> Vec<String> {
     let mm = |v: Nm| (v / 1_000) as f64 / 1e3;
     let mut lines = Vec::new();
     let mut exceptions: BTreeSet<(String, String, Nm)> = BTreeSet::new();
+    // A differential pair runs at its coupled width, narrower than its class's track as often as
+    // not: that is the pair, not a neck.
+    let pair_width: HashMap<u32, Nm> = crate::pairs::diff_pairs(board).iter().flat_map(|p| [(p.p, p.width), (p.n, p.width)]).collect();
     for &id in laid {
         let Some(it) = board.item(id) else { continue };
         let (Kind::Track, Shape::Capsule { a, b, r }) = (&it.kind, &it.shape) else { continue };
         let (a, b, width) = (*a, *b, 2 * r);
+        if pair_width.get(&it.net).is_some_and(|&w| width + SLACK >= w) {
+            continue;
+        }
         let name = board.net_name(it.net).to_string();
         let profile = Profile::for_net(board, it.net);
         let rule_min = nm(board.rules.min_track_width_of(&name));
@@ -76,4 +82,45 @@ pub fn report(board: &Board, laid: &[ItemId]) -> Vec<String> {
         }
     }
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use board::{Item, Point};
+
+    /// A USB pair whose class asks 0.5 mm tracks and 0.2 mm paired, and a 1 mm pad of D-.
+    fn board() -> Board {
+        let text = r#"(kicad_pcb (version 20241229) (generator "pcbnew") (general (thickness 1.6))
+          (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+          (net 0 "") (net 1 "USB_D+") (net 2 "USB_D-")
+          (footprint "t:P" (layer "F.Cu") (uuid "22222222-2222-4222-8222-222222222221") (at 10 10)
+            (property "Reference" "J1" (at 0 -2 0) (layer "F.SilkS") (uuid "22222222-2222-4222-8222-222222222222"))
+            (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 2 "USB_D-")))
+          (gr_rect (start 0 0) (end 30 30) (layer "Edge.Cuts") (width 0.1)))"#;
+        let (pcb, copper) = kicad_pcb::parse_board(text).unwrap();
+        let rules = r#"{"net_settings":{"classes":[{"name":"Default","clearance":0.15,"track_width":0.15},{"name":"USB","clearance":0.15,"track_width":0.5,"diff_pair_width":0.2,"diff_pair_gap":0.15,"priority":0}],"netclass_patterns":[{"netclass":"USB","pattern":"USB_D*"}]}}"#;
+        Board::new(&pcb, &copper, kicad_pcb::Rules::parse(rules).unwrap())
+    }
+
+    fn track_into_pad(b: &mut Board, width_mm: f64) -> ItemId {
+        b.insert(Item {
+            kind: Kind::Track,
+            net: 2,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(10_000_000, 10_000_000), b: Point::new(20_000_000, 10_000_000), r: (width_mm * 5e5) as Nm },
+            hole: None,
+            locked: false,
+            span: None,
+        })
+    }
+
+    #[test]
+    fn a_pair_at_its_coupled_width_is_no_neck() {
+        let mut b = board();
+        let paired = track_into_pad(&mut b, 0.2);
+        assert!(report(&b, &[paired]).is_empty(), "{:?}", report(&b, &[paired]));
+        let thinner = track_into_pad(&mut b, 0.1);
+        assert_eq!(report(&b, &[thinner]).len(), 1, "narrower than the pair is still a neck");
+    }
 }
