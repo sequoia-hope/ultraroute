@@ -11,5 +11,8 @@
     "@sveltejs/vite-plugin-svelte": "7.3.1",
     "svelte": "5.57.2",
     "vite": "8.3.4"
+  },
+  "dependencies": {
+    "board-draw": "github:sequoia-hope/board-draw#43c4f6fc9179c387af4340b899a469198f7e3c67"
   }
 }

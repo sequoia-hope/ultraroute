@@ -10,5 +10,7 @@ crate-type = ["cdylib", "rlib"]
 wasm = ["dep:wasm-bindgen"]
 
 [dependencies]
+# The board drawing shared with Circuit Composer; web/package.json pins its renderer at the same commit.
+board-draw = { git = "https://github.com/sequoia-hope/board-draw", rev = "43c4f6fc9179c387af4340b899a469198f7e3c67" }
 serde_json.workspace = true
 wasm-bindgen = { version = "=0.2.129", optional = true }

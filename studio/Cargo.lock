@@ -12,6 +12,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "board-draw"
+version = "0.1.0"
+source = "git+https://github.com/sequoia-hope/board-draw?rev=43c4f6fc9179c387af4340b899a469198f7e3c67#43c4f6fc9179c387af4340b899a469198f7e3c67"
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -280,6 +285,7 @@ dependencies = [
 name = "studio-core"
 version = "0.1.0"
 dependencies = [
+ "board-draw",
  "serde_json",
  "wasm-bindgen",
 ]

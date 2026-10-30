@@ -10,5 +10,6 @@ nice -n 15 wasm-pack build core --release --target web --out-dir ../web/src/core
 (cd ../core && nice -n 15 wasm-pack build crates/web --release --target web \
   --out-dir ../../../studio/web/src/router --out-name router --no-pack)
 cd web
-[ -d node_modules ] || npm ci --no-audit --no-fund
+# Installs again when the lockfile has moved on, such as to a new board-draw commit.
+[ node_modules/.package-lock.json -nt package-lock.json ] || npm ci --no-audit --no-fund
 nice -n 15 npx vite build

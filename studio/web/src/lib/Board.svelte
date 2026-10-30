@@ -1,6 +1,6 @@
 <script>
   import { onMount, untrack } from 'svelte';
-  import { Renderer } from './renderer.js';
+  import { Renderer } from 'board-draw';
 
   // studio: the WASM scene. version: bumped whenever the scene changed.
   // mode: 'all', 'top', 'bottom' or 'split' (top and bottom side by side, the bottom seen

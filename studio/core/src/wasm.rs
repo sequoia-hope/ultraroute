@@ -38,15 +38,15 @@ impl Studio {
     }
 
     pub fn set_active_layer(&mut self, layer: usize) {
-        self.scene.active_layer = layer.min(self.scene.layers.len().saturating_sub(1));
+        self.scene.board.style.active_layer = layer.min(self.scene.board.layers().len().saturating_sub(1));
     }
 
     pub fn set_high_contrast(&mut self, on: bool) {
-        self.scene.high_contrast = on;
+        self.scene.board.style.high_contrast = on;
     }
 
     pub fn set_show_pours(&mut self, on: bool) {
-        self.scene.show_pours = on;
+        self.scene.board.style.show_pours = on;
     }
 
     pub fn set_highlight(&mut self, parts: Vec<i32>) {
@@ -66,11 +66,11 @@ impl Studio {
     }
 
     pub fn net_name(&self, net: i32) -> String {
-        self.scene.nets.get(&net).cloned().unwrap_or_default()
+        self.scene.board.nets.get(&net).cloned().unwrap_or_default()
     }
 
     pub fn set_hot_net(&mut self, net: i32) {
-        self.scene.hot_net = (net != 0).then_some(net);
+        self.scene.board.style.hot_net = (net != 0).then_some(net);
     }
 
     pub fn set_picked(&mut self, part: i32) {
@@ -78,17 +78,15 @@ impl Studio {
     }
 
     pub fn set_offset(&mut self, part: i32, dx: f32, dy: f32) {
-        self.scene.offsets.insert(part, [dx, dy]);
+        self.scene.set_offset(part, dx, dy);
     }
 
     pub fn clear_offsets(&mut self) {
-        self.scene.offsets.clear();
+        self.scene.clear_offsets();
     }
 
     pub fn set_layer_hidden(&mut self, layer: usize, hidden: bool) {
-        if let Some(h) = self.scene.hidden.get_mut(layer) {
-            *h = hidden;
-        }
+        self.scene.board.set_layer_visible(layer, !hidden);
     }
 
     pub fn set_selected(&mut self, part: i32) {
@@ -155,12 +153,13 @@ impl Studio {
         let s = &self.scene;
         let (traces, vias) = s.counts();
         let layers: Vec<_> = s
-            .layers
+            .board
+            .layers()
             .iter()
             .enumerate()
-            .map(|(i, name)| {
-                let c = s.layer_color(i);
-                json!({"name": name, "hidden": s.hidden.get(i).copied().unwrap_or(false), "color": [c[0], c[1], c[2]], "active": i == s.active_layer})
+            .map(|(i, l)| {
+                let c = l.color;
+                json!({"name": l.name, "hidden": !l.visible, "color": [c[0], c[1], c[2]], "active": i == s.board.style.active_layer})
             })
             .collect();
         json!({
@@ -173,8 +172,8 @@ impl Studio {
             "layers": layers,
             "done": s.done,
             "focus": s.focus.as_ref().map(|f| f.phase().to_string()),
-            "high_contrast": s.high_contrast,
-            "pours": s.show_pours,
+            "high_contrast": s.board.style.high_contrast,
+            "pours": s.board.style.show_pours,
             "events": s.events.iter().rev().take(12).collect::<Vec<_>>(),
         })
         .to_string()
