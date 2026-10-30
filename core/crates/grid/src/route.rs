@@ -669,17 +669,21 @@ pub fn edits(board: &Board, laid: &[ItemId]) -> (Vec<kicad_pcb::NewTrack>, Vec<k
         match (&item.kind, &item.shape) {
             (Kind::Track, Shape::Capsule { a, b, r }) => {
                 let layer = (0..board.layers.len()).find(|l| item.on(*l)).map_or_else(String::new, |l| board.layers[l].clone());
-                tracks.push(kicad_pcb::NewTrack { start: metres(*a), end: metres(*b), width: 2.0 * *r as f64 * 1e-9, layer, net: item.net });
+                tracks.push(kicad_pcb::NewTrack { start: metres(*a), end: metres(*b), width: 2.0 * *r as f64 * 1e-9, layer, net: item.net, locked: item.locked });
             }
             (Kind::Via, Shape::Capsule { a, r, .. }) => {
                 let on: Vec<usize> = (0..board.layers.len()).filter(|l| item.on(*l)).collect();
                 let (Some(&first), Some(&last)) = (on.first(), on.last()) else { continue };
+                // The writer has no blind or buried via, and nothing lays one: say so rather than
+                // write a through via's tokens for it.
+                assert!(first == 0 && last + 1 == board.layers.len(), "a via from {} to {} does not go through the board", board.layers[first], board.layers[last]);
                 vias.push(kicad_pcb::NewVia {
                     at: metres(*a),
                     size: 2.0 * *r as f64 * 1e-9,
                     drill: 2.0 * item.hole.map_or(0, |h| h.1) as f64 * 1e-9,
                     layers: [board.layers[first].clone(), board.layers[last].clone()],
                     net: item.net,
+                    locked: item.locked,
                 });
             }
             _ => {}

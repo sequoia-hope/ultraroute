@@ -160,9 +160,14 @@ pub fn read(root: &Node) -> Result<Pcb, KicadParse> {
                 }
             }
             "footprint" => {
-                let fp = read_footprint(child, &mut outline, &mut margin, &mut warnings)?;
+                let mut fp = read_footprint(child, &mut outline, &mut margin, &mut warnings)?;
+                // Two parts with one uuid (a copy KiCad did not renumber): the second gets one of
+                // its place in the file, in memory only; the file is left as it is.
                 if !seen_uuids.insert(fp.uuid.clone()) {
-                    return Err(KicadParse::DuplicateFootprintUuid { uuid: fp.uuid });
+                    let p = child.pos();
+                    warnings.push(format!("footprint {} at line {} has the uuid {} of another; it is told apart by its place", fp.reference, p.line, fp.uuid));
+                    fp.uuid = format!("duplicate-{}-{}", p.line, p.col);
+                    seen_uuids.insert(fp.uuid.clone());
                 }
                 footprints.push(fp);
             }

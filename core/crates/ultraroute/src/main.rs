@@ -68,7 +68,13 @@ fn main() {
             });
             Box::new(std::io::stdout())
         } else {
-            Box::new(std::io::BufWriter::new(std::fs::File::create(path).expect("create the live file")))
+            match std::fs::File::create(path) {
+                Ok(f) => Box::new(std::io::BufWriter::new(f)),
+                Err(e) => {
+                    eprintln!("--live {path}: {e}");
+                    std::process::exit(1);
+                }
+            }
         };
         Live::new(out, a.fps, a.pours_block).with_step(a.live_step)
     });

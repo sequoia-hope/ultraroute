@@ -1186,6 +1186,9 @@ pub fn run_with_solver(
     for f in board.footprints.iter_mut().filter(|f| a.lock.contains(&f.reference)) {
         f.locked = true;
     }
+    for name in a.lock.iter().filter(|n| !board.footprints.iter().any(|f| &f.reference == *n)) {
+        eprintln!("warning: --lock {name}: no such part on the board");
+    }
     for (name, x, y) in &a.place {
         let Some(fp) = board.footprints.iter().position(|f| &f.reference == name) else {
             eprintln!("warning: --place {name}: no such part on the board");

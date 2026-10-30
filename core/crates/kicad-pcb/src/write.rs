@@ -14,6 +14,8 @@ pub struct NewTrack {
     pub width: f64,
     pub layer: String,
     pub net: u32,
+    /// Written `(locked yes)`: copper of the board's that the router split or moved stays locked.
+    pub locked: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -23,6 +25,7 @@ pub struct NewVia {
     pub drill: f64,
     pub layers: [String; 2],
     pub net: u32,
+    pub locked: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -78,12 +81,13 @@ pub fn apply(text: &str, edit: &Edit) -> String {
     };
     for t in &edit.tracks {
         out.push_str(&format!(
-            "\t(segment\n\t\t(start {} {})\n\t\t(end {} {})\n\t\t(width {})\n\t\t(layer \"{}\")\n\t\t(net {})\n\t\t(uuid \"{}\")\n\t)\n",
+            "\t(segment\n\t\t(start {} {})\n\t\t(end {} {})\n\t\t(width {})\n{}\t\t(layer \"{}\")\n\t\t(net {})\n\t\t(uuid \"{}\")\n\t)\n",
             mm(t.start[0]),
             mm(t.start[1]),
             mm(t.end[0]),
             mm(t.end[1]),
             mm(t.width),
+            if t.locked { "\t\t(locked yes)\n" } else { "" },
             t.layer,
             net(t.net),
             uuids.draw()
@@ -91,13 +95,14 @@ pub fn apply(text: &str, edit: &Edit) -> String {
     }
     for v in &edit.vias {
         out.push_str(&format!(
-            "\t(via\n\t\t(at {} {})\n\t\t(size {})\n\t\t(drill {})\n\t\t(layers \"{}\" \"{}\")\n\t\t(net {})\n\t\t(uuid \"{}\")\n\t)\n",
+            "\t(via\n\t\t(at {} {})\n\t\t(size {})\n\t\t(drill {})\n\t\t(layers \"{}\" \"{}\")\n{}\t\t(net {})\n\t\t(uuid \"{}\")\n\t)\n",
             mm(v.at[0]),
             mm(v.at[1]),
             mm(v.size),
             mm(v.drill),
             v.layers[0],
             v.layers[1],
+            if v.locked { "\t\t(locked yes)\n" } else { "" },
             net(v.net),
             uuids.draw()
         ));
@@ -206,6 +211,21 @@ mod tests {
     }
 
     #[test]
+    fn locked_copper_is_written_locked() {
+        let text = "(kicad_pcb\n\t(version 20241229)\n\t(net 0 \"\")\n\t(net 1 \"A\")\n)\n";
+        let edit = Edit {
+            tracks: vec![NewTrack { start: [1e-3, 2e-3], end: [3e-3, 2e-3], width: 0.2e-3, layer: "F.Cu".into(), net: 1, locked: true }],
+            vias: vec![NewVia { at: [3e-3, 2e-3], size: 0.6e-3, drill: 0.3e-3, layers: ["F.Cu".into(), "B.Cu".into()], net: 1, locked: true }],
+            ..Edit::default()
+        };
+        let out = apply(text, &edit);
+        assert!(out.contains("(width 0.2)\n\t\t(locked yes)\n\t\t(layer \"F.Cu\")"), "{out}");
+        assert!(out.contains("(layers \"F.Cu\" \"B.Cu\")\n\t\t(locked yes)\n\t\t(net 1)"), "{out}");
+        let unlocked = apply(text, &Edit { tracks: vec![NewTrack { locked: false, ..edit.tracks[0].clone() }], ..Edit::default() });
+        assert!(!unlocked.contains("locked"));
+    }
+
+    #[test]
     fn an_empty_edit_changes_nothing() {
         let text = "(kicad_pcb\n\t(version 20241229)\n)\n";
         assert_eq!(apply(text, &Edit::default()), text);
@@ -218,7 +238,7 @@ mod tests {
         let end = start + "(segment (x))".len();
         let edit = Edit {
             remove: vec![Span { start, end }],
-            tracks: vec![NewTrack { start: [1e-3, 2e-3], end: [3e-3, 2e-3], width: 0.2e-3, layer: "F.Cu".into(), net: 4 }],
+            tracks: vec![NewTrack { start: [1e-3, 2e-3], end: [3e-3, 2e-3], width: 0.2e-3, layer: "F.Cu".into(), net: 4, locked: false }],
             ..Edit::default()
         };
         let out = apply(text, &edit);
@@ -236,7 +256,7 @@ mod tests {
         assert_eq!(names, ["", "GND", "VCC"]);
         assert_eq!(pcb.footprints[0].pads.iter().map(|p| p.net.as_ref().unwrap().number).collect::<Vec<_>>(), [1, 2]);
         assert_eq!(copper.tracks[0].net, 1);
-        let edit = Edit { tracks: vec![NewTrack { start: [12e-3, 10e-3], end: [12e-3, 12e-3], width: 0.2e-3, layer: "F.Cu".into(), net: 2 }], ..Edit::default() };
+        let edit = Edit { tracks: vec![NewTrack { start: [12e-3, 10e-3], end: [12e-3, 12e-3], width: 0.2e-3, layer: "F.Cu".into(), net: 2, locked: false }], ..Edit::default() };
         let out = apply(text, &edit);
         assert!(out.contains("(net \"VCC\")\n\t\t(uuid"), "{out}");
         let (again, _) = crate::parse_board(&out).unwrap();

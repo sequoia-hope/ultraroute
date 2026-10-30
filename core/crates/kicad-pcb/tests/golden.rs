@@ -294,13 +294,13 @@ fn legacy_v5_is_unsupported_version() {
 }
 
 #[test]
-fn duplicate_uuid_is_refused() {
-    assert_eq!(
-        parse_kicad_pcb(&fixture("dup_uuid.kicad_pcb")).unwrap_err(),
-        KicadParse::DuplicateFootprintUuid {
-            uuid: "71829304-0000-4000-8000-000000000001".into()
-        }
-    );
+fn a_duplicate_uuid_is_said_and_told_apart() {
+    let pcb = parse_kicad_pcb(&fixture("dup_uuid.kicad_pcb")).unwrap();
+    assert!(pcb.warnings.iter().any(|w| w.contains("71829304-0000-4000-8000-000000000001")), "{:?}", pcb.warnings);
+    let mut ids: Vec<&str> = pcb.footprints.iter().map(|f| f.uuid.as_str()).collect();
+    ids.sort();
+    ids.dedup();
+    assert_eq!(ids.len(), pcb.footprints.len(), "each part has an id of its own");
 }
 
 #[test]

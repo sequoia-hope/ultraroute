@@ -26,6 +26,7 @@ fn variants(text: &str) -> [(&'static str, String); 4] {
         width: t.width,
         layer: t.layer.clone(),
         net: t.net,
+        locked: false,
     };
     [
         ("clean", text.to_string()),
