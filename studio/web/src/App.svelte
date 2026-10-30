@@ -9,6 +9,9 @@
   const STATIC = import.meta.env.VITE_STATIC === '1';
   // Built to route in the tab itself: the core router runs here, in a worker, with no server.
   const LOCAL = import.meta.env.VITE_LOCAL === '1';
+  // Parts are not moved by hand for now: on a phone, zooming kept catching a chip and moving it,
+  // and the router nudges parts itself. Lock, select and route stay.
+  const MOVE_BY_HAND = false;
   let version = $state(0);
   let board;
 
@@ -532,7 +535,7 @@
     if (STATIC && event.key !== 'Escape') return;
     const k = event.shiftKey ? 5 : 1;
     const moves = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] };
-    if (moves[event.key]) {
+    if (moves[event.key] && MOVE_BY_HAND) {
       event.preventDefault();
       moveSelected(moves[event.key][0] * step * k, moves[event.key][1] * step * k);
     } else if (event.key === 'l') {
@@ -768,6 +771,7 @@
           {#if placements[selectedPart.name]}· placed by hand{/if}
         </p>
         {#if !STATIC}
+        {#if MOVE_BY_HAND}
         <div class="pad">
           <span></span><button onclick={() => moveSelected(0, step)} title="Up (↑)">↑</button><span></span>
           <button onclick={() => moveSelected(-step, 0)} title="Left (←)">←</button>
@@ -777,6 +781,7 @@
           <button onclick={() => moveSelected(step, 0)} title="Right (→)">→</button>
           <span></span><button onclick={() => moveSelected(0, -step)} title="Down (↓)">↓</button><span></span>
         </div>
+        {/if}
         <div class="buttons">
           <button onclick={() => toggleLock(selectedPart.name)}>
             {locks.includes(selectedPart.name) ? 'Unlock' : 'Lock'}
@@ -785,20 +790,21 @@
         </div>
         {/if}
         {#if selectedPart.fixed && !locks.includes(selectedPart.name) && !sentLocks.includes(selectedPart.name)}
-          <p class="muted">Fixed in the design: the router won't move it, but you can.</p>
+          <p class="muted">Fixed in the design: the router won't move it{MOVE_BY_HAND ? ', but you can' : ''}.</p>
         {/if}
         {#if placements[selectedPart.name]}
           <button class="link" onclick={() => unplace(selectedPart.name)}>Put it back where the design has it</button>
         {/if}
-        {#if !STATIC}<p class="hint">Arrow keys move it (Shift for 5×), L locks, Esc closes.</p>{/if}
+        {#if !STATIC}<p class="hint">{MOVE_BY_HAND ? 'Arrow keys move it (Shift for 5×), ' : ''}L locks, Esc closes.</p>{/if}
       </section>
     {/if}
 
-    <section>
-      <h2
+    <!-- Closed by default: a board's locked parts (the earring's LEDs) are many and mostly stay locked. -->
+    <details class="locked">
+      <summary
         onmouseenter={() => highlight([...locks.map((n) => parts.find((p) => p.name === n)?.id), ...designFixed.map((p) => p.id)])}
         onmouseleave={() => highlight([])}
-      >Locked <span class="muted">{locks.length + designFixed.length}</span></h2>
+      ><h2>Locked <span class="muted">{locks.length + designFixed.length}</span></h2></summary>
       {#if locks.length + designFixed.length === 0}
         <p class="muted">Nothing is locked.{STATIC ? '' : ' Select a part and press L, or Lock.'}</p>
       {:else}
@@ -816,7 +822,7 @@
           {/each}
         </div>
       {/if}
-    </section>
+    </details>
 
     {#if Object.keys(placements).length}
       <section>
@@ -906,7 +912,7 @@
       mode={viewMode}
       {flipped}
       layers={status?.layers?.map((l) => l.name) ?? []}
-      editable={!STATIC}
+      editable={!STATIC && MOVE_BY_HAND}
       ondrop={dropped}
       onselect={select}
       onhover={(h) => (hover = h)}
