@@ -755,22 +755,26 @@ struct ViaCosts {
     rip: u32,
 }
 
-/// The prices `--via-cost` gives, or by default: with every layer free for signals, a via costs
-/// negotiation 500, routing one connection at a time 600 and rip-up 320 (below its 400 for
-/// ripping copper, so a route takes the other layer before ripping a track there): a via pair
-/// to hop over a crossing must cost more than the congestion it dodges, or two-layer boards
-/// fill with them. With planes inside, signals run on the outer layers among the planes' vias,
-/// and dear vias drive routes the long way round dense parts: 200, 80 and 80, as before.
+/// What a via costs negotiation unless `--via-cost` says, in millimetres of straight track:
+/// measured on the benchmark at 1.0, 2.5 and 5.0 mm (docs/pcbench.md), 5.0 laid the fewest vias,
+/// 7% fewer than 2.5, for 0.5% more track.
+pub const VIA_COST_MM: f64 = 5.0;
+
+/// The prices `--via-cost` gives, or by default [`VIA_COST_MM`], in each stage's grid steps:
+/// routing one connection at a time pays 1.2 times negotiation's price and rip-up 0.8 times
+/// (below its price for ripping copper, so a route takes the other layer before ripping a track
+/// there). With planes inside, signals run on the outer layers among the planes' vias, and dear
+/// vias drive routes the long way round dense parts: 1.0, 0.4 and 0.4 mm, as the router had them
+/// before (the benchmark's recipe names no planes, so this is not measured there).
 fn via_costs(a: &Args, board: &Board) -> ViaCosts {
     let cell = a.cell.unwrap_or(grid::Options::default().cell);
-    match a.via_cost {
-        Some((neg, open)) => {
-            let at = |mm: f64| grid::via_cost_mm(cell, mm);
-            ViaCosts { negotiate: at(neg), open: at(open.unwrap_or(neg * 1.2)), rip: at(open.unwrap_or(neg * 0.8)) }
-        }
-        None if board.planes != 0 => ViaCosts { negotiate: 200, open: 80, rip: 80 },
-        None => ViaCosts { negotiate: 500, open: 600, rip: 320 },
-    }
+    let at = |mm: f64| grid::via_cost_mm(cell, mm);
+    let (negotiate, open, rip) = match a.via_cost {
+        Some((neg, open)) => (neg, open.unwrap_or(neg * 1.2), open.unwrap_or(neg * 0.8)),
+        None if board.planes != 0 => (1.0, 0.4, 0.4),
+        None => (VIA_COST_MM, VIA_COST_MM * 1.2, VIA_COST_MM * 0.8),
+    };
+    ViaCosts { negotiate: at(negotiate), open: at(open), rip: at(rip) }
 }
 
 /// The widest region the region plough rips round a trapped connection's path.
