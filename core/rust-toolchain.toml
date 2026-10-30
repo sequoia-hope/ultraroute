@@ -1,0 +1,6 @@
+# One toolchain for every checkout and CI, so clippy judges the tree alike everywhere (CI pins the
+# same version in .github/workflows/test.yml).
+[toolchain]
+channel = "1.95.0"
+components = ["clippy"]
+targets = ["wasm32-unknown-unknown"]
