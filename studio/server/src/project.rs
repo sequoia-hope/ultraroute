@@ -168,7 +168,8 @@ impl Drop for Lock {
 }
 
 /// Merges `fields` into `apps.studio.<board>` of the project's `design/status.json`, read,
-/// changed and written back under its lock file. Every other key stays as it was, in its place,
+/// changed and written back under its lock file; a field given as null is taken out, so a
+/// later run clears what an earlier one said. Every other key stays as it was, in its place,
 /// whatever schema the file has. A project without a status file is left without one (false).
 pub fn update_status(project: &Path, board: &str, fields: Map<String, Value>, wait: Duration) -> Result<bool, String> {
     let path = project.join("design/status.json");
@@ -188,7 +189,13 @@ pub fn update_status(project: &Path, board: &str, fields: Map<String, Value>, wa
             .as_object_mut()
             .ok_or(format!("{shown}: {key} is not an object, so it was left alone"))?;
     }
-    entry.extend(fields);
+    for (key, value) in fields {
+        if value.is_null() {
+            entry.remove(&key);
+        } else {
+            entry.insert(key, value);
+        }
+    }
     let mut out = serde_json::to_string_pretty(&status).map_err(|e| e.to_string())?;
     if text.ends_with('\n') {
         out.push('\n');
@@ -382,6 +389,18 @@ mod tests {
         assert_eq!(v["updated"], "2026-10-26");
         assert_eq!(v["apps"]["studio"]["easy2350"], json!({"opens": 3, "saved": false}));
         assert!(!p.0.join("design/status.json.lock").exists());
+    }
+
+    #[test]
+    fn a_null_field_takes_its_key_out() {
+        let p = Scratch::new();
+        let path = p.put("design/status.json", r#"{"apps": {"studio": {"b": {"opens": 1, "failed": "crash"}}}}"#);
+        let mut fields = Map::new();
+        fields.insert("opens".into(), json!(0));
+        fields.insert("failed".into(), Value::Null);
+        update_status(&p.0, "b", fields, LOCK_WAIT).unwrap();
+        let v: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(v["apps"]["studio"]["b"], json!({"opens": 0}));
     }
 
     #[test]
