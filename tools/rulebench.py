@@ -13,6 +13,10 @@ Everything lives in ~/Software/ultraroute-lab/rulebench/: boards/NAME/ holds boa
 .kicad_pro and .kicad_dru, bare.kicad_pcb and bare.json; runs/RUN/NAME/ each run's output. The
 boards are the designer's own and stay out of this repository. Judging is PCBench's: a zone
 refill, then kicad-cli DRC, counting violations that involve routed copper.
+
+Several of these boards run to the 120 s limit, so what they route depends on how busy the
+machine is: compare two binaries in runs made side by side, under the same load (on 2026-10-30
+dancing_forest left 8, 20 and 70 connections open with one binary as loaf's load changed).
 """
 
 import argparse
