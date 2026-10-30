@@ -146,6 +146,8 @@
     { key: 'bottom', label: 'Bottom' },
     { key: 'split', label: 'Side by side' },
   ];
+  // The copper between top and bottom, each shown alone from the view bar's Inner menu.
+  const innerLayers = $derived((status?.layers ?? []).slice(1, -1).map((l, k) => ({ key: `layer:${k + 1}`, label: l.name.replace(/\.Cu$/, '') })));
   let tighten = $state(true);
   const engine = $derived(router === 'core' ? 'core' : 'copperroute');
   // Copperroute reads the job's Specctra board, the core its KiCad board.
@@ -1016,6 +1018,17 @@
     <div class="views segmented" role="group" aria-label="Which side to show">
       {#each VIEWS as v}
         <button class:on={viewMode === v.key} onclick={() => (viewMode = v.key)}>{v.label}</button>
+        {#if v.key === 'top' && innerLayers.length}
+          <select
+            class:on={viewMode.startsWith('layer:')}
+            value={viewMode.startsWith('layer:') ? viewMode : ''}
+            onchange={(e) => (viewMode = e.currentTarget.value || 'all')}
+            title="An inner copper layer alone"
+          >
+            <option value="" disabled>Inner</option>
+            {#each innerLayers as l}<option value={l.key}>{l.label}</option>{/each}
+          </select>
+        {/if}
       {/each}
       <button class="help-button" onclick={() => (showHelp = !showHelp)} title="View controls (?)">?</button>
     </div>
