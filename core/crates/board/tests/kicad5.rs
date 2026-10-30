@@ -324,3 +324,22 @@ fn a_keepouts_cutout_forbids_nothing() {
     assert!(keepout_hit(&mut b, (10.0, 10.0), (19.0, 10.0)), "out across the cutout's edge into the keepout");
     assert!(keepout_hit(&mut b, (3.0, 3.0), (5.0, 3.0)), "in the keepout");
 }
+
+#[test]
+fn a_planes_unfilled_zone_stands_in_by_its_outline() {
+    // Two through-hole pads of net A, and net A's zone over all of B.Cu, saved with no fill.
+    let mut b = board(
+        "(footprint \"P\" (layer \"F.Cu\") (uuid \"0b10c000-0000-4000-8000-000000000001\") (at 5 15) (property \"Reference\" \"J1\")
+           (pad \"1\" thru_hole circle (at 0 0) (size 1.6 1.6) (drill 0.8) (layers \"*.Cu\") (net 1 \"A\")))
+         (footprint \"P\" (layer \"F.Cu\") (uuid \"0b10c000-0000-4000-8000-000000000002\") (at 25 15) (property \"Reference\" \"J2\")
+           (pad \"1\" thru_hole circle (at 0 0) (size 1.6 1.6) (drill 0.8) (layers \"*.Cu\") (net 1 \"A\")))
+         (zone (net 1) (net_name \"A\") (layer \"B.Cu\") (uuid \"dddddddd-0000-4000-8000-000000000001\") (hatch edge 0.5)
+           (connect_pads (clearance 0.2)) (min_thickness 0.25) (fill (thermal_gap 0.5) (thermal_bridge_width 0.5))
+           (polygon (pts (xy 1 1) (xy 29 1) (xy 29 29) (xy 1 29))))",
+    );
+    assert_eq!(connectivity_without_pours(&b).airlines.len(), 1, "no copper joins them yet");
+    let back = b.layers.iter().position(|l| l == "B.Cu").unwrap();
+    b.set_planes(1 << back);
+    assert_eq!(connectivity_without_pours(&b).airlines.len(), 0, "the plane's outline joins them");
+    assert!(b.warnings.iter().any(|w| w.contains("not filled")), "{:?}", b.warnings);
+}

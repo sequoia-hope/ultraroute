@@ -1234,7 +1234,11 @@ pub fn run_with_solver(
                 None => panic!("--planes: the board has no copper layer {name} (it has {})", board.layers.join(", ")),
             }
         }
+        let said = board.warnings.len();
         board.set_planes(mask);
+        for w in &board.warnings[said..] {
+            eprintln!("warning: {w}");
+        }
     }
     if let Some(l) = live.as_mut() {
         l.header(&board);

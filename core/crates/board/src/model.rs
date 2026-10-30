@@ -296,6 +296,9 @@ pub struct Board {
     pub ties: HashMap<ItemId, (usize, Vec<u32>)>,
     /// A keepout's cutouts, where it forbids nothing.
     pub keepout_holes: HashMap<ItemId, Vec<Shape>>,
+    /// Zones of a net saved with no fill (KiCad not having filled them): their zone, net, layers
+    /// and outline, to stand in for their copper where it must be there, on a plane.
+    pub unfilled: Vec<(usize, u32, u64, Shape)>,
     /// Areas where a via costs the router dearly but is allowed, on every layer: rule areas
     /// whose name starts `soft-novia`, and boxes given on the command line. Room kept for silk.
     pub via_avoid: Vec<Shape>,
@@ -409,6 +412,7 @@ impl Board {
             hole_ends: HashMap::new(),
             ties: HashMap::new(),
             keepout_holes: HashMap::new(),
+            unfilled: Vec::new(),
             via_avoid: Vec::new(),
             via_avoid_cost: 3_000,
             regions: Vec::new(),
@@ -626,10 +630,22 @@ impl Board {
                 }
                 continue;
             }
+            let kept = blocks.iter().any(|b| b.zones.contains(&z));
+            // A zone saved unfilled has no copper to read. Kept, as a block's, its outline stands
+            // for it, as it would for a plane's (`set_planes`); a pour refilled round the routes
+            // needs none.
+            if zone.filled.is_empty() && zone.net != 0 && zone.outline.len() >= 3 {
+                let outline = Shape::Polygon(zone.outline.iter().copied().map(Point::from_m).collect());
+                board.unfilled.push((z, zone.net, mask(&zone.layers), outline.clone()));
+                if kept {
+                    board.insert(Item { kind: Kind::Pour { zone: z, kept: true }, net: zone.net, layers: mask(&zone.layers), shape: outline, hole: None, locked: true, span: None });
+                    board.warnings.push(format!("zone {} of {} is not filled: its outline stands for its copper; refill it in KiCad", zone.name, zone.net_name));
+                }
+            }
             for (layer, poly) in &zone.filled {
                 if poly.len() >= 3 {
                     board.insert(Item {
-                        kind: Kind::Pour { zone: z, kept: blocks.iter().any(|b| b.zones.contains(&z)) },
+                        kind: Kind::Pour { zone: z, kept },
                         net: zone.net,
                         layers: one(layer),
                         shape: Shape::Polygon(poly.iter().copied().map(Point::from_m).collect()),
@@ -951,6 +967,12 @@ impl Board {
     /// them, vias still passing, and their pours join their nets (see [`crate::connectivity_without_pours`]).
     pub fn set_planes(&mut self, mask: u64) {
         self.planes |= mask;
+        // A plane's zone saved unfilled: its outline stands for its pour, which joins its net.
+        let unfilled: Vec<(usize, u32, u64, Shape)> = self.unfilled.iter().filter(|u| u.2 & mask != 0).cloned().collect();
+        for (zone, net, layers, outline) in unfilled {
+            self.insert(Item { kind: Kind::Pour { zone, kept: true }, net, layers: layers & mask, shape: outline, hole: None, locked: true, span: None });
+            self.warnings.push(format!("a plane's zone (net {}) is not filled: its outline stands for its copper; refill it in KiCad", self.net_name(net)));
+        }
         let Some(outer) = self.outline.first().cloned() else { return };
         for layer in (0..self.layers.len()).filter(|l| mask & (1 << l) != 0) {
             self.insert(Item {
