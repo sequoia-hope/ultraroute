@@ -18,7 +18,7 @@ Read it beside this guide.
 | `kicad-pcb` | Reads `.kicad_pcb` text into a neutral record (`Pcb`, `Copper`), the rules from `.kicad_pro` and `.kicad_dru` (`Rules`), and writes edits back into the text (`apply`, `Edit`). Metres. |
 | `board` | The routing model: every piece of copper, hole, keepout and the outline as `Item`s in a spatial index (`Board`), the rule check (`check_item`), connectivity (`connectivity`), zone fills for display. Nanometres. |
 | `grid` | The grid routers and everything that reworks routed copper: `route_open`, `route_negotiated`, `rip_up`, `chase`, `prefanout`, `route_pairs`, `join_planes`, `shove_escape` (the plough), `push`, `nudge`, `pull_tight`, cleanup, `match_lengths`, `blame`. Also the grid itself (`ObstacleMap`, `RouteGrid`, `Profile`) and the `FieldSolver` trait with CPU and GPU solvers. |
-| `morph` | Moving copper smoothly: the harmonic `WarpField`, `flow` (copper carried along with moving parts), `shift_copper` (any per-point move that keeps joints joined), radial `Pole` fields, and escape combing (`comb`, `clear_lane`). |
+| `morph` | Moving copper smoothly: the harmonic `WarpField`, `flow` (copper carried along with moving parts), `shift_copper` (any per-point move that keeps joints joined), and `fine_pitch` (the parts whose escapes are hard). |
 | `topo` | Topological routing: rubber bands pulled taut through a triangulation of the copper. |
 | `ultraroute` | The command: `parse` turns flags into `Args`, `run` drives the whole pipeline from text to text, `Live` streams the studio's frames. |
 | `web` | The same pipeline compiled to WebAssembly for the studio's Web Worker. |
@@ -364,24 +364,6 @@ it is zero; elsewhere it solves Laplace's equation, so it is as smooth as a fiel
 places can be. Shapes claim cells before hulls do, and earlier inclusions before later.
 `may_move(bbox)` says whether anything in a box would move by a nanometre or more.
 
-### Poles: repulsors and attractors on copper
-
-`morph::Pole { center, strength, radius }` is a radial field acting on copper alone; parts do
-not move. At distance `d` a point moves `2 * strength * (d/r) / (1 + d²/r²)` away from the
-centre: nothing at the centre, `strength` at one `radius` out (the peak), falling as `1/d`
-beyond. Positive `strength` repels, negative attracts; because the move goes to zero at the
-centre, an attractor never pulls a point past it. Both are nanometres.
-
-- `poles_at(&poles, p) -> (dx, dy)` sums several poles. A repulsor and an attractor side by
-  side make a drift from one to the other; ring a region with repulsors to clear it.
-- `shift_poles(board, soft, &poles, piece) -> (moved, spans)` moves all unlocked copper one
-  step by them.
-
-The far field is long: a 0.15 mm pole moves copper millimetres away by a little, so most of a
-board's copper is rewritten. Copper pushed into something breaks a rule; rip it with
-`grid::rip_broken(board, soft, pours_block)` and route again. The example does exactly this,
-and undoes the move when it leaves more open.
-
 ### push: a field that moves parts
 
 `grid::push(board, &Field, &PushOptions, soft, watch) -> PushStats` moves every unlocked part by
@@ -405,7 +387,9 @@ what the flow pressed into something. Route again after: the command runs `route
 move), `held_back`, `flowed`, `ripped`, `removed_spans`. `push_watch` reports each `PushStep`.
 
 The field moves parts, not copper. Copper only moves because parts did: a push with no unlocked
-part in reach changes nothing. To move copper by a field directly, use poles or `shift_copper`.
+part in reach changes nothing. To move copper by a field directly, use `shift_copper`; copper it
+pushes into something breaks a rule, so rip it with `grid::rip_broken(board, soft, pours_block)`
+and route again. The example does exactly this, and undoes the move when it leaves more open.
 Moved parts must be written back (see the last section).
 
 The command's `--push X,Y,RADIUS,OUTWARD[,DX,DY]` (mm, y up), `--push-steps N` and
@@ -458,22 +442,11 @@ The command runs passes in a new order each (`--shove-passes`, `--shove-patience
 `Region`, doubles a failed pad's reach in `reaches` each pass up to 4 mm. That loop lives in
 `run`'s `shove_pass`, not in the library.
 
-### Combing escapes
+### Fine-pitch parts
 
-- `morph::fine_pitch(&board, pitch) -> Vec<usize>`: parts with four or more pads whose closest
-  pads of different nets sit within `pitch` (the command uses 0.5 mm).
-- `morph::edges(&board, footprint)` finds the package's sides and each signal pad's lane (the
-  line straight out from it).
-- `morph::comb(board, footprint, &EscapeOptions, soft) -> EscapeStats` draws each net's copper
-  in the fanout zone sideways onto its own pad's lane, fully near the pads and fading out, and
-  pushes copper of nets with no pad on that side out past the zone.
-- `morph::clear_lane(board, footprint, pad, &EscapeOptions, soft) -> (moved, spans)` slides
-  other nets' copper out of one pad's lane, half a pitch each side.
-
-`EscapeOptions`: `zone` 1,000,000 nm (depth of the fanout zone), `full` 0.6 (share of the zone
-pulled fully onto lanes), `clear` 150,000 nm (how far past the zone foreign copper goes). Follow
-both with `rip_broken` and routing. The command's `--escape` and `--clear-lanes` do, and undo
-the change when it frees nothing.
+`morph::fine_pitch(&board, pitch) -> Vec<usize>`: parts with four or more pads whose closest
+pads of different nets on a shared layer sit within `pitch` (the command uses 0.5 mm). Pre-fanout
+escapes them, and the rip plough tries only their trapped connections.
 
 ## Writing back to KiCad
 
@@ -527,9 +500,7 @@ it runs `route_open` and the cleanup only; each flag adds a stage. In order:
    by `route_open` tier by tier or, with `--first-negotiate`, negotiated among themselves),
    `--negotiate` (`route_negotiated`, half the timeout), `route_open` to finish (always),
    `prune_closed_escapes`, `--rip-up` (`rip_up`), `--chase` (`chase`), the escapes join `laid`,
-   `--push` (`push`, then `route_open`), `--escape` (`comb`, `rip_broken`, `route_open`,
-   `rip_up`; undone if no better), `--clear-lanes` (`clear_lane` per trapped pad, same
-   pattern).
+   `--push` (`push`, then `route_open`).
 6. **Rescue**: `--shove` (`shove_escape` passes); `--topo-trapped` or
    `--topo-trapped-rip` on what is still open; `--nudge` (`nudge`).
 7. **Finish**: `--tighten` (`pull_tight`); pair copper joins `laid`; `drop_duplicates`;

@@ -28,7 +28,7 @@ mod regions;
 
 pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--no-negotiate-vias] [--no-negotiate-rip] [--no-negotiate-tree] [--negotiate-jacobi] [--negotiate-reroute-all] [--negotiate-legacy] [--diff-pairs] [--diff-pairs-legacy] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner|same] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--via-cost MM[,OPEN_MM]] [--no-directional] [--no-reduce-vias] [--gpu] \
 [--timeout SECONDS] [--cell MM] [--first NET,...] [--first-negotiate] [--first-weight W] [--restart N] [--topo-first REF,...|auto] [--topo-trapped] [--topo-trapped-rip] [--topo-sample MM] \
-[--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--push-decay D] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--uuid-seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
+[--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--push-decay D] [--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--uuid-seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
 [--recipe default|bench|minimal] [--live PATH|-] [--live-fps N] [--live-step MS] [--blame]
 --push and --place take millimetres with y pointing up: give KiCad's y negated (KiCad y 127.5 is -127.5).";
 
@@ -123,11 +123,6 @@ pub struct Args {
     pub push_steps: usize,
     /// How fast the push field falls off beyond its radius (2 by default: as 1/d far out).
     pub push_decay: f64,
-    /// Parts whose escapes are combed into lanes after routing, or "auto" for fine-pitch ones.
-    pub escape: Vec<String>,
-    pub escape_zone: Option<f64>,
-    /// Clear the lane of every fine-pitch pad an open connection ends on, keeping what helps.
-    pub clear_lanes: bool,
     /// Plough a way out for each open connection trapped at a fine-pitch part's pads.
     pub shove: bool,
     /// How the plough clears the copper in the way, its reach, the rip-up repair after each try,
@@ -180,7 +175,7 @@ pub const RECIPE: &str = "--negotiate --rip-up --tighten --prefanout --diff-pair
 /// gets those alone, as before there was a default.
 const STAGE_FLAGS: &[&str] = &[
     "--negotiate", "--rip-up", "--tighten", "--prefanout", "--diff-pairs", "--shove", "--shove-plough", "--nudge", "--topo", "--topo-first",
-    "--topo-trapped", "--topo-trapped-rip", "--chase", "--escape", "--clear-lanes", "--push", "--restart", "--first",
+    "--topo-trapped", "--topo-trapped-rip", "--chase", "--push", "--restart", "--first",
     // Loading a board to look at it names no stage to run, and wants none.
     "--no-route",
 ];
@@ -272,9 +267,6 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
         push: None,
         push_steps: 20,
         push_decay: 2.0,
-        escape: Vec::new(),
-        escape_zone: None,
-        clear_lanes: false,
         shove: false,
         shove_plough: None,
         shove_reach: None,
@@ -448,8 +440,6 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
                 }
                 a.push = Some([n[0], n[1], n[2], n[3], n.get(4).copied().unwrap_or(0.0), n.get(5).copied().unwrap_or(0.0)]);
             }
-            "--escape" => a.escape.extend(value()?.split(',').filter(|r| !r.is_empty()).map(str::to_string)),
-            "--clear-lanes" => a.clear_lanes = true,
             "--shove" => a.shove = true,
             "--shove-plough" => {
                 a.shove = true;
@@ -479,7 +469,6 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
                     _ => return Err(format!("--chase-costs: {v} is not RIP,CHAIN[,LINKS]")),
                 };
             }
-            "--escape-zone" => a.escape_zone = Some(value()?.parse().map_err(|e| format!("--escape-zone: {e}"))?),
             "--push-steps" => a.push_steps = value()?.parse().map_err(|e| format!("--push-steps: {e}"))?,
             "--push-decay" => a.push_decay = value()?.parse().map_err(|e| format!("--push-decay: {e}"))?,
             "--blame" => a.blame = true,
@@ -2072,116 +2061,6 @@ pub fn run_with_solver(
                 again.routed,
                 started.elapsed().as_secs_f64()
             );
-        }
-        if !a.escape.is_empty() && timeline.enter(&run, "escape") {
-            let parts: Vec<usize> = if a.escape.iter().any(|r| r == "auto") {
-                morph::fine_pitch(&board, 500_000)
-            } else {
-                a.escape.iter().filter_map(|r| board.footprints.iter().position(|f| &f.reference == r).or_else(|| { eprintln!("warning: --escape {r}: no such part"); None })).collect()
-            };
-            let opts = morph::EscapeOptions { zone: a.escape_zone.map_or(morph::EscapeOptions::default().zone, |mm| (mm * 1e6).round() as Nm), ..Default::default() };
-            let before = open_airlines(&board).len();
-            let kept = (board.clone(), laid.clone(), removed.len());
-            for &f in &parts {
-                let e = morph::comb(&mut board, f, &opts, &mut laid);
-                removed.extend(e.removed_spans.iter().copied());
-                let (ripped, spans) = grid::rip_broken(&mut board, &mut laid, a.pours_block);
-                removed.extend(spans);
-                say("escaping", format!("{}: {} lanes, {} combed, {} pushed out, {ripped} ripped", board.footprints[f].reference, e.lanes, e.combed, e.pushed_out));
-                eprintln!("escape {}: {} lanes, {} combed onto them, {} pushed out of the zone, {ripped} ripped", board.footprints[f].reference, e.lanes, e.combed, e.pushed_out);
-                step(&board);
-            }
-            let reroute = grid::Options { deadline: round_deadline.clone(), ..options.clone() };
-            let again = grid::route_open(&mut board, solver.as_mut(), &reroute, &mut watch);
-            laid.extend(again.laid.iter().copied());
-            if a.rip_up {
-                grid::rip_up(
-                    &mut board,
-                    solver.as_mut(),
-                    &grid::RipOptions {
-                        cell: a.cell.unwrap_or(grid::RipOptions::default().cell),
-                        via_cost: costs.rip,
-                        deadline: round_deadline.clone(),
-                        pours_block: a.pours_block,
-                        log: log.clone(),
-                        ..Default::default()
-                    },
-                    &mut laid,
-                    &mut watch,
-                );
-            }
-            let after = open_airlines(&board).len();
-            eprintln!("escape: {before} open before combing, {after} after rerouting{}, {:.1} s", if after < before { "" } else { ", undone" }, started.elapsed().as_secs_f64());
-            if after >= before {
-                (board, laid) = (kept.0, kept.1);
-                removed.truncate(kept.2);
-                say("escaping", format!("{after} open, no fewer than {before}: undone"));
-                step(&board);
-            }
-        }
-        if a.clear_lanes && timeline.enter(&run, "clear lanes") {
-            let fine = morph::fine_pitch(&board, 500_000);
-            let opts = morph::EscapeOptions { zone: a.escape_zone.map_or(morph::EscapeOptions::default().zone, |mm| (mm * 1e6).round() as Nm), ..Default::default() };
-            let (mut tried, mut kept_count) = (0, 0);
-            let mut done: HashSet<ItemId> = HashSet::new();
-            loop {
-                let open = open_airlines(&board);
-                // Pads on fine-pitch parts that an open connection ends on, not yet tried.
-                let pad = open.iter().flat_map(|c| [c.from_item, c.to_item]).find(|id| {
-                    !done.contains(id) && board.item(*id).is_some_and(|it| matches!(it.kind, Kind::Pad { footprint, .. } if fine.contains(&footprint)))
-                });
-                let Some(pad) = pad else { break };
-                if round_deadline.expired() {
-                    break;
-                }
-                done.insert(pad);
-                let Some(Kind::Pad { footprint, number, .. }) = board.item(pad).map(|it| it.kind.clone()) else { continue };
-                tried += 1;
-                let before = open.len();
-                let snapshot = (board.clone(), laid.clone(), removed.len());
-                let reference = board.footprints[footprint].reference.clone();
-                if let Some(grid::Log(log)) = &log {
-                    let at = board.item(pad).map_or(Point::new(0, 0), |it| { let b = it.shape.bbox(); Point::new((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2) });
-                    log(grid::Activity { phase: "clearing lanes", text: format!("{reference}-{number}: sliding other nets out of its lane"), focus: Some(grid::Focus::Connection { net: board.item(pad).map_or(0, |it| it.net), from: at, to: at }) });
-                }
-                let (moved, spans) = morph::clear_lane(&mut board, footprint, pad, &opts, &mut laid);
-                removed.extend(spans);
-                step(&board);
-                let (ripped, spans) = grid::rip_broken(&mut board, &mut laid, a.pours_block);
-                removed.extend(spans);
-                say("clearing lanes", format!("{reference}-{number}: {moved} pieces slid, {ripped} ripped for breaking a rule"));
-                step(&board);
-                let open_after_rip = open_airlines(&board).len();
-                let reroute = grid::Options { deadline: round_deadline.seconds(20.0), ..options.clone() };
-                let again = grid::route_open(&mut board, solver.as_mut(), &reroute, &mut |_| {});
-                laid.extend(again.laid.iter().copied());
-                let left = open_airlines(&board);
-                let after = left.len();
-                let own = board.item(pad).map_or(0, |it| it.net);
-                let net_name = |n: u32| board.nets.get(n as usize).cloned().unwrap_or_default();
-                let still: Vec<String> = left.iter().filter(|c| !open.iter().any(|o| o.from_item == c.from_item && o.to_item == c.to_item)).map(|c| net_name(c.net)).collect();
-                eprintln!(
-                    "clear lane {reference}-{number} ({}): {moved} pieces slid, {ripped} ripped, {} open after ripping, {} rerouted {} failed, {before} -> {after} open, own {}, newly open {still:?}",
-                    net_name(own),
-                    open_after_rip,
-                    again.routed,
-                    again.failed,
-                    if left.iter().any(|c| c.from_item == pad || c.to_item == pad) { "still open" } else { "routed" },
-                );
-                if after < before {
-                    kept_count += 1;
-                    say("clearing lanes", format!("{reference}-{number}: rerouted, {after} open, kept"));
-                    step(&board);
-                } else {
-                    say("clearing lanes", format!("{reference}-{number}: rerouted, {after} open, no better"));
-                    step(&board);
-                    (board, laid) = (snapshot.0, snapshot.1);
-                    removed.truncate(snapshot.2);
-                    say("clearing lanes", format!("{reference}-{number}: undone"));
-                    step(&board);
-                }
-            }
-            eprintln!("clear lanes: {tried} tried, {kept_count} kept, {} open, {:.1} s", open_airlines(&board).len(), started.elapsed().as_secs_f64());
         }
         if a.restart > 0 {
             let left = open_airlines(&board);

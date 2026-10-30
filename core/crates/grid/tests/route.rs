@@ -300,34 +300,6 @@ fn a_zero_field_moves_nothing() {
 
 
 #[test]
-fn combing_escapes_into_lanes_breaks_no_connection() {
-    let (mut b, mut laid) = routed();
-    let parts = morph::fine_pitch(&b, 500_000);
-    assert!(!parts.is_empty(), "the earring has fine-pitch parts");
-    let open_now = |b: &Board| connectivity_without_pours(b).airlines.len();
-    let before = b.clone();
-    let open_before = open_now(&b);
-    let mut combed = 0;
-    for &f in &parts {
-        let e = morph::comb(&mut b, f, &morph::EscapeOptions::default(), &mut laid);
-        assert!(e.lanes > 0, "{} has lanes", b.footprints[f].reference);
-        combed += e.combed + e.pushed_out;
-    }
-    assert!(combed > 0);
-    // Moved, never broken: everything joined before is joined still, before anything is ripped.
-    assert_eq!(open_now(&b), open_before);
-    for (id, it) in before.items().filter(|(_, it)| it.locked || matches!(it.kind, Kind::Pad { .. })) {
-        assert_eq!(b.item(id).map(|i| &i.shape), Some(&it.shape), "{id} is fixed and moved");
-    }
-    assert!(laid.iter().all(|id| b.item(*id).is_some()));
-    // What combing left breaking a rule is ripped, and nothing breaks one after that.
-    rip_broken(&mut b, &mut laid, false);
-    let (was, now) = (violations_but_pours(&before), violations_but_pours(&b));
-    assert!(now.difference(&was).next().is_none());
-}
-
-
-#[test]
 fn copper_leading_nowhere_is_pruned_and_connected_copper_is_kept() {
     let mut b = earring();
     // Every track and via the file has counts as the router's, and none of it dangles.
