@@ -1,9 +1,14 @@
-//! The board as the live stream describes it, turned into triangles for the GPU, and the
-//! picking a pointer needs. Shared by the web client (through WASM) and the native one.
+//! The board as the live stream describes it, and what the router is doing to it. The board
+//! itself is a board-draw scene, which meshes it and picks in it; this adds the run's state
+//! (trials, airlines, probes, congestion, focus) and draws it over the board. Shared by the web
+//! client (through WASM) and the native one.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
+use board_draw::{AreaKind, Fill, Geom, Item, Mesh, Pose, Prim, circle_points, with_alpha};
 use serde_json::Value;
+
+pub use board_draw::{Rgba, STRIDE};
 
 #[cfg(feature = "wasm")]
 pub mod wasm;
@@ -20,28 +25,11 @@ const HEAT_FLOOR: f32 = 0.15;
 const HEAT_CHANGE: f32 = 0.05;
 const HEAT_FADE_MS: f64 = 1500.0;
 
-/// Polygons with more corners than this are drawn as outlines rather than fans.
-const LARGE_POLYGON: usize = 24;
-
-/// Floats per vertex: position, segment ends, radius, colour.
-pub const STRIDE: usize = 11;
 const EVENTS_KEPT: usize = 200;
 
-type Rgba = [f32; 4];
-
-// KiCad's default colour theme.
-/// Through-hole pads, whatever the layer.
-const PAD: Rgba = [0.89, 0.72, 0.18, 1.0];
-const VIA: Rgba = [0.86, 0.86, 0.86, 1.0];
-const DRILL: Rgba = [0.0, 0.03, 0.07, 1.0];
-const UNPLATED_HOLE: Rgba = [0.1, 0.77, 0.82, 1.0];
-const OUTLINE: Rgba = [0.82, 0.82, 0.8, 1.0];
 const AIRLINE: Rgba = [0.96, 1.0, 0.84, 0.6];
-/// How bright the layers other than the active one stay in high-contrast mode.
-const DIMMED: f32 = 0.22;
 const PROBE: Rgba = [1.0, 0.85, 0.2, 0.16];
 const DOOR: Rgba = [1.0, 0.85, 0.2, 0.9];
-const BODY: Rgba = [1.0, 1.0, 1.0, 0.05];
 const PICKED: Rgba = [1.0, 1.0, 1.0, 0.9];
 const SELECTED: Rgba = [0.51, 0.77, 0.69, 1.0];
 const LOCKED: Rgba = [1.0, 0.95, 0.6, 0.95];
@@ -56,45 +44,6 @@ const ROUTABLE_SHARE: f32 = 0.5;
 const AIRLINE_WIDTH_MM: f32 = 0.35;
 /// Width a trial route is counted at, track and clearance, in millimetres.
 const TRIAL_WIDTH_MM: f32 = 0.3;
-
-#[derive(Clone, Debug)]
-pub enum Prim {
-    Circle([f32; 3]),
-    Poly(Vec<f32>),
-}
-
-#[derive(Clone, Debug)]
-pub enum Geom {
-    Trace { layer: usize, width: f32, points: Vec<f32> },
-    Via { at: [f32; 2], shape: Option<Prim>, drill: Option<f32> },
-    Pin { part: i32, pads: Vec<(usize, Prim)>, at: [f32; 2], drill: Option<f32> },
-    Outline { polys: Vec<Vec<f32>> },
-    Area { kind: AreaKind, part: i32, tiles: Vec<(usize, Vec<f32>)> },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AreaKind {
-    Keepout,
-    ViaKeepout,
-    Pour,
-    Body,
-}
-
-#[derive(Clone, Debug)]
-pub struct Item {
-    pub net: i32,
-    pub fixed: bool,
-    pub geom: Geom,
-}
-
-impl Item {
-    fn part(&self) -> i32 {
-        match self.geom {
-            Geom::Pin { part, .. } | Geom::Area { part, .. } => part,
-            _ => 0,
-        }
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct Part {
@@ -137,10 +86,11 @@ pub struct Probe {
 
 #[derive(Default)]
 pub struct Scene {
-    pub layers: Vec<String>,
-    pub nets: HashMap<i32, String>,
+    /// Layers, nets, copper, parts' poses (a part dragged in the client is posed at its drag
+    /// offset, its items staying in board coordinates) and how the board is styled.
+    pub board: board_draw::Scene,
     pub bbox: [f32; 4],
-    pub items: BTreeMap<u32, Item>,
+    /// The parts as the router lists them.
     pub parts: BTreeMap<i32, Part>,
     pub airlines: Vec<[f32; 5]>,
     pub probes: Vec<Probe>,
@@ -155,20 +105,9 @@ pub struct Scene {
     /// How many events have ever arrived; the oldest kept is number `event_total - events.len()`.
     pub event_total: u64,
     pub done: Option<Value>,
-    pub hidden: Vec<bool>,
-    pub offsets: HashMap<i32, [f32; 2]>,
     pub picked: Option<i32>,
-    pub hot_net: Option<i32>,
     pub selected: Option<i32>,
     pub show_congestion: bool,
-    /// Whether pours are drawn: as the router filled them, or before it has, as the board file has them.
-    pub show_pours: bool,
-    /// Zones the router poured around the copper, as KiCad would: net, layer and rectangles
-    /// `x0, y0, x1, y1`.
-    pub fills: Vec<(i32, usize, Vec<f32>)>,
-    /// The layer drawn on top, and in high-contrast mode the only one drawn bright.
-    pub active_layer: usize,
-    pub high_contrast: bool,
     /// Each congestion cell's last value and when it changed, for popping in and fading out.
     pub heat_memory: std::cell::RefCell<HashMap<usize, (f32, f64)>>,
     /// Where the router says it is working.
@@ -199,46 +138,49 @@ fn layer(v: &Value) -> usize {
     v.as_u64().unwrap_or(0) as usize
 }
 
+/// An item of the stream as a board-draw item. Items arrive in board coordinates; a part's
+/// stand where its pose (identity until dragged) puts them.
 fn parse_item(v: &Value) -> Option<(u32, Item)> {
     let id = v.get("id")?.as_u64()? as u32;
     let net = v.get("net").and_then(Value::as_i64).unwrap_or(0) as i32;
-    let fixed = v.get("fixed").and_then(Value::as_bool).unwrap_or(false);
     let part = v.get("part").and_then(Value::as_i64).unwrap_or(0) as i32;
     let at = |v: &Value| {
         let a = floats(&v["at"]);
         [a.first().copied().unwrap_or(0.0), a.get(1).copied().unwrap_or(0.0)]
     };
     let drill = v.get("drill").and_then(Value::as_f64).map(|d| d as f32);
-    let geom = match v.get("k")?.as_str()? {
-        "trace" => Geom::Trace { layer: layer(&v["layer"]), width: f(&v["w"]), points: floats(&v["p"]) },
-        "via" => Geom::Via { at: at(v), shape: v.get("shape").and_then(prim), drill },
-        "pin" => Geom::Pin {
+    let (part, geom) = match v.get("k")?.as_str()? {
+        "trace" => (0, Geom::Track { layer: layer(&v["layer"]), width: f(&v["w"]), points: floats(&v["p"]) }),
+        "via" => (0, Geom::Via { at: at(v), shape: v.get("shape").and_then(prim), drill }),
+        "pin" => (
             part,
-            at: at(v),
-            drill,
-            pads: v["pads"]
-                .as_array()
-                .map(|pads| pads.iter().filter_map(|p| Some((layer(&p["layer"]), prim(&p["shape"])?))).collect())
-                .unwrap_or_default(),
-        },
-        "outline" => Geom::Outline {
-            polys: v["polys"].as_array().map(|p| p.iter().map(floats).collect()).unwrap_or_default(),
-        },
-        kind => Geom::Area {
-            kind: match kind {
-                "pour" => AreaKind::Pour,
-                "body" => AreaKind::Body,
-                "via-keepout" => AreaKind::ViaKeepout,
-                _ => AreaKind::Keepout,
+            Geom::Pad {
+                at: at(v),
+                drill,
+                pads: v["pads"]
+                    .as_array()
+                    .map(|pads| pads.iter().filter_map(|p| Some((layer(&p["layer"]), prim(&p["shape"])?))).collect())
+                    .unwrap_or_default(),
             },
+        ),
+        "outline" => (0, Geom::Outline { polys: v["polys"].as_array().map(|p| p.iter().map(floats).collect()).unwrap_or_default() }),
+        kind => (
             part,
-            tiles: v["tiles"]
-                .as_array()
-                .map(|t| t.iter().map(|t| (layer(&t["layer"]), floats(&t["g"]))).collect())
-                .unwrap_or_default(),
-        },
+            Geom::Area {
+                kind: match kind {
+                    "pour" => AreaKind::Pour,
+                    "body" => AreaKind::Body,
+                    "via-keepout" => AreaKind::ViaKeepout,
+                    _ => AreaKind::Keepout,
+                },
+                tiles: v["tiles"]
+                    .as_array()
+                    .map(|t| t.iter().map(|t| (layer(&t["layer"]), floats(&t["g"]))).collect())
+                    .unwrap_or_default(),
+            },
+        ),
     };
-    Some((id, Item { net, fixed, geom }))
+    Some((id, Item { net, part, geom }))
 }
 
 impl Scene {
@@ -249,28 +191,33 @@ impl Scene {
         };
         match v.get("t").and_then(Value::as_str) {
             Some("board") => {
-                let hidden = std::mem::take(&mut self.hidden);
+                let hidden: Vec<bool> = self.board.layers().iter().map(|l| !l.visible).collect();
+                let style = board_draw::Style { hot_net: None, ..self.board.style.clone() };
                 let show_congestion = self.show_congestion;
-                let (show_pours, active_layer, high_contrast) = (self.show_pours, self.active_layer, self.high_contrast);
                 let highlight = std::mem::take(&mut self.highlight);
                 let event_total = self.event_total;
                 let events = std::mem::take(&mut self.events);
                 *self = Scene::default();
+                self.board.style = style;
                 self.show_congestion = show_congestion;
-                (self.show_pours, self.active_layer, self.high_contrast) = (show_pours, active_layer, high_contrast);
                 self.highlight = highlight;
                 // The event count runs on across boards, so a watcher never sees one twice.
                 self.event_total = event_total;
                 self.events = events;
-                self.layers = v["layers"]
+                let names: Vec<String> = v["layers"]
                     .as_array()
                     .map(|l| l.iter().map(|l| l["name"].as_str().unwrap_or("").to_string()).collect())
                     .unwrap_or_default();
-                self.hidden = if hidden.len() == self.layers.len() { hidden } else { vec![false; self.layers.len()] };
+                self.board.set_layers(&names);
+                if hidden.len() == names.len() {
+                    for (i, h) in hidden.into_iter().enumerate() {
+                        self.board.set_layer_visible(i, !h);
+                    }
+                }
                 if let Some(nets) = v["nets"].as_object() {
                     for (k, name) in nets {
                         if let Ok(n) = k.parse() {
-                            self.nets.insert(n, name.as_str().unwrap_or("").to_string());
+                            self.board.nets.insert(n, name.as_str().unwrap_or("").to_string());
                         }
                     }
                 }
@@ -285,22 +232,24 @@ impl Scene {
                 self.ms = v["ms"].as_u64().unwrap_or(self.ms);
                 for id in v["del"].as_array().into_iter().flatten() {
                     if let Some(id) = id.as_u64() {
-                        self.items.remove(&(id as u32));
+                        self.board.remove(id as u32);
                     }
                 }
                 for item in v["add"].as_array().into_iter().flatten() {
                     if let Some((id, item)) = parse_item(item) {
-                        self.items.insert(id, item);
+                        self.board.insert(id, item);
                     }
                 }
                 for p in v["parts"].as_array().into_iter().flatten() {
                     let at = floats(&p["at"]);
                     let id = p["id"].as_i64().unwrap_or(0) as i32;
+                    let name = p["name"].as_str().unwrap_or("").to_string();
+                    self.board.set_part(id, &name);
                     self.parts.insert(
                         id,
                         Part {
                             id,
-                            name: p["name"].as_str().unwrap_or("").to_string(),
+                            name,
                             at: [at.first().copied().unwrap_or(0.0), at.get(1).copied().unwrap_or(0.0)],
                             fixed: p["fixed"].as_bool().unwrap_or(false),
                         },
@@ -373,12 +322,16 @@ impl Scene {
                 true
             }
             Some("fill") => {
-                self.fills = v["fills"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .map(|f| (f["net"].as_i64().unwrap_or(0) as i32, layer(&f["layer"]), floats(&f["r"])))
-                    .collect();
+                // Zones the router poured around the copper, as KiCad would: rectangles
+                // `x0, y0, x1, y1`, each drawn as a quad.
+                let mut fills = Vec::new();
+                for f in v["fills"].as_array().into_iter().flatten() {
+                    let (net, layer) = (f["net"].as_i64().unwrap_or(0) as i32, layer(&f["layer"]));
+                    for r in floats(&f["r"]).chunks_exact(4) {
+                        fills.push(Fill { net, layer, polygon: vec![r[0], r[1], r[2], r[1], r[2], r[3], r[0], r[3]] });
+                    }
+                }
+                self.board.set_fills(fills);
                 true
             }
             Some("done") => {
@@ -393,54 +346,37 @@ impl Scene {
         }
     }
 
-    /// KiCad's default copper colours: F.Cu red, B.Cu blue, the inner layers in its order.
-    pub fn layer_color(&self, layer: usize) -> Rgba {
-        let last = self.layers.len().saturating_sub(1);
-        let name = self.layers.get(layer).map(String::as_str).unwrap_or("");
-        let rgb = |r: f32, g: f32, b: f32| [r / 255.0, g / 255.0, b / 255.0, 0.9];
-        if name == "F.Cu" || layer == 0 {
-            rgb(200.0, 52.0, 52.0)
-        } else if name == "B.Cu" || layer == last {
-            rgb(77.0, 127.0, 196.0)
-        } else {
-            [
-                rgb(127.0, 200.0, 127.0),
-                rgb(206.0, 125.0, 44.0),
-                rgb(79.0, 203.0, 203.0),
-                rgb(219.0, 98.0, 139.0),
-                rgb(167.0, 165.0, 198.0),
-                rgb(40.0, 204.0, 217.0),
-            ][(layer - 1) % 6]
-        }
-    }
-
-    /// A layer's colour as drawn now: dimmed in high-contrast mode unless it is the active one.
-    fn drawn_color(&self, layer: usize) -> Rgba {
-        let c = self.layer_color(layer);
-        if self.high_contrast && layer != self.active_layer {
-            [c[0] * DIMMED, c[1] * DIMMED, c[2] * DIMMED, c[3]]
-        } else {
-            c
-        }
-    }
-
-    fn shown(&self, layer: usize) -> bool {
-        !self.hidden.get(layer).copied().unwrap_or(false)
-    }
-
+    /// A part's drag offset.
     fn offset(&self, part: i32) -> [f32; 2] {
-        if part == 0 {
-            return [0.0, 0.0];
-        }
-        self.offsets.get(&part).copied().unwrap_or([0.0, 0.0])
+        let p = self.board.pose(part);
+        [p.x, p.y]
     }
 
-    fn tint(&self, color: Rgba, net: i32) -> Rgba {
-        if net != 0 && self.hot_net == Some(net) {
-            [(color[0] + 1.0) / 2.0, (color[1] + 1.0) / 2.0, (color[2] + 1.0) / 2.0, 1.0]
-        } else {
-            color
+    /// Drags a part `dx, dy` from where the router has it.
+    pub fn set_offset(&mut self, part: i32, dx: f32, dy: f32) {
+        if part != 0 {
+            self.board.set_pose(part, Pose::at(dx, dy));
         }
+    }
+
+    pub fn clear_offsets(&mut self) {
+        self.board.reset_poses();
+    }
+
+    pub fn layer_color(&self, layer: usize) -> Rgba {
+        self.board.layer_color(layer)
+    }
+
+    pub fn part_box(&self, part: i32) -> Option<[f32; 4]> {
+        self.board.part_box(part)
+    }
+
+    pub fn part_at(&self, x: f32, y: f32) -> Option<i32> {
+        self.board.part_at(x, y)
+    }
+
+    pub fn net_at(&self, x: f32, y: f32, reach: f32) -> Option<i32> {
+        self.board.net_at(x, y, reach)
     }
 
     /// Triangles for everything shown, back to front, `STRIDE` floats per vertex. `px` is the
@@ -449,115 +385,13 @@ impl Scene {
         self.mesh_with(px, u64::MAX, 0.0)
     }
 
-    /// The mesh for the layers in `mask` only, at time `now` (milliseconds, for what animates).
+    /// The mesh for the layers in `mask` only, at time `now` (milliseconds, for what animates):
+    /// the board, then the run drawn over it.
     pub fn mesh_with(&self, px: f32, mask: u64, now: f64) -> Vec<f32> {
-        let mut m = Mesh { v: Vec::with_capacity(self.items.len() * 64 * STRIDE), aa: px };
-        // Back to front, the active layer last so it is drawn on top.
-        let mut back_to_front: Vec<usize> = (0..self.layers.len().max(1)).rev().filter(|l| *l != self.active_layer).collect();
-        back_to_front.push(self.active_layer);
-        let shown = |layer: usize| self.shown(layer) && layer < 64 && mask & (1 << layer) != 0;
-        let part_shown = |part: i32| {
-            self.items.values().any(|it| matches!(&it.geom, Geom::Pin { part: p, pads, .. } if *p == part && pads.iter().any(|(l, _)| shown(*l))))
-        };
-
-        if self.show_pours {
-            for &layer in &back_to_front {
-                if !shown(layer) {
-                    continue;
-                }
-                for (net, l, rects) in &self.fills {
-                    if *l == layer {
-                        let color = self.tint(with_alpha(self.drawn_color(layer), 0.5), *net);
-                        for r in rects.chunks_exact(4) {
-                            m.fill(&[r[0], r[1], r[2], r[1], r[2], r[3], r[0], r[3]], [0.0, 0.0], color);
-                        }
-                    }
-                }
-            }
-        }
-        for item in self.items.values() {
-            if let Geom::Area { kind, part, tiles } = &item.geom {
-                // Fills from the file are stale once the router has poured its own.
-                if *kind == AreaKind::Pour && (!self.show_pours || !self.fills.is_empty()) {
-                    continue;
-                }
-                let o = self.offset(*part);
-                for (layer, g) in tiles {
-                    if !shown(*layer) {
-                        continue;
-                    }
-                    let color = match kind {
-                        AreaKind::Body => BODY,
-                        AreaKind::Pour => with_alpha(self.drawn_color(*layer), 0.22),
-                        AreaKind::Keepout | AreaKind::ViaKeepout => with_alpha(self.drawn_color(*layer), 0.05),
-                    };
-                    // A fan fills only convex shapes; a large outline (a whole pour or rule area)
-                    // is drawn as its edge.
-                    if g.len() / 2 > LARGE_POLYGON {
-                        let edge = if *kind == AreaKind::Pour { 0.45 } else { 0.3 };
-                        let shifted: Vec<f32> = g.chunks_exact(2).flat_map(|c| [c[0] + o[0], c[1] + o[1]]).collect();
-                        m.ring(&shifted, px * 0.7, with_alpha(color, edge));
-                    } else {
-                        m.fill(g, o, color);
-                    }
-                }
-            }
-        }
-        for &layer in &back_to_front {
-            if !shown(layer) {
-                continue;
-            }
-            let color = self.drawn_color(layer);
-            for item in self.items.values() {
-                if let Geom::Trace { layer: l, width, points } = &item.geom
-                    && *l == layer
-                {
-                    m.polyline(points, width / 2.0, self.tint(color, item.net));
-                }
-            }
-        }
-        for &layer in &back_to_front {
-            if !shown(layer) {
-                continue;
-            }
-            for item in self.items.values() {
-                if let Geom::Pin { part, pads, drill, .. } = &item.geom {
-                    let o = self.offset(*part);
-                    // As KiCad draws them: a through-hole pad in gold, a surface pad in its layer's colour.
-                    let through = drill.is_some() && pads.len() > 1;
-                    let color = if through {
-                        if self.high_contrast && layer != self.active_layer { [PAD[0] * DIMMED, PAD[1] * DIMMED, PAD[2] * DIMMED, 1.0] } else { PAD }
-                    } else {
-                        with_alpha(self.drawn_color(layer), 1.0)
-                    };
-                    for (l, p) in pads {
-                        if *l == layer {
-                            m.prim(p, o, self.tint(color, item.net));
-                        }
-                    }
-                }
-            }
-        }
-        for item in self.items.values() {
-            match &item.geom {
-                Geom::Via { shape: Some(shape), at, drill } => {
-                    m.prim(shape, [0.0, 0.0], self.tint(VIA, item.net));
-                    if let Some(d) = drill {
-                        m.disc(*at, *d, DRILL);
-                    }
-                }
-                Geom::Pin { part, at, drill: Some(d), pads } if pads.is_empty() || pads.iter().any(|(l, _)| shown(*l)) => {
-                    let o = self.offset(*part);
-                    m.disc([at[0] + o[0], at[1] + o[1]], *d, if pads.is_empty() { UNPLATED_HOLE } else { DRILL });
-                }
-                Geom::Outline { polys } => {
-                    for p in polys {
-                        m.ring(p, px, OUTLINE);
-                    }
-                }
-                _ => {}
-            }
-        }
+        let b = &self.board;
+        let mut m = Mesh::with_capacity(px, b.items().count() * 64 * STRIDE);
+        b.draw_into(&mut m, mask);
+        let shown = |layer: usize| b.shown(layer, mask);
         if self.show_congestion {
             // A cell pops in when its value changes and fades out while it stays, so only what
             // the router is changing stands out.
@@ -591,18 +425,18 @@ impl Scene {
                 continue;
             }
             if t.collides {
-                m.polyline(&t.points, px * 1.3, self.tint(COLLIDING, t.net));
+                m.polyline(&t.points, px * 1.3, b.tint(COLLIDING, t.net));
             } else {
-                let c = self.drawn_color(t.layer);
+                let c = b.drawn_color(t.layer);
                 let pale = [(c[0] + 0.6) / 1.6, (c[1] + 0.6) / 1.6, (c[2] + 0.6) / 1.6, 0.85];
-                m.dashed_polyline(&t.points, px * 0.9, px * 5.0, self.tint(pale, t.net));
+                m.dashed_polyline(&t.points, px * 0.9, px * 5.0, b.tint(pale, t.net));
             }
         }
         for v in &self.trial_vias {
             m.ring(&circle_points(*v, TRIAL_VIA_MM), px * 0.8, TRIAL_VIA);
         }
         for a in &self.airlines {
-            m.segment([a[0], a[1]], [a[2], a[3]], px * 0.6, self.tint(AIRLINE, a[4] as i32));
+            m.segment([a[0], a[1]], [a[2], a[3]], px * 0.6, b.tint(AIRLINE, a[4] as i32));
         }
         for probe in &self.probes {
             if probe.layer.is_some_and(|l| !shown(l)) {
@@ -615,7 +449,7 @@ impl Scene {
         }
         for part in self.parts.values() {
             if self.is_locked(part.id)
-                && part_shown(part.id)
+                && b.part_shown(part.id, mask)
                 && let Some(b) = self.part_box(part.id)
             {
                 m.dashed_ring(&[b[0], b[1], b[2], b[1], b[2], b[3], b[0], b[3]], px * 0.9, px * 6.0, LOCKED);
@@ -654,7 +488,7 @@ impl Scene {
             }
             None => {}
         }
-        m.v
+        m.into_vec()
     }
 
     /// A part where it is being tried: its pads outlined `by` from where it stands, a dashed box
@@ -662,8 +496,8 @@ impl Scene {
     fn draw_ghost(&self, m: &mut Mesh, part: i32, by: [f32; 2], from: [f32; 4], px: f32) {
         let o = self.offset(part);
         let (dx, dy) = (o[0] + by[0], o[1] + by[1]);
-        for item in self.items.values().filter(|i| i.part() == part) {
-            let Geom::Pin { pads, .. } = &item.geom else { continue };
+        for id in self.board.part_items(part) {
+            let Some(Geom::Pad { pads, .. }) = self.board.item(id).map(|i| &i.geom) else { continue };
             for (_, p) in pads {
                 match p {
                     Prim::Circle([x, y, r]) => m.ring(&circle_points([x + dx, y + dy], *r), px * 1.2, GHOST),
@@ -681,78 +515,8 @@ impl Scene {
         m.dashed_polyline(&[c[0], c[1], c[0] + by[0], c[1] + by[1]], px * 1.0, px * 3.0, GHOST);
     }
 
-    /// The part's extent with its drag offset, as x0, y0, x1, y1.
-    pub fn part_box(&self, part: i32) -> Option<[f32; 4]> {
-        let o = self.offset(part);
-        let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
-        let mut grow = |x: f32, y: f32| {
-            b = [b[0].min(x + o[0]), b[1].min(y + o[1]), b[2].max(x + o[0]), b[3].max(y + o[1])];
-        };
-        for item in self.items.values().filter(|i| i.part() == part) {
-            match &item.geom {
-                Geom::Pin { pads, .. } => {
-                    for (_, p) in pads {
-                        match p {
-                            Prim::Circle([x, y, r]) => {
-                                grow(x - r, y - r);
-                                grow(x + r, y + r);
-                            }
-                            Prim::Poly(g) => g.chunks_exact(2).for_each(|c| grow(c[0], c[1])),
-                        }
-                    }
-                }
-                Geom::Area { kind: AreaKind::Body, tiles, .. } => {
-                    for (_, g) in tiles {
-                        g.chunks_exact(2).for_each(|c| grow(c[0], c[1]));
-                    }
-                }
-                _ => {}
-            }
-        }
-        (b[0] <= b[2]).then_some(b)
-    }
-
-    /// The smallest part whose extent holds the point.
-    pub fn part_at(&self, x: f32, y: f32) -> Option<i32> {
-        self.parts
-            .keys()
-            .filter_map(|&p| self.part_box(p).map(|b| (p, b)))
-            .filter(|(_, b)| x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3])
-            .min_by(|a, b| area(&a.1).total_cmp(&area(&b.1)))
-            .map(|(p, _)| p)
-    }
-
-    /// The net of the copper nearest the point, within `reach` millimetres.
-    pub fn net_at(&self, x: f32, y: f32, reach: f32) -> Option<i32> {
-        let mut best: Option<(f32, i32)> = None;
-        let mut consider = |d: f32, net: i32| {
-            if net != 0 && d <= reach && best.is_none_or(|(b, _)| d < b) {
-                best = Some((d, net));
-            }
-        };
-        for item in self.items.values() {
-            match &item.geom {
-                Geom::Trace { layer, width, points } if self.shown(*layer) => {
-                    for w in points.windows(4).step_by(2) {
-                        consider(seg_dist([x, y], [w[0], w[1]], [w[2], w[3]]) - width / 2.0, item.net);
-                    }
-                }
-                Geom::Via { at, .. } => consider(((x - at[0]).powi(2) + (y - at[1]).powi(2)).sqrt() - 0.3, item.net),
-                Geom::Pin { at, part, .. } => {
-                    let o = self.offset(*part);
-                    consider(((x - at[0] - o[0]).powi(2) + (y - at[1] - o[1]).powi(2)).sqrt() - 0.3, item.net);
-                }
-                _ => {}
-            }
-        }
-        best.map(|(_, n)| n)
-    }
-
     pub fn is_locked(&self, part: i32) -> bool {
-        self.lock_overrides
-            .get(&part)
-            .copied()
-            .unwrap_or_else(|| self.parts.get(&part).is_some_and(|p| p.fixed))
+        self.lock_overrides.get(&part).copied().unwrap_or_else(|| self.parts.get(&part).is_some_and(|p| p.fixed))
     }
 
     /// How full each cell of the board is: copper and pads on the signal layers, plus what
@@ -777,18 +541,19 @@ impl Scene {
                 add(a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]), width * step);
             }
         };
-        for item in self.items.values() {
+        let layers = self.board.layers().len().max(1);
+        for (_, item) in self.board.items() {
             match &item.geom {
-                Geom::Trace { width, points, .. } => {
+                Geom::Track { width, points, .. } => {
                     for w in points.windows(4).step_by(2) {
                         line([w[0], w[1]], [w[2], w[3]], *width, &mut add);
                     }
                 }
                 Geom::Via { shape: Some(shape), .. } => {
-                    spread(shape, [0.0, 0.0], prim_area(shape) * self.layers.len().max(1) as f32, &mut add);
+                    spread(shape, [0.0, 0.0], prim_area(shape) * layers as f32, &mut add);
                 }
-                Geom::Pin { pads, part, .. } => {
-                    let o = self.offset(*part);
+                Geom::Pad { pads, .. } => {
+                    let o = self.offset(item.part);
                     for (_, p) in pads {
                         spread(p, o, prim_area(p), &mut add);
                     }
@@ -805,7 +570,7 @@ impl Scene {
                 line([w[0], w[1]], [w[2], w[3]], TRIAL_WIDTH_MM, &mut add);
             }
         }
-        let capacity = CELL_MM * CELL_MM * ROUTABLE_SHARE * self.layers.len().max(1) as f32;
+        let capacity = CELL_MM * CELL_MM * ROUTABLE_SHARE * layers as f32;
         Congestion { cols, rows, x0, y0, values: demand.into_iter().map(|d| d / capacity).collect() }
     }
 
@@ -834,8 +599,8 @@ impl Scene {
     }
 
     pub fn counts(&self) -> (usize, usize) {
-        let traces = self.items.values().filter(|i| matches!(i.geom, Geom::Trace { .. })).count();
-        let vias = self.items.values().filter(|i| matches!(i.geom, Geom::Via { .. })).count();
+        let traces = self.board.items().filter(|(_, i)| matches!(i.geom, Geom::Track { .. })).count();
+        let vias = self.board.items().filter(|(_, i)| matches!(i.geom, Geom::Via { .. })).count();
         (traces, vias)
     }
 }
@@ -899,148 +664,6 @@ fn spread(p: &Prim, o: [f32; 2], area: f32, add: &mut dyn FnMut(f32, f32, f32)) 
     }
 }
 
-fn circle_points(c: [f32; 2], r: f32) -> Vec<f32> {
-    (0..16)
-        .flat_map(|k| {
-            let t = std::f32::consts::TAU * k as f32 / 16.0;
-            [c[0] + r * t.cos(), c[1] + r * t.sin()]
-        })
-        .collect()
-}
-
-fn area(b: &[f32; 4]) -> f32 {
-    (b[2] - b[0]) * (b[3] - b[1])
-}
-
-fn with_alpha(c: Rgba, a: f32) -> Rgba {
-    [c[0], c[1], c[2], a]
-}
-
-fn seg_dist(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
-    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-    let len2 = dx * dx + dy * dy;
-    let t = if len2 == 0.0 { 0.0 } else { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2).clamp(0.0, 1.0) };
-    ((p[0] - a[0] - t * dx).powi(2) + (p[1] - a[1] - t * dy).powi(2)).sqrt()
-}
-
-/// Vertices carry the segment they belong to and its radius; the fragment shader cuts the quad
-/// to a capsule. A negative radius marks a plain fill.
-struct Mesh {
-    v: Vec<f32>,
-    aa: f32,
-}
-
-impl Mesh {
-    fn vertex(&mut self, p: [f32; 2], a: [f32; 2], b: [f32; 2], r: f32, c: Rgba) {
-        self.v.extend_from_slice(&[p[0], p[1], a[0], a[1], b[0], b[1], r, c[0], c[1], c[2], c[3]]);
-    }
-
-    fn segment(&mut self, a: [f32; 2], b: [f32; 2], r: f32, c: Rgba) {
-        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-        let len = (dx * dx + dy * dy).sqrt();
-        let (ux, uy) = if len > 0.0 { (dx / len, dy / len) } else { (1.0, 0.0) };
-        let e = r + self.aa;
-        let (nx, ny) = (-uy * e, ux * e);
-        let (tx, ty) = (ux * e, uy * e);
-        let p0 = [a[0] - tx + nx, a[1] - ty + ny];
-        let p1 = [a[0] - tx - nx, a[1] - ty - ny];
-        let p2 = [b[0] + tx + nx, b[1] + ty + ny];
-        let p3 = [b[0] + tx - nx, b[1] + ty - ny];
-        for p in [p0, p1, p2, p2, p1, p3] {
-            self.vertex(p, a, b, r, c);
-        }
-    }
-
-    fn disc(&mut self, at: [f32; 2], r: f32, c: Rgba) {
-        self.segment(at, at, r, c);
-    }
-
-    fn polyline(&mut self, points: &[f32], r: f32, c: Rgba) {
-        if points.len() == 2 {
-            self.disc([points[0], points[1]], r, c);
-        }
-        for w in points.windows(4).step_by(2) {
-            self.segment([w[0], w[1]], [w[2], w[3]], r, c);
-        }
-    }
-
-    /// Dashes `dash` long with gaps as long, the pattern running on across corners.
-    /// Each step ends either the current dash or gap (`left` drops to exactly zero) or the
-    /// segment (`rest` does), so it always finishes; dashes too fine to see are drawn solid.
-    fn dashed_polyline(&mut self, points: &[f32], r: f32, dash: f32, c: Rgba) {
-        let total: f32 = points
-            .windows(4)
-            .step_by(2)
-            .map(|w| ((w[2] - w[0]).powi(2) + (w[3] - w[1]).powi(2)).sqrt())
-            .sum();
-        if !(dash > 0.0 && dash.is_finite() && total.is_finite()) || total / dash > 10_000.0 {
-            self.polyline(points, r, c);
-            return;
-        }
-        let (mut on, mut left) = (true, dash);
-        for w in points.windows(4).step_by(2) {
-            let (a, b) = ([w[0], w[1]], [w[2], w[3]]);
-            let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
-            let at = |s: f32| [a[0] + (b[0] - a[0]) * s / len, a[1] + (b[1] - a[1]) * s / len];
-            let (mut t, mut rest) = (0.0f32, len);
-            while rest > 0.0 {
-                let take = left.min(rest);
-                if on {
-                    self.segment(at(t), at(t + take), r, c);
-                }
-                t += take;
-                rest -= take;
-                left -= take;
-                if left <= 0.0 {
-                    on = !on;
-                    left = dash;
-                }
-            }
-        }
-    }
-
-    fn ring(&mut self, points: &[f32], r: f32, c: Rgba) {
-        let n = points.len() / 2;
-        for i in 0..n {
-            let j = (i + 1) % n;
-            self.segment([points[2 * i], points[2 * i + 1]], [points[2 * j], points[2 * j + 1]], r, c);
-        }
-    }
-
-    fn dashed_ring(&mut self, points: &[f32], r: f32, dash: f32, c: Rgba) {
-        let n = points.len() / 2;
-        for i in 0..n {
-            let j = (i + 1) % n;
-            let (a, b) = ([points[2 * i], points[2 * i + 1]], [points[2 * j], points[2 * j + 1]]);
-            let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
-            let dashes = ((len / (dash * 1.8)).floor() as usize).max(1);
-            for k in 0..dashes {
-                let (t0, t1) = (k as f32 / dashes as f32, (k as f32 + 0.55) / dashes as f32);
-                let at = |t: f32| [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])];
-                self.segment(at(t0), at(t1), r, c);
-            }
-        }
-    }
-
-    /// A fan from the first corner: tile shapes and pads are convex.
-    fn fill(&mut self, points: &[f32], o: [f32; 2], c: Rgba) {
-        let n = points.len() / 2;
-        let at = |i: usize| [points[2 * i] + o[0], points[2 * i + 1] + o[1]];
-        for i in 1..n.saturating_sub(1) {
-            for p in [at(0), at(i), at(i + 1)] {
-                self.vertex(p, p, p, -1.0, c);
-            }
-        }
-    }
-
-    fn prim(&mut self, p: &Prim, o: [f32; 2], c: Rgba) {
-        match p {
-            Prim::Circle([x, y, r]) => self.disc([x + o[0], y + o[1]], *r, c),
-            Prim::Poly(g) => self.fill(g, o, c),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1059,10 +682,10 @@ mod tests {
         let mut s = Scene::default();
         assert!(s.apply(BOARD));
         assert!(s.apply(&frame(&format!("{TRACE},{PIN}"), "")));
-        assert_eq!(s.items.len(), 2);
+        assert_eq!(s.board.items().count(), 2);
         assert_eq!(s.counts(), (1, 0));
         s.apply(&frame("", "1"));
-        assert_eq!(s.items.len(), 1);
+        assert_eq!(s.board.items().count(), 1);
     }
 
     #[test]
@@ -1078,7 +701,7 @@ mod tests {
         let mut s = Scene::default();
         s.apply(BOARD);
         s.apply(&frame(TRACE, ""));
-        s.hidden[0] = true;
+        s.board.set_layer_visible(0, false);
         assert!(s.mesh(0.01).is_empty());
     }
 
@@ -1089,7 +712,7 @@ mod tests {
         s.apply(&frame(PIN, ""));
         assert_eq!(s.part_at(2.0, 2.0), Some(7));
         assert_eq!(s.part_at(4.0, 4.0), None);
-        s.offsets.insert(7, [2.0, 2.0]);
+        s.set_offset(7, 2.0, 2.0);
         assert_eq!(s.part_at(4.0, 4.0), Some(7));
     }
 
@@ -1120,7 +743,7 @@ mod tests {
     #[test]
     fn router_fills_replace_the_files_pours_and_go_with_the_board() {
         let mut s = Scene::default();
-        s.show_pours = true;
+        s.board.style.show_pours = true;
         s.apply(BOARD);
         s.apply(&frame(r#"{"id":2,"k":"pour","net":3,"tiles":[{"layer":0,"g":[0,0,1,0,1,1]}]}"#, ""));
         let with_file = s.mesh(0.01).len();
@@ -1128,10 +751,10 @@ mod tests {
         s.apply(r#"{"t":"fill","fills":[{"zone":0,"net":3,"layer":0,"r":[0,0,2,2,3,3,4,4]}]}"#);
         // Two rectangles of two triangles each, in place of the file's one triangle.
         assert_eq!(s.mesh(0.01).len(), 12 * STRIDE);
-        s.show_pours = false;
+        s.board.style.show_pours = false;
         assert!(s.mesh(0.01).is_empty());
         s.apply(BOARD);
-        assert!(s.fills.is_empty());
+        assert!(s.board.fills().is_empty());
     }
 
     #[test]
@@ -1146,62 +769,6 @@ mod tests {
         assert_eq!(s.trials.len(), 1);
         s.apply(r#"{"t":"done","open":0}"#);
         assert!(s.trials.is_empty());
-    }
-
-    /// Quads in a mesh, each segment being one.
-    fn quads(m: &Mesh) -> usize {
-        m.v.len() / (6 * STRIDE)
-    }
-
-    fn mesh() -> Mesh {
-        Mesh { v: Vec::new(), aa: 0.0 }
-    }
-
-    #[test]
-    fn dashes_run_on_across_corners() {
-        // 2 mm then 1 mm at a 0.5 mm dash: on, off, on, off | on, off.
-        let mut m = mesh();
-        m.dashed_polyline(&[0.0, 0.0, 2.0, 0.0, 2.0, 1.0], 0.1, 0.5, FOCUS);
-        assert_eq!(quads(&m), 3);
-        // 0.25 mm then 0.75 mm: the first dash breaks over the corner and carries on 0.25 mm,
-        // where restarting the pattern would draw 0.5 mm.
-        let mut m = mesh();
-        m.dashed_polyline(&[0.0, 0.0, 0.25, 0.0, 0.25, 0.75], 0.1, 0.5, FOCUS);
-        assert_eq!(quads(&m), 2);
-        assert_eq!(&m.v[6 * STRIDE + 4..6 * STRIDE + 6], &[0.25, 0.25], "second piece ends 0.25 mm up");
-    }
-
-    #[test]
-    fn dashing_always_finishes() {
-        // The first version recomputed its place in the pattern from a running total with `%`;
-        // a rounding step too small to move `t` spun forever, growing the mesh until killed.
-        let awkward = [0.1f32, 0.3, 1.0 / 3.0, 1e-3, 0.007, 12.345];
-        for &dash in &awkward {
-            let mut points = vec![0.0f32, 0.0];
-            let mut x = 0.0f32;
-            for k in 0..300 {
-                x += 0.1 + k as f32 * 0.0137;
-                points.extend([x, (k % 7) as f32 * 0.31]);
-            }
-            let mut m = mesh();
-            m.dashed_polyline(&points, 0.05, dash, FOCUS);
-            let total: f32 = points.windows(4).step_by(2).map(|w| ((w[2] - w[0]).powi(2) + (w[3] - w[1]).powi(2)).sqrt()).sum();
-            // Each dash is at most one piece per segment it crosses.
-            assert!(quads(&m) <= (total / dash) as usize + 300 + 2, "dash {dash}: {} quads", quads(&m));
-        }
-    }
-
-    #[test]
-    fn dashes_too_fine_or_broken_are_drawn_solid() {
-        let line = [0.0f32, 0.0, 1000.0, 0.0, 1000.0, 5.0];
-        for dash in [0.0, -1.0, f32::NAN, f32::INFINITY, 1e-6] {
-            let mut m = mesh();
-            m.dashed_polyline(&line, 0.1, dash, FOCUS);
-            assert_eq!(quads(&m), 2, "dash {dash}");
-        }
-        let mut m = mesh();
-        m.dashed_polyline(&[0.0, 0.0, f32::INFINITY, 0.0], 0.1, 0.5, FOCUS);
-        assert_eq!(quads(&m), 1);
     }
 
     #[test]
@@ -1298,10 +865,11 @@ mod tests {
     fn a_new_board_keeps_layer_visibility_but_drops_drags() {
         let mut s = Scene::default();
         s.apply(BOARD);
-        s.hidden[1] = true;
-        s.offsets.insert(7, [1.0, 0.0]);
+        s.apply(&frame(PIN, ""));
+        s.board.set_layer_visible(1, false);
+        s.set_offset(7, 1.0, 0.0);
         s.apply(BOARD);
-        assert!(s.hidden[1]);
-        assert!(s.offsets.is_empty());
+        assert!(!s.board.visible(1));
+        assert_eq!(s.board.pose(7), Pose::default());
     }
 }

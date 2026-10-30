@@ -20,24 +20,24 @@ fn hash(mesh: &[f32]) -> u64 {
 }
 
 fn set_offset(s: &mut Scene, part: i32, dx: f32, dy: f32) {
-    s.offsets.insert(part, [dx, dy]);
+    s.set_offset(part, dx, dy);
 }
 
 fn set_hidden(s: &mut Scene, layer: usize, hidden: bool) {
-    s.hidden[layer] = hidden;
+    s.board.set_layer_visible(layer, !hidden);
 }
 
 fn set_hot_net(s: &mut Scene, net: i32) {
-    s.hot_net = Some(net);
+    s.board.style.hot_net = Some(net);
 }
 
 fn set_active(s: &mut Scene, layer: usize, high_contrast: bool) {
-    s.active_layer = layer;
-    s.high_contrast = high_contrast;
+    s.board.style.active_layer = layer;
+    s.board.style.high_contrast = high_contrast;
 }
 
 fn set_pours(s: &mut Scene, on: bool) {
-    s.show_pours = on;
+    s.board.style.show_pours = on;
 }
 
 /// Hashes of the mesh after each line of the stream, then of each view of the finished board.
