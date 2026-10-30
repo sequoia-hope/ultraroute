@@ -26,7 +26,7 @@ use serde_json::{json, Value};
 
 mod regions;
 
-pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--no-negotiate-vias] [--no-negotiate-rip] [--no-negotiate-tree] [--negotiate-jacobi] [--negotiate-legacy] [--diff-pairs] [--diff-pairs-legacy] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--via-cost MM[,OPEN_MM]] [--no-directional] [--no-reduce-vias] [--gpu] \
+pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--no-negotiate-vias] [--no-negotiate-rip] [--no-negotiate-tree] [--negotiate-jacobi] [--negotiate-reroute-all] [--negotiate-legacy] [--diff-pairs] [--diff-pairs-legacy] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--via-cost MM[,OPEN_MM]] [--no-directional] [--no-reduce-vias] [--gpu] \
 [--timeout SECONDS] [--cell MM] [--first NET,...] [--first-negotiate] [--first-weight W] [--restart N] [--topo-first REF,...|auto] [--topo-trapped] [--topo-trapped-rip] [--topo-sample MM] \
 [--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--push-decay D] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough warp|linear|rip|gentle|dipole|region] [--shove-steps N] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-late] [--shove-seconds S] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--uuid-seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
 [--live PATH|-] [--live-fps N] [--live-step MS] [--blame]
@@ -62,6 +62,8 @@ pub struct Args {
     /// Negotiation routes each round against the last on `--threads` threads
     /// (`NegotiationOptions::jacobi`), instead of one connection after another.
     pub negotiate_jacobi: bool,
+    /// Every negotiation round reroutes every connection, not only those that collided.
+    pub negotiate_reroute_all: bool,
     pub prefanout: bool,
     pub prefanout_mode: Option<grid::EscapeMode>,
     pub prefanout_order: Option<grid::EscapeOrder>,
@@ -195,6 +197,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         negotiate_rip: true,
         negotiate_tree: true,
         negotiate_jacobi: false,
+        negotiate_reroute_all: false,
         prefanout: false,
         prefanout_mode: None,
         prefanout_order: None,
@@ -293,6 +296,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             "--no-negotiate-rip" => a.negotiate_rip = false,
             "--no-negotiate-tree" => a.negotiate_tree = false,
             "--negotiate-jacobi" => a.negotiate_jacobi = true,
+            "--negotiate-reroute-all" => a.negotiate_reroute_all = true,
             "--negotiate-legacy" => {
                 a.negotiate_repasses = Some(0);
                 a.negotiate_vias = false;
@@ -1816,6 +1820,7 @@ pub fn run_with_solver(
                         rip_blocked: a.negotiate_rip,
                         reachable_tree: a.negotiate_tree,
                         jacobi: a.negotiate_jacobi,
+                        reroute_all: a.negotiate_reroute_all,
                         seed: a.seed,
                         log: log.clone(),
                         ..Default::default()
@@ -1910,6 +1915,7 @@ pub fn run_with_solver(
                     rip_blocked: a.negotiate_rip,
                     reachable_tree: a.negotiate_tree,
                     jacobi: a.negotiate_jacobi,
+                    reroute_all: a.negotiate_reroute_all,
                     ..Default::default()
                 },
                 &mut watch,

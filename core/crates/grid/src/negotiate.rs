@@ -60,6 +60,10 @@ pub struct NegotiationOptions {
     /// Builds every patched grid whole as well and panics where the two differ: for tests, as
     /// it gives back what patching saves.
     pub check_patches: bool,
+    /// Every round reroutes every connection, as PathFinder does. By default a round after the
+    /// first reroutes only the connections that collided in the one before, or have no path:
+    /// one that collided with nothing holds a legal path, and prices only rise.
+    pub reroute_all: bool,
     /// Rounds without fewer collisions than the best so far before negotiation gives up.
     pub patience: usize,
     /// Nets whose open connections participate; every net when `None`.
@@ -107,6 +111,7 @@ impl Default for NegotiationOptions {
             threads: 1,
             jacobi: false,
             check_patches: false,
+            reroute_all: false,
             patience: 4,
             nets: None,
             net_weight: HashMap::new(),
@@ -790,6 +795,9 @@ fn run_pass(
                     break;
                 }
                 let c = &mut connections[k];
+                if round > 0 && !options.reroute_all && !c.colliding && c.path.is_some() {
+                    continue;
+                }
                 if report {
                     tell(&options.log, "negotiating", || format!("round {}: rerouting {}", round + 1, board.net_name(c.net)), None);
                 }
