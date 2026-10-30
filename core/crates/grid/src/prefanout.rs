@@ -31,6 +31,10 @@ pub enum EscapeMode {
     /// A fine-grid A* route across layers out to the target ring, preferring inner layers so each
     /// dogbone via also reserves an inner-layer channel clear of its neighbours' vias.
     GridInner,
+    /// As [`EscapeMode::GridInner`], but a pad whose net meets no other pad off its own surface
+    /// layer, and no pour, first tries a via-free escape on that layer: a dogbone there is a via
+    /// the net's other end must pay back.
+    GridSame,
 }
 
 /// Order in which a package's candidate pads claim their escapes.
@@ -1174,7 +1178,41 @@ fn lay_pad_escape(
             handoffs,
             true,
         ),
+        EscapeMode::GridSame => lay_grid_escape(
+            board,
+            frame,
+            pad,
+            profile,
+            narrow_hw,
+            win_bounds,
+            options,
+            siblings,
+            opp_via_guard,
+            escaped_pours,
+            local_maps,
+            global_maps,
+            handoffs,
+            true,
+        ),
     }
+}
+
+/// Every other pad of `pad`'s net is on `pad`'s layer and the net has no pour: a route between
+/// them on that layer needs no via.
+fn stays_on_surface(board: &Board, pad: &PadInfo) -> bool {
+    let mut others = 0;
+    for (id, it) in board.items() {
+        if it.net != pad.net || id == pad.id {
+            continue;
+        }
+        match it.kind {
+            Kind::Pad { .. } if it.on(pad.layer) => others += 1,
+            Kind::Pad { .. } => return false,
+            Kind::Pour { .. } => return false,
+            _ => {}
+        }
+    }
+    others > 0
 }
 
 fn try_commit_items(
@@ -1470,9 +1508,14 @@ fn lay_grid_escape(
             targets
         };
 
+        let surface_first = options.mode == EscapeMode::GridSame && !two_layer && stays_on_surface(board, pad);
         let target_sets: Vec<Vec<usize>> = if multi_layer && inner_layers != vec![pad.layer] {
-            if two_layer {
-                vec![vec![pad.layer], inner_layers.clone()]
+            if two_layer || surface_first {
+                let mut rest = inner_layers.clone();
+                if surface_first {
+                    rest.extend((0..board.layers.len()).filter(|l| !inner_layers.contains(l) && *l != pad.layer));
+                }
+                vec![vec![pad.layer], rest]
             } else {
                 let mut other_outer: Vec<usize> = (0..board.layers.len()).filter(|l| !inner_layers.contains(l)).collect();
                 other_outer.sort_by_key(|&l| l == pad.layer);
@@ -1512,7 +1555,7 @@ fn lay_grid_escape(
             for (b_idx, &(r_lo, r_hi)) in ring_bands.iter().enumerate() {
                 for (s_idx, layers) in target_sets.iter().enumerate() {
                     let with_pours = b_idx == 0 && s_idx == 0 && !pour_targets.is_empty();
-                    let saved_via = if two_layer && layers.as_slice() == [pad.layer] { grid.via.take() } else { None };
+                    let saved_via = if (two_layer || surface_first) && layers.as_slice() == [pad.layer] { grid.via.take() } else { None };
                     for _attempt in 0..4 {
                         let targets = collect_targets(&grid, layers, r_lo, r_hi, with_pours);
                         if targets.is_empty() {

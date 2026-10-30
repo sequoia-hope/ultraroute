@@ -173,6 +173,15 @@
     const args = [];
     const env = {};
     if (router === 'core') {
+      // Every stage on is the router's own default recipe (the benchmark's), named rather than
+      // spelt out; moving parts is the one addition. Leaving a stage out lists the rest.
+      if (negotiate && ripUp && diffPairs && prefanout && tighten) {
+        args.push('--recipe', 'default');
+        if (moveParts) args.push('--nudge');
+        argsText = args.join(' ');
+        envText = '';
+        return;
+      }
       if (negotiate) args.push('--negotiate');
       if (ripUp) args.push('--rip-up');
       if (diffPairs) args.push('--diff-pairs');

@@ -29,6 +29,18 @@ differs between `remed-0-base-s0` and `remed-0-base-s0b` (the 200-board subset, 
 --sample-seed 1`, binary 184f640 run twice on seed 0): **3**. Across seeds 0, 1 and 2 it is 7
 (s0 vs s1) and 5 (s0 vs s2). No board gained an error type in any of those pairs.
 
+## The default recipe
+
+`ultraroute route IN -o OUT` naming no stage runs `ultraroute::RECIPE`, the recipe these runs use
+(`--recipe default`; `--recipe minimal` runs only the grid router). Two candidates were measured
+against it on the 200-board sample (sequoia-server, 2026-10-30, against `srv-46e1f7d`), and neither
+joined it:
+
+| added to the default | clean | lost / won | vias (clean in both) | at the limit | decision |
+|---|---|---|---|---|---|
+| `--nudge` | 162 -> 163 | 0 / 1 | 4649 -> 4629 | 23 -> 26 | no: within noise (3), slower, and it moves the designer's parts; the studio offers it as a choice |
+| `--prefanout-mode same` | 162 -> 163 | 1 / 2 | 4549 -> 4516 | 23 -> 21 | no: within noise; kept as an option |
+
 ## Provenance and referee failures
 
 `run` writes `runs/RUN/run.json` once, when the run starts: recipe, timeout, seed, boards,

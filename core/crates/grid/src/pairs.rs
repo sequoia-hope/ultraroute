@@ -18,7 +18,8 @@ use crate::search::{route_astar, GridPath, STRAIGHT};
 const PIN_PAIR_SPAN: Nm = 3_000_000;
 /// Pin pairs closer than this are joined by matched bridges alone; there is no run worth coupling.
 const SHORTEST_RUN: Nm = 1_500_000;
-/// Legacy start rings, kept for `--diff-pairs-legacy`.
+/// Start rings of the legacy run, a coupled centreline on one layer that a run end-to-end
+/// coupling could not lay falls back to.
 const LEGACY_RINGS: [(Nm, Nm); 4] = [(0, 300_000), (400_000, 900_000), (900_000, 1_600_000), (1_600_000, 2_500_000)];
 /// Rings around each pin pair's midpoint where a coupled stretch may start or end, tried from
 /// nearest to farthest so spread connector pins still converge cleanly.
@@ -68,8 +69,6 @@ impl Pair {
 pub struct PairOptions {
     pub cell: Nm,
     pub pours_block: bool,
-    /// Run the single-layer, legless pair stage from before end-to-end coupling, for comparison.
-    pub legacy: bool,
     /// When end-to-end coupling stops searching: runs still to do after it are coupled the legacy
     /// way, their legs left to the router, until the run's hard deadline.
     pub deadline: crate::clock::Deadline,
@@ -78,7 +77,7 @@ pub struct PairOptions {
 
 impl Default for PairOptions {
     fn default() -> PairOptions {
-        PairOptions { cell: 50_000, pours_block: false, legacy: false, deadline: Default::default(), log: None }
+        PairOptions { cell: 50_000, pours_block: false, deadline: Default::default(), log: None }
     }
 }
 
@@ -484,9 +483,6 @@ pub fn route_pairs(board: &mut Board, options: &PairOptions, watch: &mut dyn FnM
 
 /// `route_pairs`, telling `watch` of every run tried, laid or not.
 pub fn route_pairs_watch(board: &mut Board, options: &PairOptions, watch: &mut dyn FnMut(&Board, &PairRun)) -> PairStats {
-    if options.legacy {
-        return route_pairs_legacy(board, options, watch);
-    }
     let mut stats = PairStats::default();
     for pair in diff_pairs(board) {
         stats.pairs += 1;
@@ -2220,47 +2216,6 @@ fn bridge_siblings(board: &mut Board, pair: &Pair, profile: &Profile, pours_bloc
         }
     }
     out
-}
-
-/// Legacy single-layer `route_pairs_watch`, preserved for `--diff-pairs-legacy` comparisons.
-fn route_pairs_legacy(board: &mut Board, options: &PairOptions, watch: &mut dyn FnMut(&Board, &PairRun)) -> PairStats {
-    let mut stats = PairStats::default();
-    for pair in diff_pairs(board) {
-        stats.pairs += 1;
-        let ends = pin_pairs(board, &pair);
-        let profile = Profile::for_net(board, pair.p);
-        let fat = Profile { class: format!("pair {}", board.net_name(pair.p)), half_width: pair.width + pair.gap / 2, ..profile };
-        for (i, j) in runs(&ends) {
-            let (a, b) = (ends[i], ends[j]);
-            if a.mid.distance(b.mid) < SHORTEST_RUN as f64 {
-                continue;
-            }
-            stats.runs += 1;
-            tell(
-                &options.log,
-                "pairs",
-                || format!("coupling {} and {}", board.net_name(pair.p), board.net_name(pair.n)),
-                Some(Focus::Connection { net: pair.p, from: a.mid, to: b.mid }),
-            );
-            if let Some(laid) = legacy_run(board, options, &pair, &fat, a, b) {
-                let layer = laid.0.first().and_then(|id| board.item(*id)).map_or(0, |it| it.layers.trailing_zeros() as usize);
-                tell(
-                    &options.log,
-                    "pairs",
-                    || format!("coupled {} and {} on {} for {:.2} mm", board.net_name(pair.p), board.net_name(pair.n), board.layers[layer], laid.1 * 1e-6),
-                    None,
-                );
-                stats.coupled += 1;
-                stats.coupled_mm += laid.1 * 1e-6;
-                stats.laid.extend(laid.0.iter().copied());
-                watch(board, &PairRun { pair: &pair, from: a.mid, to: b.mid, layer: Some(layer), centreline: &laid.2, laid: &laid.0 });
-            } else {
-                watch(board, &PairRun { pair: &pair, from: a.mid, to: b.mid, layer: None, centreline: &[], laid: &[] });
-            }
-        }
-    }
-    tell(&options.log, "pairs", || format!("{} of {} pair runs coupled, {:.1} mm", stats.coupled, stats.runs, stats.coupled_mm), None);
-    stats
 }
 
 /// The legacy run between two pin pairs: a coupled centreline on one layer, no legs.

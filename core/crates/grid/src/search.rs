@@ -215,6 +215,43 @@ pub fn trace_back(
     )
 }
 
+/// The most cells [`walled_in`] looks at before it gives up.
+const POCKET_LIMIT: usize = 1024;
+
+/// Whether the free cells reachable from those in `queue` (the free target cells, each once)
+/// number fewer than `POCKET_LIMIT` and hold no source: a target boxed into a small pocket of free
+/// cells with no way in, found without expanding the whole board from the sources. `visit` is
+/// asked of each free cell reached: `None` for a source, `Some(true)` for a cell seen for the
+/// first time (which it marks seen), `Some(false)` for one seen before. `queue` grows with every
+/// cell seen.
+pub(crate) fn walled_in(grid: &RouteGrid, queue: &mut Vec<usize>, visit: &mut dyn FnMut(usize) -> Option<bool>) -> bool {
+    let cells = grid.cell_count();
+    let mut head = 0;
+    while head < queue.len() && queue.len() < POCKET_LIMIT {
+        let index = queue[head];
+        head += 1;
+        let layer = index / cells;
+        let cell = index % cells;
+        let (i, j) = ((cell % grid.nx) as i32, (cell / grid.nx) as i32);
+        let beside = NEIGHBOURS.iter().filter_map(|&(di, dj, _)| {
+            let (ni, nj) = (i + di, j + dj);
+            (ni >= 0 && nj >= 0 && ni < grid.nx as i32 && nj < grid.ny as i32).then(|| grid.index(layer, ni as usize, nj as usize))
+        });
+        let through = (grid.via.is_some() && !grid.via_blocked[cell]).then(|| (0..grid.layers.len()).filter(move |&l| l != layer).map(move |l| l * cells + cell));
+        for next in beside.chain(through.into_iter().flatten()) {
+            if grid.blocked[next] {
+                continue;
+            }
+            match visit(next) {
+                None => return false,
+                Some(true) => queue.push(next),
+                Some(false) => {}
+            }
+        }
+    }
+    queue.len() < POCKET_LIMIT
+}
+
 /// The cheapest route from any source to any target by A*, stopping at the first target
 /// reached: the octile distance to the targets' box (never more than the true cost) steers it,
 /// so a short connection explores a small patch instead of the whole board. It gives up (`None`)
@@ -310,54 +347,19 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
         // When the target end is boxed in inside a small pocket of free cells while the source end
         // is open to the board, a bounded reachability check from the targets proves there is no
         // way in without expanding the whole board from the sources.
-        const POCKET_LIMIT: usize = 1024;
         if !overlap && b.pocket_queue.len() < POCKET_LIMIT {
-            let mut head = 0;
-            let mut found_source = false;
-            while head < b.pocket_queue.len() && b.pocket_queue.len() < POCKET_LIMIT {
-                let index = b.pocket_queue[head];
-                head += 1;
-                let layer = index / cells;
-                let cell = index % cells;
-                let (i, j) = ((cell % grid.nx) as i32, (cell / grid.nx) as i32);
-                for (di, dj, _) in NEIGHBOURS {
-                    let (ni, nj) = (i + di, j + dj);
-                    if ni < 0 || nj < 0 || ni >= grid.nx as i32 || nj >= grid.ny as i32 {
-                        continue;
-                    }
-                    let next = grid.index(layer, ni as usize, nj as usize);
-                    if !grid.blocked[next] && b.flags[next] & POCKET == 0 {
-                        if b.flags[next] & SOURCE != 0 {
-                            found_source = true;
-                            break;
-                        }
-                        mark(&mut b.flags, &mut b.touched, next, POCKET);
-                        b.pocket_queue.push(next);
-                    }
+            let Buffers { flags, touched, pocket_queue, .. } = &mut *b;
+            let mut visit = |n: usize| {
+                if flags[n] & POCKET != 0 {
+                    Some(false)
+                } else if flags[n] & SOURCE != 0 {
+                    None
+                } else {
+                    mark(flags, touched, n, POCKET);
+                    Some(true)
                 }
-                if found_source {
-                    break;
-                }
-                if grid.via.is_some() && !grid.via_blocked[cell] {
-                    for other in 0..grid.layers.len() {
-                        if other != layer {
-                            let next = other * cells + cell;
-                            if !grid.blocked[next] && b.flags[next] & POCKET == 0 {
-                                if b.flags[next] & SOURCE != 0 {
-                                    found_source = true;
-                                    break;
-                                }
-                                mark(&mut b.flags, &mut b.touched, next, POCKET);
-                                b.pocket_queue.push(next);
-                            }
-                        }
-                    }
-                    if found_source {
-                        break;
-                    }
-                }
-            }
-            if !found_source && b.pocket_queue.len() < POCKET_LIMIT {
+            };
+            if walled_in(grid, pocket_queue, &mut visit) {
                 return None;
             }
         }
@@ -471,98 +473,6 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
                 .collect(),
         )
     })
-}
-
-/// When `sources` and `targets` are disconnected on `grid`, returns the board bounding box of the
-/// smaller reachable component (grown by one grid cell). Returns `None` if a path exists between
-/// `sources` and `targets`.
-pub fn pocket_bbox(grid: &RouteGrid, sources: &[usize], targets: &[usize]) -> Option<board::BBox> {
-    let nodes = grid.blocked.len();
-    let cells = grid.cell_count();
-    let mut mark = vec![0u8; nodes];
-    let mut qs = Vec::new();
-    let mut qt = Vec::new();
-    for &s in sources {
-        if !grid.blocked[s] && mark[s] == 0 {
-            mark[s] = 1;
-            qs.push(s);
-        }
-    }
-    for &t in targets {
-        if !grid.blocked[t] {
-            if mark[t] == 1 {
-                return None;
-            }
-            if mark[t] == 0 {
-                mark[t] = 2;
-                qt.push(t);
-            }
-        }
-    }
-    let (mut hs, mut ht) = (0usize, 0usize);
-    let exhausted = loop {
-        if hs >= qs.len() {
-            break &qs;
-        }
-        if ht >= qt.len() {
-            break &qt;
-        }
-        let (q, h, me, other) = if qs.len() <= qt.len() {
-            (&mut qs, &mut hs, 1u8, 2u8)
-        } else {
-            (&mut qt, &mut ht, 2u8, 1u8)
-        };
-        let index = q[*h];
-        *h += 1;
-        let layer = index / cells;
-        let cell = index % cells;
-        let (i, j) = ((cell % grid.nx) as i32, (cell / grid.nx) as i32);
-        for (di, dj, _) in NEIGHBOURS {
-            let (ni, nj) = (i + di, j + dj);
-            if ni < 0 || nj < 0 || ni >= grid.nx as i32 || nj >= grid.ny as i32 {
-                continue;
-            }
-            let next = grid.index(layer, ni as usize, nj as usize);
-            if !grid.blocked[next] {
-                if mark[next] == other {
-                    return None;
-                }
-                if mark[next] == 0 {
-                    mark[next] = me;
-                    q.push(next);
-                }
-            }
-        }
-        if grid.via.is_some() && !grid.via_blocked[cell] {
-            for other_layer in 0..grid.layers.len() {
-                if other_layer != layer {
-                    let next = other_layer * cells + cell;
-                    if !grid.blocked[next] {
-                        if mark[next] == other {
-                            return None;
-                        }
-                        if mark[next] == 0 {
-                            mark[next] = me;
-                            q.push(next);
-                        }
-                    }
-                }
-            }
-        }
-    };
-    if exhausted.is_empty() {
-        return None;
-    }
-    let (mut lo_i, mut lo_j, mut hi_i, mut hi_j) = (usize::MAX, usize::MAX, 0usize, 0usize);
-    for &idx in exhausted {
-        let c = idx % cells;
-        let (i, j) = (c % grid.nx, c / grid.nx);
-        lo_i = lo_i.min(i);
-        lo_j = lo_j.min(j);
-        hi_i = hi_i.max(i);
-        hi_j = hi_j.max(j);
-    }
-    Some(board::BBox::of([grid.centre(lo_i, lo_j), grid.centre(hi_i, hi_j)]).grow(grid.h))
 }
 
 #[cfg(test)]

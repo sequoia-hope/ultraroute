@@ -274,10 +274,9 @@ fn fill_one(board: &Board, zone: &Zone, layer: usize, poured: &[(u32, usize, Ras
         for (c, inside) in r.cells.iter_mut().zip(&board_area.cells) {
             *c &= inside;
         }
-        let edge = nm(board.rules.min_copper_edge_clearance) as f64;
-        for (a, e, eb) in &board.outline_edges {
-            if eb.grow(edge as Nm).overlaps(b) {
-                r.clear(eb.grow(edge as Nm), |p| point_segment(p, *a, *e) < edge);
+        for &(a, e, eb, edge) in &board.outline_edges {
+            if eb.grow(edge).overlaps(b) {
+                r.clear(eb.grow(edge), |p| point_segment(p, a, e) < edge as f64);
             }
         }
     }
