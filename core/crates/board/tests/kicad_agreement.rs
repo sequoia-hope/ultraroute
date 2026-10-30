@@ -162,3 +162,34 @@ fn pad_with_drill_offset_places_copper_apart_from_hole() {
     assert!(item.shape.contains(Point::new(101_450_000, 52_540_000)));
     assert!(!item.shape.contains(Point::new(99_200_000, 52_540_000)));
 }
+
+/// A via beside an unplated 0.8 x 2.2 mm slot, at x = `x` mm: the slot's centre line runs from
+/// (10, 9.3) to (10, 10.7).
+fn via_beside_a_slot(x: f64) -> Board {
+    let src = format!(
+        r#"(kicad_pcb (version 20241229) (generator "pcbnew") (general (thickness 1.6))
+      (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+      (net 0 "") (net 1 "A")
+      (footprint "t:SLOT" (layer "F.Cu") (uuid "11111111-1111-4111-8111-111111111111") (at 10 10)
+        (pad "" np_thru_hole oval (at 0 0) (size 0.8 2.2) (drill oval 0.8 2.2) (layers "*.Cu" "*.Mask")))
+      (via (at {x} 10.65) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1) (uuid "22222222-2222-4222-8222-222222222222"))
+      (gr_rect (start 5 5) (end 15 15) (layer "Edge.Cuts") (width 0.1)))"#
+    );
+    let (pcb, copper) = parse_board(&src).unwrap();
+    let rules = r#"{"board":{"design_settings":{"rules":{"min_clearance":0.2,"min_hole_to_hole":0.25,"min_hole_clearance":0.25,"min_copper_edge_clearance":0.5,"min_through_hole_diameter":0.3}}},"net_settings":{"classes":[{"name":"Default","clearance":0.2,"track_width":0.2,"via_diameter":0.6,"via_drill":0.3}]}}"#;
+    Board::new(&pcb, &copper, Rules::parse(rules).unwrap())
+}
+
+#[test]
+fn a_slots_whole_length_keeps_copper_clear_as_kicad_measures_it() {
+    // kicad-cli 9.0.8 on this board: via at x = 10.85, hole clearance 0.15 mm (to the slot's
+    // length; to the circle the drill's width makes, it would be 0.37); at x = 11.0 none.
+    let hole_gap = |x: f64| {
+        let b = via_beside_a_slot(x);
+        let (via, _) = b.items().find(|(_, it)| it.kind == Kind::Via).unwrap();
+        check_item(&b, via).into_iter().filter(|v| v.rule == Rule::HoleClearance).map(|v| v.gap).fold(f64::INFINITY, f64::min)
+    };
+    let gap = hole_gap(10.85);
+    assert!((gap - 150_000.0).abs() < 2_000.0, "KiCad measures 0.15 mm, the check {gap} nm");
+    assert_eq!(hole_gap(11.0), f64::INFINITY, "0.3 mm from the slot is clear of its 0.25 mm");
+}

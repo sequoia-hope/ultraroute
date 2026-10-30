@@ -39,9 +39,6 @@ fn holds_clear(holder: &Item, copper: &Item) -> bool {
     holder.hole.is_some() && (holder.plated_hole() || matches!(copper.kind, Kind::Track | Kind::Via))
 }
 
-fn hole_shape(hole: (Point, Nm)) -> Shape {
-    Shape::Capsule { a: hole.0, b: hole.0, r: hole.1 }
-}
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Limits {
@@ -251,7 +248,7 @@ fn item_checks(
         if everyone {
             for other in board.near(holes, item_bbox.grow(limits.pth_hole_clearance.max(limits.edge).max(limits.max_clearance))) {
                 let Some(o) = board.item(other) else { continue };
-                let Some(h) = o.hole else { continue };
+                let Some(h) = board.hole_shape(other, o) else { continue };
                 let required = limits.hole_keep(board, other, o, item);
                 if other == id || !holds_clear(o, item) || same_pad(item, o) || (o.plated_hole() && o.net == item.net && item.net != 0) {
                     continue;
@@ -259,24 +256,23 @@ fn item_checks(
                 if failed_pairs.contains(&(id.min(other), id.max(other))) {
                     continue;
                 }
-                let gap = item.shape.gap_within(&hole_shape(h), required as f64);
+                let gap = item.shape.gap_within(&h, required as f64);
                 if gap + SLACK < required as f64 {
                     found.push(Violation { rule: Rule::HoleClearance, a: id, b: Some(other), layer: None, gap, required });
                 }
             }
         }
     }
-    if let Some(hole) = item.hole {
-        let shape = hole_shape(hole);
+    if let Some(shape) = board.hole_shape(id, item) {
         let reach = shape.bbox().grow(limits.pth_hole_clearance.max(limits.pth_hole_to_hole).max(limits.edge).max(limits.max_clearance));
         for other in board.near(holes, reach) {
             let Some(o) = board.item(other) else { continue };
             if !partner(other) || same_pad(item, o) {
                 continue;
             }
-            if let Some(h) = o.hole {
+            if let Some(h) = board.hole_shape(other, o) {
                 let required = limits.hole_to_hole(item, o);
-                let gap = shape.gap(&hole_shape(h));
+                let gap = shape.gap(&h);
                 if gap + SLACK < required as f64 {
                     found.push(Violation { rule: Rule::HoleToHole, a: id, b: Some(other), layer: None, gap, required });
                 }

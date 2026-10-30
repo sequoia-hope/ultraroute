@@ -288,6 +288,9 @@ pub struct Board {
     pub mask_areas: Vec<(Shape, u64, u32)>,
     /// Pads' own clearances, where wider than their nets' (KiCad's local clearance).
     pub pad_clearances: HashMap<ItemId, Nm>,
+    /// Slotted holes: the two ends of a slot's centre line, its radius the item's `hole`'s. A
+    /// slot is longer than the circle `hole` holds; [`Board::hole_shape`] gives all of it.
+    pub hole_ends: HashMap<ItemId, (Point, Point)>,
     /// Areas where a via costs the router dearly but is allowed, on every layer: rule areas
     /// whose name starts `soft-novia`, and boxes given on the command line. Room kept for silk.
     pub via_avoid: Vec<Shape>,
@@ -327,6 +330,20 @@ impl std::fmt::Display for LoadError {
 }
 
 impl std::error::Error for LoadError {}
+
+/// The two ends of a slotted drill's centre line, in the board frame: a pad at `position`
+/// (metres) turned `rotation_deg`, drilled `d` (metres, x by y in the pad's frame); `None` for a
+/// round hole.
+fn slot_ends(position: [f64; 2], rotation_deg: f64, d: [f64; 2]) -> Option<(Point, Point)> {
+    if (d[0] - d[1]).abs() <= 1e-6 {
+        return None;
+    }
+    let (s, c) = rotation_deg.to_radians().sin_cos();
+    let half = (d[0].max(d[1]) - d[0].min(d[1])) / 2.0;
+    let along = if d[0] > d[1] { [c, -s] } else { [s, c] };
+    let end = |k: f64| Point::from_m([position[0] + k * half * along[0], position[1] + k * half * along[1]]);
+    Some((end(-1.0), end(1.0)))
+}
 
 impl Board {
     /// Reads a `.kicad_pcb` and the `.kicad_pro` beside it.
@@ -384,6 +401,7 @@ impl Board {
             mask_web: nm(copper.solder_mask_min_width),
             mask_areas: Vec::new(),
             pad_clearances: HashMap::new(),
+            hole_ends: HashMap::new(),
             via_avoid: Vec::new(),
             via_avoid_cost: 3_000,
             regions: Vec::new(),
@@ -501,21 +519,21 @@ impl Board {
                     board.insert(Item { kind: Kind::Pour { zone: DRAWN, kept: true }, net: base.net, layers: unjoined, shape: shape.clone(), hole: None, locked: true, span: None });
                 }
             }
-            ids.push(board.insert(base));
+            let id = board.insert(base);
+            ids.push(id);
+            if let Some(ends) = model.drill.and_then(|d| slot_ends(model.position, model.rotation_deg, d)) {
+                board.hole_ends.insert(id, ends);
+            }
             // A slot's hole is longer than the circle `hole` holds: an unplated one keeps tracks
             // and vias clear of all of it, by the edge clearance, as KiCad takes an unplated slot
             // for board edge. (A plated one's copper covers it.)
             if let (Some(d), false) = (model.drill, plated) {
-                if (d[0] - d[1]).abs() > 1e-6 {
-                    let (s, c) = model.rotation_deg.to_radians().sin_cos();
-                    let half = (d[0].max(d[1]) - d[0].min(d[1])) / 2.0;
-                    let along = if d[0] > d[1] { [c, -s] } else { [s, c] };
-                    let end = |k: f64| Point::from_m([model.position[0] + k * half * along[0], model.position[1] + k * half * along[1]]);
+                if let Some((a, b)) = slot_ends(model.position, model.rotation_deg, d) {
                     board.insert(Item {
                         kind: Kind::Keepout { forbids: Keepout { tracks: true, vias: true, ..Keepout::default() }, footprint: Some(pad.footprint) },
                         net: 0,
                         layers: (1u64 << board.layers.len()) - 1,
-                        shape: Shape::Capsule { a: end(-1.0), b: end(1.0), r: nm(d[0].min(d[1]) / 2.0 + board.rules.min_hole_clearance.max(board.rules.min_copper_edge_clearance)) },
+                        shape: Shape::Capsule { a, b, r: nm(d[0].min(d[1]) / 2.0 + board.rules.min_hole_clearance.max(board.rules.min_copper_edge_clearance)) },
                         hole: None,
                         locked: true,
                         span: None,
@@ -702,6 +720,13 @@ impl Board {
         self.items.get(id).and_then(Option::as_ref).map(|_| self.shape_bboxes[id])
     }
 
+    /// The item's hole as a shape: a slot's whole length, or the drilled circle.
+    pub fn hole_shape(&self, id: ItemId, item: &Item) -> Option<Shape> {
+        let (centre, r) = item.hole?;
+        let (a, b) = self.hole_ends.get(&id).copied().unwrap_or((centre, centre));
+        Some(Shape::Capsule { a, b, r })
+    }
+
     pub fn items(&self) -> impl Iterator<Item = (ItemId, &Item)> {
         self.items.iter().enumerate().filter_map(|(i, it)| Some((i, it.as_ref()?)))
     }
@@ -864,6 +889,9 @@ impl Board {
             if let Some(mut item) = self.remove(m) {
                 item.shape = item.shape.translated(by);
                 item.hole = item.hole.map(|(c, r)| (Point::new(c.x + by.x, c.y + by.y), r));
+                if let Some((a, b)) = self.hole_ends.get_mut(&m) {
+                    (*a, *b) = (Point::new(a.x + by.x, a.y + by.y), Point::new(b.x + by.x, b.y + by.y));
+                }
                 self.restore(m, item);
             }
         }
