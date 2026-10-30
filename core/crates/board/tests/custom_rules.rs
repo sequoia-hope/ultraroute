@@ -133,16 +133,24 @@ fn pad_and_track(own: f64, gap: f64, min: f64, custom: &str) -> (Board, ItemId) 
     (b, t)
 }
 
+/// The clearance at the pad as KiCad judges it, and as the router keeps it.
+fn at_pad(b: &Board, t: ItemId) -> (Nm, Nm) {
+    let (pad, p) = b.items().find(|(_, it)| matches!(it.kind, Kind::Pad { .. })).unwrap();
+    let (x, y) = (Thing::Item(b, pad, p), Thing::Item(b, t, b.item(t).unwrap()));
+    (b.clearance_between(&x, &y, 0), b.clearance_kept(&x, &y, 0))
+}
+
 /// kicad-cli 9.0.8 on the same boards: a pad's own clearance stands in for the net classes and
-/// the custom rules, lower or higher, and only the board's minimum holds under it.
+/// the custom rules, lower or higher, and only the board's minimum holds under it. The router
+/// keeps the wider of that and what the classes and rules ask, which KiCad always accepts.
 #[test]
 fn a_pads_own_clearance_outranks_the_classes_and_the_rules() {
     let (b, t) = pad_and_track(0.1, 0.15, 0.05, "");
-    assert!(clearance_hits(&b, t).is_empty(), "0.1 mm of its own below the class's 0.2 mm");
+    assert_eq!(at_pad(&b, t), (nm(0.1e-3), nm(0.2e-3)), "0.1 mm of its own below the class's 0.2 mm");
     let (b, t) = pad_and_track(0.1, 0.15, 0.2, "");
-    assert_eq!(clearance_hits(&b, t), [nm(0.2e-3)], "the board's minimum holds");
+    assert_eq!(at_pad(&b, t).0, nm(0.2e-3), "the board's minimum holds");
     let (b, t) = pad_and_track(0.1, 0.15, 0.05, "(version 1)\n(rule hi (constraint clearance (min 0.3mm)))");
-    assert!(clearance_hits(&b, t).is_empty(), "over a custom rule's 0.3 mm");
+    assert_eq!(at_pad(&b, t), (nm(0.1e-3), nm(0.3e-3)), "over a custom rule's 0.3 mm in KiCad");
     let (b, t) = pad_and_track(0.4, 0.25, 0.05, "(version 1)\n(rule lo (constraint clearance (min 0.1mm)))");
     assert_eq!(clearance_hits(&b, t), [nm(0.4e-3)], "a custom rule's 0.1 mm does not lower it");
 }

@@ -834,15 +834,14 @@ impl ObstacleMap {
             return;
         }
         if item.is_copper() && (self.pours_block || !item.refilled()) {
-            // A pad's own clearance stands in for the classes and the custom rules (KiCad's order;
-            // see `Board::clearance_between`), the board's minimum under it.
-            let (clearance, via_clearance) = match board.pad_clearances.get(&id) {
-                Some(&own) => (own.max(nm(rules.min_clearance)), own.max(nm(rules.min_clearance))),
-                None => {
-                    let implicit = self.clearance_to(board, item.net);
-                    (self.rule_to(board, "clearance", id, item, false, implicit), self.rule_to(board, "clearance", id, item, true, implicit))
-                }
-            };
+            // A pad's own clearance stands in for the classes and the custom rules in KiCad's
+            // judgement (`Board::clearance_between`), lower too; the router keeps the wider of the
+            // two, which KiCad always accepts: on PCBench, using a pad's narrower clearance let
+            // other nets box a pad in more often than it opened a way (2026-10-30).
+            let own = board.pad_clearances.get(&id).copied().unwrap_or(0);
+            let implicit = self.clearance_to(board, item.net);
+            let clearance = self.rule_to(board, "clearance", id, item, false, implicit).max(own);
+            let via_clearance = self.rule_to(board, "clearance", id, item, true, implicit).max(own);
             let mut hit = Vec::new();
             self.cells_near(&item.shape, half_width + clearance + reach, &mut |c| hit.push(c));
             for l in (0..self.layers).filter(|l| item.on(*l)) {

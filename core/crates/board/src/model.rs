@@ -1074,6 +1074,24 @@ impl Board {
         }
     }
 
+    /// The clearance the router keeps between items `a` and `b` on `layer`: KiCad's
+    /// ([`Board::clearance_between`]) where a pad's own clearance raises it, but never below what
+    /// the classes and custom rules ask, as the grid keeps it (KiCad accepts the wider).
+    pub fn clearance_kept(&self, a: &crate::custom::Thing, b: &crate::custom::Thing, layer: usize) -> Nm {
+        let local = |t: &crate::custom::Thing| match t {
+            crate::custom::Thing::Item(_, id, _) => self.pad_clearances.get(id).copied(),
+            _ => None,
+        };
+        let own = local(a).max(local(b)).unwrap_or(0);
+        let net = |t: &crate::custom::Thing| match t {
+            crate::custom::Thing::Item(_, _, it) => Some(it.net),
+            crate::custom::Thing::New { net, .. } => *net,
+            _ => None,
+        };
+        let class = |t: &crate::custom::Thing| net(t).and_then(|n| self.net_clearances.get(n as usize).copied()).unwrap_or(self.min_clearance_nm);
+        self.rule_min("clearance", a, Some(b), layer, class(a).max(class(b))).max(own)
+    }
+
     /// The clearance the rules ask between two nets' copper, in nanometres.
     pub fn clearance(&self, a: u32, b: u32) -> Nm {
         let ca = self.net_clearances.get(a as usize).copied().unwrap_or(self.min_clearance_nm);

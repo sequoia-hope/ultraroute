@@ -284,7 +284,7 @@ fn item_checks(
                     }
                     _ if partner(other) && o.is_copper() && (o.net != item.net || item.net == 0) && !same_pad(item, o) && !tied(board, id, item, other, o) => {
                         let (a, b) = (Thing::Item(board, id, item), Thing::Item(board, other, o));
-                        let required = board.clearance_between(&a, &b, layer).max(mask_pair_gap(board, id, item, other, o, layer));
+                        let required = board.clearance_kept(&a, &b, layer).max(mask_pair_gap(board, id, item, other, o, layer));
                         let other_bbox = board.bbox(other).unwrap_or_else(|| o.shape.bbox());
                         if !item_bbox.grow(required).overlaps(other_bbox) {
                             continue;

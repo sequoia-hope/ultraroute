@@ -21,7 +21,7 @@ point below checked with kicad-cli on a probe board:
 - the last rule in the file that holds wins, over the net classes and over the board's own
   minimums, lower or higher; a rule between two objects is tried both ways round;
 - a pad's own clearance (or its footprint's) outranks the classes and the rules, lower or
-  higher, and only the board's minimum holds under it;
+  higher, and only the board's minimum holds under it (the router keeps the wider of the two);
 - a `disallow` holds if any rule naming the object's kind holds, not only the last;
 - a through via's `A.Layer` equals no layer and differs from none: only a `(layer …)` clause or
   `existsOnLayer` reaches it; `A.NetClass == 'X'` holds for any of a net's classes, `Default`
@@ -60,8 +60,10 @@ where a rule now closes space the old router used.
    are still not modelled: a reroute can starve a relief that KiCad then reports.
 5. **KiCad 9 padstacks** are taken as the front shape on every layer, now with a warning.
    Unsafe where an inner pad is larger. None in the corpus yet.
-6. **Done.** A pad's or footprint's own clearance stands in for the classes and rules, lower
-   or higher, the board minimum under it.
+6. **Judged, not used.** `Board::clearance_between` gives KiCad's answer (a pad's or footprint's
+   own clearance stands in for the classes and rules, lower or higher, the board minimum under
+   it), but the router keeps the wider of that and the classes' and rules' (`clearance_kept`):
+   using the narrower lost two PCBench boards to pads boxed in by other nets and won one.
 7. **`remove_unused_layers`** on pads and vias: rings are assumed on every layer, now with a
    warning. Costly; none in the corpus set it.
 8. **Copper the reader does not see**: curves, text boxes, dimensions and tables on copper
@@ -102,7 +104,7 @@ way Stage 9 did; steps 1-3 also add the `~/pcb` rule files above as parser tests
    spokes for planes and unfilled zones; keep `min_resolved_spokes` spokes free of new copper.
 5. **Length and via-count limits.** Done: reported after routing. Left: steering (a net over
    its length rips and reroutes with a length cost), and `diff_pair_uncoupled`.
-6. **Pad geometry.** Done: clearance overrides that lower; warnings for the rest. Left:
+6. **Pad geometry.** Done: clearance overrides judged as KiCad does; warnings for the rest. Left:
    padstacks per layer, `remove_unused_layers`, curves in custom pads and on copper.
 7. **Writer.** Done: tuned tracks held, teardrops warned of. Left: arcs out (the tightener's
    corners as KiCad arcs); blind and micro vias only if a stage ever lays them.
