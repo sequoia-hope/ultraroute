@@ -26,6 +26,8 @@ pub struct Profile {
     pub narrow_half_width: Nm,
     /// The board's minimum track, or the net's own from a custom rule: no neck goes below it.
     pub min_half_width: Nm,
+    /// The board's minimum track alone, the floor of a forced neck ([`Profile::forced_necks`]).
+    pub board_min_half_width: Nm,
     pub clearance: Nm,
     pub via_radius: Nm,
     pub drill_radius: Nm,
@@ -40,9 +42,22 @@ impl Profile {
             return self.narrow_half_width;
         }
         let Some(pad) = pad.filter(|p| matches!(p.kind, board::Kind::Pad { .. })) else { return self.half_width };
-        let b = pad.shape.bbox();
         // Not `clamp`: with no track width in the rules the floor is above the zero width.
-        ((b.max.x - b.min.x).min(b.max.y - b.min.y) / 2).max(self.min_half_width).min(self.half_width)
+        pad_half_side(pad).max(self.min_half_width).min(self.half_width)
+    }
+
+    /// Narrower legs into `pad` than [`Profile::neck_into`] allows, widest first, for a pad no
+    /// leg the rules allow can leave: the pin's own width, as the current already passes through
+    /// it, then the board's minimum track. They break the net's own width rule, or leave it
+    /// thinner than its pin, so the run reports each one ([`crate::necks`]).
+    pub fn forced_necks(&self, pad: Option<&board::Item>) -> Vec<Nm> {
+        let Some(pad) = pad.filter(|p| matches!(p.kind, board::Kind::Pad { .. })) else { return Vec::new() };
+        let floor = self.board_min_half_width;
+        let allowed = self.neck_into(Some(pad)).min(self.half_width);
+        let mut widths: Vec<Nm> = vec![pad_half_side(pad).max(floor), floor];
+        widths.retain(|&w| w < allowed);
+        widths.dedup();
+        widths
     }
 
     pub fn for_net(board: &Board, net: u32) -> Profile {
@@ -60,6 +75,7 @@ impl Profile {
             half_width,
             narrow_half_width: if power { half_width } else { (nm(min_width) / 2).clamp(1, half_width.max(1)) },
             min_half_width: (nm(min_width) / 2).clamp(1, half_width.max(1)),
+            board_min_half_width: (nm(rules.min_track_width) / 2).clamp(1, half_width.max(1)),
             clearance: take(class.map(|c| c.clearance), rules.min_clearance),
             // A class's via may leave a thinner ring round its drill than the board allows; the
             // via grows to keep the ring, the drill as the class has it.
@@ -68,6 +84,12 @@ impl Profile {
             drill_radius: take(class.map(|c| c.via_drill), rules.min_via_drill) / 2,
         }
     }
+}
+
+/// Half the shorter side of a pad's bounding box: half the width of the pin a leg enters.
+fn pad_half_side(pad: &board::Item) -> Nm {
+    let b = pad.shape.bbox();
+    (b.max.x - b.min.x).min(b.max.y - b.min.y) / 2
 }
 
 #[derive(Debug, Clone)]
