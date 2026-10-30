@@ -3,6 +3,29 @@
 Work proceeds one phase at a time; each phase ends with its scores on the test boards
 (bluebuzz, bluebuzz-1024, bluebuzz-ripped, the morph keyframes) and a commit.
 
+## State at 2026-10-30
+
+The MIT core (Phase 2c) is the router: the command, the studio and the benchmark all run it,
+and copperroute is a legacy reference. Stages 0 to 11 of a staged remediation plan
+(`REMEDIATION.md`, not tracked) have been worked through; Stage 7's move of the copperroute-era
+files waits on a decision, and Stage 12 (a global routing stage) has not begun. Each stage's
+measurements are in `~/Software/ultraroute-lab/pcbench/runs/remed-N-notes.md`. On the 200-board
+PCBench sample (`--sample 200 --sample-seed 1`, 120 s a board, one thread, judged by KiCad 9):
+
+- Stage 0 baseline (commit 184f640, on loaf, four runs): 160 to 161 boards clean. The same
+  binary and seed twice disagreed on 3 boards, all at the time limit. The slowest board took
+  648 s against the 120 s limit; 22 took over 125 s.
+- Latest (Stage 9, commit 5192519, run `srv9-5192519` on sequoia-server): 164 clean; the slowest
+  board took 122 s (the harness's wall clock, loading and writing included), and 20 were at the
+  limit. Stage 8's run (`srv8-120cd2f`) is also 164.
+- Along the way: one deadline the whole run keeps (Stage 3); runs untouched by the deadline are
+  byte-identical (Stage 4); median peak memory 164 -> 134 MB (Stage 5); median run 14.1 -> 9.2 s
+  on the server (Stage 6); vias -6% from a 5 mm via price (Stage 7); the GPU solver parked
+  (Stage 10).
+
+Stage 0's and Stage 9's counts come from different machines; each stage was compared with the one before on
+the same machine (`tools/pcbench.py compare`).
+
 ## Phase 1 — Topological routing with rip-up
 
 - [x] `copper-topo`: rubber-band routing through a triangulation of the copper, as backend `topo`.
@@ -48,19 +71,22 @@ ride the flow (velocity −∇d/d), so crowded regions spread while relative ord
 - [ ] Present several complete laid-out options (placement, outline and copper) that differ
       in size, shape or layer count, each scored by the suite, for a person to choose from.
 
-## Phase 2c — An MIT routing core (proposed)
+## Phase 2c — The MIT routing core (built; it is the router)
 
 copperroute is ~106k lines, almost all a port of freerouting (GPL); ours inside it (copper-gpu,
 copper-morph, copper-topo, copper-governor) is ~7k. A core written fresh, never ported from
-copperroute or freerouting, would let the studio link the router (and route in a browser tab
-with WebGPU) under MIT. Estimate ~15k lines:
+copperroute or freerouting, lets the studio link the router under MIT. It does: the core routes
+natively and, compiled to WebAssembly, in the browser tab, on the CPU in both. Estimated at
+~15k lines when proposed:
 
 - [x] Board I/O from `.kicad_pcb` directly (`core/crates/kicad-pcb`, from waffle-iron's reader):
       copper layers, tracks, arcs, vias, zones and rule areas, pad layer sets and exact shapes
       (custom pads included), `.kicad_pro` rules and net classes, and a writer that replaces
       routed copper and keeps every other byte. On bluebuzz all 2290 tracks and 331 vias
       rewritten give KiCad's DRC the same result (0 violations, 0 unconnected).
-- [ ] Locked flags kept when copper is written back; `.kicad_dru` custom rules applied.
+- [x] Locked flags kept when copper is written back (`(locked yes)`, REMEDIATION Stage 9);
+      `.kicad_dru` custom rules applied where the router models them (per-net track width,
+      hole clearance, hole to hole, SMD clearance, edge clearance); any other rule is a warning.
 - [x] Geometry in integer nanometres and a board model (`core/crates/board`): capsules and
       polygons per copper layer, a grid index, holes, keepouts and the outline; written without
       outside crates.
@@ -93,7 +119,9 @@ with WebGPU) under MIT. Estimate ~15k lines:
       off by default (`--features gpu` builds it in, `--gpu` warns), kept for a frontier or
       windowed kernel; the browser's WebGPU copy was deleted. What runs: A* on the CPU, natively
       and in the tab's worker pool.
-- [ ] Topo with rip-up, nudge and diffusion on the core.
+- [x] Topological routing with its own rip-up (`topo`), and rip-up and nudge in the grid
+      router (below). The command no longer links `topo` (REMEDIATION Stage 7); the crate
+      builds and tests in the workspace.
 - [x] A* search on the CPU (routes as cheap as the full field, a fraction of the work), zones
       sized per pair of net classes, legs necked down to the narrowest track out of crowded pads,
       and a rip-up finisher: a blocked connection may cross copper the router laid, which is
@@ -111,9 +139,13 @@ with WebGPU) under MIT. Estimate ~15k lines:
 - [x] `tools/kicad_bench.py`: both routers on the same KiCad board, judged by KiCad after a
       refill. Earring: core 5 open / 0 new errors / 304 vias / 48 s; copperroute grid 18 / 0 /
       196 / 427 s; copperroute maze 37 / 2 / 140 / 150 s. (Nudge and bluebuzz still to run.)
-- [ ] Fewer vias (the core uses ~1.5× copperroute's); diffusion on the core.
-- [ ] copperroute kept as the reference router across the process boundary until the core
-      matches it on the leaderboards.
+- [ ] Fewer vias. The core used ~1.5× copperroute's on the earring, and 5.7× FreeRouting's on
+      PCBench (base-1, `docs/pcbench.md`). Since then: a via pass after tightening, and a 5 mm
+      via price that took 6% off the sample's vias (REMEDIATION Stage 7).
+- [ ] Diffusion on the core.
+- [x] The core replaced copperroute as the router (earring by `tools/kicad_bench.py`: core 5
+      open, copperroute's grid 18). copperroute stays as a legacy reference across the process
+      boundary.
 
 ## Phase 2d — Our code out of the copperroute fork
 
@@ -124,13 +156,14 @@ model, so they move by being re-targeted onto the core's `board` crate, not copi
 leans on copperroute's push-and-shove (a freerouting port) and is rewritten fresh.
 
 - [x] Push field (the dipole, done our way): parts and copper flow together, only locked things
-      stay, copper ripped only where pushed into something that cannot move (`grid::push`,
-      `--push`). Nudge steps push instead of ripping.
+      stay, copper ripped only where pushed into something that cannot move (`grid::push`).
+      Nudge steps push instead of ripping. The `--push` flag was removed in REMEDIATION Stage 7.
 - [ ] copper-morph: warp field (CG), relax, reshape, move oracle and settle driver, diffusion
       placement, morph frames.
-- [x] copper-topo: the topological router (world, funnel), as `topo` (`--topo`).
+- [x] copper-topo: the topological router (world, funnel), as `topo`. Its `--topo` flags were
+      removed in REMEDIATION Stage 7; the crate stays, unlinked.
 - [x] copper-gpu's blame (who blocks an open connection), as `grid::blame` (`--blame`); the rest was already in the core.
-- [ ] ultraroute commands for settle, reshape, band, blame and frames.
+- [ ] ultraroute commands for settle, reshape, band and frames. (Blame is `--blame`, above.)
 - [ ] Our crates removed from the fork once each port matches it on the tests.
 
 ## Phase 3 — The test suite as a library
@@ -141,8 +174,8 @@ the referee, leaderboards and best results.
 - [ ] Python package (`ultraroute`): `Job`, `Config`, `run`, `score`, `compare`; usable as a
       library, a CLI and from JSON configs; any router (copperroute backends, freerouting, an
       external command) behind one interface; KiCad import/export and checks.
-- [ ] Rust side: one facade crate over copperroute for routing and placement, with a stable
-      options type.
+- [ ] Rust side: a stable options type for the core's routing and placement (today
+      `ultraroute::Args` and the grid crate's option structs; `docs/library.md`).
 - [ ] Documentation: quick start, API reference, how to add a board, a router, a placer; served
       locally with the project.
 - [ ] Tests: unit tests for the runner and referee, small fixture boards end to end, and a
@@ -163,7 +196,7 @@ suite.
 
 A front end that shows the router working in real time, at a high frame rate, as it tries
 routes; then lets a person guide it while it runs. The aim is a PCB layout tool built around
-the GPU autorouter, and a place to explore the UX paradigms and algorithms that this kind of
+the autorouter, and a place to explore the UX paradigms and algorithms that this kind of
 collaboration needs.
 
 Phase 5a (now) — play with what we have, on the web first, at `/studio/`:
@@ -181,9 +214,12 @@ Phase 5a (now) — play with what we have, on the web first, at `/studio/`:
       me" (the nudger with every other part locked) for a selected part.
 - [ ] Rubber-banding while a part is dragged: the attached wires keep their route through the
       board and are pulled taut live, falling back to airlines and a reroute when that fails.
-- [ ] The grid router's negotiation rounds as live frames (today its copper appears at once).
+- [x] Negotiation rounds as live frames: the core's `--live` sends each round's trial routes.
+      (copperroute's grid router still shows its copper at once.)
 - [ ] Steer a run without restarting it: lock or move a part, forbid a region, mid-run.
-- [ ] Routers honour the job's time limit throughout (nudge fixed; grid's maze stage overran).
+- [x] The core honours the time limit throughout: one deadline every stage and search keeps
+      (REMEDIATION Stage 3). The slowest sample board at `--timeout 120` took 648 s before it,
+      122 s at Stage 9.
 - [ ] GTK client on the same core (needs `libgtk-4-dev`).
 
 - [ ] Event stream from the routers (copper added, ripped, tried; costs; congestion) with a
@@ -197,5 +233,6 @@ Phase 5a (now) — play with what we have, on the web first, at `/studio/`:
 
 **Licensing (decided 2026-10-24).** ultraroute is MIT. copperroute stays GPL-3.0-only (a
 derivative of freerouting, with parts of KiCad's DRC), and so is everything added inside the
-fork. The studio reaches the router only across a process boundary (the live stream); linking
-the router into the studio, including a WASM build in the web client, would make it GPL.
+fork. The studio reaches copperroute only across a process boundary (the live stream); linking
+copperroute into the studio, including a WASM build in the web client, would make it GPL. The
+MIT core has no such limit: the studio links it, natively and as WASM.
