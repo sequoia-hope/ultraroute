@@ -203,3 +203,25 @@ fn copper_text_of_several_lines_is_as_tall_as_all_of_them() {
     });
     assert!(!check_item(&b, t).is_empty(), "through the third line");
 }
+
+#[test]
+fn an_edge_clearance_rule_holds_copper_further_from_edge_circles_only() {
+    let text = "(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))
+         (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user))
+         (net 0 \"\") (net 1 \"A\") (net 2 \"B\")
+         (gr_rect (start 0 0) (end 30 30) (layer \"Edge.Cuts\") (width 0.1))
+         (gr_circle (center 15 15) (end 16.5 15) (layer \"Edge.Cuts\") (width 0.1)))";
+    let (pcb, copper) = kicad_pcb::parse_board(text).unwrap();
+    let mut rules = kicad_pcb::Rules::parse(r#"{"board":{"design_settings":{"rules":{"min_clearance":0.2,"min_copper_edge_clearance":0.3}}}}"#).unwrap();
+    let plain = Board::new(&pcb, &copper, rules.clone());
+    rules.apply_custom("(rule \"cast hole\" (constraint edge_clearance (min 0.5mm)) (condition \"B.Layer == 'Edge.Cuts' && B.Shape == 'Circle'\"))", "test");
+    let ruled = Board::new(&pcb, &copper, rules);
+    // A 0.2 mm track whose edge is 0.4 mm from the 1.5 mm hole, and one 0.4 mm from the outline.
+    for (mut b, hole_short) in [(plain, false), (ruled, true)] {
+        let by_hole = track(&mut b, 15.0 + 1.5 + 0.4 + 0.1);
+        let found = check_item(&b, by_hole);
+        assert_eq!(found.iter().any(|v| v.rule == Rule::EdgeClearance && v.required == nm(0.5e-3)), hole_short, "{found:?}");
+        let by_outline = track(&mut b, 0.4 + 0.1);
+        assert!(check_item(&b, by_outline).is_empty(), "the outline keeps the board's 0.3 mm");
+    }
+}

@@ -1,7 +1,8 @@
 //! Design rules and net classes from a `.kicad_pro`, in metres, and the custom rules of a
 //! `.kicad_dru` beside it that the router understands: the stricter clearances a fab sets for
-//! through-hole pad holes and between SMD pads, and the narrowest track a net or net class may
-//! have. [`Rules::read`] warns of any other custom rule, which is not applied.
+//! through-hole pad holes and between SMD pads, the narrowest track a net or net class may
+//! have, and the edge clearance of Edge.Cuts circles or arcs. [`Rules::read`] warns of any other
+//! custom rule, which is not applied.
 
 use std::path::Path;
 
@@ -38,6 +39,10 @@ pub struct Rules {
     /// From custom rules: the narrowest track of a net (`Net`) or of a class's nets (`Class`).
     #[serde(default)]
     pub min_widths: Vec<(Select, f64)>,
+    /// From custom rules: the edge clearance of Edge.Cuts primitives of one shape, by KiCad's
+    /// name for it (`Circle` or `Arc`), where it is more than the board's.
+    #[serde(default)]
+    pub edge_clearances: Vec<(String, f64)>,
     pub warnings: Vec<String>,
 }
 
@@ -139,6 +144,7 @@ impl Rules {
             pth_hole_to_hole: 0.0,
             smd_pad_clearance: 0.0,
             min_widths: Vec::new(),
+            edge_clearances: Vec::new(),
             warnings: Vec::new(),
         })
     }
@@ -149,7 +155,10 @@ impl Rules {
     /// `A.Pad_Type == 'Through-hole'` with `hole_clearance`;
     /// `A.Pad_Type == 'Through-hole' && B.Pad_Type == 'Through-hole'` with `hole_to_hole`;
     /// `A.Pad_Type == 'SMD' && B.Pad_Type == 'SMD'` with `clearance`;
-    /// `A.NetName == 'X'` or `A.NetClass == 'X'`, or several joined by `||`, with `track_width`.
+    /// `A.NetName == 'X'` or `A.NetClass == 'X'`, or several joined by `||`, with `track_width`;
+    /// `B.Shape == 'Circle'` or `'Arc'`, with `B.Layer == 'Edge.Cuts'` or not, with
+    /// `edge_clearance` (for Edge.Cuts primitives of that shape), or no condition at all, which
+    /// raises the board's edge clearance.
     /// KiCad tries a rule both ways round, so the first holds wherever either item is a
     /// through-hole pad.
     pub fn apply_custom(&mut self, text: &str, source: &str) {
@@ -162,6 +171,14 @@ impl Rules {
             for constraint in &constraints {
                 let kind = constraint.trim_start_matches("(constraint").split_whitespace().next().unwrap_or("").to_string();
                 let min = forms(constraint, "min").first().and_then(|m| length(m.trim_start_matches("(min").trim_end_matches(')')));
+                if kind == "edge_clearance" {
+                    match (condition.as_str(), edge_shape(&condition), min) {
+                        ("", _, Some(v)) => self.min_copper_edge_clearance = self.min_copper_edge_clearance.max(v),
+                        (_, Some(shape), Some(v)) => self.edge_clearances.push((shape, v)),
+                        _ => understood = false,
+                    }
+                    continue;
+                }
                 if kind == "track_width" {
                     match (selects(&condition), min) {
                         (Some(nets), Some(v)) => self.min_widths.extend(nets.into_iter().map(|n| (n, v))),
@@ -215,6 +232,12 @@ impl Rules {
             .fold(self.min_track_width, f64::max)
     }
 
+    /// The clearance copper keeps from an Edge.Cuts primitive of KiCad's `shape` (`Segment`,
+    /// `Arc`, `Circle`): the board's, or a custom rule's for the shape where that is more.
+    pub fn edge_clearance_of(&self, shape: &str) -> f64 {
+        self.edge_clearances.iter().filter(|(s, _)| s == shape).map(|(_, v)| *v).fold(self.min_copper_edge_clearance, f64::max)
+    }
+
     /// The clearance the router must keep between two nets' copper: the larger of their
     /// classes' clearances, and never less than the board minimum.
     pub fn clearance(&self, a: &str, b: &str) -> f64 {
@@ -233,6 +256,23 @@ fn selects(condition: &str) -> Option<Vec<Select>> {
             quoted("A.NetName==").map(Select::Net).or_else(|| quoted("A.NetClass==").map(Select::Class))
         })
         .collect()
+}
+
+/// The Edge.Cuts shape a condition (spaces removed) picks: one `Shape=='Circle'` or
+/// `Shape=='Arc'` term of either item, and at most a `Layer=='Edge.Cuts'` term besides, joined by
+/// `&&`; `None` for any other condition. KiCad draws rectangles and polygons as lines here, so a
+/// rule for those, or for `Segment`, cannot be told apart and is not taken.
+fn edge_shape(condition: &str) -> Option<String> {
+    let mut shape = None;
+    for term in condition.split("&&") {
+        let (_, rest) = term.split_once('.').filter(|(item, _)| matches!(*item, "A" | "B"))?;
+        match rest.split_once("==")? {
+            ("Layer", "'Edge.Cuts'") => {}
+            ("Shape", v @ ("'Circle'" | "'Arc'")) if shape.is_none() => shape = Some(v.trim_matches('\'').to_string()),
+            _ => return None,
+        }
+    }
+    shape
 }
 
 /// `*` matches any run of characters, `?` any one.
@@ -383,5 +423,33 @@ mod tests {
         near(r.min_track_width_of("VSYS"), 0.2e-3);
         near(r.min_track_width_of("OTHER"), 0.0);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn edge_clearance_rules_pick_edge_cuts_shapes() {
+        let mut r = Rules::parse(r#"{"board":{"design_settings":{"rules":{"min_copper_edge_clearance":0.3}}}}"#).unwrap();
+        r.apply_custom(
+            r#"(version 1)
+(rule "cast hole clearance"
+  (constraint edge_clearance (min 0.5mm))
+  (condition "B.Layer == 'Edge.Cuts' && B.Shape == 'Circle'"))
+(rule "arcs"
+  (condition "A.Shape == 'Arc'")
+  (constraint edge_clearance (min 0.4mm)))
+(rule "rectangles"
+  (condition "B.Shape == 'Rectangle'")
+  (constraint edge_clearance (min 0.6mm)))"#,
+            "test",
+        );
+        let near = |a: f64, b: f64| assert!((a - b).abs() < 1e-12, "{a} vs {b}");
+        near(r.edge_clearance_of("Circle"), 0.5e-3);
+        near(r.edge_clearance_of("Arc"), 0.4e-3);
+        near(r.edge_clearance_of("Segment"), 0.3e-3);
+        assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
+        assert!(r.warnings[0].contains("rectangles"));
+        r.apply_custom("(rule \"all\" (constraint edge_clearance (min 0.35mm)))", "test");
+        near(r.min_copper_edge_clearance, 0.35e-3);
+        near(r.edge_clearance_of("Segment"), 0.35e-3);
+        near(r.edge_clearance_of("Circle"), 0.5e-3);
     }
 }

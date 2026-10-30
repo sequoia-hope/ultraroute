@@ -425,7 +425,7 @@ impl ObstacleMap {
             let r = &board.rules;
             [r.min_copper_edge_clearance, r.min_clearance, r.min_hole_clearance, r.pth_hole_clearance, r.min_hole_to_hole].map(f64::to_bits).hash(h);
             board.outline.hash(h);
-            board.outline_edges.iter().map(|&(a, b, _)| (a, b)).collect::<Vec<_>>().hash(h);
+            board.outline_edges.iter().map(|&(a, b, _, c)| (a, b, c)).collect::<Vec<_>>().hash(h);
             (board.via_openings, board.mask_web).hash(h);
             for &id in fixed {
                 let Some(it) = board.item(id) else { continue };
@@ -628,7 +628,7 @@ impl ObstacleMap {
             self.layers,
             trace_margin,
             via_margin,
-            board.outline.iter().map(Vec::len).sum::<usize>() + board.outline_edges.len(),
+            board.outline.iter().map(Vec::len).sum::<usize>() + board.outline_edges.len() + board.outline_edges.iter().map(|e| e.3 as usize).sum::<usize>(),
             outer.and_then(|o| o.first().copied()),
             outer.and_then(|o| o.last().copied()),
         );
@@ -665,8 +665,10 @@ impl ObstacleMap {
                 self.owner[l * cells + c] = SEVERAL;
             }
         }
-        for &(a, b, _) in &board.outline_edges {
+        for &(a, b, _, clearance) in &board.outline_edges {
             {
+                // An edge a custom rule holds copper further from keeps its own margins.
+                let (trace_margin, via_margin) = (trace_margin - edge + clearance, via_margin - edge + clearance);
                 let edge_shape = Shape::Capsule { a, b, r: 0 };
                 let mut hit = Vec::new();
                 self.cells_near(&edge_shape, trace_margin, &mut |c| hit.push(c));

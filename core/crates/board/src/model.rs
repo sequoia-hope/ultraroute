@@ -265,8 +265,10 @@ pub struct Board {
     pub footprints: Vec<FootprintInfo>,
     pub blocks: Vec<Block>,
     pub outline: Vec<Vec<Point>>,
-    /// Precomputed outline edge segments `(a, b, BBox::of([a, b]))` for fast edge-clearance checks.
-    pub outline_edges: Vec<(Point, Point, BBox)>,
+    /// Precomputed outline edge segments `(a, b, BBox::of([a, b]), clearance)` for fast
+    /// edge-clearance checks: the clearance copper keeps from that edge, the board's or a custom
+    /// rule's for its primitive's shape.
+    pub outline_edges: Vec<(Point, Point, BBox, Nm)>,
     pub rules: Rules,
     /// Plane layers, one bit per index into `layers`: whole layers given to one net's pour,
     /// which no track crosses, other nets' vias pass through and which joins its net.
@@ -398,11 +400,19 @@ impl Board {
         }
         // Copper keeps clear of every Edge.Cuts and Margin primitive, whether it closes into the
         // board's loops or not: a slot drawn as an open line, or a cutout the loops missed.
-        for p in pcb.outline.iter().chain(&pcb.margin) {
+        // Custom rules may hold copper further from Edge.Cuts primitives of one shape.
+        let edge_cuts = pcb.outline.len();
+        for (k, p) in pcb.outline.iter().chain(&pcb.margin).enumerate() {
+            let shape = match p.shape {
+                kicad_pcb::OutlineShape::Line { .. } => "Segment",
+                kicad_pcb::OutlineShape::Arc { .. } => "Arc",
+                kicad_pcb::OutlineShape::Circle { .. } => "Circle",
+            };
+            let clearance = nm(if k < edge_cuts { board.rules.edge_clearance_of(shape) } else { board.rules.min_copper_edge_clearance });
             for line in edge_polylines(&p.shape, p.width) {
                 let points: Vec<Point> = line.into_iter().map(Point::from_m).collect();
                 for w in points.windows(2) {
-                    board.outline_edges.push((w[0], w[1], BBox::of([w[0], w[1]])));
+                    board.outline_edges.push((w[0], w[1], BBox::of([w[0], w[1]]), clearance));
                 }
             }
         }
