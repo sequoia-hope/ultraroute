@@ -120,7 +120,7 @@ pub fn diff_pairs(board: &Board) -> Vec<Pair> {
                 let profile = Profile::for_net(board, p as u32);
                 let width = class.map(|c| nm(c.diff_pair_width)).filter(|w| *w > 0).unwrap_or(2 * profile.half_width);
                 let gap = class.map(|c| nm(c.diff_pair_gap)).filter(|g| *g > 0).unwrap_or(profile.clearance);
-                pairs.push(Pair { p: p as u32, n: n as u32, width: width.max(nm(board.rules.min_track_width_of(pn))), gap: gap.max(profile.clearance) });
+                pairs.push(Pair { p: p as u32, n: n as u32, width: width.max(board.min_track_width_of(p as u32)), gap: gap.max(profile.clearance) });
             }
         }
     }
@@ -684,6 +684,8 @@ fn coupled_grid(board: &Board, options: &PairOptions, pair: &Pair, profile: &Pro
         half_width: pair.width + pair.gap / 2,
         via_radius: min_vp / 2 + profile.via_radius,
         drill_radius: min_vp / 2 + profile.drill_radius,
+        // Its own class name is a label: the custom rules are asked about the positive net.
+        net: Some(pair.p),
         ..profile.clone()
     };
     let end_pads = [a.p, a.n, b.p, b.n];
@@ -693,7 +695,8 @@ fn coupled_grid(board: &Board, options: &PairOptions, pair: &Pair, profile: &Pro
     let rules = &board.rules;
     for &pad_id in &end_pads {
         let Some(item) = board.item(pad_id) else { continue };
-        let clr = map.clearance_to(board, item.net).max(board.pad_clearances.get(&pad_id).copied().unwrap_or(0));
+        let implicit = map.clearance_to(board, item.net).max(board.pad_clearances.get(&pad_id).copied().unwrap_or(0));
+        let clr = map.rule_to(board, "clearance", pad_id, item, false, implicit).max(map.rule_to(board, "clearance", pad_id, item, true, implicit));
         let mask_keep = board.mask_openings.get(&pad_id).map_or(0, |(_, by)| by + board.mask_margin());
         let eff_clr = clr.max(mask_keep);
         if item.is_copper() {
@@ -714,9 +717,11 @@ fn coupled_grid(board: &Board, options: &PairOptions, pair: &Pair, profile: &Pro
         }
         if let Some((hc, hr)) = item.hole {
             let hole = Shape::Capsule { a: hc, b: hc, r: hr };
-            let through_hole = matches!(item.kind, Kind::Pad { plated: true, .. });
-            let hole_clr = if through_hole { nm(rules.min_hole_clearance.max(rules.pth_hole_clearance)) } else { nm(rules.min_hole_clearance) };
-            let via_margin = (fat.drill_radius + nm(rules.min_hole_to_hole)).max(fat.via_radius + hole_clr);
+            let plain = nm(rules.min_hole_clearance);
+            let hole_clr = map.rule_to(board, "hole_clearance", pad_id, item, true, plain).max(map.rule_to(board, "hole_clearance", pad_id, item, false, plain));
+            let to_hole = map.rule_to(board, "hole_to_hole", pad_id, item, true, nm(rules.min_hole_to_hole));
+            let physical = map.rule_to(board, "physical_hole_clearance", pad_id, item, true, 0);
+            let via_margin = (fat.drill_radius + to_hole).max(fat.via_radius + hole_clr.max(physical));
             let mut hit = Vec::new();
             map.cells_near(&hole, via_margin, &mut |c| hit.push(c));
             for &c in &hit {

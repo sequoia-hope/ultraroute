@@ -222,7 +222,8 @@ fn an_edge_clearance_rule_holds_copper_further_from_edge_circles_only() {
         let found = check_item(&b, by_hole);
         assert_eq!(found.iter().any(|v| v.rule == Rule::EdgeClearance && v.required == nm(0.5e-3)), hole_short, "{found:?}");
         let by_outline = track(&mut b, 0.4 + 0.1);
-        assert!(check_item(&b, by_outline).is_empty(), "the outline keeps the board's 0.3 mm");
+        let f = check_item(&b, by_outline);
+        assert!(f.is_empty(), "the outline keeps the board's 0.3 mm: {f:?}");
     }
 }
 

@@ -46,7 +46,7 @@ pub fn necks(board: &Board, laid: &[ItemId]) -> Vec<Neck> {
         }
         let name = board.net_name(it.net).to_string();
         let profile = Profile::for_net(board, it.net);
-        let rule_min = nm(board.rules.min_track_width_of(&name));
+        let rule_min = board.min_track_width_of(it.net);
         let breaks_rule = rule_min > nm(board.rules.min_track_width) && width + SLACK < rule_min;
         // The pin it enters: a pad of its net on its layer under one of its ends.
         let layer = it.layers.trailing_zeros() as usize;

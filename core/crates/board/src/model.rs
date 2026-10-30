@@ -315,10 +315,16 @@ pub struct Board {
     pub warnings: Vec<String>,
     /// Clearances per net number, in nanometres, so `clearance(a, b)` is two array lookups.
     net_clearances: Vec<Nm>,
+    /// Each net's class as KiCad names it (`A,B,Default`), for the custom rules.
+    pub(crate) class_names: Vec<String>,
+    /// Whether a custom rule tells nets apart by name (see [`Board::rules_name_nets`]).
+    pub(crate) names_nets: bool,
     min_clearance_nm: Nm,
     /// The checks' limits, worked out once from the rules and the pads' openings and clearances,
     /// which only [`Board::new`] sets: a check of one item no longer walks every pad.
     pub(crate) limits: crate::check::Limits,
+    /// The custom rules (`.kicad_dru`), read; empty without one.
+    pub custom: std::sync::Arc<kicad_pcb::dru::RuleSet>,
     items: Vec<Option<Item>>,
     /// Cached shape bounding boxes (`item.shape.bbox()`) parallel to `items`.
     shape_bboxes: Vec<BBox>,
@@ -362,7 +368,21 @@ impl Board {
         Ok((Board::new(&pcb, &copper, rules), text))
     }
 
-    pub fn new(pcb: &Pcb, copper: &Copper, rules: Rules) -> Board {
+    pub fn new(pcb: &Pcb, copper: &Copper, mut rules: Rules) -> Board {
+        let custom = match &rules.custom {
+            Some((source, text)) => match kicad_pcb::dru::RuleSet::parse(text) {
+                Ok(set) => {
+                    let said = Board::custom_warnings(&set, source);
+                    rules.warnings.extend(said);
+                    set
+                }
+                Err(e) => {
+                    rules.warnings.push(format!("{source}: {e}; no custom rule is applied"));
+                    Default::default()
+                }
+            },
+            None => Default::default(),
+        };
         let layers: Vec<String> = copper.layers.iter().map(|l| l.name.clone()).collect();
         let mask = |names: &[String]| -> u64 {
             copper.expand(names).iter().filter_map(|n| layers.iter().position(|l| l == n)).fold(0, |m, i| m | 1 << i)
@@ -378,6 +398,7 @@ impl Board {
             .iter()
             .map(|name| nm(rules.class_of(name).map_or(0.0, |c| c.clearance)).max(min_clearance_nm))
             .collect();
+        let class_names: Vec<String> = nets.iter().map(|name| rules.class_of(name).map(|c| c.name).unwrap_or_default()).collect();
         let blocks = Block::of(pcb, copper);
         let mut board = Board {
             layers: layers.clone(),
@@ -419,13 +440,17 @@ impl Board {
             pour_cost: 0.0,
             warnings: pcb.warnings.iter().chain(&copper.warnings).cloned().collect(),
             net_clearances,
+            class_names,
+            names_nets: false,
             min_clearance_nm,
             limits: Default::default(),
+            custom: std::sync::Arc::new(custom),
             items: Vec::new(),
             shape_bboxes: Vec::new(),
             bboxes: Vec::new(),
             cells: HashMap::new(),
         };
+        board.names_nets = crate::custom::names_nets(&board.custom);
         match pcb.outline_loops() {
             Ok(loops) => {
                 for l in std::iter::once(&loops.outer).chain(&loops.holes) {
@@ -437,15 +462,19 @@ impl Board {
         }
         // Copper keeps clear of every Edge.Cuts and Margin primitive, whether it closes into the
         // board's loops or not: a slot drawn as an open line, or a cutout the loops missed.
-        // Custom rules may hold copper further from Edge.Cuts primitives of one shape.
+        // Custom rules may set an edge clearance by the primitive's shape and layer; one that
+        // turns on the copper (a track, a net) is taken at its strictest for every copper item.
         let edge_cuts = pcb.outline.len();
+        let implicit = nm(board.rules.min_copper_edge_clearance);
         for (k, p) in pcb.outline.iter().chain(&pcb.margin).enumerate() {
             let shape = match p.shape {
                 kicad_pcb::OutlineShape::Line { .. } => "Segment",
                 kicad_pcb::OutlineShape::Arc { .. } => "Arc",
                 kicad_pcb::OutlineShape::Circle { .. } => "Circle",
             };
-            let clearance = nm(if k < edge_cuts { board.rules.edge_clearance_of(shape) } else { board.rules.min_copper_edge_clearance });
+            let edge = crate::custom::Thing::Edge { shape, layer: if k < edge_cuts { "Edge.Cuts" } else { "Margin" } };
+            let copper = crate::custom::Thing::Copper(&board);
+            let clearance = (0..board.layers.len()).map(|l| board.rule_min("edge_clearance", &copper, Some(&edge), l, implicit)).max().unwrap_or(implicit);
             for line in edge_polylines(&p.shape, p.width) {
                 let points: Vec<Point> = line.into_iter().map(Point::from_m).collect();
                 for w in points.windows(2) {

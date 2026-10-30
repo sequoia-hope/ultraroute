@@ -15,6 +15,7 @@
 //! author), and the router's `board` crate builds its model from this one.
 
 pub mod copper;
+pub mod dru;
 pub mod model;
 pub mod outline;
 pub mod read;
