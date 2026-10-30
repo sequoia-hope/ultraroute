@@ -300,7 +300,10 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
     let on_copper = |n: &Node| n.find("layer").and_then(|l| l.args().first()).and_then(Node::text).is_some_and(|l| l.ends_with(".Cu"));
     let unread_kind = |n: &Node| matches!(n.head(), Some("gr_curve" | "fp_curve" | "gr_text_box" | "fp_text_box" | "dimension" | "table")) && on_copper(n);
     let unused_layers = |n: &Node| n.find("remove_unused_layers").is_some_and(|r| r.args().first().and_then(Node::text) != Some("no"));
-    let (mut unread, mut padstacks, mut rings) = (0, 0, 0);
+    let (mut unread, mut padstacks, mut rings, mut teardrops) = (0, 0, 0, 0);
+    // A tuning pattern's tracks were tuned to a length by hand: they are held as they are.
+    let mut tuned: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut patterns = 0;
     let mut footprint = 0;
     for child in root.args() {
         match child.head() {
@@ -326,6 +329,12 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
                 span: child.pos().into(),
             }),
             _ if unread_kind(child) => unread += 1,
+            Some("generated") => {
+                if child.find("type").and_then(|t| t.args().first()).and_then(Node::text) == Some("tuning_pattern") {
+                    patterns += 1;
+                    tuned.extend(child.find("members").into_iter().flat_map(|m| m.args().iter().filter_map(Node::text).map(str::to_string)));
+                }
+            }
             Some("via") => {
                 rings += usize::from(unused_layers(child));
                 let names: Vec<String> = required(child, "layers")?
@@ -347,7 +356,10 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
                     span: child.pos().into(),
                 });
             }
-            Some("zone") => copper.zones.push(read_zone(child, None)?),
+            Some("zone") => {
+                teardrops += usize::from(child.find("attr").is_some_and(|a| a.find("teardrop").is_some()));
+                copper.zones.push(read_zone(child, None)?)
+            }
             Some("group") => copper.groups.push(Group {
                 name: child.args().first().and_then(Node::text).unwrap_or("").to_string(),
                 uuid: uuid(child),
@@ -403,6 +415,21 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
             }
             _ => {}
         }
+    }
+    if patterns > 0 {
+        let mut held = 0;
+        for t in copper.tracks.iter_mut().filter(|t| tuned.contains(&t.uuid)) {
+            t.locked = true;
+            held += 1;
+        }
+        for a in copper.arcs.iter_mut().filter(|a| tuned.contains(&a.uuid)) {
+            a.locked = true;
+            held += 1;
+        }
+        copper.warnings.push(format!("{patterns} tuning pattern(s): their {held} track(s) are held as tuned (locked)"));
+    }
+    if teardrops > 0 {
+        copper.warnings.push(format!("{teardrops} teardrop zone(s) are kept as zones: tracks the router lays get none; regenerate teardrops in KiCad"));
     }
     if unread > 0 {
         copper.warnings.push(format!("{unread} curve(s), text box(es), dimension(s) or table(s) on copper layers are not read as copper"));

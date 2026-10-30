@@ -155,6 +155,28 @@ impl Board {
         self.class_names.get(net as usize).map_or("", String::as_str)
     }
 
+    /// The narrowest track the custom rules allow whatever the net, on any layer: the board's
+    /// minimum, or the last `track_width` rule that surely holds for a track of no net in
+    /// particular (a fab's blanket 0.15 mm). A forced neck may break a net's own width rule, and
+    /// says so, but keeps to this.
+    pub fn min_track_width_any(&self) -> Nm {
+        let floor = nm(self.rules.min_track_width);
+        if !self.custom.has("track_width") {
+            return floor;
+        }
+        (0..self.layers.len())
+            .map(|l| {
+                let track = Thing::New { board: self, via: false, net: None, class: "", width: 0, drill: 0, layer: Some(l), area: Area::Unknown };
+                let r = self.custom.resolve("track_width", &track, None, &self.layers[l], self.layers.len());
+                match r.sure {
+                    Some((rule, c)) if rule.severity != Severity::Ignore => c.min.map_or(floor, nm),
+                    _ => floor,
+                }
+            })
+            .max()
+            .unwrap_or(floor)
+    }
+
     /// Warnings for the custom rules the router does not keep to: those it could not read, and
     /// those whose every constraint is one it does not model, on copper it lays.
     pub(crate) fn custom_warnings(set: &RuleSet, source: &str) -> Vec<String> {

@@ -26,8 +26,9 @@ pub struct Profile {
     pub narrow_half_width: Nm,
     /// The board's minimum track, or the net's own from a custom rule: no neck goes below it.
     pub min_half_width: Nm,
-    /// The narrowest track the rules allow anywhere, the floor of a forced neck
-    /// ([`Profile::forced_necks`]): the board's minimum unless a custom rule sets another.
+    /// The narrowest track the rules allow for any net, the floor of a forced neck
+    /// ([`Profile::forced_necks`]): the board's minimum unless a custom rule for every net sets
+    /// another.
     pub board_min_half_width: Nm,
     pub clearance: Nm,
     pub via_radius: Nm,
@@ -92,9 +93,9 @@ impl Profile {
             half_width,
             narrow_half_width: if power { half_width } else { (nm(min_width) / 2).clamp(1, half_width.max(1)) },
             min_half_width: (nm(min_width) / 2).clamp(1, half_width.max(1)),
-            // The rules' floor: the board's minimum, or a custom rule's where the last that holds
-            // sets another (a fab's 0.15 mm on outer layers over a board minimum of 0.12).
-            board_min_half_width: (nm(min_width) / 2).clamp(1, half_width.max(1)),
+            // The rules' floor for every net: the board's minimum, or a custom rule's that holds
+            // whatever the net (a fab's 0.15 mm over a board minimum of 0.12).
+            board_min_half_width: (board.min_track_width_any() / 2).clamp(1, half_width.max(1)),
             clearance: take(class.map(|c| c.clearance), rules.min_clearance),
             via_radius: (diameter / 2).max(drill / 2 + ring),
             drill_radius: drill / 2,
