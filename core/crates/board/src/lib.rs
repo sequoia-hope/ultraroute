@@ -7,6 +7,7 @@ pub mod connect;
 pub mod geom;
 pub mod fill;
 pub mod regions;
+pub mod work;
 
 pub use model::{Block, Board, FootprintInfo, Item, ItemId, Kind, LoadError, DRAWN};
 pub use check::{check, check_item, check_item_with_pours, intrudes, mask_gap, mask_pair_gap, Rule, Violation, MASK_MARGIN};

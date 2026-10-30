@@ -214,6 +214,7 @@ impl ObstacleMap {
     /// A map covering only `bounds`, for fine-grid work such as escaping a single package without
     /// paying for a fine grid over the whole board.
     pub fn window(board: &Board, profile: Profile, h: Nm, bounds: board::BBox, pours_block: bool) -> ObstacleMap {
+        crate::work::add(&crate::work::MAPS, 1);
         let (x0, y0) = (bounds.min.x, bounds.min.y);
         let nx = ((bounds.max.x - x0) / h).max(1) as usize;
         let ny = ((bounds.max.y - y0) / h).max(1) as usize;
@@ -264,6 +265,7 @@ impl ObstacleMap {
     /// are copied, and only the unlocked tracks and vias in reach are stamped, not the pads and
     /// pours again.
     pub fn subwindow(&self, board: &Board, bounds: board::BBox) -> ObstacleMap {
+        crate::work::add(&crate::work::MAPS, 1);
         let h = self.h;
         let i0 = (bounds.min.x - self.x0).div_euclid(h).clamp(0, self.nx.saturating_sub(1) as Nm) as usize;
         let j0 = (bounds.min.y - self.y0).div_euclid(h).clamp(0, self.ny.saturating_sub(1) as Nm) as usize;
@@ -332,6 +334,7 @@ impl ObstacleMap {
 
     /// [`ObstacleMap::without`], or `None` if `deadline` passes first.
     pub fn without_by(board: &Board, profile: Profile, h: Nm, pours_block: bool, skip: &dyn Fn(ItemId) -> bool, deadline: &Deadline) -> Option<ObstacleMap> {
+        crate::work::add(&crate::work::MAPS, 1);
         let b = map_extent(board);
         let (x0, y0) = (b.min.x, b.min.y);
         let nx = ((b.max.x - x0) / h).max(1) as usize;
