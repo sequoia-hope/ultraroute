@@ -28,9 +28,9 @@ mod regions;
 
 pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--no-negotiate-vias] [--no-negotiate-rip] [--no-negotiate-tree] [--negotiate-jacobi] [--negotiate-reroute-all] [--negotiate-legacy] [--diff-pairs] [--diff-pairs-legacy] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner|same] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--via-cost MM[,OPEN_MM]] [--no-directional] [--no-reduce-vias] [--gpu] \
 [--timeout SECONDS] [--cell MM] [--first NET,...] [--first-negotiate] [--first-weight W] [--restart N] [--topo-first REF,...|auto] [--topo-trapped] [--topo-trapped-rip] [--topo-sample MM] \
-[--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--push-decay D] [--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--uuid-seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
+[--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--uuid-seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
 [--recipe default|bench|minimal] [--live PATH|-] [--live-fps N] [--live-step MS] [--blame]
---push and --place take millimetres with y pointing up: give KiCad's y negated (KiCad y 127.5 is -127.5).";
+--place takes millimetres with y pointing up: give KiCad's y negated (KiCad y 127.5 is -127.5).";
 
 pub struct Args {
     pub input: String,
@@ -117,12 +117,6 @@ pub struct Args {
     pub topo_trapped_rip: bool,
     /// Outline sample spacing for topological passes, in nanometres.
     pub topo_sample: Option<Nm>,
-    /// A push field applied after routing, in millimetres: centre, radius, outward flow and an
-    /// optional flow along a direction.
-    pub push: Option<[f64; 6]>,
-    pub push_steps: usize,
-    /// How fast the push field falls off beyond its radius (2 by default: as 1/d far out).
-    pub push_decay: f64,
     /// Plough a way out for each open connection trapped at a fine-pitch part's pads.
     pub shove: bool,
     /// How the plough clears the copper in the way, its reach, the rip-up repair after each try,
@@ -175,7 +169,7 @@ pub const RECIPE: &str = "--negotiate --rip-up --tighten --prefanout --diff-pair
 /// gets those alone, as before there was a default.
 const STAGE_FLAGS: &[&str] = &[
     "--negotiate", "--rip-up", "--tighten", "--prefanout", "--diff-pairs", "--shove", "--shove-plough", "--nudge", "--topo", "--topo-first",
-    "--topo-trapped", "--topo-trapped-rip", "--chase", "--push", "--restart", "--first",
+    "--topo-trapped", "--topo-trapped-rip", "--chase", "--restart", "--first",
     // Loading a board to look at it names no stage to run, and wants none.
     "--no-route",
 ];
@@ -264,9 +258,6 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
         topo_trapped: false,
         topo_trapped_rip: false,
         topo_sample: None,
-        push: None,
-        push_steps: 20,
-        push_decay: 2.0,
         shove: false,
         shove_plough: None,
         shove_reach: None,
@@ -432,14 +423,6 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
                 a.nudge = true;
                 a.nudge_guided = true;
             }
-            "--push" => {
-                let v = value()?;
-                let n: Vec<f64> = v.split(',').map(|s| s.trim().parse::<f64>()).collect::<Result<_, _>>().map_err(|e| format!("--push {v}: {e}"))?;
-                if n.len() != 4 && n.len() != 6 {
-                    return Err(format!("--push {v}: give X,Y,RADIUS,OUTWARD or X,Y,RADIUS,OUTWARD,DX,DY in mm"));
-                }
-                a.push = Some([n[0], n[1], n[2], n[3], n.get(4).copied().unwrap_or(0.0), n.get(5).copied().unwrap_or(0.0)]);
-            }
             "--shove" => a.shove = true,
             "--shove-plough" => {
                 a.shove = true;
@@ -469,8 +452,6 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
                     _ => return Err(format!("--chase-costs: {v} is not RIP,CHAIN[,LINKS]")),
                 };
             }
-            "--push-steps" => a.push_steps = value()?.parse().map_err(|e| format!("--push-steps: {e}"))?,
-            "--push-decay" => a.push_decay = value()?.parse().map_err(|e| format!("--push-decay: {e}"))?,
             "--blame" => a.blame = true,
             "--via-avoid" => {
                 let v = value()?;
@@ -2026,41 +2007,6 @@ pub fn run_with_solver(
         }
         if !fanout_laid.is_empty() && !a.prefanout_keep_unused {
             laid.append(&mut fanout_laid);
-        }
-        if let Some([x, y, radius, outward, dx, dy]) = a.push.filter(|_| timeline.enter(&run, "push")) {
-            // Same coordinates as --place: the board's y runs the other way.
-            let field = grid::Field {
-                center: Point::new((x * 1e6).round() as i64, (-y * 1e6).round() as i64),
-                outward: outward * 1e6,
-                vector: (dx * 1e6, -dy * 1e6),
-                radius: radius * 1e6,
-                decay: a.push_decay,
-            };
-            say("pushing", format!("flowing everything free to move away from ({x}, {y}) mm"));
-            let locked = locked_footprints(&board, &pair_laid, a.diff_pairs_legacy);
-            let p = grid::push(
-                &mut board,
-                &field,
-                &grid::PushOptions { steps: a.push_steps, locked, pours_block: a.pours_block, deadline: round_deadline.clone(), log: log.clone(), ..Default::default() },
-                &mut laid,
-                &mut |b: &Board| {
-                    if let Some(l) = live.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
-                        l.frame(b, true, Vec::new());
-                    }
-                },
-            );
-            removed.extend(p.removed_spans.iter().copied());
-            let again = grid::route_open(&mut board, solver.as_mut(), &grid::Options { deadline: round_deadline.clone(), ..options.clone() }, &mut watch);
-            laid.extend(again.laid.iter().copied());
-            eprintln!(
-                "push: {} parts moved, {} held back, {} copper moves, {} ripped, {} rerouted, {:.1} s",
-                p.moved.len(),
-                p.held_back,
-                p.flowed,
-                p.ripped,
-                again.routed,
-                started.elapsed().as_secs_f64()
-            );
         }
         if a.restart > 0 {
             let left = open_airlines(&board);

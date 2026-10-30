@@ -1,6 +1,6 @@
-//! A push field: every part and every piece of copper free to move flows with one smooth
-//! displacement field, away from a point and along a direction, falling off with distance. Only
-//! locked parts and locked copper stand still.
+//! A push: every part and every piece of copper free to move flows with one smooth displacement
+//! field, given as a function from a point to its move. Only locked parts and locked copper stand
+//! still. Nudging pushes one part at a time this way.
 //!
 //! Parts move rigidly, each by the field at its pads' centre, and take a smaller step (or none)
 //! where a full one would put their pads or courtyard into something that cannot move. The copper
@@ -16,37 +16,6 @@ use board::{check_item, check_item_with_pours, nm, Board, Item, ItemId, Kind, Po
 use kicad_pcb::Span;
 
 use crate::report::{tell, Log};
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Field {
-    pub center: Point,
-    /// Outward flow, in nanometres: a point one radius from the centre moves this far away from
-    /// it (with `decay` 2). Zero at the centre itself, so the flow tears nothing apart there.
-    pub outward: f64,
-    /// Flow along a direction, in nanometres at the centre.
-    pub vector: (f64, f64),
-    /// Distance over which the field falls off, in nanometres.
-    pub radius: f64,
-    /// How fast it falls off beyond `radius`: the field goes as `(1 + d²/radius²)^(-decay/2)`.
-    pub decay: f64,
-}
-
-impl Field {
-    /// The displacement at `p`, in nanometres.
-    pub fn at(&self, p: Point) -> (f64, f64) {
-        let (dx, dy) = ((p.x - self.center.x) as f64, (p.y - self.center.y) as f64);
-        let d = dx.hypot(dy);
-        let r = self.radius.max(1.0);
-        let w = (1.0 + (d / r).powi(2)).powf(-0.5 * self.decay);
-        let (mut x, mut y) = (self.vector.0 * w, self.vector.1 * w);
-        if d > 0.0 {
-            let u = 2.0 * self.outward * (d / r) * w;
-            x += u * dx / d;
-            y += u * dy / d;
-        }
-        (x, y)
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct PushOptions {
@@ -148,16 +117,17 @@ pub struct PushStep<'a> {
     pub ripped: &'a [Item],
 }
 
-/// Pushes everything free to move along `field`. `soft` holds the router's copper; copper from
-/// the board file that moves joins it, as it must now be written back.
-pub fn push(board: &mut Board, field: &Field, options: &PushOptions, soft: &mut Vec<ItemId>, watch: &mut dyn FnMut(&Board)) -> PushStats {
+/// Pushes everything free to move along `field`, each point's move in nanometres. `soft` holds
+/// the router's copper; copper from the board file that moves joins it, as it must now be written
+/// back.
+pub fn push(board: &mut Board, field: &dyn Fn(Point) -> (f64, f64), options: &PushOptions, soft: &mut Vec<ItemId>, watch: &mut dyn FnMut(&Board)) -> PushStats {
     push_watch(board, field, options, soft, &mut |b, _| watch(b))
 }
 
 /// As [`push`], reporting each step's part moves and ripped copper to `watch`.
 pub fn push_watch(
     board: &mut Board,
-    field: &Field,
+    field: &dyn Fn(Point) -> (f64, f64),
     options: &PushOptions,
     soft: &mut Vec<ItemId>,
     watch: &mut dyn FnMut(&Board, PushStep),
@@ -186,7 +156,7 @@ pub fn push_watch(
             }
             let pads = pads_of(board, f);
             let Some(c) = centre_of(board, &pads) else { continue };
-            let (dx, dy) = field.at(c);
+            let (dx, dy) = field(c);
             let full = (dx / steps as f64, dy / steps as f64);
             if rounded(full) == Point::new(0, 0) {
                 continue;
@@ -259,22 +229,4 @@ pub fn rip_broken_items(board: &mut Board, soft: &mut Vec<ItemId>, pours_block: 
     }
     soft.retain(|id| board.item(*id).is_some());
     (ripped, spans)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_field_flows_away_from_its_centre_and_fades() {
-        let f = Field { center: Point::new(0, 0), outward: 1000.0, vector: (0.0, 0.0), radius: 10_000.0, decay: 2.0 };
-        assert_eq!(f.at(Point::new(0, 0)), (0.0, 0.0));
-        let (x, y) = f.at(Point::new(10_000, 0));
-        assert!((x - 1000.0).abs() < 1e-9 && y == 0.0, "one radius out moves `outward`: {x}");
-        let (x, _) = f.at(Point::new(-10_000, 0));
-        assert!(x < 0.0, "away from the centre on either side");
-        assert!(f.at(Point::new(100_000, 0)).0 < f.at(Point::new(10_000, 0)).0 / 4.0);
-        let g = Field { vector: (500.0, 0.0), outward: 0.0, ..f };
-        assert_eq!(g.at(Point::new(0, 0)), (500.0, 0.0));
-    }
 }

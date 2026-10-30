@@ -75,9 +75,9 @@ the same units. `topo::Options::via_cost` and `rip_cost` are different: lengths 
 `Pcb` is the same frame in metres. Two places flip y:
 
 - The live stream (`Live`, the studio) draws y up, so its millimetres are `(x, -y)`.
-- The command's `--place REF=X,Y` and `--push X,Y,...` take y up too: `run` builds the point as
+- The command's `--place REF=X,Y` takes y up too: `run` builds the point as
   `Point::new(x * 1e6, -y * 1e6)`. To place a part at KiCad's (100, 97.5) you pass
-  `--place U1=100,-97.5`. `--push`'s direction `DX,DY` is flipped the same way.
+  `--place U1=100,-97.5`.
 - `--rip-region X,Y,R` and `--via-avoid X0,Y0,X1,Y1` do not flip: they are KiCad's frame.
 
 In library code there is no flip anywhere: build `Point`s in the board's frame.
@@ -366,15 +366,9 @@ places can be. Shapes claim cells before hulls do, and earlier inclusions before
 
 ### push: a field that moves parts
 
-`grid::push(board, &Field, &PushOptions, soft, watch) -> PushStats` moves every unlocked part by
-a field and lets the copper flow with it.
-
-`grid::Field { center, outward, vector, radius, decay }`, all lengths nanometres. With
-`w = (1 + d²/radius²)^(-decay/2)`, a point `d` from the centre moves `vector * w` plus
-`2 * outward * (d/radius) * w` straight away from the centre. With `decay` 2 a point one radius
-out moves exactly `outward`, and the field falls as `1/d` far out; a larger `decay` keeps it
-local. Positive `outward` is a repulsor, negative an attractor, `vector` a uniform drift that
-fades with the same `w`. `field.at(p)` evaluates it.
+`grid::push(board, &field, &PushOptions, soft, watch) -> PushStats` moves every unlocked part by
+a field and lets the copper flow with it. The field is any `Fn(Point) -> (f64, f64)`: a point's
+move in nanometres.
 
 Each step (`steps`, default 20) moves each part by the field at its pads' centre divided by the
 steps, trying a full, half and quarter step and keeping the first that leaves its pads clear of
@@ -390,16 +384,14 @@ The field moves parts, not copper. Copper only moves because parts did: a push w
 part in reach changes nothing. To move copper by a field directly, use `shift_copper`; copper it
 pushes into something breaks a rule, so rip it with `grid::rip_broken(board, soft, pours_block)`
 and route again. The example does exactly this, and undoes the move when it leaves more open.
-Moved parts must be written back (see the last section).
-
-The command's `--push X,Y,RADIUS,OUTWARD[,DX,DY]` (mm, y up), `--push-steps N` and
-`--push-decay D` (default 2) run one push after rip-up.
+Moved parts must be written back (see the last section). The command pushes only as `--nudge`
+does, one part at a time.
 
 ### nudge: small part moves, judged
 
 `grid::nudge(board, solver, &NudgeOptions, soft, watch) -> NudgeStats` tries moving parts near
-each open connection. Each try is a one-step `push` of one part (`Field` with `outward` 0,
-`vector` the step, `radius` the courtyard's half-diagonal plus 0.5 mm), legal only if the part's
+each open connection. Each try is a one-step `push` of one part (the step at the part's centre,
+fading as `1 / (1 + d²/r²)`, `r` the courtyard's half-diagonal plus 0.5 mm), legal only if the part's
 pads keep every rule and its courtyard meets no other; what it ripped is routed again, and the
 move is kept only if fewer connections are open. `blame` suggests moves first.
 
@@ -499,8 +491,7 @@ it runs `route_open` and the cleanup only; each flag adds a stage. In order:
    `--topo` (`route_topological`, 40% of the time), `--topo-first`, `--first` (priority nets,
    by `route_open` tier by tier or, with `--first-negotiate`, negotiated among themselves),
    `--negotiate` (`route_negotiated`, half the timeout), `route_open` to finish (always),
-   `prune_closed_escapes`, `--rip-up` (`rip_up`), `--chase` (`chase`), the escapes join `laid`,
-   `--push` (`push`, then `route_open`).
+   `prune_closed_escapes`, `--rip-up` (`rip_up`), `--chase` (`chase`), the escapes join `laid`.
 6. **Rescue**: `--shove` (`shove_escape` passes); `--topo-trapped` or
    `--topo-trapped-rip` on what is still open; `--nudge` (`nudge`).
 7. **Finish**: `--tighten` (`pull_tight`); pair copper joins `laid`; `drop_duplicates`;

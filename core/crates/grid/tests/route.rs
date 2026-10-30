@@ -241,12 +241,26 @@ fn board_centre(b: &Board) -> Point {
     Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2)
 }
 
+/// A field moving every point straight away from `centre`: `by` at one `radius` out, nothing at
+/// the centre, falling as 1/d far out.
+fn outward(centre: Point, by: f64, radius: f64) -> impl Fn(Point) -> (f64, f64) {
+    move |p| {
+        let (dx, dy) = ((p.x - centre.x) as f64, (p.y - centre.y) as f64);
+        let d = dx.hypot(dy);
+        if d == 0.0 {
+            return (0.0, 0.0);
+        }
+        let u = 2.0 * by * (d / radius) / (1.0 + (d / radius).powi(2));
+        (u * dx / d, u * dy / d)
+    }
+}
+
 #[test]
 fn a_push_flows_everything_free_away_from_its_centre_and_leaves_locked_things_alone() {
     let (mut b, mut laid) = routed();
     let before = b.clone();
     let centre = board_centre(&b);
-    let field = Field { center: centre, outward: 300_000.0, vector: (0.0, 0.0), radius: 6_000_000.0, decay: 2.0 };
+    let field = outward(centre, 300_000.0, 6_000_000.0);
     let mut frames = 0;
     let p = push(&mut b, &field, &PushOptions { steps: 6, ..Default::default() }, &mut laid, &mut |_| frames += 1);
     assert_eq!(frames, 6, "every step is shown");
@@ -278,7 +292,7 @@ fn copper_that_only_flows_stays_joined() {
     let (mut b, mut laid) = routed();
     let open_now = |b: &Board| connectivity_without_pours(b).airlines.len();
     let open_before = open_now(&b);
-    let field = Field { center: board_centre(&b), outward: 20_000.0, vector: (0.0, 0.0), radius: 8_000_000.0, decay: 2.0 };
+    let field = outward(board_centre(&b), 20_000.0, 8_000_000.0);
     let p = push(&mut b, &field, &PushOptions { steps: 2, ..Default::default() }, &mut laid, &mut |_| {});
     assert!(p.flowed > 0);
     assert!(p.ripped * 20 < p.flowed, "a gentle push rips little: {} ripped of {} moved", p.ripped, p.flowed);
@@ -291,7 +305,7 @@ fn copper_that_only_flows_stays_joined() {
 fn a_zero_field_moves_nothing() {
     let (mut b, mut laid) = routed();
     let before = b.clone();
-    let field = Field { center: board_centre(&b), outward: 0.0, vector: (0.0, 0.0), radius: 5_000_000.0, decay: 2.0 };
+    let field = outward(board_centre(&b), 0.0, 5_000_000.0);
     let p = push(&mut b, &field, &PushOptions::default(), &mut laid, &mut |_| {});
     assert_eq!((p.moved.len(), p.flowed, p.ripped), (0, 0, 0));
     assert_eq!(violations(&b), violations(&before));

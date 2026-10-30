@@ -13,7 +13,7 @@ use board::{check_item, connectivity, connectivity_without_pours, point_segment,
 use kicad_pcb::Span;
 
 use crate::blame::{blame, BlameOptions};
-use crate::push::{push, Field, PushOptions};
+use crate::push::{push, PushOptions};
 use crate::report::{tell, Focus, Log};
 use crate::route::{route_open, FieldSolver, Options};
 
@@ -200,7 +200,13 @@ fn try_step(
     let soft_before = soft.clone();
     let reference = board.footprints[footprint].reference.clone();
     tell(&options.log, "nudging", || format!("{reference}: trying {:+.2}, {:+.2} mm for {why}", by.x as f64 * 1e-6, -by.y as f64 * 1e-6), Some(Focus::Trial { part: footprint, by }));
-    let field = Field { center: centre(board, footprint), outward: 0.0, vector: (by.x as f64, by.y as f64), radius: reach_of(board, footprint), decay: 2.0 };
+    // The step at the part, fading as 1 / (1 + d²/r²) with the distance d from its centre.
+    let (c, r, v) = (centre(board, footprint), reach_of(board, footprint).max(1.0), (by.x as f64, by.y as f64));
+    let field = |p: Point| {
+        let d = ((p.x - c.x) as f64).hypot((p.y - c.y) as f64);
+        let w = (1.0 + (d / r).powi(2)).powf(-1.0);
+        (v.0 * w, v.1 * w)
+    };
     let only = Some(HashSet::from([footprint]));
     let pushed = push(board, &field, &PushOptions { steps: 1, locked: options.locked.clone(), only, pours_block: options.pours_block, deadline: options.deadline.clone(), log: None }, soft, &mut |_| {});
     let moved = pushed.moved.first().map(|&(_, by)| by);
