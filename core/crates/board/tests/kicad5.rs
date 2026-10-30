@@ -225,3 +225,18 @@ fn an_edge_clearance_rule_holds_copper_further_from_edge_circles_only() {
         assert!(check_item(&b, by_outline).is_empty(), "the outline keeps the board's 0.3 mm");
     }
 }
+
+#[test]
+fn an_outline_that_does_not_close_is_reported() {
+    let text = "(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))
+         (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user))
+         (net 0 \"\")
+         (gr_line (start 0 0) (end 30 0) (layer \"Edge.Cuts\") (width 0.1))
+         (gr_line (start 30 0) (end 30 30) (layer \"Edge.Cuts\") (width 0.1)))";
+    let (pcb, copper) = kicad_pcb::parse_board(text).unwrap();
+    let b = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+    assert!(b.outline.is_empty());
+    assert!(b.warnings.iter().any(|w| w.contains("outline")), "{:?}", b.warnings);
+    // A closed outline warns of nothing.
+    assert!(!board("").warnings.iter().any(|w| w.contains("outline")));
+}

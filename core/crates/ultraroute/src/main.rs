@@ -28,7 +28,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    for w in &board.rules.warnings {
+    for w in board.rules.warnings.iter().chain(&board.warnings) {
         eprintln!("warning: {w}");
     }
     // Sized before anything is allocated: a board too large for the machine is fitted or refused,

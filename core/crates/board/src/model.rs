@@ -299,6 +299,9 @@ pub struct Board {
     /// What crossing another net's pour (one refilled round new copper, not a plane) costs, as a
     /// multiple of the length inside: crossing cuts the pour into pieces. 0 for nothing.
     pub pour_cost: f64,
+    /// What reading the board found and could not take as given: the reader's own warnings
+    /// (drawings it skips, values it assumed) and an outline that does not close.
+    pub warnings: Vec<String>,
     /// Clearances per net number, in nanometres, so `clearance(a, b)` is two array lookups.
     net_clearances: Vec<Nm>,
     min_clearance_nm: Nm,
@@ -385,6 +388,7 @@ impl Board {
             via_avoid_cost: 3_000,
             regions: Vec::new(),
             pour_cost: 0.0,
+            warnings: pcb.warnings.iter().chain(&copper.warnings).cloned().collect(),
             net_clearances,
             min_clearance_nm,
             limits: Default::default(),
@@ -393,10 +397,14 @@ impl Board {
             bboxes: Vec::new(),
             cells: HashMap::new(),
         };
-        if let Ok(loops) = pcb.outline_loops() {
-            for l in std::iter::once(&loops.outer).chain(&loops.holes) {
-                board.outline.push(l.points(MAX_ERROR_M).into_iter().map(Point::from_m).collect());
+        match pcb.outline_loops() {
+            Ok(loops) => {
+                for l in std::iter::once(&loops.outer).chain(&loops.holes) {
+                    board.outline.push(l.points(MAX_ERROR_M).into_iter().map(Point::from_m).collect());
+                }
             }
+            // Copper still keeps clear of every edge primitive (below); the map covers the items.
+            Err(e) => board.warnings.push(format!("board outline: {e}; the board's extent is taken from its parts")),
         }
         // Copper keeps clear of every Edge.Cuts and Margin primitive, whether it closes into the
         // board's loops or not: a slot drawn as an open line, or a cutout the loops missed.
