@@ -24,8 +24,6 @@ pub mod search;
 pub mod shove;
 pub mod tune;
 pub mod vias;
-#[cfg(feature = "gpu")]
-pub mod sweep;
 
 pub use blame::{blame, Blame, BlameOptions, BlameReport};
 pub use cleanup::{drop_duplicates, drop_duplicates_watch, prune_dangling, prune_dangling_watch, pull_tight, pull_tight_watch, split_at_joins, CleanStats};
@@ -47,5 +45,3 @@ pub use vias::{reduce_vias, reduce_vias_all, ViaOptions, ViaStats};
 pub use shove::{shove_escape, Plough, ShoveEvent, ShoveOptions, ShoveRound, ShoveStats, ShoveTry};
 #[cfg(feature = "gpu")]
 pub use gpu::GpuSolver;
-#[cfg(feature = "gpu")]
-pub use sweep::GpuSweepSolver;
