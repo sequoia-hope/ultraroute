@@ -172,18 +172,19 @@ fn main() {
         }
         return;
     }
+    // The MIT core is the studio's router; copperroute, the legacy one, is optional.
+    let core = flag("--core").map_or_else(|| root.join("core/target/release/ultraroute"), PathBuf::from);
+    if !core.is_file() {
+        fail(&format!("no core router at {} (build it with studio/build.sh, or pass --core)", core.display()));
+    }
     let router = flag("--router").map_or_else(|| root.join("target-topo/release/copperroute"), PathBuf::from);
     if !router.is_file() {
-        fail(&format!("no router at {} (build it, or pass --router)", router.display()));
+        eprintln!("studio-server: no copperroute at {} (the legacy router; pass --router to use one); jobs run on the core", router.display());
     }
     let port = flag("--port")
         .or_else(|| std::env::var("PORT").ok())
         .or_else(|| registry_port(&root))
         .unwrap_or_else(|| fail("no port: pass --port, set $PORT, or register the project with `proj add`"));
-    let core = flag("--core").map_or_else(|| root.join("core/target/release/ultraroute"), PathBuf::from);
-    if !core.is_file() {
-        eprintln!("studio-server: no core router at {} (build it, or pass --core); only copperroute will run", core.display());
-    }
     let config = Arc::new(Config { runs: root.join("studio/runs"), root, router, core });
     let runner = Arc::new(Runner::new());
     let listener = TcpListener::bind(format!("0.0.0.0:{port}")).unwrap_or_else(|e| fail(&format!("port {port}: {e}")));
