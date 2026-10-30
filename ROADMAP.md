@@ -6,11 +6,12 @@ Work proceeds one phase at a time; each phase ends with its scores on the test b
 ## State at 2026-10-30
 
 The MIT core (Phase 2c) is the router: the command, the studio and the benchmark all run it,
-and copperroute is a legacy reference. Stages 0 to 11 of a staged remediation plan
-(`REMEDIATION.md`, not tracked) have been worked through; Stage 7's move of the copperroute-era
-files waits on a decision, and Stage 12 (a global routing stage) has not begun. Each stage's
-measurements are in `~/Software/ultraroute-lab/pcbench/runs/remed-N-notes.md`. On the 200-board
-PCBench sample (`--sample 200 --sample-seed 1`, 120 s a board, one thread, judged by KiCad 9):
+and copperroute is a legacy reference, its tools under `legacy/`. Stages 0 to 11 of a staged
+remediation plan (`REMEDIATION.md`, not tracked) are merged; Stage 12 (a global routing stage)
+was measured and stopped (more vias, fewer clean boards; branch `remed/12-global` kept). Each
+stage's measurements are in `~/Software/ultraroute-lab/pcbench/runs/remed-N-notes.md`. On the
+200-board PCBench sample (`--sample 200 --sample-seed 1`, 120 s a board, one thread, judged by
+KiCad 9):
 
 - Stage 0 baseline (commit 184f640, on loaf, four runs): 160 to 161 boards clean. The same
   binary and seed twice disagreed on 3 boards, all at the time limit. The slowest board took
@@ -136,14 +137,14 @@ natively and, compiled to WebAssembly, in the browser tab, on the CPU in both. E
 - [x] Courtyards read; a core nudger (`--nudge`): parts near a blocked airline stepped 0.25–1 mm
       in eight directions, kept only when legal (pads clear, no courtyard overlap) and fewer
       connections stay open. On the packed earring nearly every step is illegal and none helps.
-- [x] `tools/kicad_bench.py`: both routers on the same KiCad board, judged by KiCad after a
+- [x] `legacy/tools/kicad_bench.py`: both routers on the same KiCad board, judged by KiCad after a
       refill. Earring: core 5 open / 0 new errors / 304 vias / 48 s; copperroute grid 18 / 0 /
       196 / 427 s; copperroute maze 37 / 2 / 140 / 150 s. (Nudge and bluebuzz still to run.)
 - [ ] Fewer vias. The core used ~1.5× copperroute's on the earring, and 5.7× FreeRouting's on
       PCBench (base-1, `docs/pcbench.md`). Since then: a via pass after tightening, and a 5 mm
       via price that took 6% off the sample's vias (REMEDIATION Stage 7).
 - [ ] Diffusion on the core.
-- [x] The core replaced copperroute as the router (earring by `tools/kicad_bench.py`: core 5
+- [x] The core replaced copperroute as the router (earring by `legacy/tools/kicad_bench.py`: core 5
       open, copperroute's grid 18). copperroute stays as a legacy reference across the process
       boundary.
 
