@@ -11,6 +11,9 @@ struct Params {
     via_allowed: u32,
     // Independent grids of the same shape laid end to end, one per net routed at once.
     fields: u32,
+    // Non-zero: steps along a layer's own direction cost less than across it, as on the CPU
+    // (search.rs `step_cost`): horizontal on even layers, vertical on odd ones.
+    directional: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -32,12 +35,34 @@ const PATH_STRIDE: u32 = 8192u;
 const TARGET_OFFSET: u32 = 4096u;
 const MAX_PATH_LEN: u32 = 4095u;
 
+// a + b, held at UNREACHED rather than wrapping: a wrapped sum would look like a cheap path.
+fn sat_add(a: u32, b: u32) -> u32 {
+    if (a > UNREACHED - b) {
+        return UNREACHED;
+    }
+    return a + b;
+}
+
+// What a step on `layer` along (di, dj) costs, `base` being the plain grid's 10 or 14.
+fn step_cost(layer: u32, di: i32, dj: i32, base: u32) -> u32 {
+    if (params.directional == 0u) {
+        return base;
+    }
+    if (di != 0 && dj != 0) {
+        return 15u;
+    }
+    if (((layer & 1u) == 0u) == (dj == 0)) {
+        return 10u;
+    }
+    return 12u;
+}
+
 fn offer(field: u32, n: u32, value: u32) {
     let b = atomicLoad(&blocked[n]);
     if ((b & 1u) != 0u) {
         return;
     }
-    let entered = value + penalty[n];
+    let entered = sat_add(value, penalty[n]);
     if (entered > atomicLoad(&state[1u + field])) {
         return;
     }
@@ -87,13 +112,13 @@ fn relax(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(num_workgroups)
         if (ni < 0 || nj < 0 || ni >= i32(params.nx) || nj >= i32(params.ny)) {
             continue;
         }
-        offer(field, base + layer * cells + u32(nj) * params.nx + u32(ni), c + step[k]);
+        offer(field, base + layer * cells + u32(nj) * params.nx + u32(ni), sat_add(c, step_cost(layer, di[k], dj[k], step[k])));
     }
     let vp = via_blocked[field * cells + cell];
     if (params.via_allowed != 0u && vp != UNREACHED) {
         for (var l = 0u; l < params.layers; l++) {
             if (l != layer) {
-                offer(field, base + l * cells + cell, c + params.via_cost + vp);
+                offer(field, base + l * cells + cell, sat_add(sat_add(c, params.via_cost), vp));
             }
         }
     }
@@ -150,7 +175,7 @@ fn trace_paths(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
             let n = layer * cells + u32(nj) * params.nx + u32(ni);
             let cn = atomicLoad(&cost[base + n]);
-            if (cn != UNREACHED && cn + step[k] + pen_at == c_at) {
+            if (cn != UNREACHED && sat_add(sat_add(cn, step_cost(layer, di[k], dj[k], step[k])), pen_at) == c_at) {
                 prev = n;
                 found = true;
                 break;
@@ -162,7 +187,7 @@ fn trace_paths(@builtin(global_invocation_id) gid: vec3<u32>) {
                 if (l != layer) {
                     let n = l * cells + cell;
                     let cn = atomicLoad(&cost[base + n]);
-                    if (cn != UNREACHED && cn + params.via_cost + vp + pen_at == c_at) {
+                    if (cn != UNREACHED && sat_add(sat_add(sat_add(cn, params.via_cost), vp), pen_at) == c_at) {
                         prev = n;
                         found = true;
                         break;

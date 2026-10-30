@@ -8,7 +8,9 @@ license = "MIT"
 # its progress live in the studio's frame format.
 
 [features]
-default = ["gpu"]
+# The GPU field solver is experimental and slower than the CPU's search (REVIEW.md 3.4): built in
+# only when asked for, with --features gpu.
+default = []
 gpu = ["grid/gpu"]
 # A sampling profiler in the binary, needing no perf permissions: with ULTRAROUTE_PROFILE=FILE set,
 # a run writes its stacks to FILE in the collapsed (flame graph) format.

@@ -2,7 +2,7 @@
 //! batches so no single submission holds the GPU long enough to stall the desktop.
 
 use crate::grid::RouteGrid;
-use crate::route::FieldSolver;
+use crate::route::{CpuSolver, FieldSolver};
 use crate::search::{trace_back, walled_in, GridPath, UNREACHED};
 
 /// Relaxation sweeps per submission; the changed flag is read back between submissions.
@@ -312,9 +312,19 @@ impl FieldSolver for GpuSolver {
     }
 }
 
+/// How a batch's relaxation ended.
+#[derive(PartialEq)]
+enum Relaxed {
+    Done,
+    /// The grids' deadline passed first: no field is complete.
+    Cut,
+    /// The device did not give its results back: the CPU solves the batch instead.
+    Failed,
+}
+
 impl GpuSolver {
-    /// Relaxes the batch's fields until nothing changes: false when the grids' deadline cut it short.
-    fn run_relax(&mut self, jobs: &[(&RouteGrid, &[usize], &[usize])], via_cost: u32, with_targets: bool) -> bool {
+    /// Relaxes the batch's fields until nothing changes.
+    fn run_relax(&mut self, jobs: &[(&RouteGrid, &[usize], &[usize])], via_cost: u32, with_targets: bool) -> Relaxed {
         let (first, _, _) = jobs[0];
         let per_field = first.blocked.len();
         let cells = first.nx * first.ny;
@@ -361,10 +371,11 @@ impl GpuSolver {
                 }
             }
             self.scratch_via.extend((0..cells).map(|c| if grid.via_blocked[c] { UNREACHED } else { grid.via_penalty_at(c).min(UNREACHED - 1) }));
-            if grid.penalty.is_empty() {
+            // Each node's whole price, as the CPU reads it: the stage's penalty and the regions' cost.
+            if grid.penalty.is_empty() && grid.region_cost.is_empty() {
                 self.scratch_penalty.resize(self.scratch_penalty.len() + per_field, 0);
             } else {
-                self.scratch_penalty.extend_from_slice(&grid.penalty);
+                self.scratch_penalty.extend((0..per_field).map(|n| grid.penalty_at(n)));
             }
             let mut has_source = false;
             for &s in sources {
@@ -396,7 +407,7 @@ impl GpuSolver {
             via_cost,
             u32::from(first.via.is_some()),
             fields as u32,
-            0,
+            u32::from(first.directional),
             0,
         ];
         let bufs = self.buffers.as_ref().unwrap();
@@ -430,12 +441,14 @@ impl GpuSolver {
             self.queue.submit([encoder.finish()]);
             self.dispatches += u64::from(DISPATCHES_PER_BATCH);
             let changed = Self::read_staging_u32(&self.device, &self.queue, &bufs.state, &bufs.state_staging, 4);
-            if changed.first().copied().unwrap_or(0) == 0 {
-                return true;
+            match changed.first() {
+                None => return Relaxed::Failed,
+                Some(0) => return Relaxed::Done,
+                Some(_) => {}
             }
             // The batch's grids share their stage's deadline; a relaxation cut short finds nothing.
             if jobs[0].0.deadline.expired() {
-                return false;
+                return Relaxed::Cut;
             }
         }
     }
@@ -449,14 +462,20 @@ impl GpuSolver {
         let per_field = jobs[0].0.blocked.len();
         let nodes = per_field * jobs.len();
         let full_jobs: Vec<(&RouteGrid, &[usize], &[usize])> = jobs.iter().map(|&(g, s)| (g, s, &[][..])).collect();
-        if !self.run_relax(&full_jobs, via_cost, false) {
-            return vec![vec![UNREACHED; per_field]; jobs.len()];
+        let cpu = || jobs.iter().map(|&(g, s)| CpuSolver.solve(g, s, via_cost)).collect();
+        match self.run_relax(&full_jobs, via_cost, false) {
+            Relaxed::Cut => return vec![vec![UNREACHED; per_field]; jobs.len()],
+            Relaxed::Failed => return cpu(),
+            Relaxed::Done => {}
         }
         let bufs = self.buffers.as_ref().unwrap();
         let values: Vec<u32> = read_back(&self.device, &self.queue, &bufs.cost, (nodes * 4) as u64)
             .chunks_exact(4)
             .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
+        if values.len() != nodes {
+            return cpu();
+        }
         values.chunks(per_field).map(<[u32]>::to_vec).collect()
     }
 
@@ -470,8 +489,11 @@ impl GpuSolver {
         let per_field = first.blocked.len();
         let cells = first.cell_count();
         let fields = jobs.len();
-        if !self.run_relax(jobs, via_cost, true) {
-            return vec![None; fields];
+        let cpu = || jobs.iter().map(|&(g, s, t)| CpuSolver.route(g, s, t, via_cost)).collect();
+        match self.run_relax(jobs, via_cost, true) {
+            Relaxed::Cut => return vec![None; fields],
+            Relaxed::Failed => return cpu(),
+            Relaxed::Done => {}
         }
         let bufs = self.buffers.as_ref().unwrap();
         let mut encoder = self.device.create_command_encoder(&Default::default());
@@ -489,6 +511,9 @@ impl GpuSolver {
             &bufs.paths_staging,
             (fields * PATH_STRIDE * 4) as u64,
         );
+        if path_words.len() != fields * PATH_STRIDE {
+            return cpu();
+        }
         let mut out = Vec::with_capacity(fields);
         let mut full_costs: Option<Vec<u32>> = None;
         for (f_idx, &(grid, _, targets)) in jobs.iter().enumerate() {
@@ -504,6 +529,10 @@ impl GpuSolver {
                         .collect()
                 });
                 let base = f_idx * per_field;
+                if costs.len() < base + per_field {
+                    out.push(CpuSolver.route(grid, jobs[f_idx].1, targets, via_cost));
+                    continue;
+                }
                 out.push(trace_back(grid, &costs[base..base + per_field], targets, via_cost));
             } else {
                 let slice = &path_words[pbase + 1..pbase + 1 + len];
