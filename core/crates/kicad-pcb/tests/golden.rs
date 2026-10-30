@@ -381,3 +381,14 @@ fn rect_v8_resync_golden_and_values() {
     assert!((loops.outer.signed_area_m2.abs() - 1800.0e-6).abs() < 1e-15);
     assert!(loops.holes.is_empty());
 }
+
+#[test]
+fn footprints_with_no_id_are_read_with_one_of_their_place() {
+    // As kiutils writes them: no (uuid …) or (tstamp …).
+    let text = "(kicad_pcb (version 20240108) (general (thickness 1.6))\n (footprint \"X:Y\" (layer \"F.Cu\") (at 0 0))\n (footprint \"X:Y\" (layer \"F.Cu\") (at 5 0)))";
+    let pcb = parse_kicad_pcb(text).unwrap();
+    let ids: Vec<&str> = pcb.footprints.iter().map(|f| f.uuid.as_str()).collect();
+    assert_eq!(ids.len(), 2);
+    assert_ne!(ids[0], ids[1]);
+    assert_eq!(ids, parse_kicad_pcb(text).unwrap().footprints.iter().map(|f| f.uuid.as_str()).collect::<Vec<_>>());
+}
