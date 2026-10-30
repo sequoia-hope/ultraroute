@@ -5,6 +5,19 @@
 > slower than A* on the CPU on these boards (`REVIEW.md` §3.4), so it is parked behind
 > `--features gpu`. What runs is A* on the CPU, natively and, in the studio, in a pool of
 > WebAssembly workers in the browser tab; there is no WebGPU routing.
+>
+> The rest, by milestone. The project did not stay on CopperRoute: the router is now our own MIT
+> core (`core/`, `README.md`), and copperroute is a legacy reference. Built: negotiated congestion
+> on the CPU, a topological router (the `topo` crate, an experiment the command does not link),
+> the benchmark harness judged by `kicad-cli` (`tools/pcbench.py`, `docs/pcbench.md`),
+> and from the governance list a thread cap (half the cores), a memory ceiling that fits or
+> refuses a run before it allocates (`--max-memory`), and one time budget every stage keeps
+> (`--timeout`). Not built: milestone 6's GPU global routing (a CPU global stage is the next
+> planned experiment), milestone 7's WebGPU build, the "Precision strategy" paths beyond the
+> parked solver's 32-bit costs, low OS priority inside the router (the studio's build uses
+> `nice`, the router does not), resumable checkpoints, and the ILP/SAT, analytical-placement
+> and reinforcement-learning back ends. One `FieldSolver` trait and the stage table stand where
+> the "pluggable router trait" was planned.
 
 ## Goal
 

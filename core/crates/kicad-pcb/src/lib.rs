@@ -1,18 +1,18 @@
-//! `.kicad_pcb` reader — specs/kicad_board_link.md increment C1.
+//! `.kicad_pcb` reader and writer, and the `.kicad_pro`/`.kicad_dru` rules.
 //!
 //! ```text
 //! text ──sexpr::parse──▶ Node ──read::read──▶ Pcb ──outline::chain──▶ OutlineLoops
+//!                             ──copper::read_copper──▶ Copper
 //! ```
 //!
-//! What comes out is a neutral record in metres (Y down, as the file is;
-//! the sketch-frame flip belongs to the derive step) plus the board
-//! outline chained into one outer loop and its cutouts. Everything the
-//! reader does not understand is counted into one warning; everything
-//! that would make the board silently wrong is a typed error.
+//! What comes out is a neutral record in metres (Y down, as the file is)
+//! plus the board outline chained into one outer loop and its cutouts.
+//! Everything the reader does not understand is counted into one warning;
+//! everything that would make the board silently wrong is a typed error.
+//! `write::apply` puts edits back into the text and keeps every other byte.
 //!
-//! No workspace dependency and no kernel type: this crate is a
-//! file-format reader, like `step-import`, and lives outside the kernel
-//! layering.
+//! No workspace dependency: the reader began as waffle-iron's (same
+//! author), and the router's `board` crate builds its model from this one.
 
 pub mod copper;
 pub mod model;
@@ -31,7 +31,7 @@ pub use read::MIN_VERSION;
 pub use rules::{NetClass, Rules, RulesError};
 pub use write::{apply, mm, Edit, NewTrack, NewVia};
 
-/// Why a file could not be read into a [`Pcb`] (spec §6).
+/// Why a file could not be read into a [`Pcb`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum KicadParse {
     #[error("not a kicad_pcb file (top-level form is `{found}`)")]
@@ -68,7 +68,7 @@ pub fn parse_board(text: &str) -> Result<(Pcb, Copper), KicadParse> {
 
 impl Pcb {
     /// The Edge.Cuts primitives chained into the board loop and its
-    /// cutouts (spec §3 O1–O6).
+    /// cutouts.
     pub fn outline_loops(&self) -> Result<OutlineLoops, OutlineError> {
         outline::chain(&self.outline)
     }

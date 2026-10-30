@@ -1,4 +1,4 @@
-//! Edge.Cuts primitives → closed loops (spec §3 rows O1–O6).
+//! Edge.Cuts primitives → closed loops.
 //!
 //! Endpoints are welded at [`OUTLINE_WELD_M`] and nothing wider: a gap is
 //! reported with its size, never closed (P9/P10). Every welded endpoint
@@ -46,7 +46,7 @@ pub enum Segment {
         /// Sweep from `start` to `end` goes counter-clockwise in the
         /// coordinate sense of the frame the points are in (angle
         /// increasing). In the file's Y-down frame that is clockwise on
-        /// screen; the Y flip of the derive step reverses it.
+        /// screen; flipping Y reverses it.
         ccw: bool,
     },
     Circle {

@@ -1,7 +1,7 @@
 //! S-expression tree → [`Pcb`].
 //!
 //! Tolerant by construction: a form this reader does not know is counted,
-//! not rejected, and reported as ONE warning per file (§2.2 of the spec).
+//! not rejected, and reported as ONE warning per file.
 //! Strict where silence would be wrong: a footprint on a layer other than
 //! `F.Cu`/`B.Cu`, a missing uuid, a duplicate uuid, a missing thickness and
 //! an unsupported version are loud errors.
@@ -455,7 +455,7 @@ fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt()
 }
 
-/// Three-point arc, or — when the points are collinear (spec §3 O7) — the
+/// Three-point arc, or — when the points are collinear — the
 /// chord as a line plus a warning. Never a silent degenerate arc.
 fn arc_or_line(
     s: [f64; 2],

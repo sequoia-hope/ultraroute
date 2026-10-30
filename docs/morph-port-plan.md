@@ -1,5 +1,12 @@
 # Porting the board-morphing work to Rust
 
+> **Note, 2026-10-30:** this plan, and the port it describes, are of `copper-morph`, a crate in
+> the copperroute fork (branch `governance`), not of the core's `morph` crate. The core's `morph`
+> (`core/crates/morph`) was written separately on the core's `board` model: the harmonic warp
+> field, copper carried along with moving parts, and finding fine-pitch parts. Of the rest here
+> (relax, reshape, the move oracle, settle, diffusion), nothing is in the core yet
+> (`ROADMAP.md`, Phase 2d).
+
 Source: `~/pcb/rp2350-motor-controller/hardware/tools` (branch `rev-b-fixes`) and `~/pcb/rp2350-motor-controller-lean-jiggle/hardware/tools` (branch `lean-jiggle`). Surveyed 2026-10-22, read-only.
 
 **Goal:** when a part's pads have no escape route, nudge the part (and the copper attached to it) just enough that the autorouter can finish, verified by DRC.

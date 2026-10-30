@@ -1,16 +1,33 @@
 # PCBench
 
-PCBench (PCBench/, 1,182 KiCad boards with published results for FreeRouting, PcbRouter and
-RL-MCTS in PCBench/Baselines/Results_all.csv) routed by the core from bare pads and judged by
-KiCad. `tools/pcbench.py` does it:
+PCBench (1,182 KiCad boards with published results for FreeRouting, PcbRouter and RL-MCTS in
+`PCBench/Baselines/Results_all.csv`) routed by the core from bare pads and judged by KiCad.
+`tools/pcbench.py` does it. It needs KiCad 9 (`kicad-cli` and its `pcbnew` Python module), a
+release build of the router, and a clone of <https://github.com/emshotton/PCBench> at `PCBench/`
+in the checkout. `PCBench/` is not tracked, so a git worktree has none: run the tool from the
+checkout that holds it, and point `ULTRAROUTE_BIN` at another build when needed.
 
+    git clone https://github.com/emshotton/PCBench
+    (cd core && cargo build --release -p ultraroute)
     python3 tools/pcbench.py prepare                  # once: KiCad 5 -> 9, strip, judge the bare board
-    ~/.claude/bin/reserve -c 16 -l pcbench -- python3 tools/pcbench.py run RUN [--timeout 120]
+    ~/.claude/bin/reserve -c 16 -l pcbench -- python3 tools/pcbench.py run RUN --sample 200 --sample-seed 1
     python3 tools/pcbench.py report RUN
 
-Boards and runs live in ~/Software/ultraroute-lab/pcbench/. `ULTRAROUTE_BIN` picks another
-router build. Conversion gives each repeated uuid a fresh one (KiCad 5 numbers footprints 0, 1,
-...).
+`--sample 200 --sample-seed 1` is the 200-board subset every remediation stage was measured on
+(about 16 minutes on 16 workers). Leave it out to route all 1,182 boards; `--only ID,ID` routes
+the boards named (the directory names under `boards/`). Each board gets `--strip-all`, the
+recipe (`--recipe default` unless `--recipe "..."` is given), `--seed`, `--uuid-seed`,
+`--threads 1` and `--timeout` (120 s by default), under an 8 GB memory cap; the run takes as
+many workers as `reserve` booked (`RESERVED_CORES`, 4 without it). Boards and runs live in
+`~/Software/ultraroute-lab/pcbench/` (`ULTRAROUTE_LAB` moves it). Conversion gives each repeated
+uuid a fresh one (KiCad 5 numbers footprints 0, 1, ...).
+
+A two-board check of the command line (2026-10-30, loaf, the Stage 11 build):
+
+    ~/.claude/bin/reserve -c 2 -l pcbench -- python3 tools/pcbench.py run remed-11-walkthrough --only 1-Wire-Wing-pcb_1-Wire_Wing,1Bitsy_1bitsy
+    [1/2] 1-Wire-Wing-pcb_1-Wire_Wing: ok open 0 new {} 1.5 s
+    [2/2] 1Bitsy_1bitsy: ok open 0 new {} 14.3 s
+    2 of 2 succeeded
 
 ## Comparing runs
 

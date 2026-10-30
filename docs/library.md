@@ -17,11 +17,12 @@ Read it beside this guide.
 |---|---|
 | `kicad-pcb` | Reads `.kicad_pcb` text into a neutral record (`Pcb`, `Copper`), the rules from `.kicad_pro` and `.kicad_dru` (`Rules`), and writes edits back into the text (`apply`, `Edit`). Metres. |
 | `board` | The routing model: every piece of copper, hole, keepout and the outline as `Item`s in a spatial index (`Board`), the rule check (`check_item`), connectivity (`connectivity`), zone fills for display. Nanometres. |
-| `grid` | The grid routers and everything that reworks routed copper: `route_open`, `route_negotiated`, `rip_up`, `prefanout`, `route_pairs`, `join_planes`, `shove_escape` (the plough), `push`, `nudge`, `pull_tight`, cleanup, `match_lengths`, `blame`. Also the grid itself (`ObstacleMap`, `RouteGrid`, `Profile`) and the `FieldSolver` trait with CPU and GPU solvers. |
+| `grid` | The grid routers and everything that reworks routed copper: `route_open`, `route_negotiated`, `rip_up`, `prefanout`, `route_pairs`, `join_planes`, `shove_escape` (the plough), `push`, `nudge`, `pull_tight`, `reduce_vias`, cleanup, `match_lengths`, `blame`. Also the grid itself (`ObstacleMap`, `RouteGrid`, `Profile`), the `Deadline` every stage keeps, and the `FieldSolver` trait with the CPU solver (and a GPU one behind the `gpu` feature). |
 | `morph` | Moving copper smoothly: the harmonic `WarpField`, `flow` (copper carried along with moving parts), `shift_copper` (any per-point move that keeps joints joined), and `fine_pitch` (the parts whose escapes are hard). |
 | `topo` | Topological routing: rubber bands pulled taut through a triangulation of the copper. An experiment: the command does not link it, and it stays in the workspace for its own tests. |
-| `ultraroute` | The command: `parse` turns flags into `Args`, `run` drives the whole pipeline from text to text, `Live` streams the studio's frames. |
+| `ultraroute` | The command: `parse` turns flags into `Args`, `route` (or `run`) drives the whole pipeline from text to text through the stage table `STAGES`, `Live` streams the studio's frames, `RunStats` is what `--stats` writes. |
 | `web` | The same pipeline compiled to WebAssembly for the studio's Web Worker. |
+| `lab-films` | `feature_film`, which records one stage of a run through the router's `Watch` hooks for `lab/features.html`. |
 
 A run goes like this:
 
@@ -31,7 +32,7 @@ A run goes like this:
    returns the text too, which you must keep: writing back edits it in place.
 3. The routers mutate the `Board`. Each lays tracks and vias with `board.insert` after checking
    them, and reports the ids it laid. Your program keeps one list of the router's own copper,
-   called `soft` in the grid's signatures and `laid` in `run`. That list is what later stages may
+   called `soft` in the grid's signatures and `laid` in the command's `Ledger`. That list is what later stages may
    rip, move and tighten, and what is written back.
 4. Whatever leaves the board that came from the file (stripped, ripped, moved) has a `Span`, the
    byte range of its text. Keep every such span in a `removed` list.
@@ -75,7 +76,7 @@ the same units. `topo::Options::via_cost` and `rip_cost` are different: lengths 
 `Pcb` is the same frame in metres. Two places flip y:
 
 - The live stream (`Live`, the studio) draws y up, so its millimetres are `(x, -y)`.
-- The command's `--place REF=X,Y` takes y up too: `run` builds the point as
+- The command's `--place REF=X,Y` takes y up too: the set-up stage builds the point as
   `Point::new(x * 1e6, -y * 1e6)`. To place a part at KiCad's (100, 97.5) you pass
   `--place U1=100,-97.5`.
 - `--rip-region X,Y,R` and `--via-avoid X0,Y0,X1,Y1` do not flip: they are KiCad's frame.
@@ -135,9 +136,13 @@ move or rip any unlocked track or via, file copper included, and add what they m
 take `soft`: they return what they laid in their stats' `laid`, and you add it yourself. Forget
 that and `rip_up` treats the copper as fixed and `edits` never writes it.
 
-**Time, cancelling and progress.** Most options structs have `max_seconds: Option<f64>` (that
-stage only; there is no global clock), `cancel: Option<Arc<AtomicBool>>` (set it from anywhere
-to stop at the next connection) and `log: Option<grid::Log>`. A `Log` is
+**Time, cancelling and progress.** Every options struct for a stage that can take long has a
+`deadline: grid::Deadline`; `join_planes`, `pull_tight` and `match_lengths` take one as an
+argument. `Deadline::max_seconds(Some(20.0))` is 20 s from now and `Deadline::default()` no
+limit; `Deadline::until(instant, cancel)` makes a run's deadline, and `share(f)`, `seconds(s)`
+and `until_at(instant)` give a stage part of one, never more. Its `cancel: Arc<AtomicBool>`,
+set from anywhere, stops every stage made from it at the next check, and `fired` records that
+the clock cut something short. Options structs also have `log: Option<grid::Log>`. A `Log` is
 `Log(Arc<dyn Fn(Activity) + Send + Sync>)`; each `Activity` has a `phase`, a `text` and an
 optional `Focus` (a connection, a part, or a part's trial move). Every stage also takes a
 `watch: &mut dyn FnMut(&Board)` called whenever the board changes in a way worth drawing; pass
@@ -196,9 +201,11 @@ let options = grid::Options { log: Some(log.clone()), ..Default::default() };
 
 ## grid: routing
 
-All grid routers take a `&mut dyn FieldSolver`. `grid::CpuSolver` is a unit struct. With the
-`gpu` feature (on in `ultraroute` by default, off in `web`), `grid::GpuSolver::new()` returns
-`Option<GpuSolver>`, `None` without a usable adapter. The solver only finds cheapest paths, so
+All grid routers take a `&mut dyn FieldSolver`. `grid::CpuSolver` is a unit struct: A* on the
+CPU, what every run uses. With the `gpu` feature (off by default; `cargo build --features gpu`
+in `ultraroute`), `grid::GpuSolver::new()` returns `Option<GpuSolver>`, `None` without a usable
+adapter. It relaxes a whole cost field on the GPU, is experimental, and is about ten times
+slower than the CPU's search on the boards measured. The solver only finds cheapest paths, so
 every router gives the same kind of result on either.
 
 ### route_open
@@ -210,11 +217,12 @@ shortest first, and goes round again while a round joins anything.
 |---|---|---|
 | `cell` | 50,000 nm | grid step |
 | `via_cost` | 80 | search units |
-| `max_seconds` | None | |
+| `deadline` | no limit | |
 | `nets` | None | only these nets, when set |
 | `pours_block` | false | |
+| `directional` | true | on a two-layer board, routes prefer each layer's own direction |
 | `seed` | 0 | reorders connections of nearly equal length, for searches over runs |
-| `cancel`, `log` | None | |
+| `log` | None | |
 
 `Stats`: `routed`, `failed` (split into `no_terminal`, `no_path`, `refused`), `vias`, `laid`,
 and `failures` (each end item and the reason).
@@ -237,14 +245,19 @@ than `route_open` alone, which is then left to finish. `trials` sees each round'
 | `present_growth` | 1.6 | its growth per round |
 | `history_step` | 10 | added where a path collides |
 | `patience` | 4 | rounds without fewer collisions before giving up |
-| `threads` | 1 | above 1, each round routes every connection at once on that many threads |
+| `jacobi` | false | each round routes every connection against the last round on `threads` threads (Jacobi), instead of one after another (Gauss-Seidel); on the fixtures it does not settle in 30 rounds where Gauss-Seidel takes 7 |
+| `threads` | 1 | threads for `jacobi` rounds; ignored otherwise |
+| `reroute_all` | false | every round reroutes every connection; by default a round after the first reroutes only those that collided or have no path |
 | `nets` | None | |
 | `net_weight` | empty | per-net multiplier on the prices; below 1 also routes that net first |
 | `via_zones` | true | zones as tight as the grid allows, and vias negotiated: priced where they would crowd another net's trace or via, and kept hole-to-hole apart within a net unless shared |
 | `repasses` | 2 | passes after the first over what it left open, routed round what it laid |
 | `rip_blocked` | true | a connection walled off by routes it laid has them ripped and negotiated over with it, kept only when fewer are left open |
 | `reachable_tree` | true | a net's tree spanned by pairs that can meet first, so a pocketed middle pin does not keep the pins either side apart |
-| `seed`, `pours_block`, `max_seconds`, `cancel`, `log` | | as above |
+| `pad_ends` | false | a connection may also end at the pads of its ends' clusters nearest them (the region plough sets it) |
+| `directional` | true | as above |
+| `check_patches` | false | for tests: builds every patched grid whole too and panics where they differ |
+| `seed`, `pours_block`, `deadline`, `log` | | as above |
 
 `NegotiationStats`: `connections`, `rounds`, `conflicted`, `committed`, `unroutable`, `vias`,
 `laid`.
@@ -255,7 +268,8 @@ than `route_open` alone, which is then left to finish. `trials` sees each round'
 through the router's own copper at a price (`rip_cost`, default 400), rips what the new path
 meets, routes what that opened, and keeps the board only if fewer connections are open.
 Rounds repeat while any closes. `RipOptions`: `cell` 50,000, `via_cost` 80, `rip_cost` 400,
-`reroute_seconds` 10 (per attempt), `max_seconds`, `pours_block`, `cancel`, `log`.
+`reroute_seconds` 10 (per attempt), `region_repair` false (the region plough's repair after
+each try), `deadline`, `pours_block`, `log`.
 
 ### prefanout, planes and pairs
 
@@ -266,25 +280,34 @@ These run before routing in the command, so their copper is in place first.
   `parts` (footprint indices; empty does nothing; the command uses `morph::fine_pitch(&board,
   500_000)`), `local_cell` 10,000, `global_cell` 50,000, `ring` 1,100,000 (how far past the
   pad box the escapes end), `mode` (`EscapeMode::Stub`, `Dogbone`, `GridRing`, default
-  `GridInner`), `order` (`EscapeOrder::Round`, default `InnerFirst`, `TrappedFirst`), `inward`
-  true (first bridge pads to their own kept pour, exposed pad or neighbouring pad),
-  `skip_nets`, `pours_block`, `cancel`, `log`. The command keeps the escapes in a list apart
+  `GridInner`, and `GridSame`, which first tries an escape without a via for a pad whose net
+  meets nothing off its own layer), `order` (`EscapeOrder::Round`, default `InnerFirst`,
+  `TrappedFirst`), `inward` true (first bridge pads to their own kept pour, exposed pad or
+  neighbouring pad), `skip_nets`, `threads` 1 (for `TrappedFirst`'s trial route), `deadline`,
+  `pours_block`, `log`. The command keeps the escapes in a list apart
   from `laid` until routing is done, then `prune_closed_escapes(board, &mut escapes,
   pours_block)` takes out the unused ones of nets already joined.
-- `join_planes(board, &log) -> PlaneStats` gives every pad of a plane's net that is not on
-  its plane a via down to it. Call it after `set_planes`; its `laid` is soft.
+- `join_planes(board, &log, &deadline) -> PlaneStats` gives every pad of a plane's net that is
+  not on its plane a via down to it. Call it after `set_planes`; its `laid` is soft.
 - `diff_pairs(&board) -> Vec<Pair>` finds pairs by net name (names alike but for one `P`
   or `+` against `N`, `M` or `-`, standing alone or after a `D`: `USB_DP`/`USB_DM`,
   `CLK_P`/`CLK_N`, `D+`/`D-`), each with its `p`, `n`, `width` and `gap` from the class. `route_pairs(board,
-  &PairOptions { cell, pours_block, log }, watch) -> PairStats` lays their coupled runs; keep
-  that `laid` out of `soft` until the end so nothing rips a pair apart. `shares_layer(&board,
-  &pair)` says whether a pair's ends share a layer. After routing, `match_lengths(board,
-  &pairs, soft) -> TuneStats` adds bumps to the shorter net; `pair_lengths` measures.
+  &PairOptions { cell, pours_block, deadline, log }, watch) -> PairStats` lays their coupled
+  runs; keep that `laid` out of `soft` until the end so nothing rips a pair apart.
+  `shares_layer(&board, &pair)` says whether a pair's ends share a layer. After routing,
+  `match_lengths(board, &pairs, soft, &deadline) -> TuneStats` adds bumps to the shorter net;
+  `pair_lengths` measures.
 
 ### tidying
 
-- `pull_tight(board, soft) -> CleanStats` replaces each chain of the router's tracks between
-  fixed points with the fewest straight tracks that keep every rule. Ends stay put.
+- `pull_tight(board, soft, &deadline) -> CleanStats` replaces each chain of the router's tracks
+  between fixed points with the fewest straight tracks that keep every rule. Ends stay put.
+- `reduce_vias(board, &ViaOptions, soft, watch) -> ViaStats` lifts the router's vias (one, then
+  pairs joined by a plain track run, then small tangles) and reconnects their nets in a window
+  round them with no vias, or fewer within a cap on extra track, keeping a change only when it
+  checks clean and joins what it joined. `ViaOptions`: `cell` 50,000, `window_margin`
+  6,000,000 nm, `max_extra_mm_per_via` 12, `max_cluster_span` 45,000,000 nm,
+  `max_cluster_vias` 8, `max_passes` 3, `deadline`, `pours_block`, `log`.
 - `drop_duplicates(board, soft)` and `prune_dangling(board, soft)` return `(count, spans)`:
   doubled tracks, and copper leading nowhere, taken out. Add the spans to `removed`.
 
@@ -318,7 +341,7 @@ runs it: depend on the `topo` crate yourself to use it.
 `soft`. `topo::Options`: `sample` 100,000 nm (outline sample spacing; keep it below twice the
 narrowest clearance reach), `via_cost` 2,000,000 nm, `max_expansions` 400,000, `orders` 1,
 `rip_cost` 1,000,000 nm, `rip_passes` 6 (0 turns rip-up off), `only` (a set of
-`(min_id, max_id)` connections), `nets`, `pours_block`, `cancel`, `log`, `max_seconds`.
+`(min_id, max_id)` connections), `nets`, `pours_block`, `deadline`, `log`.
 
 ## Pushes, fields and morphs
 
@@ -373,7 +396,7 @@ and courtyards on its side). Then `morph::flow` carries the copper, and `rip_bro
 what the flow pressed into something. Route again after: the command runs `route_open`.
 
 `PushOptions`: `steps` 20, `locked` (footprints held besides those locked on the board), `only`
-(when set, only these move), `pours_block`, `log`. `PushStats`: `moved` (each part and its total
+(when set, only these move), `deadline`, `pours_block`, `log`. `PushStats`: `moved` (each part and its total
 move), `held_back`, `flowed`, `ripped`, `removed_spans`. `push_watch` reports each `PushStep`.
 
 The field moves parts, not copper. Copper only moves because parts did: a push with no unlocked
@@ -394,7 +417,7 @@ move is kept only if fewer connections are open. `blame` suggests moves first.
 `NudgeOptions`: `steps` `[250_000, 500_000, 1_000_000]` nm, `reach` 2,000,000 nm (how near an
 airline a courtyard must come), `parts_per_connection` 6, `reroute_seconds` 5, `locked`,
 `blind` true (also try the eight directions, not only blame's moves; slow), `cell`, `via_cost`
-80, `max_seconds`, `pours_block`, `cancel`, `log`. `NudgeStats`: `tried`, `illegal`, `kept`,
+80, `deadline`, `pours_block`, `log`. `NudgeStats`: `tried`, `illegal`, `kept`,
 `guided`, `moved`, `ripped_spans`. `nudge_watch` reports `NudgeEvent::Blame` and `Step`.
 
 ### shove_escape: the plough
@@ -423,12 +446,13 @@ two nets' clearance, the net's widest piece and `margin`).
 nm, `reaches` and `net_reaches` (per-pad and per-net reach overrides), `margin` 50,000 nm,
 `soft_cost` 30, `cross_cost` 400, `cascade` 0 (connections a try knocked open that are ploughed
 in turn), `parts` None, `reroute_seconds` 20, `repair_seconds` 10, `seed` 0, `accept_ties`
-false, `deadline`, `pours_block`, `log`. `ShoveStats` has a `ShoveTry` per connection (rounds,
+false, `negotiate_repasses` 1 (for the region plough's negotiation), `deadline`, `pours_block`,
+`log`. `ShoveStats` has a `ShoveTry` per connection (rounds,
 `routed`, `kept`, open before and after) and `removed_spans`.
 
 The command runs passes in a new order each (`--shove-passes`, `--shove-patience`) and, for
 `Region`, doubles a failed pad's reach in `reaches` each pass up to 4 mm. That loop lives in
-`run`'s `shove_pass`, not in the library.
+the command's `shove` stage (`stages.rs`, `shove_pass`), not in the library.
 
 ### Fine-pitch parts
 
@@ -471,29 +495,46 @@ the board.
 
 ## The command's stage order
 
-`ultraroute::run(&args, board, &text, live, cancel)` is the reference pipeline. With no flags
-it runs `route_open` and the cleanup only; each flag adds a stage. In order:
+`ultraroute::route(&args, board, &text, live, cancel, solver, watch)` is the reference pipeline
+(`run` and `run_with_solver` are shorter forms of it). It runs the stages of
+`ultraroute::STAGES`, in `core/crates/ultraroute/src/lib.rs`, in turn; each is a `Stage` in
+`stages.rs` that says whether the run's flags and the board ask for it, and the table gives it
+its share of `--timeout`. A command line naming no stage gets `ultraroute::RECIPE`, which turns on
+`--prefanout`, `--diff-pairs`, `--negotiate`, `--rip-up`, the region plough and `--tighten`;
+`--recipe minimal` turns on none, which leaves finishing, vias and cleaning. In order:
 
-1. **Setup.** `--lock` marks parts locked; `--place` moves parts with `move_footprint`
-   (copper touching them is ripped); `--strip` removes unlocked tracks and vias (`--strip-all`
-   locked ones too); `--planes` calls `set_planes`. Then the solver (`--gpu`), `--adopt`,
-   `--via-avoid` boxes and `--rip-region` discs (copper inside ripped).
-2. **`--prefanout`**: `prefanout` on `morph::fine_pitch(&board, 500_000)`. Escapes are held apart
-   from `laid` until rip-up is done, and those no route used are taken out.
-3. **Planes**: `join_planes` when any layer is a plane.
-4. **`--diff-pairs`**: `route_pairs`, held apart until cleanup.
-5. **Routing**: the nets `--regions` gives a length limit, by `route_open`, first;
-   `--negotiate` (`route_negotiated`, half the timeout), `route_open` to finish (always),
-   `prune_closed_escapes`, `--rip-up` (`rip_up`), the escapes join `laid`.
-6. **Rescue**: `--shove` (`shove_escape` passes); `--nudge` (`nudge`).
-7. **Finish**: `--tighten` (`pull_tight`); pair copper joins `laid`; `drop_duplicates`;
-   `prune_dangling`; with `--diff-pairs`, `match_lengths`; `--blame` prints what blocks each open
-   connection.
-8. **Write**: moved parts' `(at ...)`, `edits`, `apply`.
+1. **`set-up`** (always). `--lock` marks parts locked; `--place` moves parts with
+   `move_footprint` (copper touching them is ripped); `--strip` removes unlocked tracks and vias
+   (`--strip-all` locked ones too); `--planes` and `--auto-planes` call `set_planes`. Then the
+   solver (`--gpu`), `--adopt`, `--regions`, `--via-avoid` boxes, the via and pour prices, and
+   `--rip-region` discs (copper inside ripped).
+2. **`prefanout`** (`--prefanout`): `prefanout` on `morph::fine_pitch(&board, 500_000)`.
+   Escapes are held apart from `laid` until rip-up is done.
+3. **`planes`** (a layer is a plane): `join_planes`.
+4. **`pairs`** (`--diff-pairs`): `route_pairs`, its copper locked and held apart until cleaning;
+   then **`pair-escapes`** (`--prefanout`): pads of pairs left open at fine-pitch parts escaped.
+5. **`routing`**, which holds the next six: **`first`** (nets `--regions` gives a length limit,
+   by `route_open`), **`negotiation`** (`--negotiate`: `route_negotiated`), **`finishing`**
+   (`route_open`, always), **`prune-escapes`** (`prune_closed_escapes`), **`rip-up`**
+   (`--rip-up`: `rip_up`), **`merge-escapes`** (the escapes join `laid`).
+6. **`shove`** (`--shove`, `--shove-plough`): `shove_escape` passes; if pair copper walls a
+   connection in, the pair copper near it is let go and the plough tries again.
+7. **`nudge`** (`--nudge`): `nudge`.
+8. **`tightening`** (`--tighten`): `pull_tight`; its line is printed after the via pass.
+9. **`vias`** (the router laid copper): `reduce_vias`, then `pull_tight` again when it dropped any.
+10. **`cleaning`** (always, whatever the time): pair copper joins `laid`; `drop_duplicates`;
+    `prune_dangling`.
+11. **`length matching`** (`--diff-pairs`): `match_lengths`.
+12. **`result`** (always): the open count, and with `--blame` what blocks each open connection.
+13. **`write`** (always): `split_at_joins`, the regions' and necks' reports, moved parts'
+    `(at ...)`, `edits`, `apply`.
 
-The time limit (`--timeout`) is shared out: negotiation gets half, the stages after it what is
-left. A library pipeline sets each stage's `max_seconds`
-itself. Two habits from `run` are worth copying. Hold copper you do not want ripped (escapes,
+The time (`--timeout`) is shared out by the table: pre-fanout 15% and planes 5% of what is left;
+pairs until a quarter of the run has gone; negotiation half the run; finishing, rip-up, shove
+and nudge until the run's end less the 10% the via pass keeps back; tightening, vias and length
+matching until the run's end, which comes 2% (at least 2 s) before `--timeout` so cleaning and
+writing fit. `core/README.md` has the table. A library pipeline gives each stage's `deadline`
+itself. Two habits from the command are worth copying. Hold copper you do not want ripped (escapes,
 pairs) out of `soft` until the end. And try any move that might make things worse on a clone:
 
 ```rust
@@ -513,10 +554,12 @@ If the stages above as the command runs them are what you want, run the command:
     ultraroute route IN.kicad_pcb -o OUT.kicad_pcb --strip --timeout 60
 
 With no stage named it runs the default recipe, `ultraroute::RECIPE`; `--recipe minimal` runs only
-the grid router.
+the grid router and the clean-up. `--stats FILE` writes what the run did as JSON
+(`ultraroute::RunStats`): each stage's time, work and open connections, the settings, peak
+memory, the connections given up and why, and findings.
 
 The `.kicad_pro` (and `.kicad_dru`) beside the input give the rules. Progress goes to standard
-error. `ultraroute route` with no input prints every flag.
+error. `ultraroute route --help` prints every flag; `core/README.md` explains each.
 
 `--live -` streams the run to standard output as newline-delimited JSON, the studio's format: a
 `board` header with every item, then `frame`s with what was added or removed and the router's
@@ -525,9 +568,11 @@ stopped on `Cancelled` or `Deadline`. Coordinates are millimetres with y up. A l
 standard input stops the run at the next connection, and the board so far is still written.
 `--live PATH` writes the stream to a file; `--live-fps` (30) and `--live-step MS` pace it.
 
-From Rust, the same is `ultraroute::parse(&args)` then `ultraroute::run(&a, board, &text,
-live, cancel)`, with `Live::new(writer, fps, pours_join)` for a stream. `Live` cannot be driven
-from outside `run`: its frame methods are private.
+From Rust, the same is `ultraroute::parse(&args)` then `ultraroute::route(&a, board, &text,
+live, cancel, None, None)`, which returns the text and the `RunStats`, with
+`Live::new(writer, fps, pours_join)` for a stream. `Live` cannot be driven from outside the run:
+its frame methods are private. A `Watch` passed as the last argument sees each stage start and
+end and the board as it changes; `lab-films` records its films that way.
 
 ## WebAssembly
 
@@ -551,8 +596,8 @@ its length inside, or outside; a via pays `weight` mm of track), for tracks or, 
 true`, for vias. A rule holds for the nets and classes it names, `"*"` for all. The board keeps
 them as `board::Region`; each obstacle map rasterises them once (`grid::regions`) and every net's
 view gets the rules that hold for it: hard rules as blocked cells, costs in
-`RouteGrid::region_cost` and `via_penalty`, which the CPU searches add to every step (the GPU
-and the studio's worker pool do not see the costs yet). `max_lengths` entries
+`RouteGrid::region_cost` and `via_penalty`, which the CPU searches and the GPU solver add to
+every step (the studio's worker pool in the browser does not see the costs yet). `max_lengths` entries
 (`{"nets": [...], "max_length_mm": N}`) are checked and reported at the end, with copper that
 breaks a region's hard rule, by region name; they are not yet routed to.
 

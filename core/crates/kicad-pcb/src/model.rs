@@ -1,10 +1,9 @@
 //! The neutral board record a `.kicad_pcb` reads into.
 //!
-//! Units and frame (specs/kicad_board_link.md §2.2): every length is in
-//! **metres**, every angle in **degrees**. Positions are in the **board
-//! frame as the file stores it: Y down**, so `y` grows toward the bottom of
-//! the screen; the Y flip that puts the board into a right-handed sketch
-//! frame belongs to the derive step (§2.3), not here. Footprint-local
+//! Units and frame: every length is in **metres**, every angle in
+//! **degrees**. Positions are in the **board frame as the file stores it:
+//! Y down**, so `y` grows toward the bottom of the screen; a caller that
+//! wants Y up flips it itself (the studio's live stream does). Footprint-local
 //! pad and graphic positions have already been placed into the board frame
 //! by the reader ([`Footprint::place`]).
 
@@ -166,8 +165,8 @@ pub struct Pad {
 
 impl Pad {
     /// A hole that nothing connects to: a non-plated through hole, or a
-    /// plated one with no net. The mounting-hole rule of the spec (§2.3)
-    /// combines this with the footprint name.
+    /// plated one with no net. A mounting-hole rule combines this with the
+    /// footprint name ([`Footprint::is_mounting_hole_footprint`]).
     pub fn is_unconnected_hole(&self) -> bool {
         match self.kind {
             PadKind::NpThruHole => true,
@@ -199,7 +198,7 @@ impl Footprint {
         place(self.at, self.rotation_deg, local)
     }
 
-    /// Footprint-name test the spec's mounting-hole rule uses.
+    /// Footprint-name test for a mounting hole.
     pub fn is_mounting_hole_footprint(&self) -> bool {
         self.footprint.starts_with("MountingHole")
             || self
