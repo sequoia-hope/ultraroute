@@ -28,7 +28,7 @@ mod regions;
 
 pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--no-negotiate-vias] [--no-negotiate-rip] [--no-negotiate-tree] [--negotiate-jacobi] [--negotiate-legacy] [--diff-pairs] [--diff-pairs-legacy] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--topo] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--via-cost MM[,OPEN_MM]] [--no-directional] [--no-reduce-vias] [--gpu] \
 [--timeout SECONDS] [--cell MM] [--first NET,...] [--first-negotiate] [--first-weight W] [--restart N] [--topo-first REF,...|auto] [--topo-trapped] [--topo-trapped-rip] [--topo-sample MM] \
-[--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--push-decay D] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough warp|linear|rip|gentle|dipole|region] [--shove-steps N] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-late] [--shove-seconds S] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--uuid-seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] \
+[--push X,Y,RADIUS,OUTWARD[,DX,DY]] [--push-steps N] [--push-decay D] [--escape REF,...|auto] [--escape-zone MM] [--clear-lanes] [--shove] [--shove-plough warp|linear|rip|gentle|dipole|region] [--shove-steps N] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-late] [--shove-seconds S] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--uuid-seed N] [--adopt] [--chase] [--chase-costs RIP,CHAIN[,LINKS]] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
 [--live PATH|-] [--live-fps N] [--live-step MS] [--blame]
 --push and --place take millimetres with y pointing up: give KiCad's y negated (KiCad y 127.5 is -127.5).";
 
@@ -92,6 +92,11 @@ pub struct Args {
     pub fps: f64,
     pub no_route: bool,
     pub threads: Option<usize>,
+    /// The most memory the run may take, in megabytes; `None` for the machine's own limit
+    /// ([`memory_cap`]).
+    pub max_memory: Option<u64>,
+    /// Print what the run's grids will take, and the limit, then stop.
+    pub estimate: bool,
     /// Grid cell for every stage, in nanometres.
     pub cell: Option<Nm>,
     /// Nets to favour first (names, `@REF` for a part's signal nets, or `@auto` for fine-pitch parts).
@@ -215,6 +220,8 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         fps: 30.0,
         no_route: false,
         threads: None,
+        max_memory: None,
+        estimate: false,
         cell: None,
         first: Vec::new(),
         first_negotiate: false,
@@ -357,6 +364,8 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
             "--pours-block" => a.pours_block = true,
             "--no-route" => a.no_route = true,
             "--threads" => a.threads = Some(value()?.parse().map_err(|e| format!("--threads: {e}"))?),
+            "--max-memory" => a.max_memory = Some(value()?.parse().map_err(|e| format!("--max-memory: {e}"))?),
+            "--estimate" => a.estimate = true,
             "--cell" => {
                 let mm: f64 = value()?.parse().map_err(|e| format!("--cell: {e}"))?;
                 if !(0.005..=1.0).contains(&mm) {
@@ -1255,6 +1264,117 @@ pub fn run(a: &Args, board: Board, text: &str, live: Option<Live>, cancel: Arc<A
 }
 
 /// Routes `board` using `custom_solver` when provided, or the default CPU/GPU solver otherwise.
+/// Threads for a run that names none: half the machine's.
+pub fn default_threads() -> usize {
+    std::thread::available_parallelism().map_or(1, |n| n.get() / 2).max(1)
+}
+
+/// The grid cell a run that names none routes on.
+fn default_cell() -> Nm {
+    grid::Options::default().cell
+}
+
+/// The coarsest cell [`fit_memory`] goes to, and its step there, in nanometres.
+const COARSEST_CELL: Nm = 100_000;
+const CELL_STEP: Nm = 10_000;
+
+/// The most memory a run may take, in bytes, and where that figure comes from: `--max-memory`,
+/// else the tightest `memory.max` of the cgroups the process runs in, else 60% of the memory
+/// the kernel reports available, else 4 GB.
+pub fn memory_cap(a: &Args) -> (u64, String) {
+    if let Some(mb) = a.max_memory {
+        return (mb << 20, "--max-memory".into());
+    }
+    if let Some(limit) = cgroup_limit() {
+        return (limit, "its cgroup's memory.max".into());
+    }
+    let available = std::fs::read_to_string("/proc/meminfo").ok().and_then(|m| {
+        let line = m.lines().find(|l| l.starts_with("MemAvailable:"))?;
+        line.split_whitespace().nth(1)?.parse::<u64>().ok()
+    });
+    match available {
+        Some(kb) => (kb * 1024 / 10 * 6, "60% of available memory".into()),
+        None => (4 << 30, "4 GB, the memory available unknown".into()),
+    }
+}
+
+/// The tightest `memory.max` from the process's cgroup (v2) up to the root.
+fn cgroup_limit() -> Option<u64> {
+    let own = std::fs::read_to_string("/proc/self/cgroup").ok()?;
+    let path = own.lines().find_map(|l| l.strip_prefix("0::"))?.trim().to_string();
+    let mut dir = std::path::PathBuf::from("/sys/fs/cgroup").join(path.trim_start_matches('/'));
+    let mut tightest: Option<u64> = None;
+    loop {
+        if let Ok(max) = std::fs::read_to_string(dir.join("memory.max")) {
+            if let Ok(v) = max.trim().parse::<u64>() {
+                tightest = Some(tightest.map_or(v, |t| t.min(v)));
+            }
+        }
+        if dir == std::path::Path::new("/sys/fs/cgroup") || !dir.pop() {
+            return tightest;
+        }
+    }
+}
+
+/// Fits the run to the memory it may take: what its grids will take is worked out before any is
+/// allocated, and when that is over the cap the run first gives up threads, then routes on a
+/// coarser cell, a step at a time up to 0.1 mm, and says what it chose. A board still over
+/// the cap is refused (`Err`), with both figures. `Ok` carries the lines to print.
+pub fn fit_memory(a: &mut Args, board: &Board) -> Result<Vec<String>, String> {
+    let (cap, from) = memory_cap(a);
+    let mb = |b: u64| b.div_ceil(1 << 20);
+    let (asked_threads, asked_cell) = (a.threads.unwrap_or_else(default_threads), a.cell.unwrap_or_else(default_cell));
+    let (mut threads, mut cell) = (asked_threads, asked_cell);
+    // Only Jacobi negotiation searches the whole board on every thread at once; otherwise the
+    // threads work on windows (pre-fanout), and one search holds the whole board.
+    let jacobi = a.negotiate_jacobi;
+    let searching = |threads: usize| if jacobi { threads } else { 1 };
+    let first = grid::memory_estimate(board, cell, searching(threads));
+    let mut lines = vec![format!(
+        "memory: {} MB estimated ({} nodes at {} mm, {} classes, {} searching the whole board), {} MB allowed by {from}",
+        first.mb(),
+        first.nodes,
+        cell as f64 / 1e6,
+        first.classes,
+        first.threads,
+        mb(cap)
+    )];
+    let mut e = first.clone();
+    while e.bytes > cap && jacobi && threads > 1 {
+        threads -= 1;
+        e = grid::memory_estimate(board, cell, searching(threads));
+    }
+    while e.bytes > cap && cell < COARSEST_CELL {
+        cell = (cell + CELL_STEP).min(COARSEST_CELL);
+        e = grid::memory_estimate(board, cell, searching(threads));
+    }
+    if e.bytes > cap {
+        return Err(format!(
+            "memory: the board needs {} MB even on one thread at {} mm, over the {} MB allowed by {from}; give --max-memory or a coarser --cell",
+            e.mb(),
+            cell as f64 / 1e6,
+            mb(cap)
+        ));
+    }
+    if e != first {
+        if threads != asked_threads {
+            a.threads = Some(threads);
+        }
+        if cell != asked_cell {
+            a.cell = Some(cell);
+        }
+        lines.push(format!("memory: {} threads at {} mm to fit, {} MB estimated", threads, cell as f64 / 1e6, e.mb()));
+    }
+    Ok(lines)
+}
+
+/// The most memory the process has held, in megabytes, where the system says (Linux).
+pub fn peak_memory_mb() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let line = status.lines().find(|l| l.starts_with("VmHWM:"))?;
+    line.split_whitespace().nth(1)?.parse::<u64>().ok().map(|kb| kb.div_ceil(1024))
+}
+
 pub fn run_with_solver(
     a: &Args,
     mut board: Board,
@@ -1427,8 +1547,7 @@ pub fn run_with_solver(
     // Escapes laid before routing, held apart from the router's own copper until the grid has
     // had its pass, so the ones no route used can be taken out again.
     let mut fanout_laid = Vec::new();
-    let cores = std::thread::available_parallelism().map_or(1, |n| n.get() / 2).max(1);
-    let threads = a.threads.unwrap_or(cores);
+    let threads = a.threads.unwrap_or_else(default_threads);
     if a.prefanout && timeline.enter(&run, "prefanout") {
         let parts = morph::fine_pitch(&board, 500_000);
         let defaults = grid::PrefanoutOptions::default();

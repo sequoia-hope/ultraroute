@@ -92,6 +92,18 @@ fn pad_half_side(pad: &board::Item) -> Nm {
     (b.max.x - b.min.x).min(b.max.y - b.min.y) / 2
 }
 
+/// What a board's map covers: its outline, or with none its items' extent and room round it, not
+/// only their corners nearest the origin, which left a map too small to route round anything.
+pub(crate) fn map_extent(board: &Board) -> board::BBox {
+    let b = board.outline.iter().flatten().copied().fold(None, |b: Option<board::BBox>, p| {
+        Some(b.map_or(board::BBox::of([p]), |b| b.union(board::BBox::of([p]))))
+    });
+    b.unwrap_or_else(|| {
+        let items = board.items().map(|(_, it)| it.shape.bbox()).reduce(board::BBox::union);
+        items.unwrap_or(board::BBox::of([Point::new(0, 0)])).grow(2_000_000)
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct ViaSpec {
     pub radius: Nm,
@@ -320,15 +332,7 @@ impl ObstacleMap {
 
     /// [`ObstacleMap::without`], or `None` if `deadline` passes first.
     pub fn without_by(board: &Board, profile: Profile, h: Nm, pours_block: bool, skip: &dyn Fn(ItemId) -> bool, deadline: &Deadline) -> Option<ObstacleMap> {
-        let b = board.outline.iter().flatten().copied().fold(None, |b: Option<board::BBox>, p| {
-            Some(b.map_or(board::BBox::of([p]), |b| b.union(board::BBox::of([p]))))
-        });
-        // With no outline, the items' extent and room round it: not only their corners nearest
-        // the origin, which left a map too small to route round anything.
-        let b = b.unwrap_or_else(|| {
-            let items = board.items().map(|(_, it)| it.shape.bbox()).reduce(board::BBox::union);
-            items.unwrap_or(board::BBox::of([Point::new(0, 0)])).grow(2_000_000)
-        });
+        let b = map_extent(board);
         let (x0, y0) = (b.min.x, b.min.y);
         let nx = ((b.max.x - x0) / h).max(1) as usize;
         let ny = ((b.max.y - y0) / h).max(1) as usize;

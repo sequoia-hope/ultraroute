@@ -10,11 +10,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use board::Board;
-use ultraroute::{parse, run, Live};
+use ultraroute::{fit_memory, parse, peak_memory_mb, run, Live};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let a = match parse(&args) {
+    let mut a = match parse(&args) {
         Ok(a) => a,
         Err(e) => {
             eprintln!("{e}");
@@ -30,6 +30,27 @@ fn main() {
     };
     for w in &board.rules.warnings {
         eprintln!("warning: {w}");
+    }
+    // Sized before anything is allocated: a board too large for the machine is fitted or refused,
+    // and a refused one leaves the input as the output, as a crash does.
+    match fit_memory(&mut a, &board) {
+        Ok(lines) => {
+            for l in lines {
+                eprintln!("{l}");
+            }
+            if a.estimate {
+                return;
+            }
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            if !a.estimate {
+                if let Err(e) = std::fs::write(&a.output, &text) {
+                    eprintln!("{}: {e}", a.output);
+                }
+            }
+            std::process::exit(1);
+        }
     }
 
     let cancel = Arc::new(AtomicBool::new(false));
@@ -60,6 +81,9 @@ fn main() {
             (text, 1)
         }
     };
+    if let Some(mb) = peak_memory_mb() {
+        eprintln!("memory: peak {mb} MB");
+    }
     if let Err(e) = std::fs::write(&a.output, out) {
         eprintln!("{}: {e}", a.output);
         std::process::exit(1);

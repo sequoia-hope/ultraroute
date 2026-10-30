@@ -9,6 +9,7 @@ pub mod cleanup;
 pub mod clock;
 pub mod grid;
 pub mod jitter;
+pub mod memory;
 pub mod necks;
 pub mod negotiate;
 pub mod prefanout;
@@ -43,6 +44,7 @@ pub use route::{edits, keep_orphans, route_open, terminal_cells, CpuSolver, Fiel
 pub use search::via_cost_mm;
 pub use tune::{match_lengths, match_lengths_watch, pair_lengths, TuneBump, TuneStats};
 pub use clock::Deadline;
+pub use memory::{memory_estimate, MemoryEstimate};
 pub use vias::{reduce_vias, reduce_vias_all, ViaOptions, ViaStats};
 pub use shove::{plough_fields, shove_escape, shove_escape_steps, Plough, ShoveEvent, ShoveOptions, ShoveRound, ShoveStats, ShoveTry};
 #[cfg(feature = "gpu")]
