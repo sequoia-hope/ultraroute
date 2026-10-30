@@ -67,8 +67,9 @@ disk since it was loaded, and records the route and the router's report under
 Before the core, the router was [copperroute](https://github.com/sequoia-hope/copperroute)
 (branch `governance`, forked from emshotton/copperroute), a Rust port of freerouting, run as a
 separate program from a checkout at `copperroute/`. It is kept as a reference router. The studio
-can still run it on the jobs that have a Specctra `.dsn`, and `studio-server` still looks for its
-binary at `target-topo/release/copperroute` (or `--router PATH`) when it starts. The tools of that
+can still run it on the jobs that have a Specctra `.dsn` when its binary is at
+`target-topo/release/copperroute` (or given with `--router PATH`); without it the studio routes on
+the core alone. The tools of that
 era stay in this repository: `tools/route_job.py` (route a job many ways, keep a leaderboard),
 `tools/kicad_bench.py` (the core and copperroute on one board, judged by KiCad), `jobs/<board>/`,
 `morph-frames/`, `experiments.json` and `history.html`. Whether they move to a `legacy/`
