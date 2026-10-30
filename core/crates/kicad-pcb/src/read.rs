@@ -468,15 +468,13 @@ fn read_footprint(
             });
         }
     };
+    // Boards written by other tools (kiutils) may give a footprint no id; one from its place in
+    // the file is unique and the same every read. Ids only tie footprints to groups.
     let uuid = match n.find("uuid").or_else(|| n.find("tstamp")) {
         Some(u) => u.text_arg(0, "uuid")?.to_string(),
         None => {
             let p = n.pos();
-            return Err(KicadParse::Syntax {
-                line: p.line,
-                col: p.col,
-                expected: "(uuid …) or (tstamp …) in footprint".to_string(),
-            });
+            format!("no-uuid-{}-{}", p.line, p.col)
         }
     };
     let at_node = required(n, "at", form)?;
