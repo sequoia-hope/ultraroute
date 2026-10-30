@@ -384,6 +384,37 @@ label.inline {
   color: var(--muted);
 }
 
+.open-file {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.open-file button {
+  white-space: nowrap;
+}
+
+.open-file .small {
+  margin: 0;
+}
+
+/* Files dragged over the board: where they open. */
+.drop-here {
+  position: absolute;
+  inset: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 16px;
+  border: 2px dashed var(--accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 80%, transparent);
+  color: var(--text);
+  font-size: 15px;
+  pointer-events: none;
+}
+
 .legend .ramp {
   width: 90px;
   height: 8px;
