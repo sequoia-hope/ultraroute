@@ -1,8 +1,6 @@
 //! Shortest paths on a `RouteGrid`, as integer costs so the CPU reference and the GPU kernel
 //! agree exactly: 10 per straight step, 14 per diagonal, `via_cost` per layer change.
 
-use std::cmp::Reverse;
-use std::collections::BinaryHeap;
 
 use crate::grid::RouteGrid;
 
@@ -51,20 +49,83 @@ fn step_cost(directional: bool, layer: usize, di: i32, dj: i32, base: u32) -> u3
     }
 }
 
+/// A min-heap of (priority, node) pairs packed one to a `u64`, the priority in the high half,
+/// with four children to a parent. It pops in exactly the order a binary heap of the pairs does,
+/// from entries half the size in a tree half as deep: the searches' queue was a third of the
+/// router's time.
+#[derive(Default)]
+pub(crate) struct NodeHeap {
+    keys: Vec<u64>,
+}
+
+impl NodeHeap {
+    pub(crate) const fn new() -> NodeHeap {
+        NodeHeap { keys: Vec::new() }
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.keys.clear();
+    }
+
+    pub(crate) fn push(&mut self, priority: u32, node: usize) {
+        debug_assert!(u32::try_from(node).is_ok(), "node {node} does not fit the heap's key");
+        let key = (u64::from(priority) << 32) | node as u64;
+        let mut i = self.keys.len();
+        self.keys.push(key);
+        while i > 0 {
+            let parent = (i - 1) / 4;
+            if self.keys[parent] <= key {
+                break;
+            }
+            self.keys[i] = self.keys[parent];
+            i = parent;
+        }
+        self.keys[i] = key;
+    }
+
+    pub(crate) fn pop(&mut self) -> Option<(u32, usize)> {
+        let top = *self.keys.first()?;
+        let last = self.keys.pop().expect("a first key is a last one");
+        let n = self.keys.len();
+        if n > 0 {
+            let mut i = 0;
+            loop {
+                let first = 4 * i + 1;
+                if first >= n {
+                    break;
+                }
+                let mut least = first;
+                for c in first + 1..(first + 4).min(n) {
+                    if self.keys[c] < self.keys[least] {
+                        least = c;
+                    }
+                }
+                if self.keys[least] >= last {
+                    break;
+                }
+                self.keys[i] = self.keys[least];
+                i = least;
+            }
+            self.keys[i] = last;
+        }
+        Some(((top >> 32) as u32, (top & 0xffff_ffff) as usize))
+    }
+}
+
 /// Cost from the nearest source to every cell (`UNREACHED` where none, and everywhere when the
 /// grid's deadline passes before the field is done).
 pub fn cost_field(grid: &RouteGrid, sources: &[usize], via_cost: u32) -> Vec<u32> {
     let cells = grid.cell_count();
     let mut cost = vec![UNREACHED; grid.blocked.len()];
-    let mut heap = BinaryHeap::new();
+    let mut heap = NodeHeap::new();
     for &s in sources {
         if !grid.blocked[s] {
             cost[s] = 0;
-            heap.push(Reverse((0u32, s)));
+            heap.push(0, s);
         }
     }
     let mut popped = 0usize;
-    while let Some(Reverse((c, index))) = heap.pop() {
+    while let Some((c, index)) = heap.pop() {
         if c > cost[index] {
             continue;
         }
@@ -80,7 +141,7 @@ pub fn cost_field(grid: &RouteGrid, sources: &[usize], via_cost: u32) -> Vec<u32
             let candidate = c + step + grid.penalty_at(next);
             if candidate < cost[next] && !grid.blocked[next] {
                 cost[next] = candidate;
-                heap.push(Reverse((candidate, next)));
+                heap.push(candidate, next);
             }
         };
         for (di, dj, step) in NEIGHBOURS {
@@ -168,7 +229,7 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
         touched: Vec<usize>,
         pocket_queue: Vec<usize>,
         epoch: u32,
-        heap: BinaryHeap<Reverse<(u32, usize)>>,
+        heap: NodeHeap,
     }
     const TARGET: u8 = 1;
     const SOURCE: u8 = 2;
@@ -182,7 +243,7 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
                 touched: Vec::new(),
                 pocket_queue: Vec::new(),
                 epoch: 0,
-                heap: BinaryHeap::new(),
+                heap: NodeHeap::new(),
             })
         };
     }
@@ -312,12 +373,12 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
             if !grid.blocked[s] {
                 b.gen[s] = epoch;
                 b.cost[s] = 0;
-                b.heap.push(Reverse((estimate(s), s)));
+                b.heap.push(estimate(s), s);
             }
         }
         let mut expanded = 0usize;
         let mut reached = None;
-        while let Some(Reverse((f, index))) = b.heap.pop() {
+        while let Some((f, index)) = b.heap.pop() {
             let c = if b.gen[index] == epoch { b.cost[index] } else { UNREACHED };
             if f > c.saturating_add(estimate(index)) {
                 continue;
@@ -345,7 +406,7 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
                     if candidate < cur {
                         b.gen[next] = epoch;
                         b.cost[next] = candidate;
-                        b.heap.push(Reverse((candidate + estimate(next), next)));
+                        b.heap.push(candidate + estimate(next), next);
                     }
                 }
             }
@@ -359,7 +420,7 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
                             if candidate < cur {
                                 b.gen[next] = epoch;
                                 b.cost[next] = candidate;
-                                b.heap.push(Reverse((candidate + estimate(next), next)));
+                                b.heap.push(candidate + estimate(next), next);
                             }
                         }
                     }
@@ -507,6 +568,34 @@ pub fn pocket_bbox(grid: &RouteGrid, sources: &[usize], targets: &[usize]) -> Op
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_node_heap_pops_as_a_binary_heap_of_pairs_does() {
+        use std::cmp::Reverse;
+        use std::collections::BinaryHeap;
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let mut draw = |n: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % n
+        };
+        let (mut ours, mut theirs) = (NodeHeap::new(), BinaryHeap::new());
+        for _ in 0..20_000 {
+            if draw(3) < 2 {
+                // Few priorities and nodes, so ties and repeats are common.
+                let (p, n) = (draw(50) as u32, draw(200) as usize);
+                ours.push(p, n);
+                theirs.push(Reverse((p, n)));
+            } else {
+                assert_eq!(ours.pop(), theirs.pop().map(|Reverse(k)| k));
+            }
+        }
+        while let Some(Reverse(k)) = theirs.pop() {
+            assert_eq!(ours.pop(), Some(k));
+        }
+        assert_eq!(ours.pop(), None);
+    }
     use crate::grid::ViaSpec;
 
     #[test]

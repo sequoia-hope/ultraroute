@@ -72,6 +72,11 @@ fn main() {
         };
         Live::new(out, a.fps, a.pours_block).with_step(a.live_step)
     });
+    #[cfg(feature = "profile")]
+    let profiler = std::env::var_os("ULTRAROUTE_PROFILE").map(|path| {
+        let guard = pprof::ProfilerGuardBuilder::default().frequency(250).blocklist(&["libc", "libgcc", "pthread", "vdso"]).build().expect("start the profiler");
+        (path, guard)
+    });
     // A crash still leaves the caller a board: the input as it came, and a failing exit.
     let routed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(&a, board, &text, live, cancel)));
     let (out, code) = match routed {
@@ -81,6 +86,10 @@ fn main() {
             (text, 1)
         }
     };
+    #[cfg(feature = "profile")]
+    if let Some((path, guard)) = profiler {
+        write_profile(&path, &guard);
+    }
     if let Some(mb) = peak_memory_mb() {
         eprintln!("memory: peak {mb} MB");
     }
@@ -91,3 +100,22 @@ fn main() {
     std::process::exit(code);
 }
 
+
+/// The profile's stacks in the collapsed format, root first: one line per stack, its frames joined
+/// by `;`, then its sample count.
+#[cfg(feature = "profile")]
+fn write_profile(path: &std::ffi::OsStr, guard: &pprof::ProfilerGuard) {
+    let report = match guard.report().build() {
+        Ok(r) => r,
+        Err(e) => return eprintln!("profile: {e}"),
+    };
+    let mut out = String::new();
+    for (frames, count) in &report.data {
+        let names: Vec<String> = frames.frames.iter().rev().flat_map(|f| f.iter().rev().map(|s| s.name())).collect();
+        out.push_str(&format!("{} {count}\n", names.join(";")));
+    }
+    match std::fs::write(path, out) {
+        Ok(()) => eprintln!("profile: {} stacks written to {}", report.data.len(), path.to_string_lossy()),
+        Err(e) => eprintln!("profile: {}: {e}", path.to_string_lossy()),
+    }
+}

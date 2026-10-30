@@ -43,7 +43,8 @@ fn hole_shape(hole: (Point, Nm)) -> Shape {
     Shape::Capsule { a: hole.0, b: hole.0, r: hole.1 }
 }
 
-struct Limits {
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Limits {
     max_clearance: Nm,
     edge: Nm,
     hole_clearance: Nm,
@@ -88,7 +89,7 @@ impl Limits {
 }
 
 impl Limits {
-    fn of(board: &Board) -> Limits {
+    pub(crate) fn of(board: &Board) -> Limits {
         let rules = &board.rules;
         let (hole_clearance, hole_to_hole) = (nm(rules.min_hole_clearance), nm(rules.min_hole_to_hole));
         let pth_hole_clearance = hole_clearance.max(nm(rules.pth_hole_clearance));
@@ -150,11 +151,11 @@ pub fn mask_pair_gap(board: &Board, a_id: ItemId, a: &Item, b_id: ItemId, b: &It
 }
 
 pub fn check(board: &Board) -> Vec<Violation> {
-    let limits = Limits::of(board);
+    let limits = &board.limits;
     let mut found = Vec::new();
     let mut failed_pairs = HashSet::new();
     for (id, _) in board.items() {
-        item_checks(board, id, false, false, &limits, &mut failed_pairs, &mut found);
+        item_checks(board, id, false, false, limits, &mut failed_pairs, &mut found);
     }
     found
 }
@@ -163,14 +164,14 @@ pub fn check(board: &Board) -> Vec<Violation> {
 /// Pours are left out, as they are refilled around new copper; a block's kept pours are not.
 pub fn check_item(board: &Board, id: ItemId) -> Vec<Violation> {
     let mut found = Vec::new();
-    item_checks(board, id, true, true, &Limits::of(board), &mut HashSet::new(), &mut found);
+    item_checks(board, id, true, true, &board.limits, &mut HashSet::new(), &mut found);
     found
 }
 
 /// What one item breaks, pours included: for routing that keeps pours as planes.
 pub fn check_item_with_pours(board: &Board, id: ItemId) -> Vec<Violation> {
     let mut found = Vec::new();
-    item_checks(board, id, true, false, &Limits::of(board), &mut HashSet::new(), &mut found);
+    item_checks(board, id, true, false, &board.limits, &mut HashSet::new(), &mut found);
     found
 }
 

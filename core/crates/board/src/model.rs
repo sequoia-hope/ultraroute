@@ -300,6 +300,9 @@ pub struct Board {
     /// Clearances per net number, in nanometres, so `clearance(a, b)` is two array lookups.
     net_clearances: Vec<Nm>,
     min_clearance_nm: Nm,
+    /// The checks' limits, worked out once from the rules and the pads' openings and clearances,
+    /// which only [`Board::new`] sets: a check of one item no longer walks every pad.
+    pub(crate) limits: crate::check::Limits,
     items: Vec<Option<Item>>,
     /// Cached shape bounding boxes (`item.shape.bbox()`) parallel to `items`.
     shape_bboxes: Vec<BBox>,
@@ -382,6 +385,7 @@ impl Board {
             pour_cost: 0.0,
             net_clearances,
             min_clearance_nm,
+            limits: Default::default(),
             items: Vec::new(),
             shape_bboxes: Vec::new(),
             bboxes: Vec::new(),
@@ -634,6 +638,7 @@ impl Board {
                 });
             }
         }
+        board.limits = crate::check::Limits::of(&board);
         board
     }
 
