@@ -797,6 +797,13 @@ impl Stage for Write {
         ledger.removed.extend(spans);
         if split > 0 {
             eprintln!("split {split} tracks where others end on them");
+            // A track that ran past a join leaves that overhang a piece of its own, leading
+            // nowhere, which KiCad reports as dangling.
+            let (pruned, spans) = grid::prune_dangling(board, &mut laid);
+            ledger.removed.extend(spans);
+            if pruned > 0 {
+                eprintln!("pruned {pruned} dangling after the split");
+            }
         }
         for (line, nets) in regions::report(board, &ledger.lengths, &laid) {
             eprintln!("regions: {line}");
