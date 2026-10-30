@@ -193,3 +193,39 @@ fn a_slots_whole_length_keeps_copper_clear_as_kicad_measures_it() {
     assert!((gap - 150_000.0).abs() < 2_000.0, "KiCad measures 0.15 mm, the check {gap} nm");
     assert_eq!(hole_gap(11.0), f64::INFINITY, "0.3 mm from the slot is clear of its 0.25 mm");
 }
+
+/// KiCad's NetTie-2_SMD_Pad0.5mm (two 0.5 mm pads 1 mm apart, a copper bar between them) tying
+/// nets A and B at (10, 10), and `extra` beside it.
+pub fn net_tie_board(extra: &str) -> Board {
+    let src = format!(
+        r#"(kicad_pcb (version 20241229) (generator "pcbnew") (general (thickness 1.6))
+      (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+      (net 0 "") (net 1 "A") (net 2 "B") (net 3 "C")
+      (footprint "NetTie:NetTie-2_SMD_Pad0.5mm" (layer "F.Cu") (uuid "11111111-1111-4111-8111-111111111111") (at 10 10)
+        (property "Reference" "NT1" (at 0 -1.2 0) (layer "F.SilkS") (uuid "11111111-1111-4111-8111-111111111112"))
+        (net_tie_pad_groups "1, 2")
+        (fp_poly (pts (xy -0.5 -0.25) (xy 0.5 -0.25) (xy 0.5 0.25) (xy -0.5 0.25)) (stroke (width 0) (type solid)) (fill yes) (layer "F.Cu"))
+        (pad "1" smd circle (at -0.5 0) (size 0.5 0.5) (layers "F.Cu") (net 1 "A"))
+        (pad "2" smd circle (at 0.5 0) (size 0.5 0.5) (layers "F.Cu") (net 2 "B")))
+      {extra}
+      (gr_rect (start 0 0) (end 30 30) (layer "Edge.Cuts") (width 0.1)))"#
+    );
+    let (pcb, copper) = parse_board(&src).unwrap();
+    let rules = r#"{"board":{"design_settings":{"rules":{"min_clearance":0.2,"min_copper_edge_clearance":0.5}}},"net_settings":{"classes":[{"name":"Default","clearance":0.2,"track_width":0.2}]}}"#;
+    Board::new(&pcb, &copper, Rules::parse(rules).unwrap())
+}
+
+#[test]
+fn a_net_tie_joins_its_nets_as_kicad_allows_and_nothing_else() {
+    // kicad-cli 9.0.8 finds no violation in the tie itself.
+    assert!(check(&net_tie_board("")).is_empty(), "{:?}", check(&net_tie_board("")));
+    // A track of net A ending inside pad 2 (net B), touching the bar: KiCad finds nothing.
+    let b = net_tie_board(r#"(segment (start 10.5 12) (end 10.5 10) (width 0.2) (layer "F.Cu") (net 1) (uuid "aaaaaaaa-0000-4000-8000-000000000001"))"#);
+    assert!(check(&b).is_empty(), "{:?}", check(&b));
+    // One ending short of the pads, 0.15 mm from them: KiCad's clearance violation.
+    let b = net_tie_board(r#"(segment (start 10.2 12) (end 10.2 10.4) (width 0.2) (layer "F.Cu") (net 1) (uuid "aaaaaaaa-0000-4000-8000-000000000003"))"#);
+    assert!(check(&b).iter().any(|v| v.rule == Rule::Clearance), "net A ending short of the tie's pads");
+    // Another net's track across the bar is not.
+    let b = net_tie_board(r#"(segment (start 10 8) (end 10 12) (width 0.2) (layer "F.Cu") (net 3) (uuid "aaaaaaaa-0000-4000-8000-000000000002"))"#);
+    assert!(check(&b).iter().any(|v| v.rule == Rule::Clearance), "net C across the tie");
+}

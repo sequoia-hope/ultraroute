@@ -62,6 +62,9 @@ pub struct CopperGraphic {
     /// 0 for none, as most drawn copper has.
     pub net: u32,
     pub polygons: Vec<Vec<[f64; 2]>>,
+    /// The footprint it is drawn in, by index; `None` on the board itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub footprint: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -347,7 +350,7 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
                     if matches!(g.head(), Some("fp_line" | "fp_arc" | "fp_circle" | "fp_rect" | "fp_poly" | "fp_text" | "property")) {
                         match graphic(g, &|p| fp.place(p), fp.rotation_deg) {
                             Ok(Some(g)) if g.layer.ends_with(".Mask") => copper.mask_graphics.push(g),
-                            Ok(Some(g)) => copper.graphics.push(g),
+                            Ok(Some(g)) => copper.graphics.push(CopperGraphic { footprint: Some(footprint), ..g }),
                             Ok(None) => {}
                             Err(_) => copper_graphics += 1,
                         }
@@ -457,7 +460,7 @@ fn graphic(g: &Node, place: &dyn Fn([f64; 2]) -> [f64; 2], rotation: f64) -> Res
         return Ok(None);
     }
     let net = g.find("net").and_then(|n| n.number_arg(0, "net").ok()).map_or(0, |n| n as u32);
-    Ok(Some(CopperGraphic { layer: layer.to_string(), net, polygons }))
+    Ok(Some(CopperGraphic { layer: layer.to_string(), net, polygons, footprint: None }))
 }
 
 fn courtyard(fp_node: &Node, fp: &Footprint) -> Result<Option<Vec<[f64; 2]>>, KicadParse> {

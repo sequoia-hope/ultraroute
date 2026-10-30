@@ -53,6 +53,30 @@ pub(crate) struct Limits {
     smd_pad_clearance: Nm,
 }
 
+/// Whether a net tie lets the two touch, as KiCad does: two members of one tie (its pads and the
+/// copper drawn in it), or a member and a track of one of its nets that ends inside one of its
+/// pads (checked with kicad-cli 9.0.8: such a track may cross the tie's bar; one ending short of
+/// the pads may not).
+fn tied(board: &Board, a: ItemId, item: &Item, b: ItemId, other: &Item) -> bool {
+    match (board.ties.get(&a), board.ties.get(&b)) {
+        (Some((f, _)), Some((g, _))) => f == g,
+        (Some((f, nets)), None) => ends_in_tie(board, other, *f, nets),
+        (None, Some((f, nets))) => ends_in_tie(board, item, *f, nets),
+        (None, None) => false,
+    }
+}
+
+/// A track of one of a tie's `nets` with an end inside one of the pads of the tie in footprint `fp`.
+fn ends_in_tie(board: &Board, track: &Item, fp: usize, nets: &[u32]) -> bool {
+    let Shape::Capsule { a, b, .. } = track.shape else { return false };
+    if track.kind != Kind::Track || !nets.contains(&track.net) {
+        return false;
+    }
+    board.ties.iter().any(|(&id, (f, _))| {
+        *f == fp && board.item(id).is_some_and(|p| matches!(p.kind, Kind::Pad { .. }) && (p.shape.contains(a) || p.shape.contains(b)))
+    })
+}
+
 /// A pad with a plated hole: KiCad's `Pad_Type == 'Through-hole'`.
 fn through_hole(item: &Item) -> bool {
     matches!(item.kind, Kind::Pad { plated: true, .. }) && item.hole.is_some()
@@ -215,7 +239,7 @@ fn item_checks(
                             found.push(Violation { rule: Rule::Keepout, a: id, b: Some(other), layer: Some(layer), gap: 0.0, required: 0 });
                         }
                     }
-                    _ if partner(other) && o.is_copper() && (o.net != item.net || item.net == 0) && !same_pad(item, o) => {
+                    _ if partner(other) && o.is_copper() && (o.net != item.net || item.net == 0) && !same_pad(item, o) && !tied(board, id, item, other, o) => {
                         let mut required = board.clearance(item.net, o.net);
                         if smd(item) && smd(o) {
                             required = required.max(limits.smd_pad_clearance);

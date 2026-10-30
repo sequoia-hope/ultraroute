@@ -291,6 +291,9 @@ pub struct Board {
     /// Slotted holes: the two ends of a slot's centre line, its radius the item's `hole`'s. A
     /// slot is longer than the circle `hole` holds; [`Board::hole_shape`] gives all of it.
     pub hole_ends: HashMap<ItemId, (Point, Point)>,
+    /// Net ties: each pad of a tie group, and each piece of copper drawn in a footprint with one,
+    /// with its footprint and the nets the tie joins. Members of one tie may touch.
+    pub ties: HashMap<ItemId, (usize, Vec<u32>)>,
     /// Areas where a via costs the router dearly but is allowed, on every layer: rule areas
     /// whose name starts `soft-novia`, and boxes given on the command line. Room kept for silk.
     pub via_avoid: Vec<Shape>,
@@ -402,6 +405,7 @@ impl Board {
             mask_areas: Vec::new(),
             pad_clearances: HashMap::new(),
             hole_ends: HashMap::new(),
+            ties: HashMap::new(),
             via_avoid: Vec::new(),
             via_avoid_cost: 3_000,
             regions: Vec::new(),
@@ -661,9 +665,17 @@ impl Board {
             });
             board.mask_areas.extend(shapes.into_iter().map(|shape| (shape, layer, net)));
         }
+        // A net tie's groups: its footprint, and the nets each joins.
+        let tie_nets = |fp: usize| -> Vec<(Vec<String>, Vec<u32>)> {
+            let f = &pcb.footprints[fp];
+            f.net_tie_groups
+                .iter()
+                .map(|g| (g.clone(), f.pads.iter().filter(|p| g.contains(&p.number)).filter_map(|p| p.net.as_ref().map(|n| n.number)).collect()))
+                .collect()
+        };
         for g in &copper.graphics {
             for poly in &g.polygons {
-                board.insert(Item {
+                let id = board.insert(Item {
                     kind: Kind::Pour { zone: DRAWN, kept: true },
                     net: g.net,
                     layers: one(&g.layer),
@@ -672,7 +684,26 @@ impl Board {
                     locked: true,
                     span: None,
                 });
+                // Copper drawn in a net tie is the tie itself, between all its nets.
+                if let Some(fp) = g.footprint {
+                    let nets: Vec<u32> = tie_nets(fp).into_iter().flat_map(|(_, n)| n).collect();
+                    if !nets.is_empty() {
+                        board.ties.insert(id, (fp, nets));
+                    }
+                }
             }
+        }
+        let tie_pads: Vec<(ItemId, usize, Vec<u32>)> = board
+            .items()
+            .filter_map(|(id, it)| match &it.kind {
+                Kind::Pad { footprint, number, .. } => {
+                    tie_nets(*footprint).into_iter().find(|(g, _)| g.contains(number)).map(|(_, nets)| (id, *footprint, nets))
+                }
+                _ => None,
+            })
+            .collect();
+        for (id, fp, nets) in tie_pads {
+            board.ties.insert(id, (fp, nets));
         }
         board.limits = crate::check::Limits::of(&board);
         board

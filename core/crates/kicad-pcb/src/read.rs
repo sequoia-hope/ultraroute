@@ -595,6 +595,10 @@ fn read_footprint(
         attrs,
         pads,
         models,
+        net_tie_groups: n
+            .find("net_tie_pad_groups")
+            .map(|g| g.args().iter().filter_map(Node::text).map(|t| t.split(',').map(|p| p.trim().to_string()).filter(|p| !p.is_empty()).collect()).collect())
+            .unwrap_or_default(),
     })
 }
 
