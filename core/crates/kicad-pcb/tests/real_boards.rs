@@ -148,6 +148,7 @@ fn copper_written_back_reads_the_same() {
             .map(|v| NewVia { at: v.at, size: v.size, drill: v.drill, layers: v.layers.clone(), net: v.net })
             .collect(),
         replace: Vec::new(),
+        uuid_seed: None,
     };
     let written = apply(&text, &edit);
     let (_, again) = parse_board(&written).unwrap();

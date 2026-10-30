@@ -32,9 +32,12 @@ pub struct Edit {
     pub replace: Vec<(Span, String)>,
     pub tracks: Vec<NewTrack>,
     pub vias: Vec<NewVia>,
+    /// The new items' uuids drawn from this seed, the same every run; random when `None`.
+    pub uuid_seed: Option<u64>,
 }
 
 pub fn apply(text: &str, edit: &Edit) -> String {
+    let mut uuids = UuidSource::new(edit.uuid_seed);
     let mut changes: Vec<(Span, Option<&str>)> =
         edit.remove.iter().map(|s| (*s, None)).chain(edit.replace.iter().map(|(s, t)| (*s, Some(t.as_str())))).collect();
     changes.sort_by_key(|c| c.0.start);
@@ -83,7 +86,7 @@ pub fn apply(text: &str, edit: &Edit) -> String {
             mm(t.width),
             t.layer,
             net(t.net),
-            uuid()
+            uuids.draw()
         ));
     }
     for v in &edit.vias {
@@ -96,7 +99,7 @@ pub fn apply(text: &str, edit: &Edit) -> String {
             v.layers[0],
             v.layers[1],
             net(v.net),
-            uuid()
+            uuids.draw()
         ));
     }
     out.push_str(&text[close..]);
@@ -110,14 +113,52 @@ pub fn mm(m: f64) -> String {
     if s == "-0" { "0".to_string() } else { s.to_string() }
 }
 
+/// Where new items' uuids come from: random, or a sequence fixed by a seed.
+pub enum UuidSource {
+    Random,
+    Seeded(u64),
+}
+
+impl UuidSource {
+    pub fn new(seed: Option<u64>) -> UuidSource {
+        // A zero state would stay zero.
+        seed.map_or(UuidSource::Random, |s| UuidSource::Seeded(s ^ 0x9e37_79b9_7f4a_7c15 | 1))
+    }
+
+    /// The next version-4 uuid.
+    pub fn draw(&mut self) -> String {
+        let (a, b) = match self {
+            UuidSource::Random => {
+                static COUNTER: AtomicU64 = AtomicU64::new(0);
+                let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+                h.write_u64(COUNTER.fetch_add(1, Ordering::Relaxed));
+                let a = h.finish();
+                h.write_u64(a);
+                (a, h.finish())
+            }
+            UuidSource::Seeded(state) => {
+                let mut draw = || {
+                    // xorshift64*
+                    *state ^= *state >> 12;
+                    *state ^= *state << 25;
+                    *state ^= *state >> 27;
+                    state.wrapping_mul(0x2545_f491_4f6c_dd1d)
+                };
+                (draw(), draw())
+            }
+        };
+        uuid_of(a, b)
+    }
+}
+
 /// A random version-4 UUID; the standard library's hasher seeds supply the randomness.
+#[cfg(test)]
 fn uuid() -> String {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-    h.write_u64(COUNTER.fetch_add(1, Ordering::Relaxed));
-    let a = h.finish();
-    h.write_u64(a);
-    let b = h.finish();
+    UuidSource::Random.draw()
+}
+
+/// The version-4 uuid of 128 bits.
+fn uuid_of(a: u64, b: u64) -> String {
     let bytes: Vec<u8> = a.to_le_bytes().into_iter().chain(b.to_le_bytes()).collect();
     let hex: String = bytes
         .iter()
@@ -150,6 +191,18 @@ mod tests {
         assert_ne!(a, b);
         assert_eq!(a.len(), 36);
         assert_eq!(&a[14..15], "4");
+    }
+
+    #[test]
+    fn a_seed_fixes_the_uuids() {
+        let draw = |seed| {
+            let mut s = UuidSource::new(Some(seed));
+            (s.draw(), s.draw())
+        };
+        assert_eq!(draw(1), draw(1));
+        assert_ne!(draw(1), draw(2));
+        assert_ne!(draw(1).0, draw(1).1);
+        assert_eq!(&draw(0).0[14..15], "4");
     }
 
     #[test]

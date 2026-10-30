@@ -77,7 +77,7 @@ fn stripped_nets_are_routed_back_without_new_violations() {
 
 #[test]
 fn negotiation_commits_only_legal_routes_one_thread_or_many() {
-    for threads in [1, 3] {
+    for (threads, jacobi) in [(1, false), (3, true)] {
         let (mut b, nets) = stripped(4);
         let before = b.clone();
         let opened = open(&b);
@@ -86,7 +86,7 @@ fn negotiation_commits_only_legal_routes_one_thread_or_many() {
         let stats = route_negotiated(
             &mut b,
             &mut CpuSolver,
-            &NegotiationOptions { cell: CELL, pours_block: true, threads, max_rounds: 8, ..Default::default() },
+            &NegotiationOptions { cell: CELL, pours_block: true, threads, jacobi, max_rounds: 8, ..Default::default() },
             &mut |_| {},
             &mut |_, trials| {
                 shown += 1;
@@ -110,20 +110,27 @@ fn negotiation_commits_only_legal_routes_one_thread_or_many() {
 }
 
 #[test]
-fn negotiation_is_the_same_on_one_thread_per_round_however_many_run() {
-    // Jacobi rounds route against one snapshot, so the thread count must not change the result.
-    let run = |threads: usize| {
+fn negotiation_is_the_same_however_many_threads_run() {
+    // The default rounds run on one thread whatever `threads` says; Jacobi rounds route against
+    // one snapshot. Either way the copper laid must not depend on the thread count.
+    let run = |threads: usize, jacobi: bool| {
         let (mut b, _) = stripped(3);
         let stats = route_negotiated(
             &mut b,
             &mut CpuSolver,
-            &NegotiationOptions { cell: CELL, pours_block: true, threads, max_rounds: 5, ..Default::default() },
+            &NegotiationOptions { cell: CELL, pours_block: true, threads, jacobi, max_rounds: 5, ..Default::default() },
             &mut |_| {},
             &mut |_, _| {},
         );
-        (stats.rounds, stats.committed, stats.conflicted, stats.vias)
+        let mut copper: Vec<String> = stats.laid.iter().filter_map(|id| b.item(*id)).map(|it| format!("{} {} {:?}", it.net, it.layers, it.shape)).collect();
+        copper.sort();
+        ((stats.rounds, stats.committed, stats.conflicted, stats.vias), copper)
     };
-    assert_eq!(run(2), run(4));
+    for jacobi in [false, true] {
+        let one = run(1, jacobi);
+        assert!(!one.1.is_empty(), "jacobi {jacobi}: something is laid");
+        assert_eq!(one, run(4, jacobi), "jacobi {jacobi}");
+    }
 }
 
 #[test]
