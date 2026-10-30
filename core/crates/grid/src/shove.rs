@@ -59,11 +59,9 @@ pub struct ShoveOptions {
     /// Keep a try that frees its trapped connection and leaves no more open than it found, not
     /// only one that leaves fewer.
     pub accept_ties: bool,
-    /// How the region plough renegotiates what it ripped: vias negotiated, passes after the
-    /// first, and trees spanned past pockets, as [`crate::NegotiationOptions`] has them.
-    pub negotiate_vias: bool,
+    /// Passes after the first when the region plough renegotiates what it ripped, as
+    /// [`crate::NegotiationOptions::repasses`].
     pub negotiate_repasses: usize,
-    pub negotiate_tree: bool,
     pub deadline: crate::clock::Deadline,
     pub pours_block: bool,
     pub log: Option<Log>,
@@ -87,9 +85,7 @@ impl Default for ShoveOptions {
             reroute_seconds: 20.0,
             repair_seconds: 10.0,
             accept_ties: false,
-            negotiate_vias: true,
             negotiate_repasses: 1,
-            negotiate_tree: true,
             seed: 0,
             deadline: Default::default(),
             pours_block: false,
@@ -1035,10 +1031,8 @@ fn negotiate(
             nets: Some(nets.clone()),
             net_weight,
             pours_block: options.pours_block,
-            via_zones: options.negotiate_vias,
             repasses: options.negotiate_repasses,
             rip_blocked: false,
-            reachable_tree: options.negotiate_tree,
             pad_ends: true,
             directional: false,
             seed,

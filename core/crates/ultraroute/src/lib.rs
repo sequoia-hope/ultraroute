@@ -26,7 +26,7 @@ use serde_json::{json, Value};
 
 mod regions;
 
-pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--no-negotiate-vias] [--no-negotiate-rip] [--no-negotiate-tree] [--negotiate-jacobi] [--negotiate-reroute-all] [--negotiate-legacy] [--diff-pairs] [--diff-pairs-legacy] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner|same] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--prefanout-soft] [--prefanout-keep-unused] [--no-prefanout-inward] [--negotiate] [--rip-up] [--nudge] [--nudge-guided] [--tighten] [--via-cost MM[,OPEN_MM]] [--no-directional] [--no-reduce-vias] [--gpu] \
+pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--negotiate-jacobi] [--negotiate-reroute-all] [--diff-pairs] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner|same] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--negotiate] [--rip-up] [--nudge] [--tighten] [--via-cost MM[,OPEN_MM]] [--gpu] \
 [--timeout SECONDS] [--cell MM] \
 [--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--uuid-seed N] [--adopt] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
 [--recipe default|bench|minimal] [--live PATH|-] [--live-fps N] [--live-step MS] [--blame]
@@ -37,13 +37,8 @@ pub struct Args {
     pub output: String,
     pub strip: bool,
     pub strip_all: bool,
-    /// Escape every fine-pitch part's pads before routing: how, in what order, how far out the
-    /// escapes end, whether the router may rip them, whether unused ones stay, and whether power
-    /// pads are first bridged inward to their pours.
     /// Route differential pairs (USB D+ and D-) coupled, before anything else.
     pub diff_pairs: bool,
-    /// Use the legacy single-layer, legless differential pair stage, for comparison.
-    pub diff_pairs_legacy: bool,
     /// Layers given whole to a plane (`In1.Cu,In2.Cu`): no tracks on them, vias through them, and
     /// their pours join their nets.
     pub planes: Vec<String>,
@@ -53,37 +48,24 @@ pub struct Args {
     pub negotiate_patience: Option<usize>,
     pub negotiate_growth: Option<f64>,
     pub negotiate_repasses: Option<usize>,
-    /// Whether negotiation prices vias, rescues connections its own routes wall off, and spans
-    /// trees past pocketed pins (`grid::NegotiationOptions`); `--negotiate-legacy` turns these
-    /// and the passes after the first off, for comparing against.
-    pub negotiate_vias: bool,
-    pub negotiate_rip: bool,
-    pub negotiate_tree: bool,
     /// Negotiation routes each round against the last on `--threads` threads
     /// (`NegotiationOptions::jacobi`), instead of one connection after another.
     pub negotiate_jacobi: bool,
     /// Every negotiation round reroutes every connection, not only those that collided.
     pub negotiate_reroute_all: bool,
+    /// Escape every fine-pitch part's pads before routing: how, in what order, and how far out
+    /// the escapes end.
     pub prefanout: bool,
     pub prefanout_mode: Option<grid::EscapeMode>,
     pub prefanout_order: Option<grid::EscapeOrder>,
     pub prefanout_ring: Option<Nm>,
-    pub prefanout_soft: bool,
-    pub prefanout_keep_unused: bool,
-    pub prefanout_inward: bool,
     pub negotiate: bool,
     pub rip_up: bool,
     pub tighten: bool,
     /// Via prices in millimetres of straight track: negotiation's, and that of routing one
     /// connection at a time and of rip-up (1.2 and 0.8 times negotiation's unless given).
     pub via_cost: Option<(f64, Option<f64>)>,
-    /// Two-layer routes without a preferred direction per layer.
-    pub no_directional: bool,
-    /// No pass after routing that takes out vias a route on one layer can do without.
-    pub no_reduce_vias: bool,
     pub nudge: bool,
-    /// Nudge only by blame's moves, without trying small steps in every direction.
-    pub nudge_guided: bool,
     pub lock: Vec<String>,
     pub gpu: bool,
     pub pours_block: bool,
@@ -189,32 +171,22 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
         strip: false,
         strip_all: false,
         diff_pairs: false,
-        diff_pairs_legacy: false,
         planes: Vec::new(),
         negotiate_rounds: None,
         negotiate_patience: None,
         negotiate_growth: None,
         negotiate_repasses: None,
-        negotiate_vias: true,
-        negotiate_rip: true,
-        negotiate_tree: true,
         negotiate_jacobi: false,
         negotiate_reroute_all: false,
         prefanout: false,
         prefanout_mode: None,
         prefanout_order: None,
         prefanout_ring: None,
-        prefanout_soft: false,
-        prefanout_keep_unused: false,
-        prefanout_inward: true,
         negotiate: false,
         rip_up: false,
         tighten: false,
         via_cost: None,
-        no_directional: false,
-        no_reduce_vias: false,
         nudge: false,
-        nudge_guided: false,
         lock: Vec::new(),
         gpu: false,
         pours_block: false,
@@ -260,10 +232,6 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
             "--strip" => a.strip = true,
             "--strip-all" => a.strip_all = true,
             "--diff-pairs" => a.diff_pairs = true,
-            "--diff-pairs-legacy" => {
-                a.diff_pairs = true;
-                a.diff_pairs_legacy = true;
-            }
             "--negotiate-rounds" => a.negotiate_rounds = Some(value()?.parse().map_err(|e| format!("--negotiate-rounds: {e}"))?),
             "--negotiate-patience" => a.negotiate_patience = Some(value()?.parse().map_err(|e| format!("--negotiate-patience: {e}"))?),
             "--negotiate-growth" => {
@@ -274,17 +242,8 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
                 a.negotiate_growth = Some(g);
             }
             "--negotiate-repasses" => a.negotiate_repasses = Some(value()?.parse().map_err(|e| format!("--negotiate-repasses: {e}"))?),
-            "--no-negotiate-vias" => a.negotiate_vias = false,
-            "--no-negotiate-rip" => a.negotiate_rip = false,
-            "--no-negotiate-tree" => a.negotiate_tree = false,
             "--negotiate-jacobi" => a.negotiate_jacobi = true,
             "--negotiate-reroute-all" => a.negotiate_reroute_all = true,
-            "--negotiate-legacy" => {
-                a.negotiate_repasses = Some(0);
-                a.negotiate_vias = false;
-                a.negotiate_rip = false;
-                a.negotiate_tree = false;
-            }
             "--planes" => a.planes.extend(value()?.split(',').filter(|s| !s.is_empty()).map(String::from)),
             "--prefanout" => a.prefanout = true,
             "--prefanout-mode" => {
@@ -317,18 +276,6 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
                 }
                 a.prefanout_ring = Some((mm * 1e6).round() as Nm);
             }
-            "--prefanout-soft" => {
-                a.prefanout = true;
-                a.prefanout_soft = true;
-            }
-            "--prefanout-keep-unused" => {
-                a.prefanout = true;
-                a.prefanout_keep_unused = true;
-            }
-            "--no-prefanout-inward" => {
-                a.prefanout = true;
-                a.prefanout_inward = false;
-            }
             "--negotiate" => a.negotiate = true,
             "--rip-up" => a.rip_up = true,
             "--tighten" => a.tighten = true,
@@ -344,8 +291,6 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
                     _ => return Err(format!("--via-cost {v}: MM or NEGOTIATE_MM,OPEN_MM")),
                 };
             }
-            "--no-directional" => a.no_directional = true,
-            "--no-reduce-vias" => a.no_reduce_vias = true,
             "--gpu" => a.gpu = true,
             "--pours-block" => a.pours_block = true,
             "--no-route" => a.no_route = true,
@@ -365,10 +310,6 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
             "--live-step" => a.live_step = value()?.parse().map_err(|e| format!("--live-step: {e}"))?,
             "--lock" => a.lock.extend(value()?.split(',').filter(|r| !r.is_empty()).map(str::to_string)),
             "--nudge" => a.nudge = true,
-            "--nudge-guided" => {
-                a.nudge = true;
-                a.nudge_guided = true;
-            }
             "--shove" => a.shove = true,
             "--shove-plough" => {
                 a.shove = true;
@@ -952,9 +893,7 @@ fn shove_pass(
                 net_reaches: net_reaches.clone(),
                 repair_seconds: a.shove_repair.unwrap_or(defaults.repair_seconds),
                 accept_ties: a.shove_ties,
-                negotiate_vias: a.negotiate_vias,
                 negotiate_repasses: a.negotiate_repasses.map_or(defaults.negotiate_repasses, |r| r.min(1)),
-                negotiate_tree: a.negotiate_tree,
                 cascade: a.shove_cascade.unwrap_or(defaults.cascade),
                 seed: a.seed.wrapping_mul(1000).wrapping_add(pass as u64 + 1),
                 deadline: deadline.clone(),
@@ -1052,9 +991,9 @@ fn relock_pairs(board: &mut Board, pair_laid: &[ItemId]) {
 
 /// Footprints that may not be nudged or pushed: the board's own locked parts, plus any part
 /// joined to locked differential-pair copper so moving a part never tears its pair legs loose.
-fn locked_footprints(board: &Board, pair_laid: &[ItemId], legacy_pairs: bool) -> HashSet<usize> {
+fn locked_footprints(board: &Board, pair_laid: &[ItemId]) -> HashSet<usize> {
     let mut out: HashSet<usize> = board.footprints.iter().enumerate().filter(|(_, f)| f.locked).map(|(i, _)| i).collect();
-    if legacy_pairs || pair_laid.is_empty() {
+    if pair_laid.is_empty() {
         return out;
     }
     let pair_set: HashSet<ItemId> = pair_laid.iter().copied().filter(|&id| board.item(id).is_some()).collect();
@@ -1274,7 +1213,7 @@ pub fn run_with_solver(
     // One deadline for the whole run: every stage's is a share of it, none past its hard end.
     let run = run_deadline(started, a.timeout, cancel.clone());
     // Routing, and the stages that rescue what it left open, stop in time for the via pass.
-    let rescue = if a.no_reduce_vias { run.clone() } else { sooner(&run, a.timeout.map_or(0.0, |t| t * VIAS_SHARE)) };
+    let rescue = sooner(&run, a.timeout.map_or(0.0, |t| t * VIAS_SHARE));
     let mut timeline = Timeline { stage: "set-up", limited: Vec::new(), overran_in: None };
     let mut solver: Box<dyn grid::FieldSolver> = match custom_solver {
         Some(s) => s,
@@ -1370,9 +1309,7 @@ pub fn run_with_solver(
         let defaults = grid::PrefanoutOptions::default();
         // Open differential pairs are held back from pre-fanout so `route_pairs` can fan out and
         // couple their pads together; any pair pad still open afterwards is escaped below.
-        let skip_nets: HashSet<u32> = if a.diff_pairs && a.diff_pairs_legacy {
-            grid::diff_pairs(&board).iter().filter(|p| grid::shares_layer(&board, p)).flat_map(|p| [p.p, p.n]).collect()
-        } else if a.diff_pairs {
+        let skip_nets: HashSet<u32> = if a.diff_pairs {
             grid::diff_pairs(&board)
                 .iter()
                 .filter(|p| grid::shares_layer(&board, p) && grid::pair_has_open_runs(&board, p, a.pours_block))
@@ -1388,7 +1325,7 @@ pub fn run_with_solver(
                 ring: a.prefanout_ring.unwrap_or(defaults.ring),
                 mode: a.prefanout_mode.unwrap_or(defaults.mode),
                 order: a.prefanout_order.unwrap_or(defaults.order),
-                inward: a.prefanout_inward,
+                inward: true,
                 parts,
                 skip_nets,
                 pours_block: a.pours_block,
@@ -1421,11 +1358,7 @@ pub fn run_with_solver(
             started.elapsed().as_secs_f64()
         );
         step(&board);
-        if a.prefanout_soft {
-            laid.extend(f.laid);
-        } else {
-            fanout_laid = f.laid;
-        }
+        fanout_laid = f.laid;
     }
     // Plane pads not on their plane get a via down to it beside them, as the router's own copper
     // a rip-up may take up again.
@@ -1444,7 +1377,6 @@ pub fn run_with_solver(
             &grid::PairOptions {
                 cell: a.cell.unwrap_or(grid::PairOptions::default().cell),
                 pours_block: a.pours_block,
-                legacy: a.diff_pairs_legacy,
                 // Coupling end to end may run until a quarter of the time is gone; later runs are
                 // laid the legacy way, as the pairs are a small part of a board, the rest of it
                 // still to route.
@@ -1460,7 +1392,7 @@ pub fn run_with_solver(
         step(&board);
         pair_laid.extend(p.laid);
         fanout_laid.retain(|&id| board.item(id).is_some_and(|it| !it.locked));
-        if a.prefanout && !a.diff_pairs_legacy {
+        if a.prefanout {
             let fine: HashSet<usize> = morph::fine_pitch(&board, 500_000).into_iter().collect();
             let pair_nets: HashSet<u32> = grid::diff_pairs(&board).iter().flat_map(|pr| [pr.p, pr.n]).collect();
             let open = if a.pours_block { connectivity(&board) } else { connectivity_without_pours(&board) }.airlines;
@@ -1495,17 +1427,12 @@ pub fn run_with_solver(
                     },
                     &mut watch,
                 );
-                if a.prefanout_soft {
-                    laid.extend(f.laid);
-                } else {
-                    fanout_laid.extend(f.laid);
-                }
+                fanout_laid.extend(f.laid);
             }
         }
     }
     let open_airlines = |b: &Board| if a.pours_block { connectivity(b) } else { connectivity_without_pours(b) }.airlines;
     let costs = via_costs(a, &board);
-    let directional = !a.no_directional;
 
     // Nets with a length limit route first, while their shortest ways are still free.
     let first: HashSet<u32> = lengths.iter().flat_map(|m| m.nets.iter().copied()).collect();
@@ -1525,7 +1452,7 @@ pub fn run_with_solver(
                 &grid::Options {
                     cell: a.cell.unwrap_or(grid::Options::default().cell),
                     via_cost: costs.open,
-                    directional,
+                    directional: true,
                     seed: a.seed,
                     deadline: rescue.share(0.25),
                     nets: Some(first.clone()),
@@ -1547,17 +1474,13 @@ pub fn run_with_solver(
                     threads,
                     cell: a.cell.unwrap_or(grid::NegotiationOptions::default().cell),
                     via_cost: costs.negotiate,
-                    directional,
                     pours_block: a.pours_block,
                     seed: a.seed,
                     log: log.clone(),
                     max_rounds: a.negotiate_rounds.unwrap_or(grid::NegotiationOptions::default().max_rounds),
                     patience: a.negotiate_patience.unwrap_or(grid::NegotiationOptions::default().patience),
                     present_growth: a.negotiate_growth.unwrap_or(grid::NegotiationOptions::default().present_growth),
-                    via_zones: a.negotiate_vias,
                     repasses: a.negotiate_repasses.unwrap_or(grid::NegotiationOptions::default().repasses),
-                    rip_blocked: a.negotiate_rip,
-                    reachable_tree: a.negotiate_tree,
                     jacobi: a.negotiate_jacobi,
                     reroute_all: a.negotiate_reroute_all,
                     ..Default::default()
@@ -1584,7 +1507,6 @@ pub fn run_with_solver(
             let options = grid::Options {
                 cell: a.cell.unwrap_or(grid::Options::default().cell),
                 via_cost: costs.open,
-                directional,
                 seed: a.seed,
                 deadline: rescue.clone(),
                 pours_block: a.pours_block,
@@ -1594,7 +1516,7 @@ pub fn run_with_solver(
             stats = grid::route_open(&mut board, solver.as_mut(), &options, &mut watch);
             laid.extend(stats.laid.iter().copied());
         }
-        if !fanout_laid.is_empty() && !a.prefanout_keep_unused {
+        if !fanout_laid.is_empty() {
             let (_, spans) = grid::prune_closed_escapes(&mut board, &mut fanout_laid, a.pours_block);
             removed.extend(spans);
         }
@@ -1624,14 +1546,14 @@ pub fn run_with_solver(
                 started.elapsed().as_secs_f64()
             );
         }
-        if !fanout_laid.is_empty() && !a.prefanout_keep_unused {
+        if !fanout_laid.is_empty() {
             laid.append(&mut fanout_laid);
         }
     }
     if a.shove && timeline.enter(&run, "shove") {
         let spans = shove_pass(a, &mut board, solver.as_mut(), &mut laid, started, &rescue, &log, &step);
         removed.extend(spans);
-        if a.diff_pairs && !a.diff_pairs_legacy && !pair_laid.is_empty() {
+        if a.diff_pairs && !pair_laid.is_empty() {
             let open = open_airlines(&board);
             if unlock_pairs_near_open(&mut board, &pair_laid, &open) > 0 {
                 let spans = shove_pass(a, &mut board, solver.as_mut(), &mut laid, started, &rescue, &log, &step);
@@ -1641,13 +1563,12 @@ pub fn run_with_solver(
         }
     }
     if a.nudge && timeline.enter(&run, "nudge") {
-        let locked = locked_footprints(&board, &pair_laid, a.diff_pairs_legacy);
+        let locked = locked_footprints(&board, &pair_laid);
         let n = grid::nudge(
             &mut board,
             solver.as_mut(),
             &grid::NudgeOptions {
                 cell: a.cell.unwrap_or(grid::NudgeOptions::default().cell),
-                blind: !a.nudge_guided,
                 deadline: rescue.clone(),
                 locked,
                 pours_block: a.pours_block,
@@ -1666,7 +1587,7 @@ pub fn run_with_solver(
         grid::pull_tight(&mut board, &mut laid, &run)
     });
     // Copper pulled tight can leave room for a route on one layer where it took two.
-    if !a.no_reduce_vias && (!laid.is_empty() || !fanout_laid.is_empty()) && timeline.enter(&run, "vias") {
+    if (!laid.is_empty() || !fanout_laid.is_empty()) && timeline.enter(&run, "vias") {
         say("vias", "taking out vias a route on one layer can do without".to_string());
         let v = grid::reduce_vias_all(
             &mut board,
@@ -1856,8 +1777,6 @@ mod tests {
     fn prefanout_flags_parse_and_validate() {
         let a = parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--prefanout"])).unwrap();
         assert!(a.prefanout);
-        assert!(a.prefanout_inward);
-        assert!(!a.prefanout_soft);
 
         let b = parse(&vec_args(&[
             "route",
@@ -1868,18 +1787,12 @@ mod tests {
             "--prefanout-order=trapped",
             "--prefanout-ring",
             "1.25",
-            "--prefanout-soft",
-            "--prefanout-keep-unused",
-            "--no-prefanout-inward",
         ]))
         .unwrap();
         assert!(b.prefanout);
         assert_eq!(b.prefanout_mode, Some(grid::EscapeMode::Dogbone));
         assert_eq!(b.prefanout_order, Some(grid::EscapeOrder::TrappedFirst));
         assert_eq!(b.prefanout_ring, Some(1_250_000));
-        assert!(b.prefanout_soft);
-        assert!(b.prefanout_keep_unused);
-        assert!(!b.prefanout_inward);
 
         assert!(parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--prefanout-mode", "bogus"])).is_err());
         assert!(parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--prefanout-ring", "9.0"])).is_err());
@@ -1888,16 +1801,7 @@ mod tests {
     #[test]
     fn negotiate_flags_parse_and_validate() {
         let def = parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--negotiate"])).unwrap();
-        assert!(def.negotiate_vias);
-        assert!(def.negotiate_rip);
-        assert!(def.negotiate_tree);
         assert_eq!(def.negotiate_repasses, None);
-
-        let leg = parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--negotiate", "--negotiate-legacy"])).unwrap();
-        assert!(!leg.negotiate_vias);
-        assert!(!leg.negotiate_rip);
-        assert!(!leg.negotiate_tree);
-        assert_eq!(leg.negotiate_repasses, Some(0));
 
         let custom = parse(&vec_args(&[
             "route",
@@ -1905,21 +1809,16 @@ mod tests {
             "-o",
             "out.kicad_pcb",
             "--negotiate-repasses=3",
-            "--no-negotiate-vias",
-            "--no-negotiate-rip",
-            "--no-negotiate-tree",
+            "--negotiate-jacobi",
         ]))
         .unwrap();
         assert_eq!(custom.negotiate_repasses, Some(3));
-        assert!(!custom.negotiate_vias);
-        assert!(!custom.negotiate_rip);
-        assert!(!custom.negotiate_tree);
+        assert!(custom.negotiate_jacobi);
         assert!(parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--negotiate-repasses", "nope"])).is_err());
 
         let dp = parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--diff-pairs"])).unwrap();
-        assert!(dp.diff_pairs && !dp.diff_pairs_legacy);
-        let dpl = parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--diff-pairs-legacy"])).unwrap();
-        assert!(dpl.diff_pairs && dpl.diff_pairs_legacy);
+        assert!(dp.diff_pairs);
+        assert!(parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--negotiate-legacy"])).is_err());
     }
 
     // Pins today's via prices on purpose, to document them. Stage 7 of REMEDIATION.md replaces
@@ -1934,10 +1833,9 @@ mod tests {
         board.planes = 1;
         let c = via_costs(&plain, &board);
         assert_eq!((c.negotiate, c.open, c.rip), (200, 80, 80));
-        let given = parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--cell", "0.035", "--via-cost", "0.7,0.28", "--no-directional", "--no-reduce-vias"])).unwrap();
+        let given = parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--cell", "0.035", "--via-cost", "0.7,0.28"])).unwrap();
         let c = via_costs(&given, &board);
         assert_eq!((c.negotiate, c.open, c.rip), (200, 80, 80));
-        assert!(given.no_directional && given.no_reduce_vias);
         assert!(parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--via-cost", "0"])).is_err());
         assert!(parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--via-cost", "1,2,3"])).is_err());
     }

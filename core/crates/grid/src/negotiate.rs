@@ -128,14 +128,6 @@ impl Default for NegotiationOptions {
     }
 }
 
-impl NegotiationOptions {
-    /// Every addition above off: negotiation as it was before them, its commit order and
-    /// patience too, to compare against.
-    fn legacy(&self) -> bool {
-        !self.via_zones && self.repasses == 0 && !self.rip_blocked && !self.reachable_tree
-    }
-}
-
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct NegotiationStats {
     pub connections: usize,
@@ -770,7 +762,7 @@ fn run_pass(
     // A small pass often starts with a collision or two and nothing between them and none, so
     // that `patience` would give up while a via pair or a short detour still costs more than
     // crossing; it waits until the present price has outgrown them.
-    let patience = if !options.legacy() && connections.len() <= SMALL { options.patience.max(8) } else { options.patience };
+    let patience = if connections.len() <= SMALL { options.patience.max(8) } else { options.patience };
     let mut shown = crate::clock::Instant::now();
     let (mut best_colliding, mut stale) = (usize::MAX, 0);
     for round in 0..max_rounds {
@@ -923,11 +915,7 @@ fn run_pass(
 
     // Commit greedily: a route whose cells lie in no committed net's zone is legal against
     // everything committed so far, converged or not; each piece is still checked exactly.
-    let order = if options.legacy() {
-        (0..connections.len()).filter(|&k| connections[k].path.is_some()).collect()
-    } else {
-        commit_order(&connections, &own_ends, nx, cells, claimer, &weight_of)
-    };
+    let order = commit_order(&connections, &own_ends, nx, cells, claimer, &weight_of);
     let mut committed = PassClaims::new(claimer);
     for k in order {
         let c = &connections[k];

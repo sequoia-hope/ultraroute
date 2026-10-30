@@ -479,7 +479,7 @@ it runs `route_open` and the cleanup only; each flag adds a stage. In order:
    locked ones too); `--planes` calls `set_planes`. Then the solver (`--gpu`), `--adopt`,
    `--via-avoid` boxes and `--rip-region` discs (copper inside ripped).
 2. **`--prefanout`**: `prefanout` on `morph::fine_pitch(&board, 500_000)`. Escapes are held apart
-   from `laid` unless `--prefanout-soft`.
+   from `laid` until rip-up is done, and those no route used are taken out.
 3. **Planes**: `join_planes` when any layer is a plane.
 4. **`--diff-pairs`**: `route_pairs`, held apart until cleanup.
 5. **Routing**: the nets `--regions` gives a length limit, by `route_open`, first;
