@@ -62,6 +62,9 @@ pub struct CopperGraphic {
     /// 0 for none, as most drawn copper has.
     pub net: u32,
     pub polygons: Vec<Vec<[f64; 2]>>,
+    /// The footprint it is drawn in, by index; `None` on the board itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub footprint: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -139,6 +142,9 @@ pub struct Zone {
     /// Layer names as written, wildcards (`*.Cu`, `F&B.Cu`) included; see [`Copper::expand`].
     pub layers: Vec<String>,
     pub outline: Vec<[f64; 2]>,
+    /// Holes in the outline, where the zone (a keepout's rule, a pour's copper) is not.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cutouts: Vec<Vec<[f64; 2]>>,
     /// The poured copper KiCad last computed, per layer; empty for a keepout or an unfilled zone.
     pub filled: Vec<(String, Vec<[f64; 2]>)>,
     /// Where each of `filled` is written, so a stale fill can be taken out of the file.
@@ -347,18 +353,21 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
                     if matches!(g.head(), Some("fp_line" | "fp_arc" | "fp_circle" | "fp_rect" | "fp_poly" | "fp_text" | "property")) {
                         match graphic(g, &|p| fp.place(p), fp.rotation_deg) {
                             Ok(Some(g)) if g.layer.ends_with(".Mask") => copper.mask_graphics.push(g),
-                            Ok(Some(g)) => copper.graphics.push(g),
+                            Ok(Some(g)) => copper.graphics.push(CopperGraphic { footprint: Some(footprint), ..g }),
                             Ok(None) => {}
                             Err(_) => copper_graphics += 1,
                         }
                     }
                 }
-                let margin = child.find("solder_mask_margin").and_then(|m| m.number_arg(0, "solder_mask_margin").ok());
-                let clearance = child.find("clearance").and_then(|m| m.number_arg(0, "clearance").ok());
+                // A local clearance or mask margin of zero is none set, as KiCad takes it: the pad
+                // has its footprint's, the footprint the board's or its net class's.
+                let local = |n: &Node, name: &str| n.find(name).and_then(|m| m.number_arg(0, name).ok()).filter(|v| *v != 0.0);
+                let margin = local(child, "solder_mask_margin");
+                let clearance = local(child, "clearance");
                 for (index, pad) in child.find_all("pad").enumerate() {
                     let mut pad_copper = read_pad(pad, footprint, index, fp)?;
-                    pad_copper.mask_margin = pad.find("solder_mask_margin").and_then(|m| m.number_arg(0, "solder_mask_margin").ok()).or(margin).map(|mm| mm * MM);
-                    pad_copper.clearance = pad.find("clearance").and_then(|m| m.number_arg(0, "clearance").ok()).or(clearance).map(|mm| mm * MM).filter(|c| *c > 0.0);
+                    pad_copper.mask_margin = local(pad, "solder_mask_margin").or(margin).map(|mm| mm * MM);
+                    pad_copper.clearance = local(pad, "clearance").or(clearance).map(|mm| mm * MM).filter(|c| *c > 0.0);
                     copper.pads.push(pad_copper);
                 }
                 for zone in child.find_all("zone") {
@@ -454,7 +463,7 @@ fn graphic(g: &Node, place: &dyn Fn([f64; 2]) -> [f64; 2], rotation: f64) -> Res
         return Ok(None);
     }
     let net = g.find("net").and_then(|n| n.number_arg(0, "net").ok()).map_or(0, |n| n as u32);
-    Ok(Some(CopperGraphic { layer: layer.to_string(), net, polygons }))
+    Ok(Some(CopperGraphic { layer: layer.to_string(), net, polygons, footprint: None }))
 }
 
 fn courtyard(fp_node: &Node, fp: &Footprint) -> Result<Option<Vec<[f64; 2]>>, KicadParse> {
@@ -539,7 +548,10 @@ fn read_zone(z: &Node, footprint: Option<usize>) -> Result<Zone, KicadParse> {
             footprints: forbids("footprints"),
         }
     });
-    let outline = z.find("polygon").and_then(|p| p.find("pts")).map(pts).transpose()?.unwrap_or_default();
+    // The first polygon is the outline, each one after it a cutout, as KiCad writes them.
+    let mut polygons = z.find_all("polygon").filter_map(|p| p.find("pts")).map(pts);
+    let outline = polygons.next().transpose()?.unwrap_or_default();
+    let cutouts = polygons.collect::<Result<Vec<_>, _>>()?;
     let (mut filled, mut fill_spans) = (Vec::new(), Vec::new());
     for f in z.find_all("filled_polygon") {
         let layer = f.find("layer").and_then(|l| l.args().first()).and_then(Node::text).unwrap_or("").to_string();
@@ -554,6 +566,7 @@ fn read_zone(z: &Node, footprint: Option<usize>) -> Result<Zone, KicadParse> {
         net_name: z.find("net_name").and_then(|n| n.args().first()).and_then(Node::text).unwrap_or("").to_string(),
         layers,
         outline,
+        cutouts,
         filled,
         fill_spans,
         keepout,
@@ -615,6 +628,13 @@ fn read_pad(p: &Node, footprint: usize, index: usize, fp: &Footprint) -> Result<
             if let Some(prims) = p.find("primitives") {
                 polys.extend(primitives(prims)?);
             }
+            // `(options (clearance convexhull))`: other copper keeps its clearance from the hull of
+            // all the pad's shapes, not from each; the hull stands for the pad (a little more copper
+            // than it has, never less).
+            let hull = p.find("options").and_then(|o| o.find("clearance")).and_then(|c| c.args().first()).and_then(Node::text) == Some("convexhull");
+            if hull {
+                polys = vec![convex_hull(polys.into_iter().flatten().collect())];
+            }
             Some(polys)
         }
     };
@@ -658,10 +678,38 @@ fn primitives(prims: &Node) -> Result<Vec<Vec<[f64; 2]>>, KicadParse> {
                 out.push(vec![[a[0], a[1]], [b[0], a[1]], [b[0], b[1]], [a[0], b[1]]]);
             }
             Some("gr_line") => out.push(capsule(point(g, "start")?, point(g, "end")?, width / 2.0)),
+            // An arc is drawn by its width along it.
+            Some("gr_arc") if width > 0.0 => {
+                let along = arc_points(point(g, "start")?, point(g, "mid")?, point(g, "end")?);
+                out.extend(along.windows(2).map(|w| capsule(w[0], w[1], width / 2.0)));
+            }
             _ => {}
         }
     }
     Ok(out)
+}
+
+/// The convex hull of `points`, anticlockwise (Andrew's monotone chain).
+fn convex_hull(mut points: Vec<[f64; 2]>) -> Vec<[f64; 2]> {
+    points.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
+    points.dedup();
+    if points.len() < 3 {
+        return points;
+    }
+    let cross = |o: [f64; 2], a: [f64; 2], b: [f64; 2]| (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    let mut hull: Vec<[f64; 2]> = Vec::new();
+    for pass in [false, true] {
+        let start = hull.len();
+        let ordered: Vec<[f64; 2]> = if pass { points.iter().rev().copied().collect() } else { points.clone() };
+        for p in ordered {
+            while hull.len() >= start + 2 && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0.0 {
+                hull.pop();
+            }
+            hull.push(p);
+        }
+        hull.pop();
+    }
+    hull
 }
 
 fn rect(size: [f64; 2]) -> Vec<[f64; 2]> {

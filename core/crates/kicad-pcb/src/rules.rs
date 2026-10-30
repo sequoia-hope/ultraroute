@@ -76,6 +76,32 @@ pub enum RulesError {
     Json(String),
 }
 
+/// KiCad 9's board rules where a project file has none, in millimetres: what a new board has
+/// (read from pcbnew 9.0.8's `BOARD().GetDesignSettings()`).
+const KICAD_RULES: [(&str, f64); 8] = [
+    ("min_clearance", 0.0),
+    ("min_track_width", 0.0),
+    ("min_via_diameter", 0.5),
+    ("min_through_hole_diameter", 0.3),
+    ("min_via_annular_width", 0.1),
+    ("min_copper_edge_clearance", 0.5),
+    ("min_hole_clearance", 0.25),
+    ("min_hole_to_hole", 0.25),
+];
+
+/// KiCad 9's Default net class, for a project that has none.
+const KICAD_DEFAULT_CLASS: NetClass = NetClass {
+    name: String::new(),
+    clearance: 0.2 * MM,
+    track_width: 0.2 * MM,
+    via_diameter: 0.6 * MM,
+    via_drill: 0.3 * MM,
+    diff_pair_width: 0.2 * MM,
+    diff_pair_gap: 0.25 * MM,
+    diff_pair_via_gap: 0.25 * MM,
+    priority: i64::MAX,
+};
+
 impl Rules {
     /// Reads a `.kicad_pro`, noting a `.kicad_dru` beside it.
     pub fn read(path: &Path) -> Result<Rules, RulesError> {
@@ -92,8 +118,18 @@ impl Rules {
         let project: Value = serde_json::from_str(text).map_err(|e| RulesError::Json(e.to_string()))?;
         let rules = &project["board"]["design_settings"]["rules"];
         let mm = |v: &Value, name: &str| v[name].as_f64().unwrap_or(0.0) * MM;
+        // A rule the project leaves out is KiCad's, as its own check takes it, not zero.
+        let mut assumed: Vec<String> = Vec::new();
+        let mut rule = |name: &str| match rules[name].as_f64() {
+            Some(v) => v * MM,
+            None => {
+                let v = KICAD_RULES.iter().find(|(n, _)| *n == name).map_or(0.0, |(_, v)| *v);
+                assumed.push(format!("{name} {v} mm"));
+                v * MM
+            }
+        };
         let net = &project["net_settings"];
-        let classes = net["classes"]
+        let mut classes: Vec<NetClass> = net["classes"]
             .as_array()
             .into_iter()
             .flatten()
@@ -126,15 +162,27 @@ impl Rules {
                 .collect(),
             _ => Vec::new(),
         };
+        let (min_clearance, min_track_width, min_via_diameter, min_via_drill) =
+            (rule("min_clearance"), rule("min_track_width"), rule("min_via_diameter"), rule("min_through_hole_diameter"));
+        let (min_via_annular_width, min_copper_edge_clearance, min_hole_clearance, min_hole_to_hole) =
+            (rule("min_via_annular_width"), rule("min_copper_edge_clearance"), rule("min_hole_clearance"), rule("min_hole_to_hole"));
+        let mut warnings = Vec::new();
+        if !assumed.is_empty() {
+            warnings.push(format!("the project sets no {}: KiCad's values are used", assumed.join(", ")));
+        }
+        if !classes.iter().any(|c| c.name == "Default") {
+            classes.push(NetClass { name: "Default".to_string(), ..KICAD_DEFAULT_CLASS });
+            warnings.push("the project has no Default net class: KiCad's is used (clearance 0.2 mm, track 0.2 mm, via 0.6 mm drilled 0.3 mm)".to_string());
+        }
         Ok(Rules {
-            min_clearance: mm(rules, "min_clearance"),
-            min_track_width: mm(rules, "min_track_width"),
-            min_via_diameter: mm(rules, "min_via_diameter"),
-            min_via_drill: mm(rules, "min_through_hole_diameter"),
-            min_via_annular_width: mm(rules, "min_via_annular_width"),
-            min_copper_edge_clearance: mm(rules, "min_copper_edge_clearance"),
-            min_hole_clearance: mm(rules, "min_hole_clearance"),
-            min_hole_to_hole: mm(rules, "min_hole_to_hole"),
+            min_clearance,
+            min_track_width,
+            min_via_diameter,
+            min_via_drill,
+            min_via_annular_width,
+            min_copper_edge_clearance,
+            min_hole_clearance,
+            min_hole_to_hole,
             allow_blind_buried_vias: rules["allow_blind_buried_vias"].as_bool().unwrap_or(false),
             allow_microvias: rules["allow_microvias"].as_bool().unwrap_or(false),
             classes,
@@ -145,7 +193,7 @@ impl Rules {
             smd_pad_clearance: 0.0,
             min_widths: Vec::new(),
             edge_clearances: Vec::new(),
-            warnings: Vec::new(),
+            warnings,
         })
     }
 
@@ -381,12 +429,36 @@ mod tests {
     }
 
     #[test]
+    fn rules_a_project_leaves_out_are_kicads_and_said_so() {
+        let r = Rules::parse("{}").unwrap();
+        let near = |a: f64, b: f64| assert!((a - b).abs() < 1e-12, "{a} vs {b}");
+        near(r.min_copper_edge_clearance, 0.5e-3);
+        near(r.min_hole_clearance, 0.25e-3);
+        near(r.min_hole_to_hole, 0.25e-3);
+        near(r.min_via_diameter, 0.5e-3);
+        near(r.min_via_drill, 0.3e-3);
+        near(r.min_clearance, 0.0);
+        let default = r.class_of("ANY").expect("a Default class");
+        near(default.clearance, 0.2e-3);
+        near(default.track_width, 0.2e-3);
+        assert_eq!(r.warnings.len(), 2, "{:?}", r.warnings);
+        assert!(r.warnings[0].contains("min_copper_edge_clearance 0.5 mm"), "{:?}", r.warnings);
+        assert!(r.warnings[1].contains("no Default net class"), "{:?}", r.warnings);
+        // A project that sets them all, with its own Default class, is taken as it is, silently.
+        let full = r#"{"board":{"design_settings":{"rules":{"min_clearance":0.1,"min_track_width":0.1,"min_via_diameter":0.4,"min_through_hole_diameter":0.2,"min_via_annular_width":0.05,"min_copper_edge_clearance":0.3,"min_hole_clearance":0.2,"min_hole_to_hole":0.2}}},"net_settings":{"classes":[{"name":"Default","clearance":0.15,"track_width":0.15}]}}"#;
+        let r = Rules::parse(full).unwrap();
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+        near(r.min_copper_edge_clearance, 0.3e-3);
+    }
+
+    #[test]
     fn custom_rules_for_holes_and_smd_pads_are_applied_and_others_reported() {
         let dir = std::env::temp_dir().join(format!("kicad-rules-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let pro = dir.join("b.kicad_pro");
         std::fs::write(&pro, r#"{"board":{"design_settings":{"rules":{"min_clearance":0.2}}},"net_settings":{"classes":[]}}"#).unwrap();
-        assert!(Rules::read(&pro).unwrap().warnings.is_empty());
+        // Only the rules it leaves out are said, none of a custom rule.
+        assert!(!Rules::read(&pro).unwrap().warnings.iter().any(|w| w.contains("custom rule")));
         std::fs::write(
             dir.join("b.kicad_dru"),
             r#"(version 1)
@@ -416,8 +488,9 @@ mod tests {
         near(r.pth_hole_clearance, 0.28e-3);
         near(r.pth_hole_to_hole, 0.45e-3);
         near(r.smd_pad_clearance, 0.15e-3);
-        assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
-        assert!(r.warnings[0].contains("Something else"));
+        let custom: Vec<&String> = r.warnings.iter().filter(|w| w.contains("custom rule")).collect();
+        assert_eq!(custom.len(), 1, "{:?}", r.warnings);
+        assert!(custom[0].contains("Something else"));
         assert_eq!(r.min_widths.len(), 3);
         near(r.min_track_width_of("VBUS"), 0.2e-3);
         near(r.min_track_width_of("VSYS"), 0.2e-3);
@@ -445,8 +518,9 @@ mod tests {
         near(r.edge_clearance_of("Circle"), 0.5e-3);
         near(r.edge_clearance_of("Arc"), 0.4e-3);
         near(r.edge_clearance_of("Segment"), 0.3e-3);
-        assert_eq!(r.warnings.len(), 1, "{:?}", r.warnings);
-        assert!(r.warnings[0].contains("rectangles"));
+        let custom: Vec<&String> = r.warnings.iter().filter(|w| w.contains("custom rule")).collect();
+        assert_eq!(custom.len(), 1, "{:?}", r.warnings);
+        assert!(custom[0].contains("rectangles"));
         r.apply_custom("(rule \"all\" (constraint edge_clearance (min 0.35mm)))", "test");
         near(r.min_copper_edge_clearance, 0.35e-3);
         near(r.edge_clearance_of("Segment"), 0.35e-3);

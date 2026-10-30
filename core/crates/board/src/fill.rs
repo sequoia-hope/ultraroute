@@ -315,12 +315,18 @@ fn fill_one(board: &Board, zone: &Zone, layer: usize, poured: &[(u32, usize, Ras
     let hole_gap = nm(board.rules.min_hole_clearance);
     for id in board.near(holes, b) {
         let Some(item) = board.item(id) else { continue };
-        let Some((at, radius)) = item.hole else { continue };
+        let Some(Shape::Capsule { a, b: end, r: radius }) = board.hole_shape(id, item) else { continue };
         if net != 0 && item.net == net && item.on(layer) {
             continue;
         }
         let reach = radius + hole_gap.max(own).max(board.clearance(net, item.net));
-        r.clear(BBox::of([at]).grow(reach), |p| p.distance(at) < reach as f64);
+        if a == end {
+            r.clear(BBox::of([a]).grow(reach), |p| p.distance(a) < reach as f64);
+        } else {
+            // A slot: every point within reach of its centre line.
+            let slot = Shape::Capsule { a, b: end, r: 0 };
+            r.clear(BBox::of([a, end]).grow(reach), |p| slot.gap_within(&Shape::Capsule { a: p, b: p, r: 0 }, reach as f64) < reach as f64);
+        }
     }
     for (other, l, done) in poured {
         if *l != layer || *other == net {

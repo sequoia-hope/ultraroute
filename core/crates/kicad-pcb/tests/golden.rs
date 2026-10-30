@@ -294,13 +294,13 @@ fn legacy_v5_is_unsupported_version() {
 }
 
 #[test]
-fn duplicate_uuid_is_refused() {
-    assert_eq!(
-        parse_kicad_pcb(&fixture("dup_uuid.kicad_pcb")).unwrap_err(),
-        KicadParse::DuplicateFootprintUuid {
-            uuid: "71829304-0000-4000-8000-000000000001".into()
-        }
-    );
+fn a_duplicate_uuid_is_said_and_told_apart() {
+    let pcb = parse_kicad_pcb(&fixture("dup_uuid.kicad_pcb")).unwrap();
+    assert!(pcb.warnings.iter().any(|w| w.contains("71829304-0000-4000-8000-000000000001")), "{:?}", pcb.warnings);
+    let mut ids: Vec<&str> = pcb.footprints.iter().map(|f| f.uuid.as_str()).collect();
+    ids.sort();
+    ids.dedup();
+    assert_eq!(ids.len(), pcb.footprints.len(), "each part has an id of its own");
 }
 
 #[test]
@@ -391,4 +391,43 @@ fn footprints_with_no_id_are_read_with_one_of_their_place() {
     assert_eq!(ids.len(), 2);
     assert_ne!(ids[0], ids[1]);
     assert_eq!(ids, parse_kicad_pcb(text).unwrap().footprints.iter().map(|f| f.uuid.as_str()).collect::<Vec<_>>());
+}
+
+#[test]
+fn a_pads_zero_clearance_and_margin_are_its_footprints() {
+    let text = "(kicad_pcb (version 20240108) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal))
+      (net 0 \"\") (net 1 \"A\")
+      (footprint \"X:Y\" (layer \"F.Cu\") (uuid \"u\") (at 0 0) (clearance 0.3) (solder_mask_margin 0.1)
+        (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\" \"F.Mask\") (net 1 \"A\") (clearance 0) (solder_mask_margin 0))
+        (pad \"2\" smd rect (at 2 0) (size 1 1) (layers \"F.Cu\" \"F.Mask\") (net 1 \"A\") (clearance 0.4) (solder_mask_margin 0.05))))";
+    let (_, copper) = parse_board(text).unwrap();
+    let near = |a: Option<f64>, b: f64| assert!(a.is_some_and(|a| (a - b).abs() < 1e-12), "{a:?} vs {b}");
+    near(copper.pads[0].clearance, 0.3e-3);
+    near(copper.pads[0].mask_margin, 0.1e-3);
+    near(copper.pads[1].clearance, 0.4e-3);
+    near(copper.pads[1].mask_margin, 0.05e-3);
+}
+
+#[test]
+fn a_custom_pads_arcs_are_copper_and_a_convex_hull_is_one_shape() {
+    let pad = |options: &str| {
+        format!(
+            "(kicad_pcb (version 20240108) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal))
+              (net 0 \"\") (net 1 \"A\")
+              (footprint \"X:Y\" (layer \"F.Cu\") (uuid \"u\") (at 0 0)
+                (pad \"1\" smd custom (at 0 0) (size 0.5 0.5) (layers \"F.Cu\") (net 1 \"A\") {options}
+                  (primitives (gr_arc (start 1 0) (mid 0 1) (end -1 0) (width 0.2)) (gr_rect (start 2 -0.2) (end 2.4 0.2))))))"
+        )
+    };
+    let (_, copper) = parse_board(&pad("(options (clearance outline) (anchor rect))")).unwrap();
+    let Outline::Polygons(polys) = &copper.pads[0].outline else { panic!("a custom pad is polygons") };
+    // The arc's outer edge reaches 1.1 mm up (KiCad's y down: -1.1 is y = 1.1 in the file's terms).
+    let reach = polys.iter().flatten().map(|p| p[1].abs()).fold(0.0, f64::max);
+    assert!((reach - 1.1e-3).abs() < 0.01e-3, "the arc reaches {reach}");
+    assert!(polys.len() > 3, "anchor, arc pieces and the rectangle: {}", polys.len());
+    let (_, copper) = parse_board(&pad("(options (clearance convexhull) (anchor rect))")).unwrap();
+    let Outline::Polygons(polys) = &copper.pads[0].outline else { panic!("a custom pad is polygons") };
+    assert_eq!(polys.len(), 1, "one hull");
+    let xs = polys[0].iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max);
+    assert!((xs - 2.4e-3).abs() < 1e-9, "the hull takes in the rectangle: {xs}");
 }

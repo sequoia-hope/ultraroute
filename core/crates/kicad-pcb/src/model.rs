@@ -130,6 +130,10 @@ pub struct Footprint {
     pub attrs: Vec<String>,
     pub pads: Vec<Pad>,
     pub models: Vec<Model>,
+    /// `(net_tie_pad_groups "1, 2" …)`: each group's pad numbers, which a net tie joins though
+    /// their nets differ.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub net_tie_groups: Vec<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -270,6 +274,7 @@ mod tests {
             attrs: vec![],
             pads: vec![],
             models: vec![],
+            net_tie_groups: vec![],
         };
         assert!(fp.is_mounting_hole_footprint());
         fp.footprint = "Resistor_SMD:R_0603".into();

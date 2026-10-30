@@ -140,12 +140,12 @@ fn copper_written_back_reads_the_same() {
         tracks: copper
             .tracks
             .iter()
-            .map(|t| NewTrack { start: t.start, end: t.end, width: t.width, layer: t.layer.clone(), net: t.net })
+            .map(|t| NewTrack { start: t.start, end: t.end, width: t.width, layer: t.layer.clone(), net: t.net, locked: false })
             .collect(),
         vias: copper
             .vias
             .iter()
-            .map(|v| NewVia { at: v.at, size: v.size, drill: v.drill, layers: v.layers.clone(), net: v.net })
+            .map(|v| NewVia { at: v.at, size: v.size, drill: v.drill, layers: v.layers.clone(), net: v.net, locked: false })
             .collect(),
         replace: Vec::new(),
         uuid_seed: None,

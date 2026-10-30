@@ -14,6 +14,7 @@ fn main() {
         width: t.width,
         layer: t.layer.clone(),
         net: t.net,
+        locked: false,
     };
     let all_copper: Vec<Span> = copper.tracks.iter().map(|t| t.span).chain(copper.vias.iter().map(|v| v.span)).collect();
     let variants = [

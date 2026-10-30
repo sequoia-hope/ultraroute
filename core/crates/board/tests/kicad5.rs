@@ -225,3 +225,121 @@ fn an_edge_clearance_rule_holds_copper_further_from_edge_circles_only() {
         assert!(check_item(&b, by_outline).is_empty(), "the outline keeps the board's 0.3 mm");
     }
 }
+
+#[test]
+fn an_outline_that_does_not_close_is_reported() {
+    let text = "(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))
+         (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user))
+         (net 0 \"\")
+         (gr_line (start 0 0) (end 30 0) (layer \"Edge.Cuts\") (width 0.1))
+         (gr_line (start 30 0) (end 30 30) (layer \"Edge.Cuts\") (width 0.1)))";
+    let (pcb, copper) = kicad_pcb::parse_board(text).unwrap();
+    let b = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+    assert!(b.outline.is_empty());
+    assert!(b.warnings.iter().any(|w| w.contains("outline")), "{:?}", b.warnings);
+    // A closed outline warns of nothing.
+    assert!(!board("").warnings.iter().any(|w| w.contains("outline")));
+}
+
+#[test]
+fn a_curved_edge_closes_the_outline_and_keeps_copper_clear() {
+    // Three straight sides and a Bezier for the fourth, bulging to y = 37.5 at x = 15.
+    let text = "(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))
+         (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user))
+         (net 0 \"\") (net 1 \"A\") (net 2 \"B\")
+         (gr_line (start 0 0) (end 30 0) (layer \"Edge.Cuts\") (width 0.1))
+         (gr_line (start 30 0) (end 30 30) (layer \"Edge.Cuts\") (width 0.1))
+         (gr_curve (pts (xy 30 30) (xy 20 40) (xy 10 40) (xy 0 30)) (layer \"Edge.Cuts\") (width 0.1))
+         (gr_line (start 0 30) (end 0 0) (layer \"Edge.Cuts\") (width 0.1)))";
+    let (pcb, copper) = kicad_pcb::parse_board(text).unwrap();
+    let mut b = Board::new(&pcb, &copper, kicad_pcb::Rules::parse(r#"{"board":{"design_settings":{"rules":{"min_copper_edge_clearance":0.5}}}}"#).unwrap());
+    assert_eq!(b.outline.len(), 1, "the curve closes the outline: {:?}", b.warnings);
+    let at = |b: &mut Board, y: f64| {
+        let id = b.insert(Item {
+            kind: Kind::Track,
+            net: 2,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(nm(14.5e-3), nm(y * 1e-3)), b: Point::new(nm(15.5e-3), nm(y * 1e-3)), r: nm(0.05e-3) },
+            hole: None,
+            locked: false,
+            span: None,
+        });
+        let edge = check_item(b, id).iter().any(|v| v.rule == Rule::EdgeClearance);
+        b.remove(id);
+        edge
+    };
+    assert!(at(&mut b, 37.3), "0.15 mm inside the curve's bulge");
+    assert!(!at(&mut b, 36.0), "1.45 mm inside it");
+}
+
+#[test]
+fn copper_at_the_clearance_from_an_arc_track_is_judged_as_from_the_true_arc() {
+    // A quarter arc of radius 5 mm round (10, 10), 0.2 mm wide, net A; clearance 0.2 mm.
+    let mut b = board("(arc (start 15 10) (mid 13.5355339 13.5355339) (end 10 15) (width 0.2) (layer \"F.Cu\") (net 1) (uuid \"aaaaaaaa-0000-4000-8000-000000000001\"))");
+    let c = Point::new(nm(10e-3), nm(10e-3));
+    // A dot of copper of net B at `radius` mm from the centre, 37 degrees round: between chords.
+    let breaks = |b: &mut Board, radius: f64| {
+        let t = 37f64.to_radians();
+        let p = Point::new(c.x + nm(radius * 1e-3 * t.cos()), c.y + nm(radius * 1e-3 * t.sin()));
+        let id = b.insert(Item { kind: Kind::Track, net: 2, layers: 1, shape: Shape::Capsule { a: p, b: p, r: nm(0.05e-3) }, hole: None, locked: false, span: None });
+        let hit = check_item(b, id).iter().any(|v| v.rule == Rule::Clearance);
+        b.remove(id);
+        hit
+    };
+    // Outside: the arc's edge at 5.1 mm, the dot's at radius - 0.05, so clear at 5.35.
+    assert!(!breaks(&mut b, 5.35), "exactly the clearance outside the arc");
+    assert!(breaks(&mut b, 5.349), "1 um closer outside");
+    // Inside: the arc's edge at 4.9 mm, so clear at 4.65.
+    assert!(!breaks(&mut b, 4.65), "exactly the clearance inside the arc");
+    assert!(breaks(&mut b, 4.651), "1 um closer inside");
+}
+
+/// A rule area keeping tracks and vias off F.Cu over (2, 2)-(22, 22) but for a cutout over
+/// (7, 7)-(17, 17), as KiCad writes one: the outline, then the cutout.
+pub const KEEPOUT_WITH_CUTOUT: &str = "(zone (net 0) (net_name \"\") (layer \"F.Cu\") (uuid \"cccccccc-0000-4000-8000-000000000001\") (hatch edge 0.5)
+    (connect_pads (clearance 0)) (min_thickness 0.25)
+    (keepout (tracks not_allowed) (vias not_allowed) (pads allowed) (copperpour allowed) (footprints allowed))
+    (fill (thermal_gap 0.5) (thermal_bridge_width 0.5))
+    (polygon (pts (xy 2 2) (xy 22 2) (xy 22 22) (xy 2 22)))
+    (polygon (pts (xy 7 7) (xy 17 7) (xy 17 17) (xy 7 17))))";
+
+#[test]
+fn a_keepouts_cutout_forbids_nothing() {
+    let mut b = board(KEEPOUT_WITH_CUTOUT);
+    let keepout_hit = |b: &mut Board, a: (f64, f64), z: (f64, f64)| {
+        let id = b.insert(Item {
+            kind: Kind::Track,
+            net: 2,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(nm(a.0 * 1e-3), nm(a.1 * 1e-3)), b: Point::new(nm(z.0 * 1e-3), nm(z.1 * 1e-3)), r: nm(0.1e-3) },
+            hole: None,
+            locked: false,
+            span: None,
+        });
+        let hit = check_item(b, id).iter().any(|v| v.rule == Rule::Keepout);
+        b.remove(id);
+        hit
+    };
+    assert!(!keepout_hit(&mut b, (10.0, 10.0), (14.0, 10.0)), "inside the cutout");
+    assert!(keepout_hit(&mut b, (10.0, 10.0), (19.0, 10.0)), "out across the cutout's edge into the keepout");
+    assert!(keepout_hit(&mut b, (3.0, 3.0), (5.0, 3.0)), "in the keepout");
+}
+
+#[test]
+fn a_planes_unfilled_zone_stands_in_by_its_outline() {
+    // Two through-hole pads of net A, and net A's zone over all of B.Cu, saved with no fill.
+    let mut b = board(
+        "(footprint \"P\" (layer \"F.Cu\") (uuid \"0b10c000-0000-4000-8000-000000000001\") (at 5 15) (property \"Reference\" \"J1\")
+           (pad \"1\" thru_hole circle (at 0 0) (size 1.6 1.6) (drill 0.8) (layers \"*.Cu\") (net 1 \"A\")))
+         (footprint \"P\" (layer \"F.Cu\") (uuid \"0b10c000-0000-4000-8000-000000000002\") (at 25 15) (property \"Reference\" \"J2\")
+           (pad \"1\" thru_hole circle (at 0 0) (size 1.6 1.6) (drill 0.8) (layers \"*.Cu\") (net 1 \"A\")))
+         (zone (net 1) (net_name \"A\") (layer \"B.Cu\") (uuid \"dddddddd-0000-4000-8000-000000000001\") (hatch edge 0.5)
+           (connect_pads (clearance 0.2)) (min_thickness 0.25) (fill (thermal_gap 0.5) (thermal_bridge_width 0.5))
+           (polygon (pts (xy 1 1) (xy 29 1) (xy 29 29) (xy 1 29))))",
+    );
+    assert_eq!(connectivity_without_pours(&b).airlines.len(), 1, "no copper joins them yet");
+    let back = b.layers.iter().position(|l| l == "B.Cu").unwrap();
+    b.set_planes(1 << back);
+    assert_eq!(connectivity_without_pours(&b).airlines.len(), 0, "the plane's outline joins them");
+    assert!(b.warnings.iter().any(|w| w.contains("not filled")), "{:?}", b.warnings);
+}

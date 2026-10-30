@@ -39,9 +39,6 @@ fn holds_clear(holder: &Item, copper: &Item) -> bool {
     holder.hole.is_some() && (holder.plated_hole() || matches!(copper.kind, Kind::Track | Kind::Via))
 }
 
-fn hole_shape(hole: (Point, Nm)) -> Shape {
-    Shape::Capsule { a: hole.0, b: hole.0, r: hole.1 }
-}
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Limits {
@@ -54,6 +51,48 @@ pub(crate) struct Limits {
     pth_hole_clearance: Nm,
     pth_hole_to_hole: Nm,
     smd_pad_clearance: Nm,
+}
+
+/// Whether `shape` lies inside the polygon `area`, more than `margin` from its edge: a point of
+/// it inside, and no edge within `margin` (none touching, when `margin` is 0).
+pub fn within(area: &Shape, shape: &Shape, margin: Nm) -> bool {
+    let Shape::Polygon(poly) = area else { return false };
+    let first = match shape {
+        Shape::Capsule { a, .. } => *a,
+        Shape::Polygon(p) => match p.first() {
+            Some(q) => *q,
+            None => return false,
+        },
+    };
+    area.contains(first)
+        && (0..poly.len()).all(|k| {
+            let edge = Shape::Capsule { a: poly[k], b: poly[(k + 1) % poly.len()], r: 0 };
+            shape.gap_within(&edge, margin as f64 + 1.0) > margin as f64
+        })
+}
+
+/// Whether a net tie lets the two touch, as KiCad does: two members of one tie (its pads and the
+/// copper drawn in it), or a member and a track of one of its nets that ends inside one of its
+/// pads (checked with kicad-cli 9.0.8: such a track may cross the tie's bar; one ending short of
+/// the pads may not).
+fn tied(board: &Board, a: ItemId, item: &Item, b: ItemId, other: &Item) -> bool {
+    match (board.ties.get(&a), board.ties.get(&b)) {
+        (Some((f, _)), Some((g, _))) => f == g,
+        (Some((f, nets)), None) => ends_in_tie(board, other, *f, nets),
+        (None, Some((f, nets))) => ends_in_tie(board, item, *f, nets),
+        (None, None) => false,
+    }
+}
+
+/// A track of one of a tie's `nets` with an end inside one of the pads of the tie in footprint `fp`.
+fn ends_in_tie(board: &Board, track: &Item, fp: usize, nets: &[u32]) -> bool {
+    let Shape::Capsule { a, b, .. } = track.shape else { return false };
+    if track.kind != Kind::Track || !nets.contains(&track.net) {
+        return false;
+    }
+    board.ties.iter().any(|(&id, (f, _))| {
+        *f == fp && board.item(id).is_some_and(|p| matches!(p.kind, Kind::Pad { .. }) && (p.shape.contains(a) || p.shape.contains(b)))
+    })
 }
 
 /// A pad with a plated hole: KiCad's `Pad_Type == 'Through-hole'`.
@@ -214,11 +253,12 @@ fn item_checks(
                             Kind::Pour { .. } => forbids.copperpour,
                             Kind::Keepout { .. } => false,
                         };
-                        if banned && intrudes(&item.shape, &o.shape) {
+                        let in_a_hole = board.keepout_holes.get(&other).is_some_and(|holes| holes.iter().any(|h| within(h, &item.shape, 0)));
+                        if banned && intrudes(&item.shape, &o.shape) && !in_a_hole {
                             found.push(Violation { rule: Rule::Keepout, a: id, b: Some(other), layer: Some(layer), gap: 0.0, required: 0 });
                         }
                     }
-                    _ if partner(other) && o.is_copper() && (o.net != item.net || item.net == 0) && !same_pad(item, o) => {
+                    _ if partner(other) && o.is_copper() && (o.net != item.net || item.net == 0) && !same_pad(item, o) && !tied(board, id, item, other, o) => {
                         let mut required = board.clearance(item.net, o.net);
                         if smd(item) && smd(o) {
                             required = required.max(limits.smd_pad_clearance);
@@ -251,7 +291,7 @@ fn item_checks(
         if everyone {
             for other in board.near(holes, item_bbox.grow(limits.pth_hole_clearance.max(limits.edge).max(limits.max_clearance))) {
                 let Some(o) = board.item(other) else { continue };
-                let Some(h) = o.hole else { continue };
+                let Some(h) = board.hole_shape(other, o) else { continue };
                 let required = limits.hole_keep(board, other, o, item);
                 if other == id || !holds_clear(o, item) || same_pad(item, o) || (o.plated_hole() && o.net == item.net && item.net != 0) {
                     continue;
@@ -259,24 +299,23 @@ fn item_checks(
                 if failed_pairs.contains(&(id.min(other), id.max(other))) {
                     continue;
                 }
-                let gap = item.shape.gap_within(&hole_shape(h), required as f64);
+                let gap = item.shape.gap_within(&h, required as f64);
                 if gap + SLACK < required as f64 {
                     found.push(Violation { rule: Rule::HoleClearance, a: id, b: Some(other), layer: None, gap, required });
                 }
             }
         }
     }
-    if let Some(hole) = item.hole {
-        let shape = hole_shape(hole);
+    if let Some(shape) = board.hole_shape(id, item) {
         let reach = shape.bbox().grow(limits.pth_hole_clearance.max(limits.pth_hole_to_hole).max(limits.edge).max(limits.max_clearance));
         for other in board.near(holes, reach) {
             let Some(o) = board.item(other) else { continue };
             if !partner(other) || same_pad(item, o) {
                 continue;
             }
-            if let Some(h) = o.hole {
+            if let Some(h) = board.hole_shape(other, o) {
                 let required = limits.hole_to_hole(item, o);
-                let gap = shape.gap(&hole_shape(h));
+                let gap = shape.gap(&h);
                 if gap + SLACK < required as f64 {
                     found.push(Violation { rule: Rule::HoleToHole, a: id, b: Some(other), layer: None, gap, required });
                 }
