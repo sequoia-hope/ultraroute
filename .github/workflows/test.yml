@@ -26,7 +26,9 @@ jobs:
         working-directory: core
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # The toolchain the tree is kept clippy-clean on locally: `stable` moved to a clippy with
+      # new lints, and the gate failed on code nobody had changed.
+      - uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
