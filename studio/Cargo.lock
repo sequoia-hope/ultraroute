@@ -14,7 +14,7 @@ dependencies = [
 [[package]]
 name = "board-draw"
 version = "0.1.0"
-source = "git+https://github.com/sequoia-hope/board-draw?rev=43c4f6fc9179c387af4340b899a469198f7e3c67#43c4f6fc9179c387af4340b899a469198f7e3c67"
+source = "git+https://github.com/sequoia-hope/board-draw?rev=d37b1f8eb25454facb83e07040f1e43e2798a6f5#d37b1f8eb25454facb83e07040f1e43e2798a6f5"
 
 [[package]]
 name = "bumpalo"

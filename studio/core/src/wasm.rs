@@ -61,6 +61,11 @@ impl Studio {
         self.scene.part_at(x, y).unwrap_or(0)
     }
 
+    /// The part a click means in a pane drawing the layers whose bits are set in `mask`.
+    pub fn part_at_in(&mut self, x: f32, y: f32, mask: u32) -> i32 {
+        self.scene.part_at_in(x, y, u64::from(mask)).unwrap_or(0)
+    }
+
     pub fn net_at(&self, x: f32, y: f32, reach: f32) -> i32 {
         self.scene.net_at(x, y, reach).unwrap_or(0)
     }

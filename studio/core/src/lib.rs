@@ -371,8 +371,25 @@ impl Scene {
         self.board.part_box(part)
     }
 
+    /// The part a click means: front before back, then the smallest.
     pub fn part_at(&self, x: f32, y: f32) -> Option<i32> {
         self.board.part_at(x, y)
+    }
+
+    /// The part a click means in a pane drawing the layers in `mask`: a pane showing only one
+    /// side picks only that side's parts, so the bottom seen alone picks what it shows.
+    pub fn part_at_in(&mut self, x: f32, y: f32, mask: u64) -> Option<i32> {
+        let n = self.board.layers().len();
+        let front = mask & 1 != 0;
+        let back = (2..=64).contains(&n) && mask & (1 << (n - 1)) != 0;
+        let style = &mut self.board.style;
+        let saved = (style.hide_front, style.hide_back);
+        if front || back {
+            (style.hide_front, style.hide_back) = (!front, !back);
+        }
+        let part = self.board.part_at(x, y);
+        (self.board.style.hide_front, self.board.style.hide_back) = saved;
+        part
     }
 
     pub fn net_at(&self, x: f32, y: f32, reach: f32) -> Option<i32> {
@@ -703,6 +720,21 @@ mod tests {
         s.apply(&frame(TRACE, ""));
         s.board.set_layer_visible(0, false);
         assert!(s.mesh(0.01).is_empty());
+    }
+
+    #[test]
+    fn a_top_part_wins_the_click_unless_only_the_bottom_is_shown() {
+        let mut s = Scene::default();
+        s.apply(BOARD);
+        // A small part on the bottom under U1's pad.
+        let under = r#"{"id":3,"k":"pin","net":3,"part":8,"at":[2,2],"pads":[{"layer":1,"shape":{"c":[2,2,0.3]}}]}"#;
+        s.apply(&frame(&format!("{PIN},{under}"), ""));
+        s.apply(r#"{"t":"frame","seq":2,"ms":5,"add":[],"del":[],"parts":[{"id":8,"name":"R1","at":[2,2],"fixed":false}],"probes":[],"events":[]}"#);
+        assert_eq!(s.part_at(2.0, 2.0), Some(7), "the top part, though the bottom one is smaller");
+        assert_eq!(s.part_at_in(2.0, 2.0, u64::MAX), Some(7));
+        assert_eq!(s.part_at_in(2.0, 2.0, 0b10), Some(8), "the bottom pane picks the bottom part");
+        assert_eq!(s.part_at_in(2.0, 2.0, 0b01), Some(7));
+        assert!(!s.board.style.hide_front && !s.board.style.hide_back, "the pane's sides are not kept");
     }
 
     #[test]
