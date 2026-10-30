@@ -226,6 +226,10 @@ fn a_net_tie_joins_its_nets_as_kicad_allows_and_nothing_else() {
     // One ending short of the pads, 0.15 mm from them: KiCad's clearance violation.
     let b = net_tie_board(r#"(segment (start 10.2 12) (end 10.2 10.4) (width 0.2) (layer "F.Cu") (net 1) (uuid "aaaaaaaa-0000-4000-8000-000000000003"))"#);
     assert!(check(&b).iter().any(|v| v.rule == Rule::Clearance), "net A ending short of the tie's pads");
+    // A track of net A across pad 2 (net B) to end in its own pad 1, clear of the bar: KiCad's
+    // short, the pad of the other net crossed rather than ended in.
+    let b = net_tie_board(r#"(segment (start 11 9.9) (end 9.5 10) (width 0.1) (layer "F.Cu") (net 1) (uuid "aaaaaaaa-0000-4000-8000-000000000004"))"#);
+    assert!(check(&b).iter().any(|v| v.rule == Rule::Clearance), "net A across the tie's pad of net B");
     // Another net's track across the bar is not.
     let b = net_tie_board(r#"(segment (start 10 8) (end 10 12) (width 0.2) (layer "F.Cu") (net 3) (uuid "aaaaaaaa-0000-4000-8000-000000000002"))"#);
     assert!(check(&b).iter().any(|v| v.rule == Rule::Clearance), "net C across the tie");

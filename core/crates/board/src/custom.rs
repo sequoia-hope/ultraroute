@@ -287,8 +287,13 @@ impl Thing<'_> {
             "netname" => str(board.net_name(net)),
             // Equal to any class the net is in, and to the whole name (see `Rules::in_class`).
             "netclass" => self.class().map_or(str(""), |c| Value::Set(std::iter::once(c.clone()).chain(c.split(',').map(String::from)).collect())),
-            // A track of no known layer is on one of them.
-            "layer" => self.layer_names().map_or_else(|| Value::OneOf(board.layers.clone()), Value::Set),
+            // A track of no known layer is on one of them; something on several layers (a via,
+            // a through-hole pad) compares with no layer at all, as in KiCad.
+            "layer" => match self.layer_names() {
+                None => Value::OneOf(board.layers.clone()),
+                Some(ls) if ls.len() > 1 => Value::Opaque,
+                Some(ls) => Value::Set(ls),
+            },
             "padtype" => match self {
                 Thing::Item(_, _, it @ Item { kind: Kind::Pad { plated, .. }, .. }) => match (it.hole, plated) {
                     (None, _) => str("SMD"),

@@ -72,14 +72,24 @@ pub fn within(area: &Shape, shape: &Shape, margin: Nm) -> bool {
 /// Whether a net tie lets the two touch, as KiCad does: two members of one tie (its pads and the
 /// copper drawn in it), or a member and a track of one of its nets that ends inside one of its
 /// pads (checked with kicad-cli 9.0.8: such a track may cross the tie's bar; one ending short of
-/// the pads may not).
+/// the pads may not). Against a pad of the tie the track must end inside that pad: one that
+/// crosses the other net's pad to end in its own shorts the two (kicad-cli 9.0.8 again).
 fn tied(board: &Board, a: ItemId, item: &Item, b: ItemId, other: &Item) -> bool {
+    let joins = |member: &Item, track: &Item, f: usize, nets: &[u32]| match member.kind {
+        Kind::Pad { .. } => ends_inside(track, member) && nets.contains(&track.net) && track.kind == Kind::Track,
+        _ => ends_in_tie(board, track, f, nets),
+    };
     match (board.ties.get(&a), board.ties.get(&b)) {
         (Some((f, _)), Some((g, _))) => f == g,
-        (Some((f, nets)), None) => ends_in_tie(board, other, *f, nets),
-        (None, Some((f, nets))) => ends_in_tie(board, item, *f, nets),
+        (Some((f, nets)), None) => joins(item, other, *f, nets),
+        (None, Some((f, nets))) => joins(other, item, *f, nets),
         (None, None) => false,
     }
+}
+
+/// Whether a track has an end inside `pad`.
+fn ends_inside(track: &Item, pad: &Item) -> bool {
+    matches!(track.shape, Shape::Capsule { a, b, .. } if pad.shape.contains(a) || pad.shape.contains(b))
 }
 
 /// A track of one of a tie's `nets` with an end inside one of the pads of the tie in footprint `fp`.

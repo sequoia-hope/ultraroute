@@ -122,6 +122,9 @@ pub enum Value {
     OneOf(Vec<String>),
     /// No object there (`B` of a constraint about one object), or nothing of the kind.
     Null,
+    /// Something no comparison takes: equal to nothing and unequal to nothing (KiCad 9.0.8 on a
+    /// through via's `A.Layer`, checked with kicad-cli: `== 'B.Cu'` and `!= 'B.Cu'` both fail).
+    Opaque,
     /// Something the caller cannot answer.
     Unknown,
 }
@@ -411,7 +414,7 @@ fn truth(v: &Value) -> Tri {
         Value::Num(n) | Value::Len(n) => Tri::of(*n != 0.0),
         Value::Unknown => Tri::Unknown,
         Value::Str(s) => Tri::of(!s.is_empty()),
-        Value::Set(_) | Value::Null => Tri::False,
+        Value::Set(_) | Value::Null | Value::Opaque => Tri::False,
         Value::OneOf(_) => Tri::Unknown,
     }
 }
@@ -444,6 +447,7 @@ fn compare(op: Op, x: &Value, y: &Value) -> Tri {
     use Value::*;
     let eq = match (x, y) {
         (Unknown, _) | (_, Unknown) => return Tri::Unknown,
+        (Opaque, _) | (_, Opaque) => return Tri::False,
         (Null, Null) => Some(true),
         (Null, _) | (_, Null) => Some(false),
         (Str(p), Str(q)) => Some(p.eq_ignore_ascii_case(q) || wildcard(q, p, true) || wildcard(p, q, true)),
@@ -710,9 +714,9 @@ mod tests {
         assert_eq!(t("A.Hole_Size_X > 0.3mm", &hole, &track), Tri::True);
         assert_eq!(t("A.Hole_Size_X > 0.3", &hole, &track), Tri::True);
         assert_eq!(t("A.Hole_Size_X > 0.5mm", &hole, &track), Tri::False);
-        let pad = obj(&[("layer", Value::Set(vec!["F.Cu".into(), "B.Cu".into()]))]);
-        assert_eq!(t("A.Layer == 'B.Cu'", &pad, &track), Tri::True);
-        assert_eq!(t("A.Layer != 'In1.Cu'", &pad, &track), Tri::True);
+        let via = obj(&[("layer", Value::Opaque)]);
+        assert_eq!(t("A.Layer == 'B.Cu'", &via, &track), Tri::False);
+        assert_eq!(t("A.Layer != 'B.Cu'", &via, &track), Tri::False);
     }
 
     #[test]
