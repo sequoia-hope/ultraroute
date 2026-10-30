@@ -638,8 +638,10 @@
   }
 
   function connect() {
-    const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-    socket = new WebSocket(`${scheme}://${location.host}/ws`);
+    // Beside the page's directory, not at the root: Boardroom serves the studio under /apps/studio/.
+    const url = new URL('../ws', location.href);
+    url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    socket = new WebSocket(url);
     socket.onopen = () => {
       connected = true;
       load();
