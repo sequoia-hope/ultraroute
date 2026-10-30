@@ -1831,11 +1831,14 @@ mod tests {
         let (pcb, copper) = kicad_pcb::parse_board("(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal)) (net 0 \"\"))").unwrap();
         let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
         let plain = parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--cell", "0.035"])).unwrap();
+        // Millimetres of track at a 0.035 mm cell: ten steps to a cell.
+        let at = |mm: f64| grid::via_cost_mm(35_000, mm);
         let c = via_costs(&plain, &board);
-        assert_eq!((c.negotiate, c.open, c.rip), (500, 600, 320));
+        assert_eq!((c.negotiate, c.open, c.rip), (at(VIA_COST_MM), at(VIA_COST_MM * 1.2), at(VIA_COST_MM * 0.8)));
+        assert_eq!(c.negotiate, 1429);
         board.planes = 1;
         let c = via_costs(&plain, &board);
-        assert_eq!((c.negotiate, c.open, c.rip), (200, 80, 80));
+        assert_eq!((c.negotiate, c.open, c.rip), (at(1.0), at(0.4), at(0.4)));
         let given = parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--cell", "0.035", "--via-cost", "0.7,0.28"])).unwrap();
         let c = via_costs(&given, &board);
         assert_eq!((c.negotiate, c.open, c.rip), (200, 80, 80));
