@@ -3,17 +3,14 @@
 //! a price, and that copper is shoved off the path, round after round, until the connection
 //! routes.
 //!
-//! The shove is a plough (`Plough::Warp`): on each layer the path runs on, a strip `R` wide on
-//! either side of it moves `R` away, where `R` clears the path for the widest copper; pads, vias,
-//! locked copper and kept pours hold still; and in between the move is a harmonic warp field,
-//! falling to nothing at the reach. So the copper in the way is carried aside in a wave with its
-//! neighbours, and copper squeezed against a pad moves only as far as there is room. Pieces of
-//! copper that meet at a point move together (`morph::shift_copper`) and points on pads stay put.
-//! Copper crossing the path, and vias on it, are ripped, since no sideways move clears them.
-//! Whatever the plough leaves breaking a rule is ripped too, and the trapped connection is routed
-//! first, through the room made for it. A round that still leaves it trapped is followed by
-//! another along the new cheapest path, which is laid outright, ripping exactly the copper its
-//! pieces would break a rule against.
+//! The region plough (`Plough::Region`) rips other nets' movable copper round where the path is
+//! pinched and negotiates the trapped connection and the nets it ripped together; the rip plough
+//! (`Plough::Rip`) lays the path outright, ripping exactly the copper its pieces would break a
+//! rule against. Where neither lays it, copper crossing the path, and vias on it, are ripped, the
+//! copper beside it is moved straight away from it, fading over the reach, pieces that meet at a
+//! point moving together (`morph::shift_copper`), whatever that leaves breaking a rule is ripped,
+//! and the trapped connection is routed first, through the room made for it. A round that still
+//! leaves it trapped is followed by another along the new cheapest path, laid outright.
 //! Connections the try knocked open can be ploughed out in turn (`cascade`), then everything
 //! still open is routed again, and the whole try is kept only when it leaves fewer connections
 //! open than it found.
@@ -43,8 +40,6 @@ pub struct ShoveOptions {
     /// nets, where it is not `reach`: the wider of a connection's pad's and its net's.
     pub reaches: HashMap<ItemId, Nm>,
     pub net_reaches: HashMap<u32, Nm>,
-    /// Steps of a gentle plough or dipole before it gives way to ripping.
-    pub steps: usize,
     /// Clearance kept beyond the rules, so the grid router's cell centres fit.
     pub margin: Nm,
     /// Cost of a path cell within other nets' movable copper's clearance, which the plough
@@ -64,11 +59,9 @@ pub struct ShoveOptions {
     /// Keep a try that frees its trapped connection and leaves no more open than it found, not
     /// only one that leaves fewer.
     pub accept_ties: bool,
-    /// How the region plough renegotiates what it ripped: vias negotiated, passes after the
-    /// first, and trees spanned past pockets, as [`crate::NegotiationOptions`] has them.
-    pub negotiate_vias: bool,
+    /// Passes after the first when the region plough renegotiates what it ripped, as
+    /// [`crate::NegotiationOptions::repasses`].
     pub negotiate_repasses: usize,
-    pub negotiate_tree: bool,
     pub deadline: crate::clock::Deadline,
     pub pours_block: bool,
     pub log: Option<Log>,
@@ -80,8 +73,7 @@ impl Default for ShoveOptions {
             cell: 50_000,
             via_cost: 80,
             rounds: 4,
-            plough: Plough::Warp,
-            steps: 8,
+            plough: Plough::Region,
             reach: 2_000_000,
             reaches: HashMap::new(),
             net_reaches: HashMap::new(),
@@ -93,9 +85,7 @@ impl Default for ShoveOptions {
             reroute_seconds: 20.0,
             repair_seconds: 10.0,
             accept_ties: false,
-            negotiate_vias: true,
             negotiate_repasses: 1,
-            negotiate_tree: true,
             seed: 0,
             deadline: Default::default(),
             pours_block: false,
@@ -107,25 +97,9 @@ impl Default for ShoveOptions {
 /// How the plough moves the copper in the way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Plough {
-    /// Straight away from the path, by `R (1 - d / W)` at a distance `d`: the full clearance on
-    /// the path, fading to nothing at the reach. Blind to what stays put, so it can press copper
-    /// into pads.
-    Linear,
-    /// By a warp field on each layer of the path: strips either side of the path move a full
-    /// clearance away from it, pads, locked copper and kept pours hold still, and in between the
-    /// field is harmonic, falling to nothing at the reach. Copper squeezed between the path and a
-    /// pad moves only as far as there is room.
-    Warp,
     /// No plough: the path is laid outright from the first round, ripping exactly the copper its
     /// pieces would break a rule against.
     Rip,
-    /// The warp plough a step at a time, `steps` of them, trying the route after each; a net
-    /// whose copper a step leaves breaking a rule goes back to where it was before that step.
-    /// Nothing is ripped until the steps are spent; then the next round lays the path outright.
-    Gentle,
-    /// As `Gentle`, but the push is a dipole's: copper is repelled from the trapped pad, straight
-    /// away from it, fading over the reach.
-    Dipole,
     /// No plough: other nets' movable copper is ripped within the reach of where the path is
     /// pinched, and the trapped connection and every connection that opened negotiate their ways
     /// together, the trapped one favoured; when that leaves a ripped net worse off, it is tried
@@ -228,18 +202,6 @@ pub fn shove_escape(
     soft: &mut Vec<ItemId>,
     watch: &mut dyn FnMut(&Board, ShoveEvent),
 ) -> ShoveStats {
-    shove_escape_steps(board, solver, options, soft, watch, &mut |_, _, _, _| {})
-}
-
-/// As [`shove_escape`], also reporting each step of a gentle or dipole plough via `on_step`.
-pub fn shove_escape_steps(
-    board: &mut Board,
-    solver: &mut dyn FieldSolver,
-    options: &ShoveOptions,
-    soft: &mut Vec<ItemId>,
-    watch: &mut dyn FnMut(&Board, ShoveEvent),
-    on_step: &mut dyn FnMut(&Board, &ShoveTry, &ShoveRound, usize),
-) -> ShoveStats {
     let out_of_time = || options.deadline.expired();
     let region = options.plough == Plough::Region;
     let mut stats = ShoveStats::default();
@@ -295,7 +257,7 @@ pub fn shove_escape_steps(
                 break;
             }
             let first = t.rounds.is_empty();
-            let round = plough_round(board, solver, options, soft, &mut cache, t.pad, first, &out_of_time, &mut spans, &mut |b, r, step| on_step(b, &t, r, step));
+            let round = plough_round(board, solver, options, soft, &mut cache, t.pad, first, &out_of_time, &mut spans);
             let (done, walled) = (round.routed, round.path.is_empty());
             t.rounds.push(round);
             watch(board, ShoveEvent::Round(&t, t.rounds.last().unwrap()));
@@ -524,7 +486,7 @@ fn cascade(
         let (end, net) = (next.from_item, next.net);
         tried.insert(end);
         for k in 0..options.rounds.max(1) {
-            let round = plough_round(board, solver, options, soft, cache, end, k == 0, out_of_time, spans, &mut |_, _, _| {});
+            let round = plough_round(board, solver, options, soft, cache, end, k == 0, out_of_time, spans);
             let (done, walled) = (round.routed, round.path.is_empty());
             t.rounds.push(round);
             watch(board, ShoveEvent::Round(t, t.rounds.last().unwrap()));
@@ -614,7 +576,6 @@ fn plough_round(
     first: bool,
     out_of_time: &dyn Fn() -> bool,
     spans: &mut Vec<Span>,
-    on_step: &mut dyn FnMut(&Board, &ShoveRound, usize),
 ) -> ShoveRound {
     let mut round = ShoveRound::default();
     let conn = joined(board, options.pours_block);
@@ -634,31 +595,24 @@ fn plough_round(
     // A via needs more room than a trace: a via site counts when other copper is within its reach.
     let via_sites = path.windows(2).filter(|w| w[0].0 != w[1].0 && soft_grid.via_blocked[w[1].2 * grid.nx + w[1].1]).count();
     round.soft_cells = path.iter().filter(|&&(l, i, j)| soft_grid.blocked[grid.index(l, i, j)]).count() + via_sites;
-    if first && round.soft_cells > 0 && matches!(options.plough, Plough::Gentle | Plough::Dipole) {
-        gentle(board, solver, options, soft, pad, net, &movable, spans, &mut round, on_step);
-        return round;
-    }
     // Clear on the grid is not always clear: the region plough goes by the copper itself.
     if first && (round.soft_cells > 0 || !pinch.is_empty()) && options.plough == Plough::Region {
         renegotiate(board, solver, options, soft, cache, pad, far, net, &pinch, out_of_time, spans, &mut round);
         return round;
     }
-    if round.soft_cells == 0 || !first || matches!(options.plough, Plough::Rip | Plough::Region) {
-        // Lay the path as it stands, ripping exactly the other copper it runs into: clear
-        // already, or a later round, where ploughing again did not move that copper off it.
-        let laid = force_lay(board, &grid, &path, &sources, &targets, &movable, spans, &mut round.ripped_items);
-        round.crossed = round.ripped_items.len();
-        soft.retain(|id| board.item(*id).is_some());
-        if let Some(items) = laid {
-            soft.extend(items);
-            round.routed = true;
-        }
-        if !round.ripped_items.is_empty() && !cache.plane_nets.is_empty() {
-            soft.extend(crate::planes::join_planes(board, &None, &options.deadline).laid);
-        }
-        if round.routed {
-            return round;
-        }
+    // Lay the path as it stands, ripping exactly the other copper it runs into.
+    let laid = force_lay(board, &grid, &path, &sources, &targets, &movable, spans, &mut round.ripped_items);
+    round.crossed = round.ripped_items.len();
+    soft.retain(|id| board.item(*id).is_some());
+    if let Some(items) = laid {
+        soft.extend(items);
+        round.routed = true;
+    }
+    if !round.ripped_items.is_empty() && !cache.plane_nets.is_empty() {
+        soft.extend(crate::planes::join_planes(board, &None, &options.deadline).laid);
+    }
+    if round.routed {
+        return round;
     }
 
     let corridor = Corridor::of(&round.path);
@@ -671,15 +625,8 @@ fn plough_round(
         .items()
         .filter(|(_, it)| movable(it))
         .filter(|(_, it)| match (&it.kind, &it.shape) {
-            (Kind::Via, board::Shape::Capsule { a, r, .. }) => {
-                // The warp plough holds vias still, so one on the path must go; the linear one
-                // shoves them, unless one sits on the path itself.
-                let room = match options.plough {
-                    Plough::Warp | Plough::Gentle | Plough::Dipole => (profile.half_width + board.clearance(net, it.net) + r) as f64,
-                    Plough::Linear | Plough::Rip | Plough::Region => options.cell as f64,
-                };
-                corridor.nearest(*a, None).is_none_or(|(d, _)| d < room)
-            }
+            // A via is shoved aside, unless it sits on the path itself.
+            (Kind::Via, board::Shape::Capsule { a, .. }) => corridor.nearest(*a, None).is_none_or(|(d, _)| d < options.cell as f64),
             (Kind::Track, board::Shape::Capsule { a, b, .. }) => {
                 let layer = it.layers.trailing_zeros() as usize;
                 corridor.crosses(*a, *b, layer)
@@ -717,23 +664,7 @@ fn plough_round(
         let by = r * (1.0 - d / w);
         Some((Point::new((ux * by).round() as i64, (uy * by).round() as i64), false))
     };
-    let fields = match options.plough {
-        Plough::Linear | Plough::Rip | Plough::Gentle | Plough::Dipole | Plough::Region => HashMap::new(),
-        Plough::Warp => plough_fields(board, &round.path, clear.values().copied().fold(0.0, f64::max), reach, net),
-    };
-    let warped = |p: Point, n: u32, layer: Option<usize>| -> Option<(Point, bool)> {
-        if n == net {
-            return None;
-        }
-        // Vias hold still, and copper ending in one with them.
-        let (dx, dy) = fields.get(&layer?)?.displacement(p);
-        (dx.hypot(dy) >= 1_000.0).then(|| (Point::new(dx.round() as i64, dy.round() as i64), false))
-    };
-    let rule: &dyn Fn(Point, u32, Option<usize>) -> Option<(Point, bool)> = match options.plough {
-        Plough::Linear | Plough::Rip | Plough::Gentle | Plough::Dipole | Plough::Region => &linear,
-        Plough::Warp => &warped,
-    };
-    let (_, moved, moved_spans) = morph::shift_copper(board, soft, 150_000.0, rule);
+    let (_, moved, moved_spans) = morph::shift_copper(board, soft, 150_000.0, &linear);
     round.moved = moved;
     spans.extend(moved_spans);
     let loose: Vec<(ItemId, Item)> = board.items().filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked).map(|(id, it)| (id, it.clone())).collect();
@@ -1100,10 +1031,8 @@ fn negotiate(
             nets: Some(nets.clone()),
             net_weight,
             pours_block: options.pours_block,
-            via_zones: options.negotiate_vias,
             repasses: options.negotiate_repasses,
             rip_blocked: false,
-            reachable_tree: options.negotiate_tree,
             pad_ends: true,
             directional: false,
             seed,
@@ -1131,131 +1060,6 @@ fn negotiate(
     );
     soft.extend(again.laid);
     spans.extend(settle(board, soft, options.pours_block, plane_nets, Some(nets)));
-}
-
-/// The gentle plough: `steps` small pushes, each followed by a try at the route, with any net a
-/// push leaves breaking a rule put back as it was. Rips nothing.
-#[allow(clippy::too_many_arguments)]
-fn gentle(
-    board: &mut Board,
-    solver: &mut dyn FieldSolver,
-    options: &ShoveOptions,
-    soft: &mut Vec<ItemId>,
-    pad: ItemId,
-    net: u32,
-    movable: &dyn Fn(&Item) -> bool,
-    spans: &mut Vec<Span>,
-    round: &mut ShoveRound,
-    on_step: &mut dyn FnMut(&Board, &ShoveRound, usize),
-) {
-    let profile = Profile::for_net(board, net);
-    let half = profile.half_width.max(profile.via_radius);
-    let widest = board.items().filter(|(_, it)| movable(it)).filter_map(|(_, it)| match it.shape {
-        board::Shape::Capsule { r, .. } => Some(r),
-        _ => None,
-    });
-    let widest = widest.max().unwrap_or(0);
-    let clearance = board.rules.classes.iter().map(|c| board::nm(c.clearance)).max().unwrap_or(0).max(profile.clearance);
-    let full = (half + clearance + widest + options.margin) as f64;
-    let steps = options.steps.max(1);
-    let reach = options.reach as f64;
-    let centre = board.item(pad).map(|it| {
-        let b = it.shape.bbox();
-        Point::new((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2)
-    });
-    let window = round.path.iter().map(|(_, p)| board::BBox::of([*p])).reduce(board::BBox::union).map(|b| b.grow(options.reach + 1_000_000));
-    for step_idx in 0..steps {
-        let fields = match options.plough {
-            Plough::Gentle => plough_fields(board, &round.path, full / steps as f64, reach, net),
-            _ => HashMap::new(),
-        };
-        let push = |p: Point, n: u32, layer: Option<usize>| -> Option<(Point, bool)> {
-            // Vias hold still, and copper ending in one with them.
-            let layer = layer?;
-            if n == net {
-                return None;
-            }
-            let (dx, dy) = match options.plough {
-                Plough::Dipole => {
-                    let c = centre?;
-                    let (x, y) = ((p.x - c.x) as f64, (p.y - c.y) as f64);
-                    let d = x.hypot(y);
-                    if d == 0.0 || d > reach {
-                        return None;
-                    }
-                    let by = full / steps as f64 * (-d / (reach / 3.0)).exp();
-                    (x / d * by, y / d * by)
-                }
-                _ => fields.get(&layer)?.displacement(p),
-            };
-            (dx.hypot(dy) >= 1_000.0).then(|| (Point::new(dx.round() as i64, dy.round() as i64), false))
-        };
-        let before: Vec<(ItemId, Item)> = board
-            .items()
-            .filter(|(_, it)| movable(it) && window.is_none_or(|w| it.shape.bbox().overlaps(w)))
-            .map(|(id, it)| (id, it.clone()))
-            .collect();
-        let soft_before = soft.clone();
-        let first_new = board.items().map(|(id, _)| id).max().map_or(0, |m| m + 1);
-        let (_, moved, moved_spans) = morph::shift_copper(board, soft, 75_000.0, &push);
-        spans.extend(moved_spans);
-        round.moved += moved;
-        put_back_broken(board, soft, &soft_before, &before, first_new, options.pours_block, spans);
-        if route_one(board, solver, options, soft, pad) {
-            round.routed = true;
-            on_step(board, round, step_idx);
-            return;
-        }
-        on_step(board, round, step_idx);
-    }
-}
-
-/// Puts every net whose copper now breaks a rule back as it was in `before`, over and over, since
-/// a net put back can land on another that moved into its room.
-/// Pieces with ids from `first_new` on were made by the step.
-fn put_back_broken(board: &mut Board, soft: &mut Vec<ItemId>, soft_before: &[ItemId], before: &[(ItemId, Item)], first_new: ItemId, pours_block: bool, spans: &mut Vec<Span>) {
-    let was: HashMap<ItemId, &Item> = before.iter().map(|(id, it)| (*id, it)).collect();
-    let nets_before: HashSet<u32> = before.iter().map(|(_, it)| it.net).collect();
-    let mut done: HashSet<u32> = HashSet::new();
-    for _ in 0..6 {
-        let broken: HashSet<u32> = board
-            .items()
-            .filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked && nets_before.contains(&it.net) && !done.contains(&it.net))
-            .filter(|(id, _)| !(if pours_block { board::check_item_with_pours(board, *id) } else { board::check_item(board, *id) }).is_empty())
-            .map(|(_, it)| it.net)
-            .collect();
-        if broken.is_empty() {
-            break;
-        }
-        for &net in &broken {
-            // What the step made of the net's copper goes, new pieces and moved vias; what it
-            // was comes back.
-            let changed: Vec<ItemId> = board
-                .items()
-                .filter(|(_, it)| it.net == net && matches!(it.kind, Kind::Track | Kind::Via) && !it.locked)
-                .filter(|(id, it)| *id >= first_new || was.get(id).is_some_and(|w| w.shape != it.shape))
-                .map(|(id, _)| id)
-                .collect();
-            for id in changed {
-                board.remove(id);
-            }
-            for (id, it) in before.iter().filter(|(_, it)| it.net == net) {
-                if board.item(*id).is_none() {
-                    if let Some(span) = it.span {
-                        spans.retain(|s| *s != span);
-                    }
-                    board.restore(*id, (*it).clone());
-                }
-            }
-        }
-        done.extend(broken);
-    }
-    soft.retain(|id| board.item(*id).is_some());
-    for id in soft_before {
-        if board.item(*id).is_some() && !soft.contains(id) {
-            soft.push(*id);
-        }
-    }
 }
 
 /// Lays `path` as tracks and vias after ripping the other nets' movable copper the pieces would
@@ -1291,70 +1095,6 @@ fn force_lay(
         }
     }
     lay(board, grid, path, sources, targets)
-}
-
-/// The warp field on each layer the path runs on, over the path's extent and `reach` beyond:
-/// copper that stays put holds still, a strip `r` wide on either side of the path moves `r` away
-/// from it, and between them the field is harmonic.
-pub fn plough_fields(board: &Board, path: &[(usize, Point)], r: f64, reach: f64, net: u32) -> HashMap<usize, morph::WarpField> {
-    const CELL: f64 = 60_000.0;
-    let mut out = HashMap::new();
-    let Some(bounds) = path.iter().map(|(_, p)| board::BBox::of([*p])).reduce(board::BBox::union) else { return out };
-    let domain = bounds.grow(reach as Nm);
-    // The path's straight runs on each layer.
-    let mut runs: HashMap<usize, Vec<(Point, Point)>> = HashMap::new();
-    let mut k = 0;
-    while k + 1 < path.len() {
-        let (layer, a) = path[k];
-        let mut e = k + 1;
-        if path[e].0 != layer {
-            k += 1;
-            continue;
-        }
-        let dir = (path[e].1.x - a.x, path[e].1.y - a.y);
-        while e + 1 < path.len() && path[e + 1].0 == layer && (path[e + 1].1.x - path[e].1.x, path[e + 1].1.y - path[e].1.y) == dir {
-            e += 1;
-        }
-        runs.entry(layer).or_default().push((a, path[e].1));
-        k = e;
-    }
-    let still: Vec<(u64, board::Shape)> = board
-        .items()
-        .filter(|(_, it)| it.shape.bbox().overlaps(domain))
-        .filter(|(_, it)| match it.kind {
-            Kind::Pad { .. } | Kind::Keepout { .. } => true,
-            Kind::Track => it.locked || it.net == net,
-            // A via spans every layer, and the tracks on layers the path does not touch stay
-            // where they are: so vias hold still, and tracks flow around them.
-            Kind::Via => true,
-            Kind::Pour { kept, .. } => kept,
-        })
-        .map(|(_, it)| (if it.hole.is_some() { u64::MAX } else { it.layers }, it.shape.clone()))
-        .collect();
-    for (layer, segments) in runs {
-        let mut field = morph::WarpField::new(bounds, CELL, reach);
-        for (layers, shape) in &still {
-            if layers & (1 << layer) != 0 {
-                field.add_inclusion(std::slice::from_ref(shape), (0.0, 0.0), false);
-            }
-        }
-        for (a, b) in segments {
-            let (dx, dy) = ((b.x - a.x) as f64, (b.y - a.y) as f64);
-            let len = dx.hypot(dy);
-            if len == 0.0 {
-                continue;
-            }
-            let (nx, ny) = (-dy / len, dx / len);
-            for side in [1.0, -1.0] {
-                let off = |p: Point| Point::new(p.x + (side * nx * r).round() as i64, p.y + (side * ny * r).round() as i64);
-                let strip = board::Shape::Polygon(vec![a, b, off(b), off(a)]);
-                field.add_inclusion(&[strip], (side * nx * r, side * ny * r), false);
-            }
-        }
-        field.solve();
-        out.insert(layer, field);
-    }
-    out
 }
 
 /// Routes the open connection at `pad` on the ordinary grid; whether it was laid.

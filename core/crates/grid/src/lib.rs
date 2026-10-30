@@ -4,7 +4,6 @@
 #[cfg(feature = "gpu")]
 pub mod gpu;
 pub mod blame;
-pub mod chase;
 pub mod cleanup;
 pub mod clock;
 pub mod grid;
@@ -25,15 +24,12 @@ pub mod search;
 pub mod shove;
 pub mod tune;
 pub mod vias;
-#[cfg(feature = "gpu")]
-pub mod sweep;
 
 pub use blame::{blame, Blame, BlameOptions, BlameReport};
-pub use chase::{chase, ChaseOptions, ChaseStats};
 pub use cleanup::{drop_duplicates, drop_duplicates_watch, prune_dangling, prune_dangling_watch, pull_tight, pull_tight_watch, split_at_joins, CleanStats};
 pub use grid::{ObstacleMap, Profile, RouteGrid, ViaSpec};
 pub use nudge::{nudge, nudge_watch, NudgeEvent, NudgeOptions, NudgeStats};
-pub use push::{push, push_watch, rip_broken, rip_broken_items, Field, PushOptions, PushStats, PushStep};
+pub use push::{push, push_watch, rip_broken, rip_broken_items, PushOptions, PushStats, PushStep};
 pub use planes::{join_planes, PlaneStats};
 pub use pairs::{diff_pairs, pair_has_open_runs, route_pairs, route_pairs_watch, shares_layer, Pair, PairOptions, PairRun, PairStats};
 pub use prefanout::{prefanout, prune_closed_escapes, EscapeMode, EscapeOrder, PrefanoutOptions, PrefanoutStats};
@@ -46,8 +42,6 @@ pub use tune::{match_lengths, match_lengths_watch, pair_lengths, TuneBump, TuneS
 pub use clock::Deadline;
 pub use memory::{memory_estimate, MemoryEstimate};
 pub use vias::{reduce_vias, reduce_vias_all, ViaOptions, ViaStats};
-pub use shove::{plough_fields, shove_escape, shove_escape_steps, Plough, ShoveEvent, ShoveOptions, ShoveRound, ShoveStats, ShoveTry};
+pub use shove::{shove_escape, Plough, ShoveEvent, ShoveOptions, ShoveRound, ShoveStats, ShoveTry};
 #[cfg(feature = "gpu")]
 pub use gpu::GpuSolver;
-#[cfg(feature = "gpu")]
-pub use sweep::GpuSweepSolver;

@@ -17,9 +17,9 @@ Read it beside this guide.
 |---|---|
 | `kicad-pcb` | Reads `.kicad_pcb` text into a neutral record (`Pcb`, `Copper`), the rules from `.kicad_pro` and `.kicad_dru` (`Rules`), and writes edits back into the text (`apply`, `Edit`). Metres. |
 | `board` | The routing model: every piece of copper, hole, keepout and the outline as `Item`s in a spatial index (`Board`), the rule check (`check_item`), connectivity (`connectivity`), zone fills for display. Nanometres. |
-| `grid` | The grid routers and everything that reworks routed copper: `route_open`, `route_negotiated`, `rip_up`, `chase`, `prefanout`, `route_pairs`, `join_planes`, `shove_escape` (the plough), `push`, `nudge`, `pull_tight`, cleanup, `match_lengths`, `blame`. Also the grid itself (`ObstacleMap`, `RouteGrid`, `Profile`) and the `FieldSolver` trait with CPU and GPU solvers. |
-| `morph` | Moving copper smoothly: the harmonic `WarpField`, `flow` (copper carried along with moving parts), `shift_copper` (any per-point move that keeps joints joined), radial `Pole` fields, and escape combing (`comb`, `clear_lane`). |
-| `topo` | Topological routing: rubber bands pulled taut through a triangulation of the copper. |
+| `grid` | The grid routers and everything that reworks routed copper: `route_open`, `route_negotiated`, `rip_up`, `prefanout`, `route_pairs`, `join_planes`, `shove_escape` (the plough), `push`, `nudge`, `pull_tight`, cleanup, `match_lengths`, `blame`. Also the grid itself (`ObstacleMap`, `RouteGrid`, `Profile`) and the `FieldSolver` trait with CPU and GPU solvers. |
+| `morph` | Moving copper smoothly: the harmonic `WarpField`, `flow` (copper carried along with moving parts), `shift_copper` (any per-point move that keeps joints joined), and `fine_pitch` (the parts whose escapes are hard). |
+| `topo` | Topological routing: rubber bands pulled taut through a triangulation of the copper. An experiment: the command does not link it, and it stays in the workspace for its own tests. |
 | `ultraroute` | The command: `parse` turns flags into `Args`, `run` drives the whole pipeline from text to text, `Live` streams the studio's frames. |
 | `web` | The same pipeline compiled to WebAssembly for the studio's Web Worker. |
 
@@ -75,9 +75,9 @@ the same units. `topo::Options::via_cost` and `rip_cost` are different: lengths 
 `Pcb` is the same frame in metres. Two places flip y:
 
 - The live stream (`Live`, the studio) draws y up, so its millimetres are `(x, -y)`.
-- The command's `--place REF=X,Y` and `--push X,Y,...` take y up too: `run` builds the point as
+- The command's `--place REF=X,Y` takes y up too: `run` builds the point as
   `Point::new(x * 1e6, -y * 1e6)`. To place a part at KiCad's (100, 97.5) you pass
-  `--place U1=100,-97.5`. `--push`'s direction `DX,DY` is flipped the same way.
+  `--place U1=100,-97.5`.
 - `--rip-region X,Y,R` and `--via-avoid X0,Y0,X1,Y1` do not flip: they are KiCad's frame.
 
 In library code there is no flip anywhere: build `Point`s in the board's frame.
@@ -127,7 +127,7 @@ for id in ids_of_unlocked_tracks_and_vias {
 }
 ```
 
-**Soft copper.** The grid's stages differ in what they may touch. `rip_up`, `chase`,
+**Soft copper.** The grid's stages differ in what they may touch. `rip_up`,
 `pull_tight`, `drop_duplicates`, `prune_dangling` and `match_lengths` work only on the ids in
 `soft`. `push`, `nudge`, `shove_escape`, `rip_broken`, `morph::flow` and `morph::shift_copper`
 move or rip any unlocked track or via, file copper included, and add what they move to `soft`.
@@ -249,18 +249,13 @@ than `route_open` alone, which is then left to finish. `trials` sees each round'
 `NegotiationStats`: `connections`, `rounds`, `conflicted`, `committed`, `unroutable`, `vias`,
 `laid`.
 
-### rip_up and chase
+### rip_up
 
 `rip_up(board, solver, &RipOptions, soft, watch) -> RipStats` tries each open connection
 through the router's own copper at a price (`rip_cost`, default 400), rips what the new path
 meets, routes what that opened, and keeps the board only if fewer connections are open.
 Rounds repeat while any closes. `RipOptions`: `cell` 50,000, `via_cost` 80, `rip_cost` 400,
 `reroute_seconds` 10 (per attempt), `max_seconds`, `pours_block`, `cancel`, `log`.
-
-`chase(board, solver, &ChaseOptions, soft, watch) -> ChaseStats` is rip-up that chains: what
-one link rips is laid the same way and may rip in turn, never undoing an earlier link.
-`ChaseOptions`: `rip_cost` 400, `chain_cost` 3,000 (crossing the chain's own new copper),
-`links` 24, plus the usual.
 
 ### prefanout, planes and pairs
 
@@ -317,7 +312,8 @@ moves are offered.
 ## topo: rubber bands
 
 `topo::route_topological(board, &topo::Options, watch) -> topo::Stats` routes open connections
-as taut wires through a triangulation of the copper, with its own rip-up.
+as taut wires through a triangulation of the copper, with its own rip-up. The command no longer
+runs it: depend on the `topo` crate yourself to use it.
 `route_topological_with_soft(board, &options, soft, watch)` may also rip earlier grid copper in
 `soft`. `topo::Options`: `sample` 100,000 nm (outline sample spacing; keep it below twice the
 narrowest clearance reach), `via_cost` 2,000,000 nm, `max_expansions` 400,000, `orders` 1,
@@ -364,35 +360,11 @@ it is zero; elsewhere it solves Laplace's equation, so it is as smooth as a fiel
 places can be. Shapes claim cells before hulls do, and earlier inclusions before later.
 `may_move(bbox)` says whether anything in a box would move by a nanometre or more.
 
-### Poles: repulsors and attractors on copper
-
-`morph::Pole { center, strength, radius }` is a radial field acting on copper alone; parts do
-not move. At distance `d` a point moves `2 * strength * (d/r) / (1 + d²/r²)` away from the
-centre: nothing at the centre, `strength` at one `radius` out (the peak), falling as `1/d`
-beyond. Positive `strength` repels, negative attracts; because the move goes to zero at the
-centre, an attractor never pulls a point past it. Both are nanometres.
-
-- `poles_at(&poles, p) -> (dx, dy)` sums several poles. A repulsor and an attractor side by
-  side make a drift from one to the other; ring a region with repulsors to clear it.
-- `shift_poles(board, soft, &poles, piece) -> (moved, spans)` moves all unlocked copper one
-  step by them.
-
-The far field is long: a 0.15 mm pole moves copper millimetres away by a little, so most of a
-board's copper is rewritten. Copper pushed into something breaks a rule; rip it with
-`grid::rip_broken(board, soft, pours_block)` and route again. The example does exactly this,
-and undoes the move when it leaves more open.
-
 ### push: a field that moves parts
 
-`grid::push(board, &Field, &PushOptions, soft, watch) -> PushStats` moves every unlocked part by
-a field and lets the copper flow with it.
-
-`grid::Field { center, outward, vector, radius, decay }`, all lengths nanometres. With
-`w = (1 + d²/radius²)^(-decay/2)`, a point `d` from the centre moves `vector * w` plus
-`2 * outward * (d/radius) * w` straight away from the centre. With `decay` 2 a point one radius
-out moves exactly `outward`, and the field falls as `1/d` far out; a larger `decay` keeps it
-local. Positive `outward` is a repulsor, negative an attractor, `vector` a uniform drift that
-fades with the same `w`. `field.at(p)` evaluates it.
+`grid::push(board, &field, &PushOptions, soft, watch) -> PushStats` moves every unlocked part by
+a field and lets the copper flow with it. The field is any `Fn(Point) -> (f64, f64)`: a point's
+move in nanometres.
 
 Each step (`steps`, default 20) moves each part by the field at its pads' centre divided by the
 steps, trying a full, half and quarter step and keeping the first that leaves its pads clear of
@@ -405,17 +377,17 @@ what the flow pressed into something. Route again after: the command runs `route
 move), `held_back`, `flowed`, `ripped`, `removed_spans`. `push_watch` reports each `PushStep`.
 
 The field moves parts, not copper. Copper only moves because parts did: a push with no unlocked
-part in reach changes nothing. To move copper by a field directly, use poles or `shift_copper`.
-Moved parts must be written back (see the last section).
-
-The command's `--push X,Y,RADIUS,OUTWARD[,DX,DY]` (mm, y up), `--push-steps N` and
-`--push-decay D` (default 2) run one push after rip-up.
+part in reach changes nothing. To move copper by a field directly, use `shift_copper`; copper it
+pushes into something breaks a rule, so rip it with `grid::rip_broken(board, soft, pours_block)`
+and route again. The example does exactly this, and undoes the move when it leaves more open.
+Moved parts must be written back (see the last section). The command pushes only as `--nudge`
+does, one part at a time.
 
 ### nudge: small part moves, judged
 
 `grid::nudge(board, solver, &NudgeOptions, soft, watch) -> NudgeStats` tries moving parts near
-each open connection. Each try is a one-step `push` of one part (`Field` with `outward` 0,
-`vector` the step, `radius` the courtyard's half-diagonal plus 0.5 mm), legal only if the part's
+each open connection. Each try is a one-step `push` of one part (the step at the part's centre,
+fading as `1 / (1 + d²/r²)`, `r` the courtyard's half-diagonal plus 0.5 mm), legal only if the part's
 pads keep every rule and its courtyard meets no other; what it ripped is routed again, and the
 move is kept only if fewer connections are open. `blame` suggests moves first.
 
@@ -430,53 +402,39 @@ airline a courtyard must come), `parts_per_connection` 6, `reroute_seconds` 5, `
 `grid::shove_escape(board, solver, &ShoveOptions, soft, watch) -> ShoveStats` frees connections
 trapped at fine-pitch pads. For each open connection with an end on one of `parts` (every open
 connection when `None`), it finds the cheapest path with other nets' movable copper passable at a
-price (`soft_cost` 30 near it, `cross_cost` 400 on it), then moves that copper off the path.
-Copper crossing the path, and vias on it, are ripped. The trapped connection is routed first,
-then everything opened, and the try is kept only if fewer connections are open (or as many, with
-`accept_ties`). A round that leaves it trapped is followed by another along the new path, up to
-`rounds`, the later ones laying the path outright.
+price (`soft_cost` 30 near it, `cross_cost` 400 on it), then clears that copper off the path.
+The trapped connection is routed first, then everything opened, and the try is kept only if
+fewer connections are open (or as many, with `accept_ties`). A round that leaves it trapped is
+followed by another along the new path, up to `rounds`, laying the path outright.
 
-`Plough` picks how the copper in the way moves. `R` is the clearance a net's copper needs from
-the path (the path's half width or via radius, the two nets' clearance, the net's widest piece
-and `margin`); `reach` is how far from the path anything moves.
+`Plough` picks how the copper in the way is cleared.
 
-| `Plough` | move |
+| `Plough` | clearing |
 |---|---|
-| `Warp` (default) | Per layer, `plough_fields` builds a `WarpField` (60 µm cells): strips either side of the path move `R` away from it, pads, vias, keepouts, locked copper and kept pours hold still, harmonic between, zero at the reach. Copper squeezed against a pad moves only as far as there is room. |
-| `Linear` | Straight away from the path by `R (1 - d/W)`, `W = max(reach, 2R)`. Blind to what stays put, so it can press copper into pads. |
-| `Gentle` | The warp plough in `steps` small steps, routing after each; a net a step breaks goes back. Nothing is ripped until the steps run out. |
-| `Dipole` | As `Gentle`, but each step moves copper straight away from the trapped pad's centre by `R / steps * exp(-3d / reach)`, out to the reach. Despite the name it is one repulsor at the pad. |
-| `Rip` | No move: the path is laid outright, ripping exactly what its pieces would break a rule against. |
-| `Region` | No move: every other net's movable copper within the reach of the path is ripped, and the trapped connection and all it opened negotiate together, the trapped net's congestion at half price. |
+| `Region` (default) | Every other net's movable copper within the reach of where the path is pinched is ripped, and the trapped connection and all it opened negotiate together, the trapped net's congestion at half price. |
+| `Rip` | The path is laid outright, ripping exactly what its pieces would break a rule against. |
 
-`ShoveOptions`: `cell` 50,000, `via_cost` 80, `rounds` 4, `plough` `Warp`, `reach` 2,000,000
-nm, `reaches` (per-pad reach overrides), `steps` 8, `margin` 50,000 nm, `soft_cost` 30,
-`cross_cost` 400, `cascade` 0 (connections a try knocked open that are ploughed in turn),
-`parts` None, `reroute_seconds` 20, `repair_seconds` 10, `seed` 0, `accept_ties` false,
-`max_seconds`, `pours_block`, `cancel`, `log`. `ShoveStats` has a `ShoveTry` per connection
-(rounds, `routed`, `kept`, open before and after) and `removed_spans`. `shove_escape_steps`
-also reports each gentle or dipole step.
+Where a round cannot lay the path, copper crossing it, and vias on it, are ripped, and the rest
+moves straight away from it by `R (1 - d/W)`, `W = max(reach, 2R)`, with `morph::shift_copper`:
+`R` is the clearance a net's copper needs from the path (the path's half width or via radius, the
+two nets' clearance, the net's widest piece and `margin`).
+
+`ShoveOptions`: `cell` 50,000, `via_cost` 80, `rounds` 4, `plough` `Region`, `reach` 2,000,000
+nm, `reaches` and `net_reaches` (per-pad and per-net reach overrides), `margin` 50,000 nm,
+`soft_cost` 30, `cross_cost` 400, `cascade` 0 (connections a try knocked open that are ploughed
+in turn), `parts` None, `reroute_seconds` 20, `repair_seconds` 10, `seed` 0, `accept_ties`
+false, `deadline`, `pours_block`, `log`. `ShoveStats` has a `ShoveTry` per connection (rounds,
+`routed`, `kept`, open before and after) and `removed_spans`.
 
 The command runs passes in a new order each (`--shove-passes`, `--shove-patience`) and, for
 `Region`, doubles a failed pad's reach in `reaches` each pass up to 4 mm. That loop lives in
 `run`'s `shove_pass`, not in the library.
 
-### Combing escapes
+### Fine-pitch parts
 
-- `morph::fine_pitch(&board, pitch) -> Vec<usize>`: parts with four or more pads whose closest
-  pads of different nets sit within `pitch` (the command uses 0.5 mm).
-- `morph::edges(&board, footprint)` finds the package's sides and each signal pad's lane (the
-  line straight out from it).
-- `morph::comb(board, footprint, &EscapeOptions, soft) -> EscapeStats` draws each net's copper
-  in the fanout zone sideways onto its own pad's lane, fully near the pads and fading out, and
-  pushes copper of nets with no pad on that side out past the zone.
-- `morph::clear_lane(board, footprint, pad, &EscapeOptions, soft) -> (moved, spans)` slides
-  other nets' copper out of one pad's lane, half a pitch each side.
-
-`EscapeOptions`: `zone` 1,000,000 nm (depth of the fanout zone), `full` 0.6 (share of the zone
-pulled fully onto lanes), `clear` 150,000 nm (how far past the zone foreign copper goes). Follow
-both with `rip_broken` and routing. The command's `--escape` and `--clear-lanes` do, and undo
-the change when it frees nothing.
+`morph::fine_pitch(&board, pitch) -> Vec<usize>`: parts with four or more pads whose closest
+pads of different nets on a shared layer sit within `pitch` (the command uses 0.5 mm). Pre-fanout
+escapes them, and the rip plough tries only their trapped connections.
 
 ## Writing back to KiCad
 
@@ -521,27 +479,20 @@ it runs `route_open` and the cleanup only; each flag adds a stage. In order:
    locked ones too); `--planes` calls `set_planes`. Then the solver (`--gpu`), `--adopt`,
    `--via-avoid` boxes and `--rip-region` discs (copper inside ripped).
 2. **`--prefanout`**: `prefanout` on `morph::fine_pitch(&board, 500_000)`. Escapes are held apart
-   from `laid` unless `--prefanout-soft`.
+   from `laid` until rip-up is done, and those no route used are taken out.
 3. **Planes**: `join_planes` when any layer is a plane.
 4. **`--diff-pairs`**: `route_pairs`, held apart until cleanup.
-5. **Routing**, once, or `--restart N` more times from the same start with the nets left open
-   promoted, keeping the best board:
-   `--topo` (`route_topological`, 40% of the time), `--topo-first`, `--first` (priority nets,
-   by `route_open` tier by tier or, with `--first-negotiate`, negotiated among themselves),
+5. **Routing**: the nets `--regions` gives a length limit, by `route_open`, first;
    `--negotiate` (`route_negotiated`, half the timeout), `route_open` to finish (always),
-   `prune_closed_escapes`, `--rip-up` (`rip_up`), `--chase` (`chase`), the escapes join `laid`,
-   `--push` (`push`, then `route_open`), `--escape` (`comb`, `rip_broken`, `route_open`,
-   `rip_up`; undone if no better), `--clear-lanes` (`clear_lane` per trapped pad, same
-   pattern).
-6. **Rescue**: `--shove` (`shove_escape` passes) unless `--shove-late`; `--topo-trapped` or
-   `--topo-trapped-rip` on what is still open; `--nudge` (`nudge`); `--shove-late`.
+   `prune_closed_escapes`, `--rip-up` (`rip_up`), the escapes join `laid`.
+6. **Rescue**: `--shove` (`shove_escape` passes); `--nudge` (`nudge`).
 7. **Finish**: `--tighten` (`pull_tight`); pair copper joins `laid`; `drop_duplicates`;
    `prune_dangling`; with `--diff-pairs`, `match_lengths`; `--blame` prints what blocks each open
    connection.
 8. **Write**: moved parts' `(at ...)`, `edits`, `apply`.
 
 The time limit (`--timeout`) is shared out: negotiation gets half, the stages after it what is
-left, and `--shove-late` keeps `--shove-seconds` (30) back from nudging for itself. A library pipeline sets each stage's `max_seconds`
+left. A library pipeline sets each stage's `max_seconds`
 itself. Two habits from `run` are worth copying. Hold copper you do not want ripped (escapes,
 pairs) out of `soft` until the end. And try any move that might make things worse on a clone:
 

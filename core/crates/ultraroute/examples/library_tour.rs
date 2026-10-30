@@ -72,17 +72,24 @@ fn main() {
     let r = grid::rip_up(&mut board, &mut solver, &grid::RipOptions { deadline: grid::Deadline::max_seconds(Some(seconds * 0.3)), ..Default::default() }, &mut laid, &mut |_| {});
     println!("rip_up: {} tries, {} kept, {} open", r.attempts, r.kept, open(&board));
 
-    // 4. Morph. A repulsor pole at the middle of the routed copper pushes every unlocked track
-    // and via away from it: 0.15 mm at one radius (1 mm) out, nothing at the centre, fading
-    // beyond. Pads and locked copper hold still and joints stay joined. Copper the move pushed
+    // 4. Morph. A repulsor at the middle of the routed copper pushes every unlocked track and via
+    // away from it, a point at a time (`shift_copper`): 0.15 mm at one radius (1 mm) out, nothing
+    // at the centre, fading beyond. Pads and locked copper hold still and joints stay joined. Copper the move pushed
     // into something is ripped and routed again, and the whole move is undone if it leaves more
     // open than before: the snapshot pattern every trial move in the CLI uses.
     let before = open(&board);
     let snapshot = (board.clone(), laid.clone(), removed.len());
     let centre = laid.iter().filter_map(|id| board.bbox(*id)).reduce(BBox::union).map(|b| Point::new((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2));
     if let Some(centre) = centre {
-        let pole = morph::Pole { center: centre, strength: 150_000.0, radius: 1_000_000.0 };
-        let (moved, spans) = morph::shift_poles(&mut board, &mut laid, &[pole], 150_000.0);
+        let (strength, radius) = (150_000.0, 1_000_000.0);
+        let away = |p: Point, _net: u32, _layer: Option<usize>| {
+            let (dx, dy) = ((p.x - centre.x) as f64, (p.y - centre.y) as f64);
+            let d = dx.hypot(dy).max(1.0);
+            let u = 2.0 * strength * (d / radius) / (1.0 + (d / radius).powi(2));
+            let by = Point::new((u * dx / d).round() as i64, (u * dy / d).round() as i64);
+            (by != Point::new(0, 0)).then_some((by, false))
+        };
+        let (_, moved, spans) = morph::shift_copper(&mut board, &mut laid, 150_000.0, &away);
         removed.extend(spans);
         let (ripped, spans) = grid::rip_broken(&mut board, &mut laid, false);
         removed.extend(spans);

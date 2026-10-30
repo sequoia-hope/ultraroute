@@ -3,7 +3,7 @@
 
 use crate::grid::RouteGrid;
 use crate::route::FieldSolver;
-use crate::search::{trace_back, GridPath, UNREACHED};
+use crate::search::{trace_back, walled_in, GridPath, UNREACHED};
 
 /// Relaxation sweeps per submission; the changed flag is read back between submissions.
 const DISPATCHES_PER_BATCH: u32 = 32;
@@ -94,6 +94,24 @@ pub(crate) fn read_back(
         .unwrap_or_default();
     staging.unmap();
     bytes
+}
+
+/// Whether no source can reach the targets, by `route_astar`'s own check ([`walled_in`]): they
+/// sit in a small pocket of free cells, and there is no field to relax for them.
+fn pocket_trapped(grid: &RouteGrid, sources: &[usize], targets: &[usize]) -> bool {
+    use std::collections::HashSet;
+    let src: HashSet<usize> = sources.iter().copied().filter(|&s| !grid.blocked[s]).collect();
+    let mut queue: Vec<usize> = targets.iter().copied().filter(|&t| !grid.blocked[t]).collect();
+    queue.sort_unstable();
+    queue.dedup();
+    if queue.is_empty() {
+        return true;
+    }
+    if queue.iter().any(|t| src.contains(t)) {
+        return false;
+    }
+    let mut seen: HashSet<usize> = queue.iter().copied().collect();
+    walled_in(grid, &mut queue, &mut |n| if src.contains(&n) { None } else { Some(seen.insert(n)) })
 }
 
 fn as_bytes(words: &[u32]) -> &[u8] {
@@ -295,58 +313,6 @@ impl FieldSolver for GpuSolver {
 }
 
 impl GpuSolver {
-    fn pocket_trapped(grid: &RouteGrid, sources: &[usize], targets: &[usize]) -> bool {
-        use std::collections::HashSet;
-        const LIMIT: usize = 1024;
-        let cells = grid.cell_count();
-        let src_set: HashSet<usize> = sources.iter().copied().filter(|&s| !grid.blocked[s]).collect();
-        let mut q: Vec<usize> = targets.iter().copied().filter(|&t| !grid.blocked[t]).collect();
-        q.sort_unstable();
-        q.dedup();
-        if q.is_empty() {
-            return true;
-        }
-        if q.len() >= LIMIT || q.iter().any(|t| src_set.contains(t)) {
-            return false;
-        }
-        let mut visited: HashSet<usize> = q.iter().copied().collect();
-        let mut head = 0;
-        while head < q.len() && q.len() < LIMIT {
-            let index = q[head];
-            head += 1;
-            let layer = index / cells;
-            let cell = index % cells;
-            let (i, j) = ((cell % grid.nx) as i32, (cell / grid.nx) as i32);
-            for (di, dj, _) in crate::search::NEIGHBOURS {
-                let (ni, nj) = (i + di, j + dj);
-                if ni < 0 || nj < 0 || ni >= grid.nx as i32 || nj >= grid.ny as i32 {
-                    continue;
-                }
-                let next = grid.index(layer, ni as usize, nj as usize);
-                if !grid.blocked[next] && visited.insert(next) {
-                    if src_set.contains(&next) {
-                        return false;
-                    }
-                    q.push(next);
-                }
-            }
-            if grid.via.is_some() && !grid.via_blocked[cell] {
-                for other in 0..grid.layers.len() {
-                    if other != layer {
-                        let next = other * cells + cell;
-                        if !grid.blocked[next] && visited.insert(next) {
-                            if src_set.contains(&next) {
-                                return false;
-                            }
-                            q.push(next);
-                        }
-                    }
-                }
-            }
-        }
-        q.len() < LIMIT
-    }
-
     /// Relaxes the batch's fields until nothing changes: false when the grids' deadline cut it short.
     fn run_relax(&mut self, jobs: &[(&RouteGrid, &[usize], &[usize])], via_cost: u32, with_targets: bool) -> bool {
         let (first, _, _) = jobs[0];
@@ -413,7 +379,7 @@ impl GpuSolver {
             }
             if !has_source {
                 init_state[1 + f_idx] = 0;
-            } else if with_targets && init_state[1 + f_idx] != 0 && Self::pocket_trapped(grid, sources, targets) {
+            } else if with_targets && init_state[1 + f_idx] != 0 && pocket_trapped(grid, sources, targets) {
                 init_state[1 + f_idx] = 0;
                 for &s in sources {
                     if !grid.blocked[s] {
