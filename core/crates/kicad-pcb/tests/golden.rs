@@ -392,3 +392,18 @@ fn footprints_with_no_id_are_read_with_one_of_their_place() {
     assert_ne!(ids[0], ids[1]);
     assert_eq!(ids, parse_kicad_pcb(text).unwrap().footprints.iter().map(|f| f.uuid.as_str()).collect::<Vec<_>>());
 }
+
+#[test]
+fn a_pads_zero_clearance_and_margin_are_its_footprints() {
+    let text = "(kicad_pcb (version 20240108) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal))
+      (net 0 \"\") (net 1 \"A\")
+      (footprint \"X:Y\" (layer \"F.Cu\") (uuid \"u\") (at 0 0) (clearance 0.3) (solder_mask_margin 0.1)
+        (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\" \"F.Mask\") (net 1 \"A\") (clearance 0) (solder_mask_margin 0))
+        (pad \"2\" smd rect (at 2 0) (size 1 1) (layers \"F.Cu\" \"F.Mask\") (net 1 \"A\") (clearance 0.4) (solder_mask_margin 0.05))))";
+    let (_, copper) = parse_board(text).unwrap();
+    let near = |a: Option<f64>, b: f64| assert!(a.is_some_and(|a| (a - b).abs() < 1e-12), "{a:?} vs {b}");
+    near(copper.pads[0].clearance, 0.3e-3);
+    near(copper.pads[0].mask_margin, 0.1e-3);
+    near(copper.pads[1].clearance, 0.4e-3);
+    near(copper.pads[1].mask_margin, 0.05e-3);
+}

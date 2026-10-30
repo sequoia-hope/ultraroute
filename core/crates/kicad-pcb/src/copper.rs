@@ -353,12 +353,15 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
                         }
                     }
                 }
-                let margin = child.find("solder_mask_margin").and_then(|m| m.number_arg(0, "solder_mask_margin").ok());
-                let clearance = child.find("clearance").and_then(|m| m.number_arg(0, "clearance").ok());
+                // A local clearance or mask margin of zero is none set, as KiCad takes it: the pad
+                // has its footprint's, the footprint the board's or its net class's.
+                let local = |n: &Node, name: &str| n.find(name).and_then(|m| m.number_arg(0, name).ok()).filter(|v| *v != 0.0);
+                let margin = local(child, "solder_mask_margin");
+                let clearance = local(child, "clearance");
                 for (index, pad) in child.find_all("pad").enumerate() {
                     let mut pad_copper = read_pad(pad, footprint, index, fp)?;
-                    pad_copper.mask_margin = pad.find("solder_mask_margin").and_then(|m| m.number_arg(0, "solder_mask_margin").ok()).or(margin).map(|mm| mm * MM);
-                    pad_copper.clearance = pad.find("clearance").and_then(|m| m.number_arg(0, "clearance").ok()).or(clearance).map(|mm| mm * MM).filter(|c| *c > 0.0);
+                    pad_copper.mask_margin = local(pad, "solder_mask_margin").or(margin).map(|mm| mm * MM);
+                    pad_copper.clearance = local(pad, "clearance").or(clearance).map(|mm| mm * MM).filter(|c| *c > 0.0);
                     copper.pads.push(pad_copper);
                 }
                 for zone in child.find_all("zone") {
