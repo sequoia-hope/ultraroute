@@ -115,8 +115,11 @@ way Stage 9 did; steps 1-3 also add the `~/pcb` rule files above as parser tests
 4. **Done (2026-10-31): zone connection and thermals.** No-connection pads stay unjoined;
    relief pads keep `min_resolved_spokes` spokes free of new copper (above). Left: a track
    into the pour for a pad short of room.
-5. **Length and via-count limits.** Done: reported after routing. Left: steering (a net over
-   its length rips and reroutes with a length cost), and `diff_pair_uncoupled`.
+5. **Length and via-count limits.** Done: reported after routing; the nets a rule limits route
+   first, one at a time, while their shortest ways are free; a net a rule allows no vias
+   (`via_count (max 0)`) gets none, in the grid and in the checker; a length limit shorter than
+   the net's pads lie apart is warned of before routing (2026-10-31). Left: steering (a net
+   over its length rips and reroutes with a length cost), and `diff_pair_uncoupled`.
 6. **Pad geometry.** Done: clearance overrides judged as KiCad does; warnings for the rest. Left:
    padstacks per layer, `remove_unused_layers`, curves in custom pads and on copper.
 7. **Writer.** Done: tuned tracks held, teardrops warned of; `--arcs MM` rounds the router's

@@ -649,6 +649,10 @@ impl ObstacleMap {
         if board.custom.has("disallow") {
             self.stamp_disallowed(board);
         }
+        // A net a custom rule allows no vias gets none.
+        if self.profile.net.is_some_and(|n| board.no_vias(n)) {
+            self.via_owner.iter_mut().for_each(|c| *c = SEVERAL);
+        }
     }
 
     /// Where a custom rule's `disallow` forbids this map's tracks or vias: a whole layer, or a

@@ -309,6 +309,10 @@ fn item_checks(
             found.push(Violation { rule: Rule::Keepout, a: id, b: None, layer: Some(layer), gap: 0.0, required: 0 });
         }
     }
+    // A custom rule may allow a net no vias (`via_count (max 0)`).
+    if item.kind == Kind::Via && board.no_vias(item.net) {
+        found.push(Violation { rule: Rule::Keepout, a: id, b: None, layer: None, gap: 0.0, required: 0 });
+    }
     // A track or via of another net bared in an opening drawn in the mask would bridge there.
     if matches!(item.kind, Kind::Track | Kind::Via) {
         for (shape, layers, net) in &board.mask_areas {
