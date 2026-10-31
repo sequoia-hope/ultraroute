@@ -791,7 +791,34 @@ impl Board {
         board.reserve_spokes(pcb, copper, &pad_items);
         let short = board.lengths_out_of_reach();
         board.warnings.extend(short);
+        let shorted = board.locked_copper_on_pads();
+        board.warnings.extend(shorted);
         board
+    }
+
+    /// A line for each locked track or via lying on a pad of another net (the copper a part's
+    /// fan-out left where the part stood before it was moved): the board is shorted before
+    /// routing, and no route mends it.
+    fn locked_copper_on_pads(&self) -> Vec<String> {
+        let mut hits: Vec<(u32, u32, String)> = Vec::new();
+        for (_, it) in self.items().filter(|(_, it)| it.locked && it.net != 0 && matches!(it.kind, Kind::Track | Kind::Via)) {
+            for layer in (0..self.layers.len()).filter(|&l| it.on(l)) {
+                for o in self.near(layer, it.shape.bbox()).into_iter().filter_map(|o| self.item(o)) {
+                    let Kind::Pad { footprint, number, .. } = &o.kind else { continue };
+                    if o.net != 0 && o.net != it.net && o.on(layer) && it.shape.gap(&o.shape) == 0.0 {
+                        hits.push((it.net, o.net, format!("{}-{number}", self.footprints[*footprint].reference)));
+                    }
+                }
+            }
+        }
+        hits.sort();
+        hits.dedup();
+        let count = hits.len();
+        hits.into_iter()
+            .take(10)
+            .map(|(mine, theirs, pad)| format!("locked copper of {} lies on {pad} of {}: shorted before routing; move it with its part, or unlock it for --strip to take up", self.net_name(mine), self.net_name(theirs)))
+            .chain((count > 10).then(|| format!("locked copper lies on {} more pads of other nets", count - 10)))
+            .collect()
     }
 
     /// Inner copper layers that are planes in all but name: one net's pours cover at least

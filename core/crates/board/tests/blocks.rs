@@ -96,3 +96,26 @@ fn a_kept_pour_joins_its_net_where_refilled_pours_join_nothing() {
     let open = |b: &Board| connectivity_without_pours(b).airlines.iter().filter(|a| b.item(a.from_item).is_some_and(|it| it.net == net)).count();
     assert!(open(&b) <= open(&plain));
 }
+
+#[test]
+fn locked_copper_left_on_another_nets_pad_is_warned_of() {
+    let text = |locked: &str| {
+        format!(
+            "(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))
+             (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (44 \"Edge.Cuts\" user))
+             (net 0 \"\") (net 1 \"A\") (net 2 \"B\")
+             (gr_rect (start 0 0) (end 30 30) (layer \"Edge.Cuts\") (width 0.1))
+             (footprint \"R\" (layer \"F.Cu\") (at 10 10) (property \"Reference\" \"R1\")
+               (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\") (net 1 \"A\")))
+             (via (at {locked}) (size 0.6) (drill 0.3) (layers \"F.Cu\" \"B.Cu\") (locked yes) (net 2)))"
+        )
+    };
+    let load = |at: &str| {
+        let (pcb, copper) = kicad_pcb::parse_board(&text(at)).unwrap();
+        board::Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap())
+    };
+    let on = load("10 10");
+    assert!(on.warnings.iter().any(|w| w.starts_with("locked copper of B lies on R1-1 of A")), "{:?}", on.warnings);
+    let clear = load("20 20");
+    assert!(!clear.warnings.iter().any(|w| w.starts_with("locked copper")), "{:?}", clear.warnings);
+}
