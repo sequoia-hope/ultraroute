@@ -3,6 +3,7 @@
   import { Studio } from './core/studio_core.js';
   import Board from './lib/Board.svelte';
   import { DEFAULT_RULES_NOTE, KICAD_DEFAULT_PRO, readBoardFiles } from './lib/open-board.js';
+  import { Conflict, fromLocation } from './lib/store.js';
 
   const studio = new Studio();
   studio.set_show_pours(true);
@@ -28,6 +29,19 @@
   // every build, and the result is downloaded.
   let fileBoard = $state(null);
   let fileNote = $state('');
+  // A Boardroom project's board read from its store (?store=…&board=…&variant=…), when that is
+  // Boardroom's workspace in this browser, over the published project (its Pages site). It routes
+  // in this tab as a file board does, and Save writes the routed board back into the project, so
+  // a reload, Boardroom and Composer all see it. The store on this machine is the server's, and
+  // the studio opens such a project by path (?project=) as before.
+  const opened = fromLocation(location);
+  const store = opened?.kind === 'browser' ? opened : null;
+  // The board as last read from or saved to the store; Save is offered while the routed one differs.
+  let savedText = $state('');
+  // The project's board changed under this tab's unsaved route: Reload, or Save as a copy.
+  let storeConflict = $state('');
+  // Where Save as a copy put this tab's route, while the conflict stands.
+  let copiedTo = $state('');
   let dragging = $state(false);
   let fileInput;
   let argsText = $state('');
@@ -288,6 +302,42 @@
       message = `couldn't open the board: ${e.message}`;
       return;
     }
+    showBoard(opened);
+  }
+
+  // The project's board from the store: its .kicad_pcb, and the .kicad_pro and .kicad_dru beside it.
+  async function openFromStore(board, variant) {
+    const dir = `hw/${board}/${variant}/`;
+    const path = `${dir}${board}.kicad_pcb`;
+    let read, pro, dru;
+    try {
+      [read, pro, dru] = await Promise.all([store.read(path), store.text(`${dir}${board}.kicad_pro`), store.text(`${dir}${board}.kicad_dru`)]);
+    } catch (e) {
+      message = `couldn't open ${board} / ${variant}: ${e.message}`;
+      return;
+    }
+    if (!read) {
+      message = `couldn't open ${board} / ${variant}: the project has no ${path}`;
+      return;
+    }
+    const pcb = new TextDecoder().decode(read.bytes);
+    savedText = pcb;
+    storeConflict = '';
+    copiedTo = '';
+    showBoard({
+      name: `${board}/${variant}`,
+      pcbName: `${board}.kicad_pcb`,
+      proName: pro == null ? null : `${board}.kicad_pro`,
+      druName: dru == null ? null : `${board}.kicad_dru`,
+      pcb,
+      pro,
+      dru: dru ?? '',
+      notes: [],
+      store: { board, variant, path, rev: read.rev },
+    });
+  }
+
+  function showBoard(opened) {
     if (running) stop();
     leaveReplay();
     fileBoard = opened;
@@ -302,6 +352,7 @@
     routedText = '';
     saveable = false;
     saveNote = '';
+    if (!opened.store) storeConflict = '';
     const notes = [...opened.notes];
     if (!opened.pro) notes.push(`no .kicad_pro was given, so it routes with ${DEFAULT_RULES_NOTE}`);
     if (opened.pro && !opened.dru) notes.push('no .kicad_dru was given, so no custom rules apply');
@@ -321,6 +372,85 @@
     event.preventDefault();
     event.dataTransfer.dropEffect = 'copy';
     dragging = true;
+  }
+
+  // The routed board over the project's, if that is still the board this tab read: otherwise it
+  // changed meanwhile (Composer saved a placement, another window routed) and the save is
+  // refused, never a silent overwrite. With the board, the run's report and the studio's entry
+  // in design/status.json, as the studio server writes them for a project on disk, from what a
+  // run in the tab knows.
+  async function saveToStore(asCopy = false) {
+    const s = fileBoard?.store;
+    if (!s || !routedText) return;
+    const text = routedText;
+    const open = status?.open;
+    let path = s.path;
+    if (asCopy) for (let n = 2; await store.read(path); n++) path = s.path.replace(/\.kicad_pcb$/, `-${n}.kicad_pcb`);
+    saveNote = 'Saving…';
+    message = '';
+    try {
+      const { rev } = await store.write(path, text, { app: 'route', message: `Routed ${s.board}${open != null ? `: ${open} open` : ''}`, base: asCopy ? null : s.rev });
+      if (asCopy) {
+        // A copy beside the board leaves the board's report and status entry alone.
+        copiedTo = path;
+        saveNote = `Saved ${path}, a copy, in this browser's copy of the project.`;
+        return;
+      }
+      fileBoard = { ...fileBoard, pcb: text, store: { ...s, rev } };
+      savedText = text;
+      storeConflict = '';
+      const at = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
+      const report = `route/${s.board}/report.json`;
+      await store.write(report, JSON.stringify({ board: s.board, variant: s.variant, pcb: path, ran: 'in the browser', at, summary: { opens: open ?? null } }, null, 1) + '\n', { app: 'route', message: `Run report for ${s.board}` });
+      // A run in the tab has no findings or router commit to give, so the published run's go; the
+      // board's connections stay what they were, and what is routed follows from its opens.
+      const statusNote = await recordInStatus(s.board, (entry) => ({
+        opens: open ?? null,
+        routed: entry.connections != null && open != null ? entry.connections - open : null,
+        findings: null,
+        failed: null,
+        router: null,
+        last_route: at,
+        saved: true,
+        report,
+        updated: at,
+      }));
+      saveNote = `Saved ${path}, in this browser's copy of the project.${statusNote}`;
+    } catch (e) {
+      saveNote = '';
+      if (e instanceof Conflict) storeConflict = `${s.path} changed since this tab read it.`;
+      else message = `couldn't save: ${e.message}`;
+    }
+  }
+
+  // The studio's entry for the board in design/status.json (apps.studio.<board>), merged with
+  // `fields(entry)` (a null removes one); the project may have no status file, and then there
+  // is nothing to tell.
+  async function recordInStatus(board, fields) {
+    for (let tries = 0; tries < 3; tries++) {
+      const read = await store.read('design/status.json');
+      if (!read) return '';
+      let st;
+      try {
+        st = JSON.parse(new TextDecoder().decode(read.bytes));
+      } catch (e) {
+        return ` design/status.json was not updated: ${e.message}`;
+      }
+      const entry = (((st.apps ??= {}).studio ??= {})[board] ??= {});
+      for (const [k, v] of Object.entries(fields(entry))) v == null ? delete entry[k] : (entry[k] = v);
+      try {
+        await store.write('design/status.json', `${JSON.stringify(st, null, 2)}\n`, { app: 'route', message: `Status: ${board} routed`, base: read.rev });
+        return '';
+      } catch (e) {
+        if (!(e instanceof Conflict)) return ` design/status.json was not updated: ${e.message}`;
+      }
+    }
+    return ' design/status.json was not updated: it kept changing.';
+  }
+
+  function reloadFromStore() {
+    const s = fileBoard?.store;
+    if (s) openFromStore(s.board, s.variant);
   }
 
   function saveToProject() {
@@ -721,7 +851,20 @@
     const asked = new URLSearchParams(location.search);
     const first = jobs.find((j) => j.name === asked.get('job')) ?? jobs[0];
     if (first) chooseJob(first.name);
-    if (asked.get('project') && !STATIC && !LOCAL) await openProject(asked.get('project'), asked);
+    if (asked.get('project') && !STATIC && !LOCAL && !store) await openProject(asked.get('project'), asked);
+    if (store && asked.get('board')) {
+      await openFromStore(asked.get('board'), asked.get('variant') ?? 'a');
+      // Another app or window changed the board: show it, unless this tab has a route not saved.
+      store.watch(async ({ paths, app }) => {
+        const s = fileBoard?.store;
+        if (!s || !paths.includes(s.path)) return;
+        const now = await store.read(s.path);
+        // This tab's own save is heard too: by now the board it has is that revision.
+        if (!now || now.rev === fileBoard?.store?.rev) return;
+        if (running || (routedText && routedText !== savedText)) storeConflict = `${s.path} was changed${app ? ` in ${app}` : ''} since this tab read it.`;
+        else reloadFromStore();
+      });
+    }
     if (LOCAL) {
       router = 'core';
       compose();
@@ -737,7 +880,7 @@
       if (rec) openRecording(rec);
     } else if (LOCAL) {
       connected = true;
-      load();
+      if (!fileBoard) load();
     } else {
       connect();
     }
@@ -837,7 +980,7 @@
         value={fileBoard ? 'file:' : projectBoard ? boardKey(projectBoard) : jobName}
         onchange={(e) => chooseBoard(e.currentTarget.value)}
       >
-        {#if fileBoard}<option value="file:" disabled>{fileBoard.pcbName} (from your computer)</option>{/if}
+        {#if fileBoard}<option value="file:" disabled>{fileBoard.store ? `${fileBoard.store.board} / ${fileBoard.store.variant} (project ${store.project})` : `${fileBoard.pcbName} (from your computer)`}</option>{/if}
         {#if project}
           {#if !projectBoard && !jobName}<option value="" disabled>Choose a board</option>{/if}
           <optgroup label="Project {project.name}">
@@ -866,7 +1009,12 @@
         }}
       />
     </div>
-    {#if fileBoard}
+    {#if fileBoard?.store}
+      <p class="note">
+        {fileBoard.store.path}, from the project in this browser. It routes here in this tab; Save keeps the routed board in the
+        project, where Boardroom's History lists every save.
+      </p>
+    {:else if fileBoard}
       <p class="note">
         {fileBoard.pcbName}{fileBoard.proName ? ` with ${fileBoard.proName}` : ''}{fileBoard.druName ? ` and ${fileBoard.druName}` : ''},
         opened from your computer. It routes here in this tab and nothing is uploaded; download the result when it's done.
@@ -951,6 +1099,25 @@
     <button class="quiet" onclick={load} disabled={!canRoute}>Show the board as designed</button>
     {#if routedText && !running}
       <button class="quiet" onclick={downloadRouted}>Download the routed board (.kicad_pcb)</button>
+    {/if}
+    {#if fileBoard?.store}
+      <button
+        class="quiet"
+        onclick={() => saveToStore()}
+        disabled={!routedText || routedText === savedText || running || !!storeConflict}
+        title="Writes the routed board over {fileBoard.store.path} in this browser's copy of the project, unless it changed since this tab read it"
+      >Save to project ({fileBoard.pcbName})</button>
+      {#if storeConflict}
+        <p class="warn">
+          {storeConflict}
+          {copiedTo ? `This route is saved beside it as ${copiedTo}; Reload opens the project's board.` : 'Reload it (this route is dropped), or save this route beside it as a copy.'}
+        </p>
+        <div class="buttons">
+          <button onclick={reloadFromStore}>Reload</button>
+          {#if !copiedTo}<button onclick={() => saveToStore(true)} disabled={!routedText || running}>Save as a copy</button>{/if}
+        </div>
+      {/if}
+      {#if saveNote}<p class="muted small">{saveNote}</p>{/if}
     {/if}
     {#if projectBoard}
       <button
