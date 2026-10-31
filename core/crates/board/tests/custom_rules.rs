@@ -168,3 +168,27 @@ fn a_nets_length_and_vias_over_a_rules_maximum_are_reported() {
     track(&mut b, 1, 1, 20.0);
     assert_eq!(b.rule_limits().len(), 2, "net A has no limit");
 }
+
+#[test]
+fn a_net_a_rule_allows_no_vias_gets_none() {
+    let mut b = board("", "(version 1)\n(rule \"crystal\" (condition \"A.NetName == 'B'\") (constraint via_count (max 0)))");
+    assert!(b.no_vias(2) && !b.no_vias(1));
+    let via = |b: &mut Board, net: u32| b.insert(Item { kind: Kind::Via, net, layers: 3, shape: Shape::Capsule { a: Point::new(nm(10e-3), nm(5e-3)), b: Point::new(nm(10e-3), nm(5e-3)), r: nm(0.3e-3) }, hole: Some((Point::new(nm(10e-3), nm(5e-3)), nm(0.15e-3))), locked: false, span: None });
+    let v = via(&mut b, 2);
+    assert!(check_item(&b, v).iter().any(|v| v.rule == Rule::Keepout), "net B's via is refused");
+    b.discard(v);
+    let v = via(&mut b, 1);
+    assert!(check_item(&b, v).is_empty(), "net A's via stands");
+}
+
+#[test]
+fn a_length_limit_shorter_than_the_pads_lie_apart_is_warned_of() {
+    let pads = "(footprint \"R\" (layer \"F.Cu\") (at 10 15) (property \"Reference\" \"R1\")
+                  (pad \"1\" smd rect (at -2 0) (size 1 1) (layers \"F.Cu\") (net 2 \"B\"))
+                  (pad \"2\" smd rect (at 2 0) (size 1 1) (layers \"F.Cu\") (net 2 \"B\")))";
+    // The pads' edges are 3 mm apart.
+    let short = board(pads, "(version 1)\n(rule \"tight\" (condition \"A.NetName == 'B'\") (constraint length (max 2mm)))");
+    assert!(short.warnings.iter().any(|w| w.starts_with("length: B's pads lie 3.00 mm apart")), "{:?}", short.warnings);
+    let room = board(pads, "(version 1)\n(rule \"loose\" (condition \"A.NetName == 'B'\") (constraint length (max 4mm)))");
+    assert!(!room.warnings.iter().any(|w| w.starts_with("length:")), "{:?}", room.warnings);
+}
