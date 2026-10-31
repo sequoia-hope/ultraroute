@@ -443,7 +443,18 @@ impl Stage for Finishing {
         let s = grid::route_open(ctx.board, ctx.solver, &options, &mut |b| watch.frame(b));
         ctx.ledger.laid.extend(s.laid.iter().copied());
         ctx.failed("finishing", &s.failures);
-        let detail = json!({"routed": s.routed, "failed": s.failed, "no_terminal": s.no_terminal, "no_path": s.no_path, "refused": s.refused, "vias": s.vias});
+        for &(from, to, width) in &s.narrowed {
+            let net = ctx.board.item(from).map_or(0, |it| it.net);
+            let name = ctx.board.net_name(net).to_string();
+            let line = format!("{name} {} to {} runs {:.2} mm wide the whole way, its pins' width: no way at its own", grid::item_name(ctx.board, from), grid::item_name(ctx.board, to), width as f64 * 1e-6);
+            eprintln!("narrowed: {line}");
+            let refs = [from, to].iter().filter_map(|&id| match ctx.board.item(id).map(|it| &it.kind) {
+                Some(Kind::Pad { footprint, .. }) => Some(ctx.board.footprints[*footprint].reference.clone()),
+                _ => None,
+            }).collect();
+            ctx.stats.findings.push(Finding { severity: "warning", kind: "neck", message: line, refs, nets: vec![name], ends: None });
+        }
+        let detail = json!({"routed": s.routed, "failed": s.failed, "no_terminal": s.no_terminal, "no_path": s.no_path, "refused": s.refused, "vias": s.vias, "narrowed": s.narrowed.len()});
         ctx.ledger.routed = s;
         detail
     }

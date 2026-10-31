@@ -105,7 +105,7 @@ impl Profile {
 }
 
 /// Half the shorter side of a pad's bounding box: half the width of the pin a leg enters.
-fn pad_half_side(pad: &board::Item) -> Nm {
+pub(crate) fn pad_half_side(pad: &board::Item) -> Nm {
     let b = pad.shape.bbox();
     (b.max.x - b.min.x).min(b.max.y - b.min.y) / 2
 }
