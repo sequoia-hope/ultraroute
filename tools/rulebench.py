@@ -5,7 +5,8 @@ as PCBench is for routing (PCBench's boards have no rule files).
 
     rulebench.py add NAME PATH/BOARD.kicad_pcb   copy a board, its project and rule file into the
                                                  lab, strip it bare and record KiCad's verdict
-    rulebench.py run RUN [--timeout S]           route every board (wrap in reserve)
+    rulebench.py run RUN [--timeout S] [--args A] route every board (wrap in reserve), with the
+                                                 router's flags A added (`--args "--arcs 0.5"`)
     rulebench.py compare A B                     board by board: open connections, vias, and new
                                                  KiCad errors (those the bare board did not have)
 
@@ -53,7 +54,7 @@ def add(a):
     print(f"{a.name}: bare board has {u} unconnected, errors {e}")
 
 
-def route_one(name, run_dir, timeout):
+def route_one(name, run_dir, timeout, extra=()):
     d = run_dir / name
     if (d / "result.json").exists():
         return json.loads((d / "result.json").read_text())
@@ -63,7 +64,7 @@ def route_one(name, run_dir, timeout):
     for suffix in (".kicad_pro", ".kicad_dru"):
         if (src / f"board{suffix}").exists():
             shutil.copy(src / f"board{suffix}", d / f"out{suffix}")
-    args = [pcbench.ROUTER, "route", src / "board.kicad_pcb", "-o", out, "--strip-all", "--seed", "0", "--uuid-seed", "0", "--threads", "1", "--timeout", str(timeout), "--report", d / "report.json"]
+    args = [pcbench.ROUTER, "route", src / "board.kicad_pcb", "-o", out, "--strip-all", "--seed", "0", "--uuid-seed", "0", "--threads", "1", "--timeout", str(timeout), "--report", d / "report.json", *extra]
     r = subprocess.run(pcbench.CAP + [str(x) for x in args], capture_output=True, text=True)
     (d / "log.txt").write_text(r.stderr[-200_000:])
     res = {"board": name, "code": r.returncode}
@@ -91,7 +92,7 @@ def run(a):
     names = sorted(p.name for p in (HOME / "boards").iterdir() if (p / "bare.json").exists())
     workers = int(os.environ.get("RESERVED_CORES", "4"))
     with concurrent.futures.ThreadPoolExecutor(workers) as pool:
-        for res in pool.map(lambda n: route_one(n, run_dir, a.timeout), names):
+        for res in pool.map(lambda n: route_one(n, run_dir, a.timeout, a.args.split()), names):
             print(f"{res['board']:20} open {res.get('unconnected')!s:>4} vias {res.get('vias')!s:>5} new errors {res.get('new_errors', res.get('referee_error'))}", flush=True)
 
 
@@ -114,6 +115,7 @@ def main():
     p = sub.add_parser("run")
     p.add_argument("run")
     p.add_argument("--timeout", type=int, default=120)
+    p.add_argument("--args", default="")
     p = sub.add_parser("compare")
     p.add_argument("a")
     p.add_argument("b")

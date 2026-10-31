@@ -824,16 +824,24 @@ impl Stage for Write {
         }
         let (board, ledger) = (&mut *ctx.board, &mut *ctx.ledger);
         let replace = crate::moved_parts(board, &ledger.original_at, ctx.text);
+        let arcs = a.arcs.map_or_else(Vec::new, |radius| grid::round_corners(board, &mut laid, radius));
+        if !arcs.is_empty() {
+            eprintln!("rounded {} corners", arcs.len());
+        }
         grid::keep_orphans(board, &ledger.removed, &mut laid);
-        let (tracks, vias) = grid::edits(board, &laid);
+        // An arc stands on the board as its chords and is written whole.
+        let chords: HashSet<ItemId> = arcs.iter().flat_map(|arc| arc.chords.iter().copied()).collect();
+        let straight: Vec<ItemId> = laid.iter().copied().filter(|id| !chords.contains(id)).collect();
+        let (tracks, vias) = grid::edits(board, &straight);
+        let arcs = grid::arc_edits(board, &arcs);
         let stale = crate::stale_fills(board, &laid, ctx.text, !replace.is_empty());
         if !stale.is_empty() {
             eprintln!("dropped {} pour fills new copper cuts; KiCad refills them", stale.len());
         }
-        let detail = json!({"tracks": tracks.len(), "vias": vias.len(), "split": split, "stale_fills": stale.len(), "moved_parts": replace.len()});
+        let detail = json!({"tracks": tracks.len(), "arcs": arcs.len(), "vias": vias.len(), "split": split, "stale_fills": stale.len(), "moved_parts": replace.len()});
         let mut removed = std::mem::take(&mut ledger.removed);
         removed.extend(stale);
-        ledger.output = Some(apply(ctx.text, &Edit { remove: removed, replace, tracks, vias, uuid_seed: ctx.args.uuid_seed }));
+        ledger.output = Some(apply(ctx.text, &Edit { remove: removed, replace, tracks, arcs, vias, uuid_seed: ctx.args.uuid_seed }));
         ledger.laid = laid;
         detail
     }

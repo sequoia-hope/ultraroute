@@ -69,8 +69,9 @@ where a rule now closes space the old router used.
 8. **Copper the reader does not see**: curves, text boxes, dimensions and tables on copper
    layers, now with a warning; custom-pad `gr_curve` primitives and the stroke of a custom-pad
    `gr_rect` still not. Unsafe; none found in the corpus.
-9. **The writer writes no arcs and no blind, buried or micro vias**: rerouted copper comes back
-   as segments and through vias (`grid/src/route.rs:677` asserts it). A tuning pattern's tracks
+9. **The writer writes no blind, buried or micro vias**: rerouted copper comes back as segments,
+   through vias and, with `--arcs MM`, arcs at its corners (`grid/src/route.rs` asserts the vias
+   go through). A tuning pattern's tracks
    are now held as they are (locked), so the router never reroutes tuned copper; teardrop zones
    are kept, with a warning that new tracks get none.
 10. **`rule_severities`** is ignored: the router's checker enforces every rule it knows. Safe.
@@ -106,8 +107,11 @@ way Stage 9 did; steps 1-3 also add the `~/pcb` rule files above as parser tests
    its length rips and reroutes with a length cost), and `diff_pair_uncoupled`.
 6. **Pad geometry.** Done: clearance overrides judged as KiCad does; warnings for the rest. Left:
    padstacks per layer, `remove_unused_layers`, curves in custom pads and on copper.
-7. **Writer.** Done: tuned tracks held, teardrops warned of. Left: arcs out (the tightener's
-   corners as KiCad arcs); blind and micro vias only if a stage ever lays them.
+7. **Writer.** Done: tuned tracks held, teardrops warned of; `--arcs MM` rounds the router's
+   corners with KiCad arcs (`grid::round_corners`, at write time: each corner between two of its
+   unlocked tracks gets the widest arc up to MM the checker passes, halving down to the track's
+   width, judged as chords grown by their sag as arcs read from a file are). Left: blind and
+   micro vias only if a stage ever lays them.
 8. **Done (2026-10-30): a benchmark with rules**, `tools/rulebench.py`, ten boards to start. A PCBench-style set of KiCad 9 boards that carry `.kicad_dru`
    files (the JLCPCB template, net layer limits, area rules), judged by kicad-cli with those
    rules, so a regression in rule handling shows the way routing regressions do.

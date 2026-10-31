@@ -1107,7 +1107,7 @@ const ARC_SAG_M: f64 = 0.2e-6;
 /// An arc track as chords between points on its centre line, and how much each chord's half
 /// width grows by its sag, so the copper covers the whole arc on both sides: never less than it
 /// is, and at most twice [`ARC_SAG_M`] more.
-fn arc_chords(s: [f64; 2], m: [f64; 2], e: [f64; 2], half_width: f64) -> (Vec<Point>, f64) {
+pub fn arc_chords(s: [f64; 2], m: [f64; 2], e: [f64; 2], half_width: f64) -> (Vec<Point>, f64) {
     let Some(c) = kicad_pcb::circumcenter(s, m, e) else {
         return (vec![Point::from_m(s), Point::from_m(e)], 0.0);
     };

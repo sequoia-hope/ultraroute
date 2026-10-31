@@ -33,7 +33,7 @@ pub use outline::{
 };
 pub use read::MIN_VERSION;
 pub use rules::{NetClass, Rules, RulesError};
-pub use write::{apply, mm, Edit, NewTrack, NewVia};
+pub use write::{apply, mm, Edit, NewArc, NewTrack, NewVia};
 
 /// Why a file could not be read into a [`Pcb`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

@@ -147,6 +147,7 @@ fn copper_written_back_reads_the_same() {
             .iter()
             .map(|v| NewVia { at: v.at, size: v.size, drill: v.drill, layers: v.layers.clone(), net: v.net, locked: false })
             .collect(),
+        arcs: Vec::new(),
         replace: Vec::new(),
         uuid_seed: None,
     };

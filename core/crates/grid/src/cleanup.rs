@@ -20,12 +20,12 @@ pub struct CleanStats {
 }
 
 /// A chain's points and the track between each pair, all on one layer, one net, one width.
-struct Chain {
-    points: Vec<Point>,
-    tracks: Vec<ItemId>,
-    layer: u64,
-    net: u32,
-    half_width: board::Nm,
+pub(crate) struct Chain {
+    pub(crate) points: Vec<Point>,
+    pub(crate) tracks: Vec<ItemId>,
+    pub(crate) layer: u64,
+    pub(crate) net: u32,
+    pub(crate) half_width: board::Nm,
 }
 
 fn ends(item: &Item) -> Option<(Point, Point, board::Nm)> {
@@ -36,7 +36,7 @@ fn ends(item: &Item) -> Option<(Point, Point, board::Nm)> {
 }
 
 /// The router's tracks grouped into chains between fixed points.
-fn chains(board: &Board, soft: &HashSet<ItemId>) -> Vec<Chain> {
+pub(crate) fn chains(board: &Board, soft: &HashSet<ItemId>) -> Vec<Chain> {
     // Per (layer, net, width, point): the soft tracks ending there.
     let mut at: HashMap<(u64, u32, board::Nm, Point), Vec<ItemId>> = HashMap::new();
     for &id in soft {

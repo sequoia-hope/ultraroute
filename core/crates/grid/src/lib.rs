@@ -1,6 +1,7 @@
 //! Grid routing on the core board model: a conservative obstacle map per net class, an integer
 //! cost field from the sources and a walk back down it, laid as tracks and vias.
 
+pub mod arcs;
 #[cfg(feature = "gpu")]
 pub mod gpu;
 pub mod blame;
@@ -26,6 +27,7 @@ pub mod tune;
 pub mod vias;
 pub mod work;
 
+pub use arcs::{round_corners, RoundArc};
 pub use blame::{blame, Blame, BlameOptions, BlameReport};
 pub use cleanup::{drop_duplicates, drop_duplicates_watch, prune_dangling, prune_dangling_watch, pull_tight, pull_tight_watch, split_at_joins, CleanStats};
 pub use grid::{ObstacleMap, Profile, RouteGrid, ViaSpec};
@@ -37,7 +39,7 @@ pub use prefanout::{prefanout, prune_closed_escapes, EscapeMode, EscapeOrder, Pr
 pub use report::{item_name, Activity, Focus, Log};
 pub use negotiate::{price_into, route_negotiated, route_negotiated_rounds, via_price_into, NegotiationOptions, NegotiationStats, RoundView, Trial};
 pub use ripup::{rip_up, rip_up_watch, RipAttempt, RipOptions, RipStats};
-pub use route::{edits, keep_orphans, route_open, terminal_cells, CpuSolver, FieldSolver, Options, PricedJob, RoundPrices, Stats};
+pub use route::{arc_edits, edits, keep_orphans, route_open, terminal_cells, CpuSolver, FieldSolver, Options, PricedJob, RoundPrices, Stats};
 pub use search::via_cost_mm;
 pub use tune::{match_lengths, match_lengths_watch, pair_lengths, TuneBump, TuneStats};
 pub use clock::Deadline;
