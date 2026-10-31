@@ -572,6 +572,23 @@ fn serve_socket(stream: TcpStream, config: &Config, runner: &Arc<Runner>, owner:
                         let reply = reply.unwrap_or_else(|error| json!({"t": "saved", "ok": false, "message": error}));
                         send(&mut ws, &reply.to_string())?;
                     }
+                    // Opened by Boardroom with its store, the page saves through Boardroom (its revision
+                    // check, its bus, its history): it asks for the routed board, writes it, then
+                    // says so, and the studio records the save in the project's status as its own.
+                    Some("routed_text") => {
+                        let reply = if relay.is_some() {
+                            Err("the router is still running: save when it has finished".to_string())
+                        } else {
+                            routed_text(routed.as_ref())
+                        };
+                        let reply = reply.unwrap_or_else(|error| json!({"t": "routed_text", "ok": false, "message": error}));
+                        send(&mut ws, &reply.to_string())?;
+                    }
+                    Some("saved_elsewhere") => {
+                        let reply = saved_elsewhere(routed.as_ref(), &mut base, config)
+                            .unwrap_or_else(|error| json!({"t": "saved", "ok": false, "message": error}));
+                        send(&mut ws, &reply.to_string())?;
+                    }
                     Some("stop") => runner.request_stop(),
                     _ => {}
                 }
@@ -708,6 +725,31 @@ fn save_routed(routed: Option<&Routed>, base: &mut Option<(PathBuf, String)>, co
     let fields = studio_status(routed, true, config);
     let status = project::update_status(&routed.project.dir, &board.board, fields, project::LOCK_WAIT).err();
     Ok(json!({"t": "saved", "ok": true, "path": board.pcb, "status_error": status}))
+}
+
+/// The last finished project route, for the page to save through Boardroom's store: its text,
+/// the board file it replaces (relative to the project) and its open connections.
+fn routed_text(routed: Option<&Routed>) -> Result<Value, String> {
+    let routed = routed.ok_or("nothing routed to save: route the project's board first")?;
+    let text = std::fs::read_to_string(&routed.output).map_err(|e| format!("the routed board {}: {e}", routed.output.display()))?;
+    if text.is_empty() {
+        return Err("the routed board is empty; nothing to save".into());
+    }
+    let board = &routed.project.board;
+    let path = board.pcb.strip_prefix(&routed.project.dir).unwrap_or(&board.pcb).to_string_lossy().into_owned();
+    Ok(json!({"t": "routed_text", "ok": true, "text": text, "path": path, "open": routed.open}))
+}
+
+/// The page saved the last route through Boardroom's store: it is now the board this page has
+/// (a later save checks against it), and the project's status records it as saved.
+fn saved_elsewhere(routed: Option<&Routed>, base: &mut Option<(PathBuf, String)>, config: &Config) -> Result<Value, String> {
+    let routed = routed.ok_or("nothing routed was saved")?;
+    let board = &routed.project.board;
+    let now = std::fs::read(&board.pcb).map_err(|e| format!("{}: {e}", board.pcb.display()))?;
+    *base = Some((board.pcb.clone(), project::fingerprint(&now)));
+    let fields = studio_status(routed, true, config);
+    let status = project::update_status(&routed.project.dir, &board.board, fields, project::LOCK_WAIT).err();
+    Ok(json!({"t": "saved", "ok": true, "path": board.pcb, "status_error": status, "via": "store"}))
 }
 
 fn send(ws: &mut tungstenite::WebSocket<TcpStream>, text: &str) -> std::io::Result<()> {
@@ -914,6 +956,36 @@ mod tests {
         assert_eq!(studio_status(&routed, false, &config)["failed"], Value::Null, "cut short but finished: nothing to raise");
         report(0, json!([]), true);
         assert_eq!(studio_status(&routed, false, &config)["failed"], json!("crash"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_route_saved_through_boardroom_is_handed_over_then_recorded() {
+        let dir = std::env::temp_dir().join(format!("studio-store-save-{}", std::process::id()));
+        let project = dir.join("proj");
+        std::fs::create_dir_all(project.join("design")).unwrap();
+        std::fs::create_dir_all(project.join("hw/b/a")).unwrap();
+        std::fs::write(project.join("design/status.json"), "{}").unwrap();
+        let output = dir.join("run.kicad_pcb");
+        let config = Config { root: dir.clone(), router: dir.clone(), core: dir.clone(), runs: dir.clone() };
+        let board = project::Board { board: "b".into(), variant: "a".into(), pcb: project.join("hw/b/a/servo_B.kicad_pcb"), project: None, rules: None, regions: None };
+        let routed = Routed { project: ProjectRun { dir: project.clone(), board, read: String::new() }, output: output.clone(), open: Some(3), at: "t".into() };
+
+        assert!(routed_text(None).unwrap_err().contains("nothing routed"));
+        std::fs::write(&output, "").unwrap();
+        assert!(routed_text(Some(&routed)).unwrap_err().contains("empty"));
+        std::fs::write(&output, "(kicad_pcb routed)").unwrap();
+        let handed = routed_text(Some(&routed)).unwrap();
+        assert_eq!((handed["text"].clone(), handed["path"].clone(), handed["open"].clone()), (json!("(kicad_pcb routed)"), json!("hw/b/a/servo_B.kicad_pcb"), json!(3)));
+
+        // Boardroom wrote it; the studio takes the file as it now is for its next save, and records the save.
+        std::fs::write(project.join("hw/b/a/servo_B.kicad_pcb"), "(kicad_pcb routed)").unwrap();
+        let mut base = None;
+        let saved = saved_elsewhere(Some(&routed), &mut base, &config).unwrap();
+        assert_eq!(saved["ok"], json!(true));
+        assert_eq!(base.unwrap().1, project::fingerprint(b"(kicad_pcb routed)"));
+        let status: Value = serde_json::from_str(&std::fs::read_to_string(project.join("design/status.json")).unwrap()).unwrap();
+        assert_eq!(status["apps"]["studio"]["b"]["saved"], json!(true));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

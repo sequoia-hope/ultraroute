@@ -36,6 +36,15 @@
   // the studio opens such a project by path (?project=) as before.
   const opened = fromLocation(location);
   const store = opened?.kind === 'browser' ? opened : null;
+  // On this machine Boardroom hands the studio its server's store too: the project's board is
+  // routed by the studio's server as before, but Save writes it through Boardroom, with the
+  // revision this page read, so a board Composer changed meanwhile is refused (Reload, or Save as
+  // a copy), and Boardroom's bus, History and the other apps hear of it.
+  const boardroom = opened?.kind === 'server' ? opened : null;
+  // The project board's file, relative to the project, and its revision as this page last read it.
+  let projectFile = $state(null); // { path, rev }
+  // The page's request for the routed board, answered by the studio's server.
+  let routedWanted = null;
   // The board as last read from or saved to the store; Save is offered while the routed one differs.
   let savedText = $state('');
   // The project's board changed under this tab's unsaved route: Reload, or Save as a copy.
@@ -257,6 +266,7 @@
     inTab = false;
     saveable = false;
     saveNote = '';
+    readProjectRev();
     compose();
     const url = new URL(location.href);
     url.searchParams.delete('job');
@@ -306,12 +316,15 @@
   }
 
   // The project's board from the store: its .kicad_pcb, and the .kicad_pro and .kicad_dru beside it.
-  async function openFromStore(board, variant) {
-    const dir = `hw/${board}/${variant}/`;
-    const path = `${dir}${board}.kicad_pcb`;
+  // `file`, when Boardroom names it (?pcb=), is the board file, which needn't be named as the board
+  // (servodrive's ethernet board is hw/ethernet/e/servodrive_E.kicad_pcb).
+  async function openFromStore(board, variant, file = null) {
+    const path = file || `hw/${board}/${variant}/${board}.kicad_pcb`;
+    const stem = path.replace(/\.kicad_pcb$/, '');
+    const name = stem.split('/').pop();
     let read, pro, dru;
     try {
-      [read, pro, dru] = await Promise.all([store.read(path), store.text(`${dir}${board}.kicad_pro`), store.text(`${dir}${board}.kicad_dru`)]);
+      [read, pro, dru] = await Promise.all([store.read(path), store.text(`${stem}.kicad_pro`), store.text(`${stem}.kicad_dru`)]);
     } catch (e) {
       message = `couldn't open ${board} / ${variant}: ${e.message}`;
       return;
@@ -326,9 +339,9 @@
     copiedTo = '';
     showBoard({
       name: `${board}/${variant}`,
-      pcbName: `${board}.kicad_pcb`,
-      proName: pro == null ? null : `${board}.kicad_pro`,
-      druName: dru == null ? null : `${board}.kicad_dru`,
+      pcbName: `${name}.kicad_pcb`,
+      proName: pro == null ? null : `${name}.kicad_pro`,
+      druName: dru == null ? null : `${name}.kicad_dru`,
       pcb,
       pro,
       dru: dru ?? '',
@@ -450,10 +463,51 @@
 
   function reloadFromStore() {
     const s = fileBoard?.store;
-    if (s) openFromStore(s.board, s.variant);
+    if (s) openFromStore(s.board, s.variant, s.path);
+  }
+
+  // The finished route from the studio's server, as text.
+  function askRouted() {
+    return new Promise((resolve, reject) => {
+      routedWanted = { resolve, reject };
+      socket.send(JSON.stringify({ cmd: 'routed_text' }));
+    });
+  }
+
+  // Save through Boardroom's store: the routed board over the project's, if it is still the
+  // revision this page read; then the studio records the save in the project's status. Refused,
+  // it offers Reload or Save as a copy, as on Pages.
+  async function saveThroughBoardroom(asCopy = false) {
+    if (!projectFile || !socket || socket.readyState !== WebSocket.OPEN) return;
+    saveNote = 'Saving…';
+    message = '';
+    try {
+      const got = await askRouted();
+      let path = projectFile.path;
+      if (asCopy) for (let n = 2; await boardroom.read(path); n++) path = projectFile.path.replace(/\.kicad_pcb$/, `-${n}.kicad_pcb`);
+      const { rev } = await boardroom.write(path, got.text, {
+        app: 'route',
+        message: `Routed ${projectBoard.board}${got.open != null ? `: ${got.open} open` : ''}`,
+        base: asCopy ? null : projectFile.rev,
+      });
+      if (asCopy) {
+        copiedTo = path;
+        saveNote = `Saved ${path}, a copy beside the board.`;
+        return;
+      }
+      projectFile = { ...projectFile, rev };
+      storeConflict = '';
+      saveable = false;
+      socket.send(JSON.stringify({ cmd: 'saved_elsewhere' }));
+    } catch (e) {
+      saveNote = '';
+      if (e instanceof Conflict) storeConflict = `${projectFile.path} changed since this page read it.`;
+      else message = `couldn't save: ${e.message}`;
+    }
   }
 
   function saveToProject() {
+    if (boardroom && projectFile) return saveThroughBoardroom();
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
     socket.send(JSON.stringify({ cmd: 'save' }));
     saveable = false;
@@ -631,9 +685,20 @@
     recording = null;
   }
 
+  // The project board's revision in Boardroom's store, read with each load: what Save checks against.
+  async function readProjectRev() {
+    if (!boardroom || !projectBoard) return;
+    const path = `hw/${projectBoard.board}/${projectBoard.variant}/${projectBoard.kicad_pcb}`;
+    const now = await boardroom.read(path).catch(() => null);
+    projectFile = now ? { path, rev: now.rev } : null;
+    storeConflict = '';
+    copiedTo = '';
+  }
+
   function load() {
     leaveReplay();
     clearTimeout(rerouteTimer);
+    readProjectRev();
     send('load', engine === 'core' ? [] : ['--backend', 'none'], engine === 'core' ? [] : locks);
   }
 
@@ -755,8 +820,12 @@
     } else if (event.t === 'routed') {
       saveable = event.saveable;
       saveNote = event.status_error ? `design/status.json was not updated: ${event.status_error}` : '';
+    } else if (event.t === 'routed_text') {
+      const wanted = routedWanted;
+      routedWanted = null;
+      if (wanted) event.ok ? wanted.resolve(event) : wanted.reject(new Error(event.message));
     } else if (event.t === 'saved') {
-      if (event.ok) saveNote = `Saved over ${event.path}.${event.status_error ? ` design/status.json was not updated: ${event.status_error}` : ''}`;
+      if (event.ok) saveNote = `Saved over ${event.path}${event.via === 'store' ? ', through Boardroom' : ''}.${event.status_error ? ` design/status.json was not updated: ${event.status_error}` : ''}`;
       else {
         saveNote = '';
         message = event.message;
@@ -852,12 +921,24 @@
     const first = jobs.find((j) => j.name === asked.get('job')) ?? jobs[0];
     if (first) chooseJob(first.name);
     if (asked.get('project') && !STATIC && !LOCAL && !store) await openProject(asked.get('project'), asked);
+    if (boardroom) {
+      // Another app changed the board: show it, unless this page has a route not saved. The bus may
+      // say only that the project changed (no paths); the revision tells.
+      boardroom.watch(async ({ paths, app }) => {
+        const f = projectFile;
+        if (!f || (paths && !paths.includes(f.path))) return;
+        const now = await boardroom.read(f.path).catch(() => null);
+        if (!now || now.rev === projectFile?.rev) return;
+        if (running || saveable) storeConflict = `${f.path} was changed${app ? ` in ${app}` : ''} since this page read it.`;
+        else load();
+      });
+    }
     if (store && asked.get('board')) {
-      await openFromStore(asked.get('board'), asked.get('variant') ?? 'a');
+      await openFromStore(asked.get('board'), asked.get('variant') ?? 'a', asked.get('pcb'));
       // Another app or window changed the board: show it, unless this tab has a route not saved.
       store.watch(async ({ paths, app }) => {
         const s = fileBoard?.store;
-        if (!s || !paths.includes(s.path)) return;
+        if (!s || (paths && !paths.includes(s.path))) return;
         const now = await store.read(s.path);
         // This tab's own save is heard too: by now the board it has is that revision.
         if (!now || now.rev === fileBoard?.store?.rev) return;
@@ -1126,6 +1207,16 @@
         disabled={!saveable || running}
         title="Writes the routed board over {project.project}/hw/{projectBoard.board}/{projectBoard.variant}/{projectBoard.kicad_pcb}, unless that file changed since it was loaded"
       >Save to project ({projectBoard.kicad_pcb})</button>
+      {#if boardroom && storeConflict}
+        <p class="warn">
+          {storeConflict}
+          {copiedTo ? `This route is saved beside it as ${copiedTo}; Reload opens the project's board.` : 'Reload it (this route is dropped), or save this route beside it as a copy.'}
+        </p>
+        <div class="buttons">
+          <button onclick={load}>Reload</button>
+          {#if !copiedTo}<button onclick={() => saveThroughBoardroom(true)} disabled={running}>Save as a copy</button>{/if}
+        </div>
+      {/if}
       {#if saveNote}<p class="muted small">{saveNote}</p>{/if}
       {#if projectBoard.routing}<p class="muted small">Routes with the project's {projectBoard.routing}.</p>{/if}
     {/if}
