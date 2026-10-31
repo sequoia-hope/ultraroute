@@ -173,7 +173,6 @@ fn a_nets_length_and_vias_over_a_rules_maximum_are_reported() {
 fn a_net_a_rule_allows_no_vias_gets_none() {
     let mut b = board("", "(version 1)\n(rule \"crystal\" (condition \"A.NetName == 'B'\") (constraint via_count (max 0)))");
     assert!(b.no_vias(2) && !b.no_vias(1));
-    assert_eq!(b.limited_nets(), [2]);
     let via = |b: &mut Board, net: u32| b.insert(Item { kind: Kind::Via, net, layers: 3, shape: Shape::Capsule { a: Point::new(nm(10e-3), nm(5e-3)), b: Point::new(nm(10e-3), nm(5e-3)), r: nm(0.3e-3) }, hole: Some((Point::new(nm(10e-3), nm(5e-3)), nm(0.15e-3))), locked: false, span: None });
     let v = via(&mut b, 2);
     assert!(check_item(&b, v).iter().any(|v| v.rule == Rule::Keepout), "net B's via is refused");

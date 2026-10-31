@@ -121,6 +121,15 @@ fn walk_chain(board: &Board, start_via: ItemId, first_track: ItemId, soft_set: &
     (chain, None)
 }
 
+/// Whether `net`'s tracks, all of them, keep to a custom rule's `length` maximum, where one
+/// limits it: a via is not traded for track length the rule cannot spare.
+fn within_length(board: &Board, net: u32) -> bool {
+    board.net_maximum("length", net).is_none_or(|(_, max)| {
+        let mm: f64 = board.items().filter(|(_, it)| it.net == net && it.kind == Kind::Track).map(|(_, it)| track_mm(it)).sum();
+        mm <= max * 1e3 + 1e-6
+    })
+}
+
 fn track_mm(item: &Item) -> f64 {
     match (&item.kind, &item.shape) {
         (Kind::Track, Shape::Capsule { a, b, .. }) => a.distance(*b) * 1e-6,
@@ -328,7 +337,8 @@ fn try_replace(
             && airlines.len() <= open_before
             && saved >= 1
             && new_len <= old_len + options.max_extra_mm_per_via * (saved as f64)
-            && touching.iter().all(|&o| !dangles(board, o));
+            && touching.iter().all(|&o| !dangles(board, o))
+            && (new_len <= old_len || within_length(board, net));
         if ok {
             let mut dirty = touched_before;
             for &id in &laid_now {
@@ -646,11 +656,20 @@ mod tests {
     use std::path::PathBuf;
 
     fn two_layer_board() -> Board {
+        two_layer_board_ruled("")
+    }
+
+    /// The two-layer board with a custom rule file's text, if any.
+    fn two_layer_board_ruled(custom: &str) -> Board {
         let (pcb, copper) = kicad_pcb::parse_board(
             "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal)) (net 0 \"\") (net 1 \"A\") (net 2 \"BLOCK\"))",
         )
         .unwrap();
-        Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap())
+        let mut rules = kicad_pcb::Rules::parse("{}").unwrap();
+        if !custom.is_empty() {
+            rules.apply_custom(custom, "test.kicad_dru");
+        }
+        Board::new(&pcb, &copper, rules)
     }
 
     #[test]
@@ -667,9 +686,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn collapses_two_via_hop_around_an_obstacle_onto_one_layer() {
-        let mut board = two_layer_board();
+    /// Two pads of net A 4 mm apart on F.Cu, a short track of another net between them, and A's
+    /// copper hopping it on B.Cu by two vias: the board and A's copper.
+    fn two_via_hop(mut board: Board) -> (Board, Vec<ItemId>) {
         for x in [0, 4_000_000] {
             board.insert(Item {
                 kind: Kind::Pad { footprint: 0, number: "1".into(), plated: false },
@@ -736,7 +755,12 @@ mod tests {
             locked: false,
             span: None,
         });
-        let mut soft = vec![t1, v1, tb, v2, t2];
+        (board, vec![t1, v1, tb, v2, t2])
+    }
+
+    #[test]
+    fn collapses_two_via_hop_around_an_obstacle_onto_one_layer() {
+        let (mut board, mut soft) = two_via_hop(two_layer_board());
         let stats = reduce_vias(&mut board, &ViaOptions::default(), &mut soft, &mut |_| {});
         assert_eq!((stats.vias_before, stats.vias_after, stats.dropped), (2, 0, 2));
         assert!(board::connectivity_without_pours(&board).airlines.is_empty());
@@ -744,6 +768,18 @@ mod tests {
         for &id in &soft {
             assert!(board::check_item(&board, id).is_empty());
         }
+    }
+
+    #[test]
+    fn keeps_the_vias_a_length_limit_cannot_spare_the_detour_for() {
+        // The hop is 4 mm of track; around the obstacle on F.Cu is longer.
+        let ruled = |max: &str| two_layer_board_ruled(&format!("(version 1)\n(rule \"short\" (condition \"A.NetName == 'A'\") (constraint length (max {max})))"));
+        let (mut board, mut soft) = two_via_hop(ruled("4.05mm"));
+        let stats = reduce_vias(&mut board, &ViaOptions::default(), &mut soft, &mut |_| {});
+        assert_eq!(stats.dropped, 0, "the detour would break the rule");
+        let (mut board, mut soft) = two_via_hop(ruled("10mm"));
+        let stats = reduce_vias(&mut board, &ViaOptions::default(), &mut soft, &mut |_| {});
+        assert_eq!(stats.dropped, 2, "a rule with room to spare lets it");
     }
 
     #[test]
