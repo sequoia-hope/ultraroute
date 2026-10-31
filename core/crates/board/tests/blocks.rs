@@ -114,8 +114,7 @@ fn locked_copper_left_on_another_nets_pad_is_warned_of() {
         let (pcb, copper) = kicad_pcb::parse_board(&text(at)).unwrap();
         board::Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap())
     };
-    let on = load("10 10");
-    assert!(on.warnings.iter().any(|w| w.starts_with("locked copper of B lies on R1-1 of A")), "{:?}", on.warnings);
-    let clear = load("20 20");
-    assert!(!clear.warnings.iter().any(|w| w.starts_with("locked copper")), "{:?}", clear.warnings);
+    let on = load("10 10").locked_copper_on_pads();
+    assert!(on.iter().any(|w| w.starts_with("locked copper of B lies on R1-1 of A")), "{on:?}");
+    assert!(load("20 20").locked_copper_on_pads().is_empty());
 }

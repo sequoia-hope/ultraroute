@@ -791,15 +791,13 @@ impl Board {
         board.reserve_spokes(pcb, copper, &pad_items);
         let short = board.lengths_out_of_reach();
         board.warnings.extend(short);
-        let shorted = board.locked_copper_on_pads();
-        board.warnings.extend(shorted);
         board
     }
 
     /// A line for each locked track or via lying on a pad of another net (the copper a part's
     /// fan-out left where the part stood before it was moved): the board is shorted before
-    /// routing, and no route mends it.
-    fn locked_copper_on_pads(&self) -> Vec<String> {
+    /// routing, and no route mends it. Asked once the copper to be stripped is gone.
+    pub fn locked_copper_on_pads(&self) -> Vec<String> {
         let mut hits: Vec<(u32, u32, String)> = Vec::new();
         for (_, it) in self.items().filter(|(_, it)| it.locked && it.net != 0 && matches!(it.kind, Kind::Track | Kind::Via)) {
             for layer in (0..self.layers.len()).filter(|&l| it.on(l)) {
