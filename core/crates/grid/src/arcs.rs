@@ -110,6 +110,18 @@ fn partners(board: &Board, net: u32, ids: &[ItemId]) -> Vec<ItemId> {
     out
 }
 
+/// Whether `other` is joined to the pieces (centre lines, of half width `r`) as KiCad joins
+/// copper: an end of a piece inside it, or, for a track, an end of it inside a piece. Overlap
+/// alone, which [`joined`] allows, is not enough: a track ending inside a corner comes loose
+/// when an arc cuts the corner away from its end, so what was anchored to the corner's tracks
+/// must be anchored to what replaces them.
+fn anchored(board: &Board, other: ItemId, pieces: &[(Point, Point)], r: Nm) -> bool {
+    let Some(o) = board.item(other) else { return true };
+    let inside_a_piece = |e: Point| pieces.iter().any(|&(p, q)| board::point_segment(e, p, q) <= r as f64);
+    pieces.iter().any(|&(a, b)| o.shape.contains(a) || o.shape.contains(b))
+        || matches!((&o.kind, &o.shape), (Kind::Track, Shape::Capsule { a, b, .. }) if inside_a_piece(*a) || inside_a_piece(*b))
+}
+
 /// The tracks `old` (from `s` to the corner `p`, and from `p` to `q`) taken up and laid again with
 /// an arc of radius `r` cutting the corner, if nothing it lays breaks a rule and every partner
 /// stays joined; else the board as it was.
@@ -137,7 +149,10 @@ fn try_arc(board: &mut Board, chain: &crate::cleanup::Chain, [s, p, q]: [Point; 
     let chords: Vec<ItemId> = chord_points.windows(2).map(|w| board.insert(track(w[0], w[1], chain.half_width + (sag * 1e9).ceil() as Nm))).collect();
     let straight_after = (end != q).then(|| board.insert(track(end, q, chain.half_width)));
     let new: Vec<ItemId> = straight_before.into_iter().chain(chords.iter().copied()).chain(straight_after).collect();
-    let legal = new.iter().all(|&id| check_item(board, id).is_empty()) && partners.iter().all(|&o| new.iter().any(|&id| joined(board, o, id)));
+    let pieces: Vec<(Point, Point)> =
+        straight_before.map(|_| (s, start)).into_iter().chain(chord_points.windows(2).map(|w| (w[0], w[1]))).chain(straight_after.map(|_| (end, q))).collect();
+    let legal = new.iter().all(|&id| check_item(board, id).is_empty())
+        && partners.iter().all(|&o| new.iter().any(|&id| joined(board, o, id)) && (!anchored(board, o, &[(s, p), (p, q)], chain.half_width) || anchored(board, o, &pieces, chain.half_width)));
     if !legal {
         for id in new.into_iter().rev() {
             board.discard(id);
@@ -196,6 +211,23 @@ mod tests {
         let arcs = round_corners(&mut b, &mut soft, 2_000_000);
         assert_eq!(arcs.iter().map(|a| a.start).collect::<Vec<_>>(), [mm(19.0, 10.0)]);
         assert!(board::check(&b).is_empty());
+    }
+
+    #[test]
+    fn a_track_ending_beside_the_corner_keeps_its_end_in_copper() {
+        // As on Biscay_Blueeye_sipm-comp: a track whose end only overlaps the corner, outside it.
+        let mut b = empty_board();
+        let mut soft = vec![b.insert(track(1, mm(20.0, 5.0), mm(20.0, 10.0))), b.insert(track(1, mm(20.0, 10.0), mm(10.0, 10.0)))];
+        let end = mm(20.05, 10.05);
+        let beside = b.insert(track(1, end, mm(20.05, 15.0)));
+        soft.push(beside);
+        round_corners(&mut b, &mut soft, 500_000);
+        let other = b.item(beside).unwrap().shape.clone();
+        let held = soft.iter().filter(|&&id| id != beside).filter_map(|id| b.item(*id)).any(|it| match it.shape {
+            Shape::Capsule { a, b: e, .. } => board::point_segment(end, a, e) <= 100_000.0 || other.contains(a) || other.contains(e),
+            _ => false,
+        });
+        assert!(held);
     }
 
     #[test]
