@@ -150,7 +150,7 @@ impl Board {
 
     /// Whether a custom rule allows `net` no vias (`via_count (max 0)`).
     pub fn no_vias(&self, net: u32) -> bool {
-        self.net_maximum("via_count", net).is_some_and(|(_, max)| max < 1.0 - 1e-9)
+        self.via_free.get(net as usize).copied().unwrap_or(false)
     }
 
     /// A line for each net whose pads lie further apart than a custom rule's `length` maximum

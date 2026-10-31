@@ -332,6 +332,8 @@ pub struct Board {
     pub(crate) class_names: Vec<String>,
     /// Whether a custom rule tells nets apart by name (see [`Board::rules_name_nets`]).
     pub(crate) names_nets: bool,
+    /// Per net number, whether a custom rule allows it no vias (see [`Board::no_vias`]).
+    pub(crate) via_free: Vec<bool>,
     min_clearance_nm: Nm,
     /// The checks' limits, worked out once from the rules and the pads' openings and clearances,
     /// which only [`Board::new`] sets: a check of one item no longer walks every pad.
@@ -460,6 +462,7 @@ impl Board {
             net_clearances,
             class_names,
             names_nets: false,
+            via_free: Vec::new(),
             min_clearance_nm,
             limits: Default::default(),
             areas: Vec::new(),
@@ -470,6 +473,7 @@ impl Board {
             cells: HashMap::new(),
         };
         board.names_nets = crate::custom::names_nets(&board.custom);
+        board.via_free = (0..board.nets.len() as u32).map(|n| board.net_maximum("via_count", n).is_some_and(|(_, max)| max < 1.0 - 1e-9)).collect();
         match pcb.outline_loops() {
             Ok(loops) => {
                 for l in std::iter::once(&loops.outer).chain(&loops.holes) {
