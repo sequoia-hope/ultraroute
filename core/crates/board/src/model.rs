@@ -785,6 +785,8 @@ impl Board {
         }
         board.limits = crate::check::Limits::of(&board);
         board.reserve_spokes(pcb, copper, &pad_items);
+        let short = board.lengths_out_of_reach();
+        board.warnings.extend(short);
         board
     }
 

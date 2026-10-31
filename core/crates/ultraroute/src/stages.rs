@@ -130,7 +130,8 @@ impl Stage for SetUp {
             None => Vec::new(),
         };
         // Nets with a length limit route first, while their shortest ways are still free.
-        ledger.first = ledger.lengths.iter().flat_map(|m| m.nets.iter().copied()).collect();
+        // So do those a custom rule limits in length or vias.
+        ledger.first = ledger.lengths.iter().flat_map(|m| m.nets.iter().copied()).chain(board.limited_nets()).collect();
         for &[x0, y0, x1, y1] in &a.via_avoid {
             let p = |x: f64, y: f64| Point::new((x * 1e6).round() as i64, (y * 1e6).round() as i64);
             board.via_avoid.push(Shape::Polygon(vec![p(x0, y0), p(x1, y0), p(x1, y1), p(x0, y1)]));

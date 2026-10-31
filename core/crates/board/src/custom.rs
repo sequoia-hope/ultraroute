@@ -17,7 +17,8 @@ use crate::geom::{nm, Nm};
 /// own pads they are the designer's.)
 pub const APPLIED: [&str; 10] = ["clearance", "hole_clearance", "hole_to_hole", "edge_clearance", "physical_hole_clearance", "track_width", "disallow", "hole_size", "via_diameter", "annular_width"];
 
-/// Constraints the router checks once it has routed and reports, but does not yet route to.
+/// Constraints the router checks once it has routed and reports: it routes their nets first, and
+/// a `via_count` of 0 gets no vias, but a length is not yet steered to.
 pub const REPORTED: [&str; 2] = ["length", "via_count"];
 
 /// Constraints on things the router neither lays nor moves: KiCad checks them as before.
@@ -112,8 +113,7 @@ impl Board {
     /// The nets whose copper breaks a custom rule's `length` or `via_count` maximum, one line
     /// each with the net's name: its tracks' total length (vias' heights not counted), its vias.
     pub fn rule_limits(&self) -> Vec<(String, String)> {
-        let (length, vias) = (self.custom.has("length"), self.custom.has("via_count"));
-        if !length && !vias {
+        if !self.custom.has("length") && !self.custom.has("via_count") {
             return Vec::new();
         }
         let mut per_net: std::collections::BTreeMap<u32, (f64, usize)> = std::collections::BTreeMap::new();
@@ -126,22 +126,61 @@ impl Board {
         }
         let mut out = Vec::new();
         for (net, (mm, count)) in per_net {
-            let class = self.class_name(net);
-            let thing = Thing::New { board: self, via: false, net: Some(net), class, width: 0, drill: 0, layer: None, area: Area::Unknown };
-            let sure = |kind: &str| self.custom.resolve(kind, &thing, None, "", self.layers.len()).sure.filter(|(r, _)| r.severity != Severity::Ignore);
             let name = self.net_name(net);
-            if let Some((rule, c)) = sure("length").filter(|_| length) {
-                if let Some(max) = c.max.filter(|max| mm > max * 1e3 + 1e-6) {
-                    out.push((format!("length: {name} is {mm:.2} mm, over rule \"{}\"'s {:.2} mm", rule.name, max * 1e3), name.to_string()));
-                }
+            if let Some((rule, max)) = self.net_maximum("length", net).filter(|(_, max)| mm > max * 1e3 + 1e-6) {
+                out.push((format!("length: {name} is {mm:.2} mm, over rule \"{rule}\"'s {:.2} mm", max * 1e3), name.to_string()));
             }
-            if let Some((rule, c)) = sure("via_count").filter(|_| vias) {
-                if let Some(max) = c.max.filter(|max| count as f64 > *max + 1e-9) {
-                    out.push((format!("vias: {name} has {count}, over rule \"{}\"'s {max}", rule.name), name.to_string()));
-                }
+            if let Some((rule, max)) = self.net_maximum("via_count", net).filter(|(_, max)| count as f64 > max + 1e-9) {
+                out.push((format!("vias: {name} has {count}, over rule \"{rule}\"'s {max}"), name.to_string()));
             }
         }
         out
+    }
+
+    /// The `max` a custom rule surely sets for `kind` (`length`, metres; `via_count`) on `net`'s
+    /// copper, with the rule's name.
+    pub fn net_maximum(&self, kind: &str, net: u32) -> Option<(String, f64)> {
+        if net == 0 || !self.custom.has(kind) {
+            return None;
+        }
+        let thing = Thing::New { board: self, via: false, net: Some(net), class: self.class_name(net), width: 0, drill: 0, layer: None, area: Area::Unknown };
+        let (rule, c) = self.custom.resolve(kind, &thing, None, "", self.layers.len()).sure.filter(|(r, _)| r.severity != Severity::Ignore)?;
+        c.max.map(|max| (rule.name.clone(), max))
+    }
+
+    /// Whether a custom rule allows `net` no vias (`via_count (max 0)`).
+    pub fn no_vias(&self, net: u32) -> bool {
+        self.net_maximum("via_count", net).is_some_and(|(_, max)| max < 1.0 - 1e-9)
+    }
+
+    /// A line for each net whose pads lie further apart than a custom rule's `length` maximum
+    /// lets its tracks reach: a tree joining them holds a path between any two, as long at least
+    /// as the gap between them. A net with a pour is left out, its copper not counted as length.
+    pub(crate) fn lengths_out_of_reach(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if !self.custom.has("length") {
+            return out;
+        }
+        for net in 1..self.nets.len() as u32 {
+            let Some((rule, max)) = self.net_maximum("length", net) else { continue };
+            let pads: Vec<&Item> = self.items().map(|(_, it)| it).filter(|it| it.net == net && matches!(it.kind, Kind::Pad { .. } | Kind::Pour { .. })).collect();
+            if pads.iter().any(|it| matches!(it.kind, Kind::Pour { .. })) {
+                continue;
+            }
+            let apart = pads.iter().enumerate().flat_map(|(i, a)| pads[i + 1..].iter().map(|b| a.shape.gap(&b.shape))).fold(0.0, f64::max) * 1e-6;
+            if apart > max * 1e3 + 1e-6 {
+                out.push(format!("length: {}'s pads lie {apart:.2} mm apart, past rule \"{rule}\"'s {:.2} mm: no route keeps to it", self.net_name(net), max * 1e3));
+            }
+        }
+        out
+    }
+
+    /// The nets a custom rule limits in length or vias.
+    pub fn limited_nets(&self) -> Vec<u32> {
+        if !self.custom.has("length") && !self.custom.has("via_count") {
+            return Vec::new();
+        }
+        (1..self.nets.len() as u32).filter(|&n| self.net_maximum("length", n).is_some() || self.net_maximum("via_count", n).is_some()).collect()
     }
 
     /// Whether a rule tells nets apart by name (`A.NetName`, `A.inDiffPair`), so copper the
