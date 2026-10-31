@@ -23,7 +23,9 @@ baselines (FreeRouting, PcbRouter, RL-MCTS; PCBench/Baselines/Results_all.csv).
 A board succeeds when KiCad finds nothing unconnected after a zone refill and no DRC error that
 involves routed copper (a track, arc or via) of a type the bare board did not have as often: routed copper that breaks the board's own rules is a
 failure, not a success. When KiCad itself fails (the zone refill or the DRC), the board gets
-`referee_error` and no verdict: the referee failed, not the router. Wirelength is the routed tracks' length and vias their count, as the
+`referee_error` and no verdict: the referee failed, not the router. When the router fails (a
+crash, which writes the input board back, a refusal or a hang), its file is not judged: the
+board fails, and `compare` counts it apart and never as noise. Wirelength is the routed tracks' length and vias their count, as the
 baselines report them. Everything lives in ~/Software/ultraroute-lab/pcbench/: boards/ID/ holds
 board.kicad_pcb (+ .kicad_pro), bare.kicad_pcb and bare.json, runs/RUN/ID/ each run's output.
 runs/RUN/run.json records where the run came from (commit, binary and its sha256, kicad-cli,
@@ -224,7 +226,11 @@ def route_one(b, run_dir, recipe, timeout, seed):
         res["peak_mb"] = round(int(timing.read_text().split()[-1]) / 1024)
     except (OSError, ValueError, IndexError):
         pass
-    if out.exists():
+    # A router that failed wrote the input board, the designer's copper and all, or nothing: what
+    # KiCad would judge there is not the router's route.
+    if router_failed(res):
+        res["success"] = False
+    elif out.exists():
         for suffix in (".kicad_pro", ".kicad_dru"):
             if (src / "board").with_suffix(suffix).exists():
                 shutil.copy((src / "board").with_suffix(suffix), out.with_suffix(suffix))
@@ -245,8 +251,19 @@ def deadlines(log):
     return limited, any(line.startswith("deadline: the run's hard limit passed") for line in log.splitlines())
 
 
+def router_failed(res):
+    """Whether the router itself failed (crashed, refused, hung): its file is then the input board
+    or nothing, not a route, and is not judged."""
+    return res.get("code") not in (0, None)
+
+
 def score(res, run_dir, b):
     """Fills a result's verdict from the run's KiCad report, against the bare board's."""
+    if router_failed(res):
+        for k in ("unconnected", "new_errors", "new_warnings", "wirelength", "vias"):
+            res.pop(k, None)
+        res["success"] = False
+        return res
     d = run_dir / b
     src = HOME / "boards" / b
     report = d / "out.drc.json"
@@ -311,7 +328,7 @@ def run(a):
         for k, f in enumerate(concurrent.futures.as_completed(futures), 1):
             r = f.result()
             ok += bool(r.get("success"))
-            verdict = "ok" if r.get("success") else "REFEREE FAILED" if "referee_error" in r else "FAIL"
+            verdict = "ok" if r.get("success") else "REFEREE FAILED" if "referee_error" in r else f"ROUTER FAILED (code {r.get('code')})" if router_failed(r) else "FAIL"
             print(f"[{k}/{len(ids)}] {r['id']}: {verdict} open {r.get('unconnected')} new {r.get('new_errors')} {r['seconds']} s", flush=True)
     print(f"{ok} of {len(ids)} succeeded")
 
@@ -384,15 +401,17 @@ def compare(a):
         def why(r):
             if "referee_error" in r:
                 return "referee failed"
-            if "unconnected" not in r:
+            if router_failed(r) or "unconnected" not in r:
                 return f"router failed (code {r.get('code')})"
             return f"open {r['unconnected']}" + (f", new {sorted(r['new_errors'])}" if r.get("new_errors") else "")
         for title, ids, rs, was in (("lost", lost, new, ""), ("won", won, base, "was ")):
             print(f"   {title} {len(ids)}" + "".join(f"\n      {i}: {was}{why(rs[i])}" for i in ids))
-        gained = {i: sorted(set(new[i].get("new_errors") or {}) - set(base[i].get("new_errors") or {})) for i in common}
+        # A failed router's run has no verdict (results judged before `router_failed` carry one).
+        errs = lambda r: {} if router_failed(r) else r.get("new_errors") or {}
+        gained = {i: sorted(set(errs(new[i])) - set(errs(base[i]))) for i in common}
         gained = {i: t for i, t in gained.items() if t}
-        changed = [i for i in common if set(new[i].get("new_errors") or {}) != set(base[i].get("new_errors") or {})]
-        print(f"   error types differ on {len(changed)} boards, gained on {len(gained)}" + "".join(f"\n      {i}: {sorted(base[i].get('new_errors') or {})} -> {sorted(new[i].get('new_errors') or {})}" for i in changed))
+        changed = [i for i in common if set(errs(new[i])) != set(errs(base[i]))]
+        print(f"   error types differ on {len(changed)} boards, gained on {len(gained)}" + "".join(f"\n      {i}: {sorted(errs(base[i]))} -> {sorted(errs(new[i]))}" for i in changed))
         both = [i for i in common if base[i].get("success") and new[i].get("success")]
         vias = [sum(rs[i].get("vias") or 0 for i in both) for rs in (base, new)]
         wl = [sum(rs[i].get("wirelength") or 0 for i in both) for rs in (base, new)]
@@ -401,6 +420,9 @@ def compare(a):
         print(f"   at the time limit (>= timeout - 10 s): {sum(base[i]['seconds'] >= limits[0] for i in common)} -> {sum(new[i]['seconds'] >= limits[1] for i in common)}")
         refs = [[i for i in common if "referee_error" in rs[i]] for rs in (base, new)]
         print(f"   referee failures: {len(refs[0])} -> {len(refs[1])}" + "".join(f"\n      {i}: {new[i]['referee_error'][:120]!r}" for i in refs[1]))
+        broke = [[i for i in common if router_failed(rs[i])] for rs in (base, new)]
+        newly_broke = [i for i in broke[1] if i not in broke[0]]
+        print(f"   router failures (crash, refusal, hang): {len(broke[0])} -> {len(broke[1])}" + "".join(f"\n      {i}: code {new[i].get('code')}" for i in broke[1]))
         peaks = {i: new[i]["peak_mb"] for i in common if "peak_mb" in new[i]}
         if peaks:
             top = max(peaks, key=peaks.get)
@@ -415,9 +437,10 @@ def compare(a):
         moved = [i for i in untouched if same(base[i]) != same(new[i])]
         if any("time_limited" in rs[i] for rs in (base, new) for i in common):
             print(f"   untouched by any deadline in both: {len(untouched)} boards, {len(moved)} differ" + "".join(f"\n      {i}: vias {base[i].get('vias')} -> {new[i].get('vias')}, open {base[i].get('unconnected')} -> {new[i].get('unconnected')}" for i in moved))
-        ok = len(lost) <= floor and not gained and not (a.exact and moved)
+        # A crash is never noise.
+        ok = len(lost) <= floor and not gained and not newly_broke and not (a.exact and moved)
         passed &= ok
-        print(f"   verdict: {'PASS' if ok else 'FAIL'}: lost {len(lost)} (noise {floor}), won {len(won)}, boards gaining an error type {len(gained)}")
+        print(f"   verdict: {'PASS' if ok else 'FAIL'}: lost {len(lost)} (noise {floor}), won {len(won)}, boards gaining an error type {len(gained)}, new router failures {len(newly_broke)}")
         keys = ("success", "unconnected", "new_errors", "vias", "wirelength", "seconds", "code", "peak_mb", "referee_error")
         for i in common:
             row = table["boards"].setdefault(i, {a.runs[0]: {k: base[i].get(k) for k in keys}})

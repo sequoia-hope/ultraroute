@@ -68,7 +68,10 @@ def route_one(name, run_dir, timeout, extra=()):
     r = subprocess.run(pcbench.CAP + [str(x) for x in args], capture_output=True, text=True)
     (d / "log.txt").write_text(r.stderr[-200_000:])
     res = {"board": name, "code": r.returncode}
-    if out.exists():
+    # A router that failed wrote the input board, the designer's copper and all: not judged.
+    if pcbench.router_failed(res):
+        res["success"] = False
+    elif out.exists():
         res["wirelength"], res["vias"] = pcbench.lengths(out)
         try:
             u, e, w = pcbench.drc(out, d, "out")
@@ -104,6 +107,9 @@ def compare(a):
     for name in sorted(set(x) & set(y)):
         p, q = x[name], y[name]
         errors = lambda r: sum(r.get("new_errors", {}).values())
+        if pcbench.router_failed(p) or pcbench.router_failed(q):
+            print(f"{name:20} ROUTER FAILED: code {p.get('code')} -> {q.get('code')}")
+            continue
         print(f"{name:20} open {p.get('unconnected')!s:>3} -> {q.get('unconnected')!s:<3} vias {p.get('vias')!s:>4} -> {q.get('vias')!s:<4} "
               f"new errors {errors(p):>3} -> {errors(q):<3} {q.get('new_errors') or ''}")
 
