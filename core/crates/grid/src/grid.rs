@@ -160,6 +160,8 @@ pub struct RouteGrid {
     pub directional: bool,
     /// When a search on the grid gives up; the stage searching sets it from its own deadline.
     pub deadline: crate::clock::Deadline,
+    /// What other nets' thermal spokes charge, shared with the map's other views; none for none.
+    pub spokes: Option<std::sync::Arc<crate::spokes::SpokePrices>>,
 }
 
 impl RouteGrid {
@@ -171,11 +173,12 @@ impl RouteGrid {
 
 impl RouteGrid {
     pub fn penalty_at(&self, index: usize) -> u32 {
-        self.penalty.get(index).copied().unwrap_or(0) + self.region_cost.get(index).copied().unwrap_or(0)
+        let spokes = self.spokes.as_ref().map_or(0, |s| s.track(index, self.net));
+        self.penalty.get(index).copied().unwrap_or(0) + self.region_cost.get(index).copied().unwrap_or(0) + spokes
     }
 
     pub fn via_penalty_at(&self, cell: usize) -> u32 {
-        self.via_penalty.get(cell).copied().unwrap_or(0)
+        self.via_penalty.get(cell).copied().unwrap_or(0) + self.spokes.as_ref().map_or(0, |s| s.via(cell, self.net))
     }
 
     pub fn cell_count(&self) -> usize {
@@ -214,6 +217,8 @@ pub struct ObstacleMap {
     pub(crate) via_avoid: Vec<u32>,
     /// The board's routing regions on these cells, applied to each net's view.
     pub(crate) regions: Vec<crate::regions::RegionRaster>,
+    /// What the thermal spokes pads can spare charge on these cells, shared by the views.
+    pub(crate) spokes: Option<std::sync::Arc<crate::spokes::SpokePrices>>,
 }
 
 
@@ -250,10 +255,12 @@ impl ObstacleMap {
             via_owner: vec![FREE; nx * ny],
             via_avoid: Vec::new(),
             regions: Vec::new(),
+            spokes: None,
         };
         map.stamp_outline(board);
         map.stamp_via_avoid(board);
         map.regions = map.region_rasters(board);
+        map.spokes = map.spoke_prices(board);
         map.stamp_mask_areas(board, &Deadline::default());
         let max_clr = (0..board.nets.len() as u32)
             .map(|n| map.clearance_to(board, n))
@@ -315,8 +322,10 @@ impl ObstacleMap {
             via_owner: rows(&self.via_owner, 1, full),
             via_avoid: Vec::new(),
             regions: Vec::new(),
+            spokes: None,
         };
         map.regions = map.region_rasters(board);
+        map.spokes = map.spoke_prices(board);
         if !self.via_avoid.is_empty() {
             map.via_avoid = (j0..j1).flat_map(|j| self.via_avoid[j * self.nx + i0..j * self.nx + i0 + nx].iter().copied()).collect();
         }
@@ -371,6 +380,7 @@ impl ObstacleMap {
             via_owner: vec![FREE; nx * ny],
             via_avoid: Vec::new(),
             regions: Vec::new(),
+            spokes: None,
         };
         map.stamp_via_avoid(board);
         // What does not move while routing (outline, pads, pours, keepouts) is stamped once and
@@ -385,6 +395,7 @@ impl ObstacleMap {
             return None;
         }
         map.regions = map.region_rasters(board);
+        map.spokes = map.spoke_prices(board);
         if !map.stamp_mask_areas(board, deadline) {
             return None;
         }
@@ -834,9 +845,13 @@ impl ObstacleMap {
             }
             return;
         }
-        // Room for a pour's thermal spoke: other nets keep their clearance from it, and the
-        // zone's where wider, as from the pour's own copper.
-        if let Kind::Spoke { clearance: zone, .. } = item.kind {
+        // Room for a pour's thermal spoke its pad cannot spare: other nets keep their clearance
+        // from it, and the zone's where wider, as from the pour's own copper. One it can spare
+        // is priced instead (`region_rasters`), and the checker refuses the cut too many.
+        if let Kind::Spoke { clearance: zone, spare, .. } = item.kind {
+            if spare > 0 {
+                return;
+            }
             let implicit = self.clearance_to(board, item.net);
             let clearance = self.rule_to(board, "clearance", id, item, false, implicit).max(zone);
             let via_clearance = self.rule_to(board, "clearance", id, item, true, implicit).max(zone);
@@ -985,6 +1000,7 @@ impl ObstacleMap {
         grid.region_cost.clear();
         grid.pours_block = self.pours_block;
         grid.directional = false;
+        grid.spokes.clone_from(&self.spokes);
         self.apply_regions(net, grid);
     }
 
@@ -1008,6 +1024,7 @@ impl ObstacleMap {
             pours_block: self.pours_block,
             directional: false,
             deadline: Default::default(),
+            spokes: self.spokes.clone(),
         };
         self.apply_regions(net, &mut grid);
         grid
@@ -1090,6 +1107,7 @@ mod tests {
                 via_owner: vec![FREE; like.via_owner.len()],
                 via_avoid: Vec::new(),
                 regions: Vec::new(),
+                spokes: None,
             };
             map.stamp_outline(board);
             map.stamp_mask_areas(board, &Deadline::default());

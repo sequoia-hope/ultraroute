@@ -114,10 +114,16 @@ def drc(pcb, out_dir, stem):
     return tally(json.loads(report.read_text()))
 
 
+# Violations of the pour refilled round the routes that name no routed copper: a pad whose
+# thermal spokes the new copper cut off names only the zone and the pad.
+POUR_AFTER_ROUTING = {"starved_thermal"}
+
+
 def routed(v):
     """Whether a violation involves routed copper (a track, arc or via), not only the board's own
-    parts, edges and drawings: a pad too near the edge is the designer's, whatever KiCad reports."""
-    return any(re.match(r"(Track|Via|Arc) \[", i.get("description", "")) for i in v.get("items", []))
+    parts, edges and drawings: a pad too near the edge is the designer's, whatever KiCad reports.
+    A pour starved by the routes counts too; what the bare board has already is taken off."""
+    return v.get("type") in POUR_AFTER_ROUTING or any(re.match(r"(Track|Via|Arc) \[", i.get("description", "")) for i in v.get("items", []))
 
 
 def tally(d):

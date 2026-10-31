@@ -33,7 +33,15 @@ pub struct Rules {
     /// copper clearance"); 0, KiCad's default, where the project leaves it out.
     #[serde(default)]
     pub solder_mask_to_copper_clearance: f64,
+    /// How many of a pad's thermal spokes must reach a pour that joins it by reliefs (KiCad's
+    /// "minimum thermal relief spoke count"); 2, KiCad's default, where the project leaves it out.
+    #[serde(default = "two")]
+    pub min_resolved_spokes: f64,
     pub warnings: Vec<String>,
+}
+
+fn two() -> f64 {
+    2.0
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -215,6 +223,7 @@ impl Rules {
             assignments,
             custom: None,
             solder_mask_to_copper_clearance: rules["solder_mask_to_copper_clearance"].as_f64().unwrap_or(0.0) * MM,
+            min_resolved_spokes: rules["min_resolved_spokes"].as_f64().unwrap_or(2.0),
             warnings,
         })
     }
@@ -434,6 +443,12 @@ mod tests {
         near(Rules::parse("{}").unwrap().solder_mask_to_copper_clearance, 0.0);
         let r = Rules::parse(r#"{"board":{"design_settings":{"rules":{"solder_mask_to_copper_clearance":0.005}}}}"#).unwrap();
         near(r.solder_mask_to_copper_clearance, 0.005e-3);
+    }
+
+    #[test]
+    fn the_projects_minimum_spoke_count_is_read() {
+        assert_eq!(Rules::parse("{}").unwrap().min_resolved_spokes, 2.0);
+        assert_eq!(Rules::parse(r#"{"board":{"design_settings":{"rules":{"min_resolved_spokes":1}}}}"#).unwrap().min_resolved_spokes, 1.0);
     }
 
 }

@@ -758,6 +758,7 @@ fn coupled_grid(board: &Board, options: &PairOptions, pair: &Pair, profile: &Pro
         pours_block: options.pours_block,
         directional: false,
         deadline: options.deadline.clone(),
+        spokes: map.spokes.clone(),
     };
     map.apply_regions(pair.p, &mut grid);
     // Enforce any region rules specific to the negative net without double-counting shared pour costs.
@@ -779,6 +780,7 @@ fn coupled_grid(board: &Board, options: &PairOptions, pair: &Pair, profile: &Pro
         pours_block: options.pours_block,
         directional: false,
         deadline: Default::default(),
+        spokes: map.spokes.clone(),
     };
     map.apply_regions(pair.n, &mut grid_n);
     for (b, &bn) in grid.blocked.iter_mut().zip(&grid_n.blocked) {

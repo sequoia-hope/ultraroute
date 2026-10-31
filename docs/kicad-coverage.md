@@ -54,10 +54,21 @@ where a rule now closes space the old router used.
 2. **Done.** Net classes resolve as KiCad 9 does: every class a net is assigned or matches,
    by priority then the project's order, each field from the first that sets it.
 3. **Done.** `solder_mask_to_copper_clearance` is read.
-4. **Half done.** A pad whose zone connection is none (its own `zone_connect 0`, its
+4. **Done.** A pad whose zone connection is none (its own `zone_connect 0`, its
    footprint's, or the zone's `connect_pads no`) is no longer joined by its net's pour, plane or
-   kept block pour. Thermal spokes (`thermal_gap`, `thermal_bridge_width`, `min_resolved_spokes`)
-   are still not modelled: a reroute can starve a relief that KiCad then reports.
+   kept block pour. A pad a pour joins by thermal reliefs keeps its spokes (`board::spokes`):
+   every spoke KiCad would draw that fits (inside the zone, clear of fixed copper, not landing
+   in another pad's relief) is room other nets' new copper may cut only while the pad keeps
+   `min_resolved_spokes` (the project's, else a custom rule's, else 2), its own net's tracks
+   out of it counting as spokes, as KiCad counts them. Gap and width come from the pad, the
+   rules (`thermal_relief_gap`, `thermal_spoke_width`), the zone, KiCad's defaults. The grid
+   walls off the spokes a pad cannot spare and prices the rest. Checked with kicad-cli 9.0.8
+   probes (a track kills a spoke when its clearance leaves the pour past the gap less than
+   `min_thickness` deep; round pads at 45°) and KiCad's DRC source (spokes counted where the
+   fill crosses the pad grown by half the gap; a pad no spoke reaches is skipped). Rulebench:
+   8 starved pads to 1, the one a pad the designer's own board starves too. Left: a pad short
+   of room could be given a track of its net into the pour, as designers do; a spoke's land
+   is not proven to join the rest of the pour.
 5. **KiCad 9 padstacks** are taken as the front shape on every layer, now with a warning.
    Unsafe where an inner pad is larger. None in the corpus yet.
 6. **Judged, not used.** `Board::clearance_between` gives KiCad's answer (a pad's or footprint's
@@ -101,8 +112,9 @@ way Stage 9 did; steps 1-3 also add the `~/pcb` rule files above as parser tests
 3. **Done (2026-10-30): a custom-rules engine**, as described above. Left: area-exact
    clearances and widths for copper not yet laid (stamping each named area with its own rule
    instead of the strictest), and per-layer track widths.
-4. **Zone connection and thermals.** Done: no-connection pads stay unjoined. Left: thermal
-   spokes for planes and unfilled zones; keep `min_resolved_spokes` spokes free of new copper.
+4. **Done (2026-10-31): zone connection and thermals.** No-connection pads stay unjoined;
+   relief pads keep `min_resolved_spokes` spokes free of new copper (above). Left: a track
+   into the pour for a pad short of room.
 5. **Length and via-count limits.** Done: reported after routing. Left: steering (a net over
    its length rips and reroutes with a length cost), and `diff_pair_uncoupled`.
 6. **Pad geometry.** Done: clearance overrides judged as KiCad does; warnings for the rest. Left:

@@ -153,10 +153,12 @@ pub enum Kind {
     Pour { zone: usize, kept: bool },
     /// A rule area, and the footprint it belongs to, whose own pads it does not keep out.
     Keepout { forbids: Keepout, footprint: Option<usize> },
-    /// Room for a thermal spoke of zone `zone` to a pad of footprint `footprint` (see
-    /// [`crate::spokes`]): other nets' new copper keeps its clearance from it, and the zone's
-    /// `clearance` where wider. It is not copper and joins nothing.
-    Spoke { zone: usize, footprint: usize, clearance: Nm },
+    /// Room for a thermal spoke of zone `zone` to pad `pad` of footprint `footprint` (see
+    /// [`crate::spokes`]), one of the pad's on its layer that fit, of which `need` must stay
+    /// whole and `spare` more may go: new copper of another net that comes within its clearance
+    /// of one (or the zone's `clearance`, where wider) cuts it. It is not copper and joins
+    /// nothing.
+    Spoke { zone: usize, footprint: usize, pad: ItemId, need: u8, spare: u8, clearance: Nm },
 }
 
 /// How a rule area's name begins when it is an area for vias to avoid rather than a keepout.

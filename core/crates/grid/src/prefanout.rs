@@ -777,6 +777,7 @@ fn single_layer_view(map: &ObstacleMap, net: u32, board_layer: usize) -> RouteGr
         pours_block: full.pours_block,
         directional: false,
         deadline: Default::default(),
+        spokes: None,
     }
 }
 

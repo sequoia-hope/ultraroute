@@ -1,7 +1,7 @@
 //! Room for the thermal spokes a pour reaches its pads by. Where a zone joins a pad with thermal
 //! reliefs, KiCad's filler leaves a gap round the pad and bridges it with spokes, one every
 //! quarter turn; DRC reports the pad (`starved_thermal`) when fewer than the rules' minimum
-//! (`min_resolved_spokes`, 2 by default) reach the pour, unless none do. A spoke reaches it when
+//! (`min_resolved_spokes`, the project's, 2 by default, or a custom rule's) reach the pour, unless none do. A spoke reaches it when
 //! the pour still lies past the gap at its tip, at least the zone's minimum width deep. New
 //! copper of another net laid there, across the gap or past it, takes the spoke away.
 //!
@@ -23,8 +23,6 @@ use crate::model::{Board, Item, ItemId, Kind};
 /// KiCad's defaults for a zone's thermal gap and spoke width, where the zone sets neither.
 const DEFAULT_GAP: f64 = 0.5e-3;
 const DEFAULT_WIDTH: f64 = 0.5e-3;
-/// KiCad's default `min_resolved_spokes`.
-const DEFAULT_SPOKES: f64 = 2.0;
 /// The shallowest land kept past a spoke's gap, where a zone sets no minimum width.
 const MIN_LAND: Nm = 25_000;
 
@@ -107,9 +105,9 @@ impl Board {
                         true => {
                             let name = self.layers[layer].clone();
                             let r = self.custom.resolve("min_resolved_spokes", &me, pour_thing.as_ref().map(|t| t as &dyn kicad_pcb::dru::Object), &name, self.layers.len());
-                            r.strictest_min(DEFAULT_SPOKES)
+                            r.strictest_min(self.rules.min_resolved_spokes)
                         }
-                        false => DEFAULT_SPOKES,
+                        false => self.rules.min_resolved_spokes,
                     }
                     .round()
                     .clamp(0.0, 4.0) as usize;
@@ -118,25 +116,20 @@ impl Board {
                     }
                     let land = nm(zone.min_thickness).max(MIN_LAND);
                     let half = width.max(land) / 2;
-                    // The four spokes, those the file's pour reaches first (it is KiCad's own
-                    // answer, made round the designer's copper), each in KiCad's order.
-                    let mut fits: Vec<(bool, Shape)> = Vec::new();
+                    let mut fits: Vec<Shape> = Vec::new();
                     for turn in 0..4 {
                         let (shape, past) = spoke_shape(pad.spoke_centre, pad.spoke_angle + 90.0 * turn as f64, &item.shape, gap, land, half);
                         let Shape::Polygon(corners) = &shape else { continue };
-                        if !corners.iter().all(|&p| within(p)) || self.in_a_relief(&past, id, &item, layer, gap) || !self.room_for(&shape, &item, z, layer) {
-                            continue;
+                        if corners.iter().all(|&p| within(p)) && !self.in_a_relief(&past, id, &item, layer, gap) && self.room_for(&shape, &item, z, layer) {
+                            fits.push(shape);
                         }
-                        let tip = Point::new((corners[1].x + corners[2].x) / 2, (corners[1].y + corners[2].y) / 2);
-                        let poured = self.items().any(|(_, it)| matches!(it.kind, Kind::Pour { zone: q, .. } if q == z) && it.on(layer) && it.shape.contains(tip));
-                        fits.push((poured, shape));
                     }
-                    fits.sort_by_key(|f| !f.0);
                     wanted += 1;
                     short += usize::from(fits.len() < count);
-                    for (_, shape) in fits.into_iter().take(count) {
+                    let spare = fits.len().saturating_sub(count) as u8;
+                    for shape in fits {
                         self.insert(Item {
-                            kind: Kind::Spoke { zone: z, footprint: pad.footprint, clearance: nm(zone.clearance) },
+                            kind: Kind::Spoke { zone: z, footprint: pad.footprint, pad: id, need: count as u8, spare, clearance: nm(zone.clearance) },
                             net: zone.net,
                             layers: 1 << layer,
                             shape,
@@ -172,11 +165,13 @@ impl Board {
     }
 
     /// Whether a spoke of `pad`'s zone `zone` fits on `layer` as `shape`: as the zone's own copper
-    /// would, clear of other nets' copper (pours refilled round it aside), the board's edge, holes
-    /// and keepouts that forbid pours.
+    /// would, clear of other nets' copper (pours refilled round it and unlocked tracks and vias
+    /// aside), the board's edge, holes and keepouts that forbid pours.
     fn room_for(&mut self, shape: &Shape, pad: &Item, zone: usize, layer: usize) -> bool {
         let trial = self.insert(Item { kind: Kind::Pour { zone, kept: true }, net: pad.net, layers: 1 << layer, shape: shape.clone(), hole: None, locked: true, span: None });
-        let clear = crate::check::check_item(self, trial).is_empty();
+        // Unlocked tracks and vias are the router's to take up (`--strip-all` takes them all,
+        // after loading): they leave a spoke its room.
+        let clear = crate::check::check_item(self, trial).iter().all(|v| v.b.and_then(|b| self.item(b)).is_some_and(|o| matches!(o.kind, Kind::Track | Kind::Via) && !o.locked));
         self.discard(trial);
         clear
     }

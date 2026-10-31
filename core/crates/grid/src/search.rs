@@ -537,6 +537,7 @@ mod tests {
             pours_block: false,
             directional: false,
             deadline: Default::default(),
+            spokes: None,
         };
         let via_at = |path: &GridPath| path.windows(2).find(|w| w[0].0 != w[1].0).map(|w| w[1].1);
         let (src, tgt) = (vec![0], vec![nx + nx - 1]);
@@ -580,6 +581,7 @@ mod tests {
             pours_block: false,
             directional: false,
             deadline: Default::default(),
+            spokes: None,
         }
     }
 
@@ -635,6 +637,7 @@ mod tests {
             pours_block: false,
             directional: true,
             deadline: Default::default(),
+            spokes: None,
         };
         let pth = |i: usize, j: usize| vec![grid.index(0, i, j), grid.index(1, i, j)];
         let horiz = route_astar(&grid, &pth(2, 12), &pth(22, 12), 500).unwrap();

@@ -60,12 +60,22 @@ fn track(b: &mut Board, x: f64) -> ItemId {
     })
 }
 
+/// How many whole spokes each pad's kept spokes ask for.
+fn needs(b: &Board) -> Vec<u8> {
+    b.items().filter_map(|(_, it)| match it.kind {
+        Kind::Spoke { need, .. } => Some(need),
+        _ => None,
+    }).collect()
+}
+
 #[test]
-fn a_relief_pad_keeps_room_for_two_spokes_unless_a_rule_asks_more() {
-    assert_eq!(tips(&board(RECT, "", "", "")).len(), 2);
+fn a_relief_pad_keeps_room_for_every_spoke_that_fits_and_needs_two_unless_a_rule_asks_more() {
     // Along the pad's axes, past its edge, the 0.5 mm gap and a 0.25 mm land of pour.
-    assert_eq!(tips(&board(RECT, "", "", FOUR)), vec![(8.75, 10.0), (10.0, 8.95), (10.0, 11.05), (11.25, 10.0)]);
-    assert_eq!(tips(&board(RECT, "", "", "(version 1) (rule one (constraint min_resolved_spokes 1))")).len(), 1);
+    let four = vec![(8.75, 10.0), (10.0, 8.95), (10.0, 11.05), (11.25, 10.0)];
+    assert_eq!(tips(&board(RECT, "", "", "")), four);
+    assert_eq!(needs(&board(RECT, "", "", "")), vec![2; 4]);
+    assert_eq!(needs(&board(RECT, "", "", FOUR)), vec![4; 4]);
+    assert_eq!(needs(&board(RECT, "", "", "(version 1) (rule one (constraint min_resolved_spokes 1))")), vec![1; 4]);
 }
 
 #[test]
@@ -76,7 +86,7 @@ fn a_solid_or_unjoined_pad_keeps_none() {
     let solid = "(pad \"1\" smd rect (at 0 0) (size 1 0.6) (layers \"F.Cu\") (net 1 \"A\") (zone_connect 2))";
     assert!(tips(&board(solid, "", "", "")).is_empty(), "the pad's own connection is solid");
     let tht = "(pad \"1\" thru_hole circle (at 0 0) (size 1.6 1.6) (drill 0.8) (layers \"*.Cu\") (net 1 \"A\"))";
-    assert_eq!(tips(&board(tht, "thru_hole_only", "", "")).len(), 2);
+    assert_eq!(tips(&board(tht, "thru_hole_only", "", "")).len(), 4);
 }
 
 #[test]
@@ -115,6 +125,33 @@ fn new_copper_of_another_net_keeps_clear_of_a_spoke_as_kicad_judges_it() {
     assert!(check_item(&b, clear).is_empty(), "{:?}", check_item(&b, clear));
 }
 
+/// A 0.2 mm track of net B from (2, y) to (18, y).
+fn across(b: &mut Board, y: f64) -> ItemId {
+    b.insert(Item {
+        kind: Kind::Track,
+        net: 2,
+        layers: 1,
+        shape: Shape::Capsule { a: Point::new(nm(2e-3), nm(y * 1e-3)), b: Point::new(nm(18e-3), nm(y * 1e-3)), r: nm(0.1e-3) },
+        hole: None,
+        locked: false,
+        span: None,
+    })
+}
+
+#[test]
+fn other_nets_may_cut_the_spokes_a_pad_can_spare_and_no_more() {
+    let mut b = board(RECT, "", "", "");
+    let clearance = |b: &Board, id| check_item(b, id).iter().filter(|v| v.rule == Rule::Clearance).count();
+    let first = track(&mut b, 11.5);
+    assert_eq!(clearance(&b, first), 0, "the +x spoke goes, three are left");
+    let second = track(&mut b, 8.5);
+    assert_eq!(clearance(&b, second), 0, "the -x spoke goes, two are left");
+    let third = across(&mut b, 11.3);
+    assert_eq!(clearance(&b, third), 1, "the +y spoke would leave one");
+    b.remove(first);
+    assert_eq!(clearance(&b, third), 0, "with the +x spoke back, two are left");
+}
+
 #[test]
 fn a_spoke_joins_nothing() {
     // A pad of net A far outside the zone, and a track of A ending inside U1's +x spoke: the
@@ -144,4 +181,58 @@ fn a_spoke_that_lands_in_another_pads_relief_is_not_kept() {
     let tips = tips(&board(RECT, "", above, FOUR));
     assert!(!tips.contains(&(10.0, 8.95)) && !tips.contains(&(10.0, 10.25)), "{tips:?}");
     assert!(tips.contains(&(11.25, 10.0)) && tips.contains(&(10.0, 11.05)), "{tips:?}");
+}
+
+#[test]
+fn an_unlocked_track_leaves_a_spoke_its_room_and_a_locked_one_does_not() {
+    // Net B's track across the +x spoke's gap, as the designer left it: the router may take an
+    // unlocked one up (`--strip-all` takes them all once the board is loaded).
+    let across = |lock: &str| format!("(segment (start 10.8 5) (end 10.8 15) (width 0.2) (layer \"F.Cu\") (net 2) {lock} (uuid \"5e000000-0000-4000-8000-000000000001\"))");
+    assert_eq!(tips(&board(RECT, "", &across(""), FOUR)).len(), 4);
+    assert_eq!(tips(&board(RECT, "", &across("(locked yes)"), FOUR)), vec![(8.75, 10.0), (10.0, 8.95), (10.0, 11.05)]);
+}
+
+/// A track of net A from (x0, y0) to (x1, y1).
+fn own(b: &mut Board, (x0, y0): (f64, f64), (x1, y1): (f64, f64)) -> ItemId {
+    b.insert(Item {
+        kind: Kind::Track,
+        net: 1,
+        layers: 1,
+        shape: Shape::Capsule { a: Point::new(nm(x0 * 1e-3), nm(y0 * 1e-3)), b: Point::new(nm(x1 * 1e-3), nm(y1 * 1e-3)), r: nm(0.1e-3) },
+        hole: None,
+        locked: false,
+        span: None,
+    })
+}
+
+#[test]
+fn the_projects_minimum_holds_where_no_rule_sets_one() {
+    let text = std::fs::read_to_string(env!("CARGO_MANIFEST_DIR").to_string() + "/../../fixtures/bluebuzz-rm2.kicad_pro").unwrap();
+    assert!(text.contains("\"min_resolved_spokes\": 1"));
+    let (pcb, copper) = kicad_pcb::parse_board(&std::fs::read_to_string(env!("CARGO_MANIFEST_DIR").to_string() + "/../../fixtures/bluebuzz-rm2.kicad_pcb").unwrap()).unwrap();
+    let b = Board::new(&pcb, &copper, kicad_pcb::Rules::parse(&text).unwrap());
+    assert!(needs(&b).iter().all(|&n| n == 1), "bluebuzz asks one spoke of each pad");
+}
+
+#[test]
+fn a_track_of_the_pads_own_net_out_of_it_counts_as_a_spoke_and_a_via_on_it_joins_it() {
+    let clearance = |b: &Board, id| check_item(b, id).iter().filter(|v| v.rule == Rule::Clearance).count();
+    let mut b = board(RECT, "", "", "");
+    track(&mut b, 11.5);
+    track(&mut b, 8.5);
+    let third = across(&mut b, 11.3);
+    assert_eq!(clearance(&b, third), 1, "one spoke left of two");
+    own(&mut b, (10.0, 10.0), (10.0, 6.0));
+    assert_eq!(clearance(&b, third), 0, "the -y spoke and the pad's own track out of it");
+    // All four cut: KiCad leaves a pad no spoke reaches alone; with a via of its net on it, it
+    // is joined.
+    let mut b = board(RECT, "", "", "");
+    track(&mut b, 11.5);
+    track(&mut b, 8.5);
+    across(&mut b, 11.3);
+    let last = across(&mut b, 8.7);
+    assert_eq!(clearance(&b, last), 1, "none left, and nothing else joins the pad");
+    let at = Point::new(nm(10e-3), nm(10e-3));
+    b.insert(Item { kind: Kind::Via, net: 1, layers: 3, shape: Shape::Capsule { a: at, b: at, r: nm(0.2e-3) }, hole: Some((at, nm(0.1e-3))), locked: false, span: None });
+    assert_eq!(clearance(&b, last), 0, "a via of its net stands on it");
 }

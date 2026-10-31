@@ -163,6 +163,7 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
         pours_block: options.pours_block,
         directional: false,
         deadline: options.deadline.clone(),
+        spokes: None,
     };
     // The GPU's fields know nothing of directions.
     let directional = options.directional && board.layers.len() == 2 && solver.batch_size() <= 1;

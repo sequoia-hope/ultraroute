@@ -180,7 +180,8 @@ order of work are in `docs/kicad-coverage.md`.
       match wins) asked by the checker and the grid alike: clearances, holes, edges, widths, via
       sizes, `disallow` by net, layer and named area; pad clearances over rules, as KiCad orders
       them.
-- [ ] Zone connections and thermals: pads that no zone joins (done); thermal spokes kept free.
+- [x] Zone connections and thermals: pads that no zone joins; thermal spokes kept free as KiCad
+      counts them (`min_resolved_spokes`).
 - [ ] Length and via-count limits: reported after routing (done); routed to.
 - [ ] Pad geometry: KiCad 9 padstacks, `remove_unused_layers`, curves (warned of now).
 - [x] Writer: arcs out (`--arcs MM`), tuning patterns held, teardrops warned of.
