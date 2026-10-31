@@ -112,12 +112,15 @@ fn pad_half_side(pad: &board::Item) -> Nm {
 
 /// What a board's map covers: its outline, or with none its items' extent and room round it, not
 /// only their corners nearest the origin, which left a map too small to route round anything.
+/// Tracks and vias the router may lay or take up are left out, so every map of one run is the
+/// same size (a map made mid-run once came out larger than those whose cells it was read with).
 pub(crate) fn map_extent(board: &Board) -> board::BBox {
     let b = board.outline.iter().flatten().copied().fold(None, |b: Option<board::BBox>, p| {
         Some(b.map_or(board::BBox::of([p]), |b| b.union(board::BBox::of([p]))))
     });
     b.unwrap_or_else(|| {
-        let items = board.items().map(|(_, it)| it.shape.bbox()).reduce(board::BBox::union);
+        let fixed = board.items().filter(|(_, it)| it.locked || !matches!(it.kind, Kind::Track | Kind::Via));
+        let items = fixed.map(|(_, it)| it.shape.bbox()).reduce(board::BBox::union);
         items.unwrap_or(board::BBox::of([Point::new(0, 0)])).grow(2_000_000)
     })
 }
@@ -1060,6 +1063,35 @@ fn unrun(runs: &[(i32, u32)], cells: &mut [i32]) {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn a_board_with_no_outline_keeps_its_maps_size_whatever_the_router_lays() {
+        let (pcb, copper) = kicad_pcb::parse_board(
+            "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal)) (net 0 \"\") (net 1 \"A\")
+             (footprint \"R\" (layer \"F.Cu\") (at 10 10) (property \"Reference\" \"R1\")
+               (pad \"1\" smd rect (at -1 0) (size 1 1) (layers \"F.Cu\") (net 1 \"A\"))
+               (pad \"2\" smd rect (at 1 0) (size 1 1) (layers \"F.Cu\") (net 1 \"A\"))))",
+        )
+        .unwrap();
+        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+        assert!(board.outline.is_empty());
+        let size = |b: &Board| {
+            let m = ObstacleMap::new(b, Profile::for_net(b, 1), 50_000, false);
+            (m.x0, m.y0, m.nx, m.ny)
+        };
+        let before = size(&board);
+        // A route of the router's swinging out into the room round the parts.
+        board.insert(board::Item {
+            kind: Kind::Track,
+            net: 1,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(9_000_000, 10_000_000), b: Point::new(9_000_000, 12_500_000), r: 100_000 },
+            hole: None,
+            locked: false,
+            span: None,
+        });
+        assert_eq!(size(&board), before);
+    }
 
     #[test]
     fn a_window_map_agrees_cell_for_cell_with_a_full_board_map() {

@@ -1290,6 +1290,11 @@ fn prepare(a: &Args, board: &mut Board, ledger: &mut Ledger) {
             }
         }
     }
+    // What is left of the board's copper, locked, may lie on another net's pad.
+    for w in board.locked_copper_on_pads() {
+        eprintln!("warning: {w}");
+        board.warnings.push(w);
+    }
     // An inner layer one net's pour all but fills is a plane in all but name: signals routed
     // across it cut its return paths. With --auto-planes it is taken as one; otherwise said.
     // (Reserving every such layer costs some boards connections: bluebuzz has three.)
