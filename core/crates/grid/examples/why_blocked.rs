@@ -85,6 +85,7 @@ fn main() {
                 Kind::Via => "via".into(),
                 Kind::Pour { kept, zone } => format!("{}pour (zone {zone})", if *kept { "kept " } else { "" }),
                 Kind::Keepout { footprint, forbids } => format!("keepout of {} {:?}", footprint.map_or("the board".into(), |f| board.footprints[f].reference.clone()), forbids),
+                Kind::Spoke { zone, footprint, .. } => format!("thermal spoke (zone {zone}) of {}", board.footprints[*footprint].reference),
             };
             println!("  {:>8.3} mm  {what} {} on {}", it.shape.gap(&pad_shape) * 1e-6, board.net_name(it.net), board.layers[layer]);
         }
@@ -117,6 +118,7 @@ fn main() {
                     Kind::Via => format!("via {}", board.net_name(it.net)),
                     Kind::Pour { kept, .. } => format!("{}pour {}", if *kept { "kept " } else { "" }, board.net_name(it.net)),
                     Kind::Keepout { footprint, .. } => format!("keepout {}", footprint.map_or("board".into(), |f| board.footprints[f].reference.clone())),
+                    Kind::Spoke { footprint, .. } => format!("thermal spoke {} of {}", board.net_name(it.net), board.footprints[*footprint].reference),
                 };
                 *walls.entry(format!("{} on {}", what, board.layers[layer])).or_default() += 1;
             }

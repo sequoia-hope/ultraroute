@@ -120,6 +120,7 @@ pub fn rip_up_watch(
         pours_block: options.pours_block,
         directional: false,
         deadline: options.deadline.clone(),
+        spokes: None,
     };
     // Plane nets' connections are the planes' to make (`join_planes`), not rip-up's.
     let plane_nets: HashSet<u32> = if options.region_repair && !options.pours_block && board.planes != 0 {

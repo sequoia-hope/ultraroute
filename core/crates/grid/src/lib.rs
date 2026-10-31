@@ -21,6 +21,7 @@ pub mod push;
 pub mod ripup;
 pub mod route;
 mod regions;
+pub mod spokes;
 pub mod search;
 pub mod shove;
 pub mod tune;

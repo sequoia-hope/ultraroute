@@ -157,6 +157,18 @@ pub struct Zone {
     /// `(connect_pads no …)`: the zone joins no pad of its net (unless the pad says otherwise).
     #[serde(default)]
     pub no_pads: bool,
+    /// `(connect_pads yes …)`: the zone joins its pads solidly, with no thermal reliefs.
+    #[serde(default)]
+    pub solid_pads: bool,
+    /// `(connect_pads thru_hole_only …)`: reliefs for plated through-hole pads, solid for SMD.
+    #[serde(default)]
+    pub reliefs_tht_only: bool,
+    /// `(fill … (thermal_gap X) (thermal_bridge_width Y))`, in metres: the gap the pour keeps
+    /// round a pad it joins with thermal spokes, and the spokes' width; 0 when unset.
+    #[serde(default)]
+    pub thermal_gap: f64,
+    #[serde(default)]
+    pub thermal_bridge_width: f64,
     /// `(min_thickness …)`: the narrowest copper the fill keeps, in metres; 0 when unset.
     pub min_thickness: f64,
     /// Inside a footprint, the footprint's index in `Pcb::footprints`.
@@ -197,6 +209,20 @@ pub struct PadCopper {
     /// zone decides.
     #[serde(default)]
     pub zone_connect: Option<u8>,
+    /// Where a zone's thermal spokes to the pad start (the pad's shape centre, drill offset
+    /// applied), in metres, and the angle of the first spoke on the board, in degrees: the pad's
+    /// rotation plus its `(thermal_bridge_angle A)` (KiCad's default, 45 for round pads and 90
+    /// otherwise). The spokes run every quarter turn from it.
+    #[serde(default)]
+    pub spoke_centre: [f64; 2],
+    #[serde(default)]
+    pub spoke_angle: f64,
+    /// The pad's (else its footprint's) own `(thermal_gap X)` and `(thermal_bridge_width X)`
+    /// (`thermal_width` before KiCad 7), in metres, over the zone's.
+    #[serde(default)]
+    pub thermal_gap: Option<f64>,
+    #[serde(default)]
+    pub thermal_width: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -404,6 +430,9 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
                     pad_copper.zone_connect = connect(pad).or(fp_connect);
                     pad_copper.mask_margin = local(pad, "solder_mask_margin").or(margin).map(|mm| mm * MM);
                     pad_copper.clearance = local(pad, "clearance").or(clearance).map(|mm| mm * MM).filter(|c| *c > 0.0);
+                    pad_copper.thermal_gap = local(pad, "thermal_gap").or(local(child, "thermal_gap")).map(|mm| mm * MM);
+                    let width = |n: &Node| local(n, "thermal_bridge_width").or(local(n, "thermal_width"));
+                    pad_copper.thermal_width = width(pad).or(width(child)).map(|mm| mm * MM);
                     copper.pads.push(pad_copper);
                 }
                 for zone in child.find_all("zone") {
@@ -620,6 +649,8 @@ fn read_zone(z: &Node, footprint: Option<usize>) -> Result<Zone, KicadParse> {
             fill_spans.push(f.pos().into());
         }
     }
+    let connect = z.find("connect_pads").and_then(|c| c.args().first()).and_then(Node::text);
+    let thermal = |name: &str| z.find("fill").and_then(|f| f.find(name)).and_then(|t| t.number_arg(0, name).ok()).map_or(0.0, |mm| mm * MM);
     Ok(Zone {
         name: z.find("name").and_then(|n| n.args().first()).and_then(Node::text).unwrap_or("").to_string(),
         net: net(z),
@@ -636,7 +667,11 @@ fn read_zone(z: &Node, footprint: Option<usize>) -> Result<Zone, KicadParse> {
             .and_then(|c| c.find("clearance"))
             .and_then(|c| c.number_arg(0, "clearance").ok())
             .map_or(0.0, |mm| mm * MM),
-        no_pads: z.find("connect_pads").is_some_and(|c| c.args().first().and_then(Node::text) == Some("no")),
+        no_pads: connect == Some("no"),
+        solid_pads: connect == Some("yes"),
+        reliefs_tht_only: connect == Some("thru_hole_only"),
+        thermal_gap: thermal("thermal_gap"),
+        thermal_bridge_width: thermal("thermal_bridge_width"),
         min_thickness: z.find("min_thickness").and_then(|t| t.number_arg(0, "min_thickness").ok()).map_or(0.0, |mm| mm * MM),
         footprint,
         uuid: uuid(z),
@@ -679,13 +714,7 @@ fn read_pad(p: &Node, footprint: usize, index: usize, fp: &Footprint) -> Result<
             Some(vec![vec![[-w - dy, h + dx], [w + dy, h - dx], [w - dy, -h + dx], [-w + dy, -h - dx]]])
         }
         PadShape::Custom => {
-            let anchor_circle = p
-                .find("options")
-                .and_then(|o| o.find("anchor"))
-                .and_then(|a| a.args().first())
-                .and_then(Node::text)
-                == Some("circle");
-            let mut polys = vec![if anchor_circle { circle([0.0, 0.0], size[0] / 2.0) } else { rect(size) }];
+            let mut polys = vec![if anchor_circle(p) { circle([0.0, 0.0], size[0] / 2.0) } else { rect(size) }];
             if let Some(prims) = p.find("primitives") {
                 polys.extend(primitives(prims)?);
             }
@@ -706,7 +735,27 @@ fn read_pad(p: &Node, footprint: usize, index: usize, fp: &Footprint) -> Result<
         None => Outline::Circle { centre: shifted([0.0, 0.0]), radius: size[0] / 2.0 },
         Some(polys) => Outline::Polygons(polys.into_iter().map(|poly| poly.into_iter().map(shifted).collect()).collect()),
     };
-    Ok(PadCopper { footprint, pad: index, layers, shape, outline, mask_margin: None, clearance: None, zone_connect: None })
+    let round = matches!(shape, PadShape::Circle) || (matches!(shape, PadShape::Custom) && anchor_circle(p));
+    let bridge = p.find("thermal_bridge_angle").and_then(|a| a.number_arg(0, "thermal_bridge_angle").ok()).unwrap_or(if round { 45.0 } else { 90.0 });
+    Ok(PadCopper {
+        footprint,
+        pad: index,
+        layers,
+        shape,
+        outline,
+        mask_margin: None,
+        clearance: None,
+        zone_connect: None,
+        spoke_centre: shifted([0.0, 0.0]),
+        spoke_angle: angle + bridge,
+        thermal_gap: None,
+        thermal_width: None,
+    })
+}
+
+/// Whether a custom pad's anchor is a circle (`(options (anchor circle))`) rather than a rectangle.
+fn anchor_circle(p: &Node) -> bool {
+    p.find("options").and_then(|o| o.find("anchor")).and_then(|a| a.args().first()).and_then(Node::text) == Some("circle")
 }
 
 /// A custom pad's extra shapes, in the pad's own frame. Lines and arcs with a width become their

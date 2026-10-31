@@ -72,7 +72,9 @@ def route_one(name, run_dir, timeout, extra=()):
         res["wirelength"], res["vias"] = pcbench.lengths(out)
         try:
             u, e, w = pcbench.drc(out, d, "out")
-            bare = json.loads((src / "bare.json").read_text())
+            # The bare board judged as this run is, by today's tally.
+            _, bare_errors, bare_warnings = pcbench.tally(json.loads((src / "bare.drc.json").read_text()))
+            bare = {"errors": bare_errors, "warnings": bare_warnings}
             res["unconnected"] = u
             res["new_errors"] = {t: n - bare["errors"].get(t, 0) for t, n in e.items() if n > bare["errors"].get(t, 0)}
             res["new_warnings"] = {t: n - bare["warnings"].get(t, 0) for t, n in w.items() if n > bare["warnings"].get(t, 0)}

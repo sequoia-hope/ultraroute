@@ -5,7 +5,7 @@ use crate::custom::Thing;
 use std::collections::HashSet;
 
 use crate::model::{Board, Item, ItemId, Kind};
-use crate::geom::{inside, nm, point_segment, Nm, Point, Shape};
+use crate::geom::{inside, nm, point_segment, BBox, Nm, Point, Shape};
 
 /// Shortfalls this small are not violations: KiCad's DRC epsilon, 0.5 µm by default.
 const SLACK: f64 = 500.0;
@@ -43,7 +43,7 @@ fn holds_clear(holder: &Item, copper: &Item) -> bool {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Limits {
-    max_clearance: Nm,
+    pub(crate) max_clearance: Nm,
     edge: Nm,
     hole_clearance: Nm,
     hole_to_hole: Nm,
@@ -229,6 +229,63 @@ pub fn check_item_with_pours(board: &Board, id: ItemId) -> Vec<Violation> {
     found
 }
 
+/// Whether `copper` (item `id`) comes within its clearance of spoke `spoke` (item `sid`) on
+/// `layer`, or the zone's where wider: the gap and the clearance if so.
+fn spoke_cut(board: &Board, id: ItemId, copper: &Item, sid: ItemId, spoke: &Item, layer: usize) -> Option<(f64, Nm)> {
+    let Kind::Spoke { clearance, .. } = spoke.kind else { return None };
+    let (a, b) = (Thing::Item(board, id, copper), Thing::Item(board, sid, spoke));
+    let required = board.clearance_kept(&a, &b, layer).max(clearance);
+    let gap = copper.shape.gap_within(&spoke.shape, required as f64);
+    (gap + SLACK < required as f64).then_some((gap, required))
+}
+
+/// Whether cutting spoke `sid` leaves its pad fewer whole spokes on `layer` than it needs,
+/// the others cut by other nets' tracks and vias but `id`. A track of the pad's net that leaves
+/// it counts as a spoke, as KiCad counts one that ends in the pour (kicad-cli 9.0.8: a pad with
+/// one spoke and its own track out of it is not starved). It skips a pad no spoke reaches at all,
+/// which a via of its net standing on it joins.
+fn spokes_left(board: &Board, id: ItemId, sid: ItemId, spoke: &Item, layer: usize) -> bool {
+    let Kind::Spoke { pad, need, .. } = spoke.kind else { return false };
+    // A pad's spokes all start at its centre, so all of them meet its box.
+    let (Some(pad_box), Some(pad_item)) = (board.bbox(pad), board.item(pad)) else { return true };
+    let in_a_pad = |p: Point| {
+        board.near(layer, BBox::of([p, p])).into_iter().filter_map(|q| board.item(q)).any(|q| matches!(q.kind, Kind::Pad { .. }) && q.on(layer) && q.shape.contains(p))
+    };
+    let own_tracks = board
+        .near(layer, pad_box)
+        .into_iter()
+        .filter_map(|t| board.item(t))
+        .filter(|t| t.kind == Kind::Track && t.net == pad_item.net && t.on(layer))
+        .filter(|t| match t.shape {
+            Shape::Capsule { a, b, .. } => match (pad_item.shape.contains(a), pad_item.shape.contains(b)) {
+                (true, false) => !in_a_pad(b),
+                (false, true) => !in_a_pad(a),
+                _ => false,
+            },
+            Shape::Polygon(_) => false,
+        })
+        .count();
+    let whole = board
+        .near(layer, pad_box)
+        .into_iter()
+        .filter(|&s| s != sid)
+        .filter_map(|s| board.item(s).map(|it| (s, it)))
+        .filter(|(_, it)| matches!(it.kind, Kind::Spoke { pad: p, .. } if p == pad) && it.on(layer))
+        .filter(|&(s, it)| {
+            let reach = board.bbox(s).unwrap_or_else(|| it.shape.bbox()).grow(board.limits.max_clearance);
+            !board.near(layer, reach).into_iter().any(|c| {
+                c != id && board.item(c).is_some_and(|o| matches!(o.kind, Kind::Track | Kind::Via) && o.net != it.net && o.on(layer) && spoke_cut(board, c, o, s, it, layer).is_some())
+            })
+        })
+        .count();
+    // KiCad leaves a pad no spoke reaches alone: one a via of its net stands on is joined.
+    let via_on_it = || {
+        board.near(layer, pad_box).into_iter().filter_map(|v| board.item(v)).any(|v| v.kind == Kind::Via && v.net == pad_item.net && v.shape.gap_within(&pad_item.shape, 0.0) == 0.0)
+    };
+    let left = whole + own_tracks;
+    left < need as usize && !(left == 0 && via_on_it())
+}
+
 /// With `everyone` false, pairs are taken once, from their lower id, as the whole-board check
 /// walks every item.
 fn item_checks(
@@ -275,11 +332,20 @@ fn item_checks(
                             Kind::Via => forbids.vias,
                             Kind::Pad { footprint: f, .. } => forbids.pads && *footprint != Some(*f),
                             Kind::Pour { .. } => forbids.copperpour,
-                            Kind::Keepout { .. } => false,
+                            Kind::Keepout { .. } | Kind::Spoke { .. } => false,
                         };
                         let in_a_hole = board.keepout_holes.get(&other).is_some_and(|holes| holes.iter().any(|h| within(h, &item.shape, 0)));
                         if banned && intrudes(&item.shape, &o.shape) && !in_a_hole {
                             found.push(Violation { rule: Rule::Keepout, a: id, b: Some(other), layer: Some(layer), gap: 0.0, required: 0 });
+                        }
+                    }
+                    // A pour's thermal spoke: new copper of other nets may cut it while enough of its
+                    // pad's others stay whole.
+                    Kind::Spoke { .. } if matches!(item.kind, Kind::Track | Kind::Via) && o.net != item.net => {
+                        if let Some((gap, required)) = spoke_cut(board, id, item, other, o, layer) {
+                            if spokes_left(board, id, other, o, layer) {
+                                found.push(Violation { rule: Rule::Clearance, a: id, b: Some(other), layer: Some(layer), gap, required });
+                            }
                         }
                     }
                     _ if partner(other) && o.is_copper() && (o.net != item.net || item.net == 0) && !same_pad(item, o) && !tied(board, id, item, other, o) => {

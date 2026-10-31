@@ -342,6 +342,7 @@ impl Thing<'_> {
                     Kind::Track => str("Track"),
                     Kind::Via => str("Via"),
                     Kind::Pour { zone, .. } if zone != DRAWN => str("Zone"),
+                    Kind::Spoke { .. } => str("Zone"),
                     Kind::Keepout { .. } => str("Rule Area"),
                     // Copper drawn on a copper layer: a line, a shape or text.
                     Kind::Pour { .. } => Value::Unknown,

@@ -194,6 +194,7 @@ pub fn warp_for(board: &Board, moves: &HashMap<usize, Point>) -> WarpField {
             Kind::Keepout { .. } => true,
             Kind::Track | Kind::Via => it.locked,
             Kind::Pour { kept, .. } => kept,
+            Kind::Spoke { .. } => false,
         })
         .map(|(_, it)| it.shape.clone())
         .collect();
