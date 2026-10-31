@@ -18,6 +18,18 @@ pub struct NewTrack {
     pub locked: bool,
 }
 
+/// A track along a circle from `start` through `mid` to `end`, written as KiCad's `(arc …)`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewArc {
+    pub start: [f64; 2],
+    pub mid: [f64; 2],
+    pub end: [f64; 2],
+    pub width: f64,
+    pub layer: String,
+    pub net: u32,
+    pub locked: bool,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewVia {
     pub at: [f64; 2],
@@ -34,6 +46,7 @@ pub struct Edit {
     /// Text put in place of a span, such as a moved footprint's `(at …)`.
     pub replace: Vec<(Span, String)>,
     pub tracks: Vec<NewTrack>,
+    pub arcs: Vec<NewArc>,
     pub vias: Vec<NewVia>,
     /// The new items' uuids drawn from this seed, the same every run; random when `None`.
     pub uuid_seed: Option<u64>,
@@ -84,6 +97,22 @@ pub fn apply(text: &str, edit: &Edit) -> String {
             "\t(segment\n\t\t(start {} {})\n\t\t(end {} {})\n\t\t(width {})\n{}\t\t(layer \"{}\")\n\t\t(net {})\n\t\t(uuid \"{}\")\n\t)\n",
             mm(t.start[0]),
             mm(t.start[1]),
+            mm(t.end[0]),
+            mm(t.end[1]),
+            mm(t.width),
+            if t.locked { "\t\t(locked yes)\n" } else { "" },
+            t.layer,
+            net(t.net),
+            uuids.draw()
+        ));
+    }
+    for t in &edit.arcs {
+        out.push_str(&format!(
+            "\t(arc\n\t\t(start {} {})\n\t\t(mid {} {})\n\t\t(end {} {})\n\t\t(width {})\n{}\t\t(layer \"{}\")\n\t\t(net {})\n\t\t(uuid \"{}\")\n\t)\n",
+            mm(t.start[0]),
+            mm(t.start[1]),
+            mm(t.mid[0]),
+            mm(t.mid[1]),
             mm(t.end[0]),
             mm(t.end[1]),
             mm(t.width),
@@ -223,6 +252,18 @@ mod tests {
         assert!(out.contains("(layers \"F.Cu\" \"B.Cu\")\n\t\t(locked yes)\n\t\t(net 1)"), "{out}");
         let unlocked = apply(text, &Edit { tracks: vec![NewTrack { locked: false, ..edit.tracks[0].clone() }], ..Edit::default() });
         assert!(!unlocked.contains("locked"));
+    }
+
+    #[test]
+    fn an_arc_is_read_back_as_written() {
+        let text = "(kicad_pcb\n\t(version 20241229)\n\t(general (thickness 1.6))\n\t(layers (0 \"F.Cu\" signal) (2 \"B.Cu\" signal))\n\t(net 0 \"\")\n\t(net 1 \"A\")\n)\n";
+        let arc = NewArc { start: [1e-3, 2e-3], mid: [1.5e-3, 2.5e-3], end: [2e-3, 2e-3], width: 0.25e-3, layer: "F.Cu".into(), net: 1, locked: false };
+        let out = apply(text, &Edit { arcs: vec![arc.clone()], ..Edit::default() });
+        let (_, copper) = crate::parse_board(&out).unwrap();
+        let read = &copper.arcs[0];
+        let close = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9;
+        assert!(close(read.start, arc.start) && close(read.mid, arc.mid) && close(read.end, arc.end), "{out}");
+        assert_eq!((read.width, read.layer.as_str(), read.net), (arc.width, "F.Cu", 1));
     }
 
     #[test]

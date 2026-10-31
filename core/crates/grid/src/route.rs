@@ -661,6 +661,22 @@ pub fn keep_orphans(board: &Board, removed: &[kicad_pcb::Span], laid: &mut Vec<I
     laid.extend(orphans);
 }
 
+/// The arcs [`crate::round_corners`] laid, as the writer takes them.
+pub fn arc_edits(board: &Board, arcs: &[crate::RoundArc]) -> Vec<kicad_pcb::NewArc> {
+    let metres = |p: Point| [p.x as f64 * 1e-9, p.y as f64 * 1e-9];
+    arcs.iter()
+        .map(|arc| kicad_pcb::NewArc {
+            start: metres(arc.start),
+            mid: metres(arc.mid),
+            end: metres(arc.end),
+            width: arc.width as f64 * 1e-9,
+            layer: board.layers[arc.layers.trailing_zeros() as usize].clone(),
+            net: arc.net,
+            locked: false,
+        })
+        .collect()
+}
+
 pub fn edits(board: &Board, laid: &[ItemId]) -> (Vec<kicad_pcb::NewTrack>, Vec<kicad_pcb::NewVia>) {
     let metres = |p: Point| [p.x as f64 * 1e-9, p.y as f64 * 1e-9];
     let mut tracks = Vec::new();

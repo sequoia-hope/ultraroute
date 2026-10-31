@@ -136,6 +136,7 @@ lengths, the deadline, and, of kind `rule`, every project or custom rule left ou
 | `--shove-cascade N` | connections a try knocked loose that are ploughed in turn (default 0) |
 | `--nudge` | move unlocked parts aside for connections nothing else could route; not in the default (it moves the designer's parts) |
 | `--tighten` | straighten the routed copper |
+| `--arcs MM` | when writing, round the corners of the router's tracks with arcs of radius up to MM (0.05 to 10), each as wide as the rules let it be; not in the default |
 | `--via-cost MM[,OPEN_MM]` | a via's price in mm of straight track (0.05 to 50): negotiation's, and with OPEN_MM that of routing one connection at a time and of rip-up (else 1.2 and 0.8 times MM) |
 | `--via-avoid X0,Y0,X1,Y1` | a box (mm, KiCad's frame) where vias cost dearly but are allowed; repeatable |
 | `--via-avoid-cost N` | that price, in search units (10 a straight cell; default 3000) |

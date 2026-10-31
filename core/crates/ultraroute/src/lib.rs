@@ -37,7 +37,7 @@ pub use stages::{Ledger, Stage, StageCtx};
 pub use stats::{Finding, RunStats, StageStats};
 pub use watch::{Cleaned, Flow, StageEvent, Unwatched, Watch};
 
-pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--negotiate-jacobi] [--negotiate-reroute-all] [--diff-pairs] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner|same] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--negotiate] [--rip-up] [--nudge] [--tighten] [--via-cost MM[,OPEN_MM]] [--gpu] \
+pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--negotiate-jacobi] [--negotiate-reroute-all] [--diff-pairs] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner|same] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--negotiate] [--rip-up] [--nudge] [--tighten] [--arcs MM] [--via-cost MM[,OPEN_MM]] [--gpu] \
 [--timeout SECONDS] [--cell MM] [--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--uuid-seed N] [--adopt] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
 [--recipe default|bench|minimal] [--live PATH|-] [--live-fps N] [--live-step MS] [--blame] [--stats|--report FILE] [-h|--help]
 --place takes millimetres with y pointing up: give KiCad's y negated (KiCad y 127.5 is -127.5).";
@@ -72,6 +72,8 @@ pub struct Args {
     pub negotiate: bool,
     pub rip_up: bool,
     pub tighten: bool,
+    /// Corners of the router's tracks rounded, by arcs of at most this radius.
+    pub arcs: Option<Nm>,
     /// Via prices in millimetres of straight track: negotiation's, and that of routing one
     /// connection at a time and of rip-up (1.2 and 0.8 times negotiation's unless given).
     pub via_cost: Option<(f64, Option<f64>)>,
@@ -200,6 +202,7 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
         negotiate: false,
         rip_up: false,
         tighten: false,
+        arcs: None,
         via_cost: None,
         nudge: false,
         lock: Vec::new(),
@@ -296,6 +299,13 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
             "--negotiate" => a.negotiate = true,
             "--rip-up" => a.rip_up = true,
             "--tighten" => a.tighten = true,
+            "--arcs" => {
+                let mm: f64 = value()?.parse().map_err(|e| format!("--arcs: {e}"))?;
+                if !(0.05..=10.0).contains(&mm) {
+                    return Err(format!("--arcs: {mm} mm is outside 0.05 to 10 mm"));
+                }
+                a.arcs = Some((mm * 1e6).round() as Nm);
+            }
             "--via-cost" => {
                 let v = value()?;
                 let mm: Vec<f64> = v.split(',').map(|x| x.trim().parse::<f64>().map_err(|e| format!("--via-cost {v}: {e}"))).collect::<Result<_, _>>()?;
@@ -1549,6 +1559,13 @@ mod tests {
 
         assert!(parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--prefanout-mode", "bogus"])).is_err());
         assert!(parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--prefanout-ring", "9.0"])).is_err());
+    }
+
+    #[test]
+    fn arcs_take_a_radius_in_millimetres() {
+        let b = parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--arcs", "0.5"])).unwrap();
+        assert_eq!(b.arcs, Some(500_000));
+        assert!(parse(&vec_args(&["route", "in.kicad_pcb", "-o", "out.kicad_pcb", "--arcs", "0"])).is_err());
     }
 
     #[test]

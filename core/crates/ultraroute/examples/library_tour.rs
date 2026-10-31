@@ -140,7 +140,7 @@ fn main() {
     // that shares a deleted span (the other chords of an arc) is written anew.
     grid::keep_orphans(&board, &removed, &mut laid);
     let (tracks, vias) = grid::edits(&board, &laid);
-    let routed = apply(&text, &Edit { remove: removed, replace: Vec::new(), tracks, vias, uuid_seed: None });
+    let routed = apply(&text, &Edit { remove: removed, replace: Vec::new(), tracks, arcs: Vec::new(), vias, uuid_seed: None });
     std::fs::write(output, routed).expect("write the routed board");
     println!("wrote {output}, {:.1} s", started.elapsed().as_secs_f64());
 }
