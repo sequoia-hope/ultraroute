@@ -496,7 +496,13 @@ fn graphic(g: &Node, place: &dyn Fn([f64; 2]) -> [f64; 2], rotation: f64) -> Res
     let kind = head.split('_').nth(1).unwrap_or(head);
     let local: Vec<Vec<[f64; 2]>> = match kind {
         "line" => stroke(&[point(g, "start")?, point(g, "end")?], false),
-        "arc" => stroke(&arc_points(point(g, "start")?, point(g, "mid")?, point(g, "end")?), false),
+        "arc" => {
+            let (s, m, e) = (point(g, "start")?, point(g, "mid")?, point(g, "end")?);
+            match stroked_arc(s, m, e, width / 2.0) {
+                Some(p) => vec![p],
+                None => stroke(&arc_points(s, m, e), false),
+            }
+        }
         "rect" => {
             let (a, b) = (point(g, "start")?, point(g, "end")?);
             let corners = vec![a, [b[0], a[1]], b, [a[0], b[1]]];
@@ -509,7 +515,17 @@ fn graphic(g: &Node, place: &dyn Fn([f64; 2]) -> [f64; 2], rotation: f64) -> Res
         "circle" => {
             let (c, e) = (point(g, "center")?, point(g, "end")?);
             let r = (e[0] - c[0]).hypot(e[1] - c[1]);
-            if filled { vec![circle(c, r + width / 2.0)] } else { stroke(&circle(c, r), true) }
+            // An outline only: two half circles, each one polygon.
+            let half_ring = |from: f64| {
+                let at = |a: f64| [c[0] + r * a.cos(), c[1] + r * a.sin()];
+                use std::f64::consts::{FRAC_PI_2, PI};
+                stroked_arc(at(from), at(from + FRAC_PI_2), at(from + PI), width / 2.0)
+            };
+            match (filled, half_ring(0.0), half_ring(std::f64::consts::PI)) {
+                (true, ..) => vec![circle(c, r + width / 2.0)],
+                (false, Some(a), Some(b)) => vec![a, b],
+                _ => stroke(&circle(c, r), true),
+            }
         }
         // KiCad 5 polygons are always filled; later ones say, but an outline-only copper
         // polygon is rare enough to take as filled.
@@ -907,6 +923,46 @@ fn pts(p: &Node) -> Result<Vec<[f64; 2]>, KicadParse> {
     Ok(out)
 }
 
+/// How far a drawn stroke's chords may stray from its arcs: KiCad's own `ARC_HIGH_DEF`.
+const STROKE_ERROR_M: f64 = 0.005 * MM;
+
+/// Chords enough that none strays more than [`STROKE_ERROR_M`] from an arc of radius `r`
+/// sweeping `sweep` radians.
+fn sag_steps(r: f64, sweep: f64) -> usize {
+    let step = 2.0 * (1.0 - (STROKE_ERROR_M / r).min(1.0)).acos();
+    ((sweep.abs() / step.max(1e-3)).ceil() as usize).max(2)
+}
+
+/// A drawn arc from `s` through `m` to `e`, stroked `half` either side, as one polygon: its
+/// outer side, the round cap at its end, its inner side and the cap at its start, the outer
+/// side and the caps a hair outside the stroke, never inside it. `None` where that would not be
+/// a simple polygon (an arc whose stroke reaches its centre, or one that nearly closes) or the
+/// three points make no arc; the stroke is then taken chord by chord.
+fn stroked_arc(s: [f64; 2], m: [f64; 2], e: [f64; 2], half: f64) -> Option<Vec<[f64; 2]>> {
+    use std::f64::consts::{PI, TAU};
+    let c = crate::outline::circumcenter(s, m, e)?;
+    let r = (s[0] - c[0]).hypot(s[1] - c[1]);
+    let angle = |p: [f64; 2]| (p[1] - c[1]).atan2(p[0] - c[0]);
+    let (a0, am, a1) = (angle(s), angle(m), angle(e));
+    let wrap = |a: f64| a.rem_euclid(TAU);
+    let sweep = if wrap(am - a0) < wrap(a1 - a0) { wrap(a1 - a0) } else { -wrap(a0 - a1) };
+    if half <= 0.0 || r <= half || sweep.abs() > 1.5 * PI {
+        return None;
+    }
+    let n = sag_steps(r + half, sweep);
+    let outer = outside(r + half, sweep.abs() / n as f64);
+    let k = sag_steps(half, PI);
+    let cap = outside(half, PI / k as f64);
+    let at = |centre: [f64; 2], radius: f64, a: f64| [centre[0] + radius * a.cos(), centre[1] + radius * a.sin()];
+    let turn = sweep.signum();
+    let mut out = Vec::with_capacity(2 * (n + k + 2));
+    out.extend((0..=n).map(|i| at(c, outer, a0 + sweep * i as f64 / n as f64)));
+    out.extend((1..k).map(|i| at(e, cap, a1 + turn * PI * i as f64 / k as f64)));
+    out.extend((0..=n).rev().map(|i| at(c, r - half, a0 + sweep * i as f64 / n as f64)));
+    out.extend((1..k).map(|i| at(s, cap, a0 + PI + turn * PI * i as f64 / k as f64)));
+    Some(out)
+}
+
 fn arc_points(s: [f64; 2], m: [f64; 2], e: [f64; 2]) -> Vec<[f64; 2]> {
     let Some(c) = crate::outline::circumcenter(s, m, e) else {
         return vec![s, m, e];
@@ -988,6 +1044,57 @@ mod tests {
         let ys: Vec<f64> = copper.graphics.iter().flat_map(|g| g.polygons.iter().flatten().map(|p| p[1])).collect();
         let tall = ys.iter().copied().fold(f64::MIN, f64::max) - ys.iter().copied().fold(f64::MAX, f64::min);
         assert!((tall - (3.0 * 1.8 * 1.6 + 0.3) * 1e-3).abs() < 1e-6, "three lines tall: {tall}");
+    }
+
+    #[test]
+    fn a_drawn_arc_is_one_polygon_covering_its_stroke() {
+        // Half a circle of radius 2 mm about the origin, stroked 0.254 mm wide.
+        let (_, copper) = crate::parse_board(
+            "(kicad_pcb (version 20240108) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal) (2 \"B.Cu\" signal)) (net 0 \"\")
+	(gr_arc (start 2 0) (mid 0 2) (end -2 0) (stroke (width 0.254) (type solid)) (layer \"F.Cu\")))",
+        )
+        .unwrap();
+        let polys: Vec<&Vec<[f64; 2]>> = copper.graphics.iter().flat_map(|g| &g.polygons).collect();
+        assert_eq!(polys.len(), 1, "one polygon, not a capsule per chord");
+        let poly = polys[0];
+        assert!(poly.len() < 200, "{} vertices", poly.len());
+        let inside = |p: [f64; 2]| {
+            let mut odd = false;
+            for i in 0..poly.len() {
+                let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+                if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < a[0] + (p[1] - a[1]) * (b[0] - a[0]) / (b[1] - a[1]) {
+                    odd = !odd;
+                }
+            }
+            odd
+        };
+        let (r, half) = (2e-3, 0.127e-3);
+        for k in 0..=90 {
+            let a = std::f64::consts::PI * k as f64 / 90.0;
+            for d in [-half + 1e-7, 0.0, half - 1e-7] {
+                assert!(inside([(r + d) * a.cos(), (r + d) * a.sin()]), "stroke at {a} rad, {d} m off its centre line");
+            }
+            assert!(!inside([(r + half + 20e-6) * a.cos(), (r + half + 20e-6) * a.sin()]), "nothing past the stroke at {a}");
+            assert!(!inside([(r - half - 20e-6) * a.cos(), (r - half - 20e-6) * a.sin()]), "nor inside it at {a}");
+        }
+        // The round caps at both ends, below the arc's ends.
+        for x in [r, -r] {
+            assert!(inside([x, -half + 1e-7]) && !inside([x, -half - 20e-6]), "cap at x = {x}");
+        }
+    }
+
+    #[test]
+    fn a_drawn_ring_is_two_half_rings() {
+        let (_, copper) = crate::parse_board(
+            "(kicad_pcb (version 20240108) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal) (2 \"B.Cu\" signal)) (net 0 \"\")
+	(gr_circle (center 0 0) (end 2 0) (stroke (width 0.254) (type solid)) (layer \"F.Cu\")))",
+        )
+        .unwrap();
+        let polys: Vec<&Vec<[f64; 2]>> = copper.graphics.iter().flat_map(|g| &g.polygons).collect();
+        assert_eq!(polys.len(), 2);
+        let radii: Vec<f64> = polys.iter().flat_map(|p| p.iter()).map(|p| p[0].hypot(p[1])).collect();
+        let (lo, hi) = (radii.iter().copied().fold(f64::MAX, f64::min), radii.iter().copied().fold(f64::MIN, f64::max));
+        assert!(lo <= 2e-3 - 0.127e-3 + 1e-9 && hi >= 2e-3 + 0.127e-3 - 1e-9 && hi < 2e-3 + 0.127e-3 + 10e-6, "{lo} {hi}");
     }
 
     #[test]
