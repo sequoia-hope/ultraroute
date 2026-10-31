@@ -330,15 +330,18 @@ fn attempt(
 const NARROW_RUN_REACH: Nm = 5_000_000;
 
 /// The half width a connection of a net that carries current may run at, the whole way, where
-/// its own width finds no way: the narrower of its two pins (pads), never under the board's
-/// minimum, for ends no further apart than [`NARROW_RUN_REACH`]. `None` for a signal, which
+/// its own width finds no way: the narrower of its two pins (pads), never under the net's own
+/// minimum (the board's, or a custom rule's for the net), for ends no further apart than
+/// [`NARROW_RUN_REACH`]. `None` for a signal, which
 /// necks already, for ends that are not both pads, and where that is no narrower.
 fn narrow_run(board: &Board, profile: &Profile, airline: &board::Airline) -> Option<Nm> {
     if profile.narrow_half_width < profile.half_width || airline.from.distance(airline.to) > NARROW_RUN_REACH as f64 {
         return None;
     }
     let pin = |id: ItemId| board.item(id).filter(|p| matches!(p.kind, Kind::Pad { .. })).map(crate::grid::pad_half_side);
-    let hw = pin(airline.from_item)?.min(pin(airline.to_item)?).max(profile.board_min_half_width);
+    // Never under the net's own minimum: a custom rule's width for it holds the whole way, as
+    // it does not over a forced neck's millimetre.
+    let hw = pin(airline.from_item)?.min(pin(airline.to_item)?).max(profile.min_half_width);
     (hw < profile.half_width).then_some(hw)
 }
 
