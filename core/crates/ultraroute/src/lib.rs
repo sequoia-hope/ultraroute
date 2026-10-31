@@ -564,6 +564,13 @@ impl Live {
         self.send_frame(board, true, Vec::new());
     }
 
+    /// The board as it is, without routing it: its header, one frame of everything on it, and
+    /// its zones poured as KiCad would refill them. What a viewer draws.
+    pub fn show(&mut self, board: &Board, text: &str) {
+        self.header(board);
+        self.fills(text, &board.rules);
+    }
+
     /// The zones of the board in `text` poured as KiCad would refill them, for drawing.
     fn fills(&mut self, text: &str, rules: &kicad_pcb::Rules) {
         let Ok((pcb, copper)) = kicad_pcb::parse_board(text) else { return };
@@ -1640,5 +1647,40 @@ mod region_blame_tests {
         let grid = grid::ObstacleMap::new(&board, grid::Profile::for_net(&board, airline.net), 100_000, false).view(airline.net);
         assert!(grid.blocked.iter().all(|b| *b), "the net may run nowhere");
         assert_eq!(regions_blocking(&board, airline.net, airline.from_item, airline.to_item, false), vec!["nowhere".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod show_tests {
+    use super::*;
+
+    /// A `Write` the test can read back after `Live` has taken it.
+    #[derive(Clone, Default)]
+    struct Shared(Arc<Mutex<Vec<u8>>>);
+    impl Write for Shared {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn show_writes_the_board_its_items_and_its_fills_without_routing() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/earring.kicad_pcb");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let (board, _) = Board::load(&path).unwrap();
+        let out = Shared::default();
+        Live::new(Box::new(out.clone()), 10.0, false).show(&board, &text);
+        let lines: Vec<Value> = String::from_utf8(out.0.lock().unwrap().clone()).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let kinds: Vec<&str> = lines.iter().map(|l| l["t"].as_str().unwrap()).collect();
+        assert_eq!(kinds, ["board", "frame", "fill"]);
+        let add = lines[1]["add"].as_array().unwrap();
+        assert_eq!(add.len(), board.items().count() + 1, "every item, and the outline");
+        assert!(add.iter().any(|i| i["k"] == "outline"));
+        assert_eq!(lines[1]["parts"].as_array().unwrap().len(), board.footprints.len());
+        assert!(!lines[2]["fills"].as_array().unwrap().is_empty(), "the earring's zones pour");
     }
 }
