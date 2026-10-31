@@ -148,6 +148,12 @@
     { key: 'core', label: 'Core', title: 'The MIT core router, on the KiCad board itself: grid routing with negotiated congestion' },
   ];
   let ripUp = $state(true);
+  // A board of the user's own (a project's, or opened from the computer) starts from bare copper:
+  // the router takes out every unlocked track and via first (--strip), so copper laid before parts
+  // moved can't block the route. Locked copper stays. Off: it routes around the board's copper.
+  // A job's own setting decides for a job.
+  let fromBare = $state(true);
+  const ownBoard = $derived(!!(fileBoard || projectBoard));
   let prefanout = $state(true);
   let diffPairs = $state(true);
   let moveParts = $state(true);
@@ -537,6 +543,7 @@
     if (!socket || socket.readyState !== WebSocket.OPEN || !(jobName || projectBoard)) return;
     if (lockList.length) args = [...args, '--lock', lockList.join(',')];
     if (retireDesign) args = [...args, '--retire-fixed', 'all'];
+    if (projectBoard && cmd === 'run' && !options.continue && fromBare) args = [...args, '--strip'];
     sentLocks = [...lockList];
     socket.send(
       JSON.stringify({
@@ -586,7 +593,9 @@
       }
     }
     const all = [];
-    if (!continuing) all.push(...(job.strip === 'all' ? ['--strip-all'] : job.strip === true ? ['--strip'] : []));
+    if (fileBoard) {
+      if (!continuing && !load && fromBare) all.push('--strip');
+    } else if (!continuing) all.push(...(job.strip === 'all' ? ['--strip-all'] : job.strip === true ? ['--strip'] : []));
     all.push(...(typeof job.args === 'string' ? job.args.split(/\s+/).filter(Boolean) : []));
     if (load) all.push('--no-route');
     else if (Number(timeout)) all.push('--timeout', String(Number(timeout)));
@@ -1131,7 +1140,7 @@
           <input type="checkbox" bind:checked={inTab} onchange={() => (timeout = inTab ? 600 : 120)} /> Route in this tab
         </label>
       {/if}
-      <label class="check"><input type="checkbox" bind:checked={ripUp} onchange={compose} /> Rip up and retry what is left</label>
+      <label class="check"><input type="checkbox" bind:checked={ripUp} onchange={compose} /> After routing, rip up and retry what is left</label>
       <label class="check" title="Routes each differential pair (USB D+ and D-) first, its two tracks side by side at the pair's width and gap"><input type="checkbox" bind:checked={diffPairs} onchange={compose} /> Route USB pairs side by side</label>
       <label class="check" title="Escapes every fine-pitch pad to a via first, on a fine local grid"><input type="checkbox" bind:checked={prefanout} onchange={compose} /> Fan out fine-pitch parts first</label>
       <label class="check"><input type="checkbox" bind:checked={tighten} onchange={compose} /> Pull the copper tight</label>
@@ -1161,6 +1170,13 @@
     <label class="check" title="After routing, the router may move unlocked parts a little to make room for what it could not route">
       <input type="checkbox" bind:checked={moveParts} onchange={compose} /> Let the router move parts
     </label>
+    {#if ownBoard}
+      <div class="start" role="radiogroup" aria-label="Start from">
+        <span class="small muted">Start from</span>
+        <label class="check"><input type="radio" bind:group={fromBare} value={true} disabled={keepGoing} /> Bare board</label>
+        <label class="check"><input type="radio" bind:group={fromBare} value={false} disabled={keepGoing} /> The board's copper</label>
+      </div>
+    {/if}
     <label class="check"><input type="checkbox" bind:checked={keepGoing} /> Continue from the last result</label>
     <label class="check"><input type="checkbox" bind:checked={rerouteOnDrop} /> Reroute after a part is moved</label>
     {#if engine !== 'core'}
@@ -1174,8 +1190,17 @@
       <button onclick={stop} disabled={!running}>Stop</button>
     </div>
     <p class="muted small explain">
-      Route lays the whole board{keepGoing ? ', keeping the last result’s copper' : ' from the start'}{moveParts ? ', then moves unlocked parts for what is left' : ''}.
-      Each press is one complete run.
+      {#if keepGoing}
+        Route continues from the last result, keeping its copper{moveParts ? ', then moves unlocked parts for what is left' : ''}.
+      {:else if ownBoard && fromBare}
+        Route takes out the board's unlocked tracks and vias{status?.traces || status?.vias ? ` (${status.traces} tracks and ${status.vias} vias on the board now)` : ''}, keeps locked copper,
+        and lays the whole board{moveParts ? ', then moves unlocked parts for what is left' : ''}.
+      {:else if ownBoard}
+        Route keeps the board's copper as it is, tracks left behind by moved parts too, and routes what is not connected{moveParts ? ', then moves unlocked parts for what is left' : ''}.
+      {:else}
+        Route lays the whole board from the start{moveParts ? ', then moves unlocked parts for what is left' : ''}.
+      {/if}
+      {ripUp ? 'After routing, it rips up and retries what is still open. ' : ''}Each press is one complete run.
     </p>
     <button class="quiet" onclick={load} disabled={!canRoute}>Show the board as designed</button>
     {#if routedText && !running}

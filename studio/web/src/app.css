@@ -859,3 +859,11 @@ details.locked > summary h2 {
   display: inline-flex;
   margin: 4px 0;
 }
+
+/* Where a run starts: bare copper, or the board's own. */
+.start {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+}
