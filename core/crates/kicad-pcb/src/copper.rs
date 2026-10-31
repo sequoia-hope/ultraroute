@@ -1094,7 +1094,7 @@ mod tests {
         assert_eq!(polys.len(), 2);
         let radii: Vec<f64> = polys.iter().flat_map(|p| p.iter()).map(|p| p[0].hypot(p[1])).collect();
         let (lo, hi) = (radii.iter().copied().fold(f64::MAX, f64::min), radii.iter().copied().fold(f64::MIN, f64::max));
-        assert!(lo <= 2e-3 - 0.127e-3 + 1e-9 && hi >= 2e-3 + 0.127e-3 - 1e-9 && hi < 2e-3 + 0.127e-3 + 10e-6, "{lo} {hi}");
+        assert!(lo <= 2e-3 - 0.127e-3 + 1e-9 && (2e-3 + 0.127e-3 - 1e-9..2e-3 + 0.127e-3 + 10e-6).contains(&hi), "{lo} {hi}");
     }
 
     #[test]
