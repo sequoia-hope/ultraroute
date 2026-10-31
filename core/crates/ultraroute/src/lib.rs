@@ -462,6 +462,8 @@ fn item_json(board: &Board, id: ItemId, item: &Item) -> Value {
             json!({"id": id, "k": kind, "net": item.net, "part": part,
                    "tiles": layers.iter().map(|l| json!({"layer": l, "g": flat(p)})).collect::<Vec<_>>()})
         }
+        // Room kept for a pour's spoke, not copper: nothing to show.
+        Kind::Spoke { .. } => Value::Null,
     }
 }
 

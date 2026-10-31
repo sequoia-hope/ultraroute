@@ -43,7 +43,7 @@ fn holds_clear(holder: &Item, copper: &Item) -> bool {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Limits {
-    max_clearance: Nm,
+    pub(crate) max_clearance: Nm,
     edge: Nm,
     hole_clearance: Nm,
     hole_to_hole: Nm,
@@ -275,11 +275,20 @@ fn item_checks(
                             Kind::Via => forbids.vias,
                             Kind::Pad { footprint: f, .. } => forbids.pads && *footprint != Some(*f),
                             Kind::Pour { .. } => forbids.copperpour,
-                            Kind::Keepout { .. } => false,
+                            Kind::Keepout { .. } | Kind::Spoke { .. } => false,
                         };
                         let in_a_hole = board.keepout_holes.get(&other).is_some_and(|holes| holes.iter().any(|h| within(h, &item.shape, 0)));
                         if banned && intrudes(&item.shape, &o.shape) && !in_a_hole {
                             found.push(Violation { rule: Rule::Keepout, a: id, b: Some(other), layer: Some(layer), gap: 0.0, required: 0 });
+                        }
+                    }
+                    // A pour's thermal spoke: new copper of other nets keeps clear of it.
+                    Kind::Spoke { clearance, .. } if matches!(item.kind, Kind::Track | Kind::Via) && o.net != item.net => {
+                        let (a, b) = (Thing::Item(board, id, item), Thing::Item(board, other, o));
+                        let required = board.clearance_kept(&a, &b, layer).max(*clearance);
+                        let gap = item.shape.gap_within(&o.shape, required as f64);
+                        if gap + SLACK < required as f64 {
+                            found.push(Violation { rule: Rule::Clearance, a: id, b: Some(other), layer: Some(layer), gap, required });
                         }
                     }
                     _ if partner(other) && o.is_copper() && (o.net != item.net || item.net == 0) && !same_pad(item, o) && !tied(board, id, item, other, o) => {

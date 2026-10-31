@@ -153,6 +153,10 @@ pub enum Kind {
     Pour { zone: usize, kept: bool },
     /// A rule area, and the footprint it belongs to, whose own pads it does not keep out.
     Keepout { forbids: Keepout, footprint: Option<usize> },
+    /// Room for a thermal spoke of zone `zone` to a pad of footprint `footprint` (see
+    /// [`crate::spokes`]): other nets' new copper keeps its clearance from it, and the zone's
+    /// `clearance` where wider. It is not copper and joins nothing.
+    Spoke { zone: usize, footprint: usize, clearance: Nm },
 }
 
 /// How a rule area's name begins when it is an area for vias to avoid rather than a keepout.
@@ -197,7 +201,7 @@ impl Item {
     }
 
     pub fn is_copper(&self) -> bool {
-        !matches!(self.kind, Kind::Keepout { .. }) && self.layers != 0
+        !matches!(self.kind, Kind::Keepout { .. } | Kind::Spoke { .. }) && self.layers != 0
     }
 }
 
@@ -499,7 +503,8 @@ impl Board {
         // Openings in the mask, each its shapes, the copper layer it bares, and the one net that
         // may run there if known yet; else the net of the pads it bares, found once they are in.
         let mut apertures: Vec<(Vec<Shape>, u64, Option<u32>)> = Vec::new();
-        for pad in &copper.pads {
+        let mut pad_items = Vec::new();
+        for (k, pad) in copper.pads.iter().enumerate() {
             let model = &pcb.footprints[pad.footprint].pads[pad.pad];
             let hole = model.drill.map(|d| (Point::from_m(model.position), nm(d[0].min(d[1]) / 2.0)));
             let plated = !matches!(model.kind, PadKind::NpThruHole);
@@ -574,6 +579,7 @@ impl Board {
             }
             let id = board.insert(base);
             ids.push(id);
+            pad_items.push((k, id));
             if let Some(ends) = model.drill.and_then(|d| slot_ends(model.position, model.rotation_deg, d)) {
                 board.hole_ends.insert(id, ends);
             }
@@ -776,6 +782,7 @@ impl Board {
             board.ties.insert(id, (fp, nets));
         }
         board.limits = crate::check::Limits::of(&board);
+        board.reserve_spokes(pcb, copper, &pad_items);
         board
     }
 
@@ -949,6 +956,7 @@ impl Board {
             .filter(|(_, it)| match &it.kind {
                 Kind::Pad { footprint: f, .. } => *f == footprint,
                 Kind::Keepout { footprint: f, .. } => *f == Some(footprint),
+                Kind::Spoke { footprint: f, .. } => *f == footprint,
                 _ => false,
             })
             .map(|(id, _)| id)
@@ -982,6 +990,7 @@ impl Board {
             .filter(|(_, it)| match &it.kind {
                 Kind::Pad { footprint: f, .. } => *f == footprint,
                 Kind::Keepout { footprint: f, .. } => *f == Some(footprint),
+                Kind::Spoke { footprint: f, .. } => *f == footprint,
                 _ => false,
             })
             .map(|(id, _)| id)

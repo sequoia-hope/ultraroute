@@ -9,6 +9,7 @@ pub mod geom;
 pub mod fill;
 pub mod regions;
 pub mod work;
+pub mod spokes;
 
 pub use model::{arc_chords, Block, Board, FootprintInfo, Item, ItemId, Kind, LoadError, DRAWN};
 pub use custom::Thing;

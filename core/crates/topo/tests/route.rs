@@ -39,6 +39,7 @@ fn window(offset: Point, pours: bool) -> Board {
             Kind::Keepout { footprint: Some(f), .. } => !footprint_in(*f, &b),
             Kind::Keepout { .. } => false,
             Kind::Pour { .. } => !pours,
+            Kind::Spoke { footprint, .. } => !footprint_in(*footprint, &b),
             Kind::Track | Kind::Via => true,
         })
         .map(|(id, _)| id)

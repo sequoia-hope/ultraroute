@@ -458,6 +458,7 @@ impl ObstacleMap {
                     Kind::Pour { kept, .. } => (2u8, *kept).hash(h),
                     Kind::Keepout { forbids, .. } => (3u8, forbids.tracks, forbids.vias).hash(h),
                     Kind::Track | Kind::Via => 4u8.hash(h),
+                    Kind::Spoke { clearance, .. } => (5u8, *clearance).hash(h),
                 }
                 match &it.shape {
                     Shape::Capsule { a, b, r } => (a, b, r).hash(h),
@@ -830,6 +831,26 @@ impl ObstacleMap {
                 for c in hit {
                     self.via_owner[c] = SEVERAL;
                 }
+            }
+            return;
+        }
+        // Room for a pour's thermal spoke: other nets keep their clearance from it, and the
+        // zone's where wider, as from the pour's own copper.
+        if let Kind::Spoke { clearance: zone, .. } = item.kind {
+            let implicit = self.clearance_to(board, item.net);
+            let clearance = self.rule_to(board, "clearance", id, item, false, implicit).max(zone);
+            let via_clearance = self.rule_to(board, "clearance", id, item, true, implicit).max(zone);
+            let mut hit = Vec::new();
+            self.cells_near(&item.shape, half_width + clearance + reach, &mut |c| hit.push(c));
+            for l in (0..self.layers).filter(|l| item.on(*l)) {
+                for &c in &hit {
+                    ObstacleMap::claim(&mut self.owner[l * cells + c], item.net);
+                }
+            }
+            hit.clear();
+            self.cells_near(&item.shape, via_radius + via_clearance, &mut |c| hit.push(c));
+            for c in hit {
+                ObstacleMap::claim(&mut self.via_owner[c], item.net);
             }
             return;
         }
