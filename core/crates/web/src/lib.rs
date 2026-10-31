@@ -623,6 +623,15 @@ pub fn route(pcb: &str, pro: &str, dru: &str, options: &str, fps: f64, on_line: 
     Ok(ultraroute::run(&a, model, pcb, Some(live), Arc::new(AtomicBool::new(false))))
 }
 
+/// Draws `pcb` without routing it, for a viewer: calls `on_line` with the studio's lines for the
+/// board as it is (its header, one frame of everything on it, and its poured zones).
+#[wasm_bindgen]
+pub fn view(pcb: &str, pro: &str, dru: &str, on_line: js_sys::Function) -> Result<(), JsValue> {
+    let (a, model) = setup(pcb, pro, dru, "")?;
+    ultraroute::Live::new(Box::new(Lines { pending: Vec::new(), send: on_line }), 1.0, a.pours_block).show(&model, pcb);
+    Ok(())
+}
+
 /// As [`route`], with negotiation's rounds handed `batch_size` connections at a time to
 /// `dispatch_batch`, which routes them on the page's worker pool and answers with their paths;
 /// `priced`, the pool is sent each round's prices once and prices each connection itself.
