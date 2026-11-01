@@ -364,6 +364,7 @@ impl Stage for First {
             nets: Some(first.clone()),
             pours_block: a.pours_block,
             log: ctx.log.clone(),
+            ..Default::default()
         };
         let watch = &mut *ctx.watch;
         let s = grid::route_open(ctx.board, ctx.solver, &options, &mut |b| watch.frame(b));

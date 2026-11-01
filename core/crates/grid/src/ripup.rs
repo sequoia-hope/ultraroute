@@ -305,6 +305,7 @@ pub fn rip_up_watch(
                 directional: false,
                 log: options.log.clone(),
                 net_via_cost: Default::default(),
+                fine: true,
             };
             tell(&options.log, "ripping up", || format!("{net_name}: ripped {ripped} pieces, rerouting them"), None);
             let mut again = route_open(board, solver, &reroute, &mut |_| {}).laid;

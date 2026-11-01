@@ -115,11 +115,13 @@ pub struct Options {
     /// Nets whose vias cost other than `via_cost`: a net a length rule limits pays for each the
     /// track its barrel counts as.
     pub net_via_cost: HashMap<u32, u32>,
+    /// A connection with no way on the grid is tried once more on a finer one round it.
+    pub fine: bool,
 }
 
 impl Default for Options {
     fn default() -> Options {
-        Options { cell: 50_000, via_cost: 80, deadline: Default::default(), nets: None, pours_block: false, directional: true, seed: 0, log: None, net_via_cost: HashMap::new() }
+        Options { cell: 50_000, via_cost: 80, deadline: Default::default(), nets: None, pours_block: false, directional: true, seed: 0, log: None, net_via_cost: HashMap::new(), fine: true }
     }
 }
 
@@ -243,7 +245,7 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
             let fine = options.cell / 2;
             let window = narrow_window(&airline);
             let nodes = ((window.max.x - window.min.x) / fine.max(1)) as f64 * ((window.max.y - window.min.y) / fine.max(1)) as f64 * board.layers.len() as f64;
-            if tried.is_err() && fine >= FINE_CELL_FLOOR && nodes <= FINE_NODES {
+            if tried.is_err() && options.fine && fine >= FINE_CELL_FLOOR && nodes <= FINE_NODES {
                 let map = ObstacleMap::window(board, profile.clone(), fine, window, options.pours_block);
                 if let Ok(items) = attempt(board, solver, options, &map, &mut grid, directional, &airline) {
                     stats.fine += 1;
