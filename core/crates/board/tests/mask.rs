@@ -173,3 +173,29 @@ fn two_bare_openings_keep_the_masks_narrowest_web_between_them() {
     let t = track_at(&mut b, 2, 5.0 + 0.3 + 0.1 + 0.15, 1);
     assert!(check_item(&b, t).is_empty());
 }
+
+#[test]
+fn a_bare_vias_opening_keeps_clear_of_an_unplated_holes() {
+    // An unplated 3.2 mm hole whose pad is the hole, its mask opening 0.2 mm wider all round
+    // (1.8 mm radius), and vias left bare: a 2 mm via of another net opens to 1.2 mm round its
+    // centre, so the two openings meet within 3.0 mm, as on digital_clock's Q17.
+    let text = "(kicad_pcb (version 20241229) (generator \"pcbnew\") (general (thickness 1.6))
+         (layers (0 \"F.Cu\" signal) (2 \"B.Cu\" signal) (1 \"F.Mask\" user) (3 \"B.Mask\" user) (25 \"Edge.Cuts\" user))
+         (setup (pad_to_mask_clearance 0.2) (tenting))
+         (net 0 \"\") (net 1 \"B\")
+         (footprint \"H\" (layer \"F.Cu\") (uuid \"0b10c000-0000-4000-8000-0000000000ab\") (at 10 10) (property \"Reference\" \"H1\")
+           (pad \"\" np_thru_hole circle (at 0 0) (size 3.2 3.2) (drill 3.2) (layers \"*.Cu\" \"*.Mask\")))
+         (gr_rect (start 0 0) (end 20 20) (layer \"Edge.Cuts\") (width 0.1)))";
+    let (pcb, copper) = kicad_pcb::parse_board(text).unwrap();
+    let rules = kicad_pcb::Rules::parse(r#"{"board":{"design_settings":{"rules":{"min_hole_clearance":0.25}}},"net_settings":{"classes":[{"name":"Default","clearance":0.0,"track_width":0.2}]}}"#).unwrap();
+    let via = |b: &mut Board, d: f64| {
+        let at = Point::new(nm((10.0 + d) * 1e-3), nm(10e-3));
+        b.insert(Item { kind: Kind::Via, net: 1, layers: 3, shape: Shape::Capsule { a: at, b: at, r: nm(1.0e-3) }, hole: Some((at, nm(0.4e-3))), locked: false, span: None })
+    };
+    let mut near = Board::new(&pcb, &copper, rules.clone());
+    let v = via(&mut near, 2.86);
+    assert!(!check_item(&near, v).is_empty(), "the openings meet: KiCad's solder mask bridge");
+    let mut far = Board::new(&pcb, &copper, rules);
+    let v = via(&mut far, 3.1);
+    assert!(check_item(&far, v).is_empty(), "{:?}", check_item(&far, v));
+}

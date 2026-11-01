@@ -510,7 +510,9 @@ impl ObstacleMap {
                 }
             }
             hit.clear();
-            self.cells_near(shape, via, &mut |c| hit.push(c));
+            // A bare via's own opening keeps clear of the area too, by the mask's narrowest web.
+            let bare = if board.via_openings.0 & layers != 0 { board.via_openings.1 + board.mask_web } else { 0 };
+            self.cells_near(shape, via + bare, &mut |c| hit.push(c));
             for c in hit {
                 ObstacleMap::claim(&mut self.via_owner[c], *net);
             }

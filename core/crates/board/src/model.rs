@@ -827,6 +827,16 @@ impl Board {
             .collect()
     }
 
+    /// How far beyond `item`, a via, its own mask opening reaches on the sides in `layers`, and
+    /// the mask's narrowest web past that: what must keep it from another opening there. 0 for a
+    /// track, or a via the mask covers on those sides.
+    pub fn via_opening_on(&self, item: &Item, layers: u64) -> Nm {
+        match item.kind {
+            Kind::Via if self.via_openings.0 & layers & item.layers != 0 => self.via_openings.1 + self.mask_web,
+            _ => 0,
+        }
+    }
+
     /// Inner copper layers that are planes in all but name: one net's pours cover at least
     /// `share` of the board there. The layer index and the net, for each.
     pub fn plane_layers(&self, share: f64) -> Vec<(usize, u32)> {
