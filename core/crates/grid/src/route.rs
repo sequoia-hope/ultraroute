@@ -214,28 +214,32 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
                 Some(Focus::Connection { net: airline.net, from: airline.from, to: airline.to }),
             );
             let profile = Profile::for_net(board, airline.net);
-            let mut tried = attempt(board, solver, options, &mut maps, &mut grid, directional, &profile, profile.class.clone(), &airline);
+            if !maps.contains_key(&profile.class) {
+                let Some(map) = ObstacleMap::new_by(board, profile.clone(), options.cell, options.pours_block, &options.deadline) else { return stats };
+                maps.insert(profile.class.clone(), map);
+            }
+            let mut tried = attempt(board, solver, options, &maps[&profile.class], &mut grid, directional, &airline);
             // A short connection of a net that carries current, which finds no way at its width,
             // may go narrowed to its pin's width the whole way: as a designer runs a regulator's
-            // switch node from a fine-pitch pin through the gap beside its capacitors.
+            // switch node from a fine-pitch pin through the gap beside its capacitors. Its map
+            // covers the connection's neighbourhood only.
             if let (Err(_), Some(hw)) = (&tried, narrow_run(board, &profile, &airline)) {
                 let mut narrow = profile.clone();
                 (narrow.half_width, narrow.narrow_half_width) = (hw, hw);
-                let key = format!("{}\u{0}{hw}", profile.class);
-                if let Ok(items) = attempt(board, solver, options, &mut maps, &mut grid, directional, &narrow, key, &airline) {
+                let map = ObstacleMap::window(board, narrow, options.cell, narrow_window(&airline), options.pours_block);
+                if let Ok(items) = attempt(board, solver, options, &map, &mut grid, directional, &airline) {
                     stats.narrowed.push((airline.from_item, airline.to_item, 2 * hw));
                     tried = Ok(items);
                 }
             }
             let laid = match tried {
                 Ok(items) => Some(items),
-                Err(Missed::Map) => return stats,
                 Err(missed) => {
                     let why = match missed {
                         Missed::Start => "no terminal at the start",
                         Missed::End => "no terminal at the end",
                         Missed::Path => "no path",
-                        Missed::Refused | Missed::Map => "refused",
+                        Missed::Refused => "refused",
                     };
                     match missed {
                         Missed::Start | Missed::End => stats.no_terminal += 1,
@@ -285,32 +289,15 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
 
 /// Why one try at a connection laid nothing.
 enum Missed {
-    /// The map was not finished before the deadline.
-    Map,
     Start,
     End,
     Path,
     Refused,
 }
 
-/// One try at `airline` with `profile`, on the map kept under `key` (made if missing).
-#[allow(clippy::too_many_arguments)]
-fn attempt(
-    board: &mut Board,
-    solver: &mut dyn FieldSolver,
-    options: &Options,
-    maps: &mut HashMap<String, ObstacleMap>,
-    grid: &mut RouteGrid,
-    directional: bool,
-    profile: &Profile,
-    key: String,
-    airline: &board::Airline,
-) -> Result<Vec<ItemId>, Missed> {
-    if !maps.contains_key(&key) {
-        let map = ObstacleMap::new_by(board, profile.clone(), options.cell, options.pours_block, &options.deadline).ok_or(Missed::Map)?;
-        maps.insert(key.clone(), map);
-    }
-    maps[&key].view_into(airline.net, grid);
+/// One try at `airline` on `map`.
+fn attempt(board: &mut Board, solver: &mut dyn FieldSolver, options: &Options, map: &ObstacleMap, grid: &mut RouteGrid, directional: bool, airline: &board::Airline) -> Result<Vec<ItemId>, Missed> {
+    map.view_into(airline.net, grid);
     grid.directional = directional;
     let sources = terminals(board, grid, airline.from_item);
     if sources.is_empty() {
@@ -324,6 +311,14 @@ fn attempt(
     let target_cells: Vec<usize> = targets.iter().map(|t| t.0).collect();
     let path = solver.route(grid, &source_cells, &target_cells, options.via_cost).ok_or(Missed::Path)?;
     lay(board, grid, &path, &sources, &targets).ok_or(Missed::Refused)
+}
+
+/// How far round a narrow run's two ends its map reaches, for the way between them to bend.
+const NARROW_RUN_MARGIN: Nm = 2_000_000;
+
+/// The part of the board a narrow run of `airline` is routed in.
+pub(crate) fn narrow_window(airline: &board::Airline) -> BBox {
+    BBox::of([airline.from, airline.to]).grow(NARROW_RUN_MARGIN)
 }
 
 /// How far apart a connection's ends may be for it to go narrowed the whole way.

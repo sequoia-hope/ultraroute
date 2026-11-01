@@ -240,6 +240,11 @@ impl ObstacleMap {
     /// A map covering only `bounds`, for fine-grid work such as escaping a single package without
     /// paying for a fine grid over the whole board.
     pub fn window(board: &Board, profile: Profile, h: Nm, bounds: board::BBox, pours_block: bool) -> ObstacleMap {
+        ObstacleMap::window_without(board, profile, h, bounds, pours_block, &|_| false)
+    }
+
+    /// [`ObstacleMap::window`], leaving out the items `skip` names, as [`ObstacleMap::without`].
+    pub fn window_without(board: &Board, profile: Profile, h: Nm, bounds: board::BBox, pours_block: bool, skip: &dyn Fn(ItemId) -> bool) -> ObstacleMap {
         crate::work::add(&crate::work::MAPS, 1);
         let (x0, y0) = (bounds.min.x, bounds.min.y);
         let nx = ((bounds.max.x - x0) / h).max(1) as usize;
@@ -281,6 +286,7 @@ impl ObstacleMap {
         let ids: Vec<ItemId> = board
             .items()
             .filter_map(|(id, _)| board.bbox(id).filter(|b| b.overlaps(reach_box)).map(|_| id))
+            .filter(|&id| !skip(id))
             .collect();
         for id in ids {
             map.stamp(board, id);

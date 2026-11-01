@@ -180,21 +180,37 @@ pub fn rip_up_watch(
             }
             let mut found = None;
             for (profile, key) in widths {
-                let hard_map = hard.entry(key.clone()).or_insert_with(|| {
-                    ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| soft_set.contains(&id))
-                });
-                hard_map.view_into(airline.net, &mut grid);
+                // The narrow run's maps cover its neighbourhood only, made for this try alone.
+                let window = (profile.half_width < base.half_width).then(|| crate::route::narrow_window(&airline));
                 let plane = |id: ItemId| board.item(id).is_some_and(|it| plane_nets.contains(&it.net));
-                let soft_map = soft_maps.entry(key.clone()).or_insert_with(|| {
-                    ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| !soft_set.contains(&id) || plane(id))
-                });
+                let made = |skip: &dyn Fn(ItemId) -> bool| match window {
+                    Some(b) => ObstacleMap::window_without(board, profile.clone(), options.cell, b, options.pours_block, skip),
+                    None => ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, skip),
+                };
+                let (hard_own, soft_own, plane_own);
+                let hard_map: &ObstacleMap = if window.is_some() {
+                    hard_own = made(&|id| soft_set.contains(&id));
+                    &hard_own
+                } else {
+                    hard.entry(key.clone()).or_insert_with(|| made(&|id| soft_set.contains(&id)))
+                };
+                hard_map.view_into(airline.net, &mut grid);
+                let soft_map: &ObstacleMap = if window.is_some() {
+                    soft_own = made(&|id| !soft_set.contains(&id) || plane(id));
+                    &soft_own
+                } else {
+                    soft_maps.entry(key.clone()).or_insert_with(|| made(&|id| !soft_set.contains(&id) || plane(id)))
+                };
                 // A plane net's soft copper is mostly vias joining pads to the planes, which
                 // `join_planes` puts back elsewhere: cheap to rip.
-                let plane_map = (!plane_nets.is_empty()).then(|| {
-                    &*plane_maps.entry(key.clone()).or_insert_with(|| {
-                        ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| !soft_set.contains(&id) || !plane(id))
-                    })
-                });
+                let plane_map: Option<&ObstacleMap> = if plane_nets.is_empty() {
+                    None
+                } else if window.is_some() {
+                    plane_own = made(&|id| !soft_set.contains(&id) || !plane(id));
+                    Some(&plane_own)
+                } else {
+                    Some(&*plane_maps.entry(key.clone()).or_insert_with(|| made(&|id| !soft_set.contains(&id) || !plane(id))))
+                };
                 let plane_cost = (options.rip_cost / 40).max(5);
                 let price = |soft: bool, plane: bool| if soft { options.rip_cost } else if plane { plane_cost } else { 0 };
                 grid.penalty.clear();
