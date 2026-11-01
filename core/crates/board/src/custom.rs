@@ -121,17 +121,14 @@ impl Board {
         for (_, it) in self.items().filter(|(_, it)| it.net != 0) {
             match (&it.kind, &it.shape) {
                 (Kind::Track, crate::geom::Shape::Capsule { a, b, .. }) => per_net.entry(it.net).or_default().0 += a.distance(*b) * 1e-6,
-                (Kind::Via, _) => {
-                    let e = per_net.entry(it.net).or_default();
-                    e.0 += self.via_height as f64 * 1e-6;
-                    e.1 += 1;
-                }
+                (Kind::Via, _) => per_net.entry(it.net).or_default().1 += 1,
                 _ => {}
             }
         }
         let mut out = Vec::new();
-        for (net, (mm, count)) in per_net {
+        for (net, (track_mm, count)) in per_net {
             let name = self.net_name(net);
+            let mm = if count == 0 { track_mm } else { self.net_length(net) };
             if let Some((rule, max)) = self.net_maximum("length", net).filter(|(_, max)| mm > max * 1e3 + 1e-6) {
                 out.push((format!("length: {name} is {mm:.2} mm, over rule \"{rule}\"'s {:.2} mm", max * 1e3), name.to_string()));
             }
@@ -159,13 +156,30 @@ impl Board {
     }
 
     /// `net`'s length in millimetres as KiCad's `length` rule counts it: its tracks, and each via
-    /// at the board's [`Board::via_height`].
+    /// its copper meets on both outer layers at the board's [`Board::via_height`]. KiCad 9.0.8
+    /// counts a via between its outermost connected layers, and looks for those from F.Cu to
+    /// B.Cu by layer number, which since KiCad 9 skips the inner layers: a via from an outer
+    /// layer to an inner one counts nothing (`PCB_VIA::GetOutermostConnectedLayers`).
     pub fn net_length(&self, net: u32) -> f64 {
-        self.items().filter(|(_, it)| it.net == net).map(|(_, it)| match (&it.kind, &it.shape) {
+        let (top, bottom) = (0, self.layers.len().saturating_sub(1));
+        let meets = |id: ItemId, via: &Item, layer: usize| {
+            self.near(layer, via.shape.bbox()).into_iter().filter(|&o| o != id).filter_map(|o| self.item(o)).any(|o| {
+                o.net == net && o.on(layer) && matches!(o.kind, Kind::Track | Kind::Pad { .. } | Kind::Via) && o.shape.gap(&via.shape) == 0.0
+            })
+        };
+        self.items().filter(|(_, it)| it.net == net).map(|(id, it)| match (&it.kind, &it.shape) {
             (Kind::Track, crate::geom::Shape::Capsule { a, b, .. }) => a.distance(*b) * 1e-6,
-            (Kind::Via, _) => self.via_height as f64 * 1e-6,
+            (Kind::Via, _) if bottom > top && meets(id, it, top) && meets(id, it, bottom) => self.via_height as f64 * 1e-6,
             _ => 0.0,
         }).sum()
+    }
+
+    /// Whether a via on `net` costs its length rule [`Board::via_height`] wherever it stands:
+    /// where the net may route on the outer layers only (a two-layer board, or the inner ones all
+    /// planes), every layer change joins F.Cu to B.Cu. With inner layers to route on, a via to
+    /// one counts nothing, and the routers are not steered by it.
+    pub fn vias_cost_length(&self) -> bool {
+        (0..self.layers.len()).filter(|l| self.planes & (1 << l) == 0).count() <= 2
     }
 
     /// How far apart `net`'s pads lie, in millimetres: the most any two are apart, which any

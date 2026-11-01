@@ -863,7 +863,10 @@ fn via_costs(a: &Args, board: &Board) -> ViaCosts {
         None => (VIA_COST_MM, VIA_COST_MM * 1.2, VIA_COST_MM * 0.8),
     };
     let height = board.via_height as f64 * 1e-6;
-    let limited: Vec<u32> = (1..board.nets.len() as u32).filter(|&n| board.net_maximum("length", n).is_some()).collect();
+    // Only where every via counts its height (`Board::vias_cost_length`); with inner layers to
+    // route on, dear vias drove bluebuzz's WL_DATA 10 mm out of its way for vias KiCad counts as
+    // nothing.
+    let limited: Vec<u32> = if board.vias_cost_length() { (1..board.nets.len() as u32).filter(|&n| board.net_maximum("length", n).is_some()).collect() } else { Vec::new() };
     let dear = |mm: f64| limited.iter().map(|&n| (n, at(mm.max(VIA_COST_MM) + height))).collect::<HashMap<u32, u32>>();
     ViaCosts { negotiate: at(negotiate), open: at(open), rip: at(rip), negotiate_limited: dear(negotiate), open_limited: dear(open) }
 }

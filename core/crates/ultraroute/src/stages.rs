@@ -296,7 +296,7 @@ impl Stage for PairEscapes {
                 [air.from_item, air.to_item].iter().any(|&id| board.item(id).is_some_and(|it| matches!(it.kind, Kind::Pad { footprint, .. } if fine.contains(&footprint))))
             })
             .map(|air| air.net)
-            .filter(|n| board.net_maximum("length", *n).is_none())
+            .filter(|n| !board.vias_cost_length() || board.net_maximum("length", *n).is_none())
             .collect();
         if open_fine_pair_nets.is_empty() {
             return json!({"nets": 0});
@@ -374,9 +374,10 @@ impl Stage for First {
     }
 }
 
-/// The nets a custom rule limits in length.
+/// The nets a custom rule limits in length, where a via costs them its height wherever it
+/// stands ([`Board::vias_cost_length`]); none elsewhere.
 fn length_limited(board: &Board) -> Vec<u32> {
-    if !board.custom.has("length") {
+    if !board.custom.has("length") || !board.vias_cost_length() {
         return Vec::new();
     }
     (1..board.nets.len() as u32).filter(|&n| board.net_maximum("length", n).is_some()).collect()

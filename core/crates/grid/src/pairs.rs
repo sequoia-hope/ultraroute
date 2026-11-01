@@ -59,9 +59,10 @@ pub struct Pair {
 }
 
 /// What each via costs a pair beyond the constants below, in nanometres of track: the height
-/// KiCad counts it as ([`Board::via_height`]) where a custom rule limits either net's length.
+/// KiCad counts it as ([`Board::via_height`]) where a custom rule limits either net's length and
+/// every via counts it ([`Board::vias_cost_length`]).
 fn length_via_extra(board: &Board, pair: &Pair) -> f64 {
-    if [pair.p, pair.n].iter().any(|&n| board.net_maximum("length", n).is_some()) { board.via_height as f64 } else { 0.0 }
+    if board.vias_cost_length() && [pair.p, pair.n].iter().any(|&n| board.net_maximum("length", n).is_some()) { board.via_height as f64 } else { 0.0 }
 }
 
 impl Pair {
