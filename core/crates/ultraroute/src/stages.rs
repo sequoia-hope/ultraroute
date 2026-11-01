@@ -711,6 +711,42 @@ impl Stage for Cleaning {
     }
 }
 
+/// What is still open once the copper is settled, routed one connection at a time again: the
+/// via pass, tightening and the clean-up move copper after the routing stages have given up, and
+/// may leave room where there was none.
+pub struct Refinish;
+
+impl Stage for Refinish {
+    fn name(&self) -> &'static str {
+        "refinishing"
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let before = ctx.open().len();
+        if before == 0 {
+            return json!({"routed": 0});
+        }
+        let a = ctx.args;
+        let options = grid::Options {
+            cell: a.cell.unwrap_or(grid::Options::default().cell),
+            via_cost: ctx.ledger.costs.open,
+            seed: a.seed,
+            deadline: ctx.deadline(),
+            pours_block: a.pours_block,
+            log: ctx.log.clone(),
+            ..Default::default()
+        };
+        let watch = &mut *ctx.watch;
+        let s = grid::route_open(ctx.board, ctx.solver, &options, &mut |b| watch.frame(b));
+        ctx.ledger.laid.extend(s.laid.iter().copied());
+        narrowed(ctx, &s.narrowed);
+        if s.routed > 0 {
+            eprintln!("refinished {} more, open {before} -> {}, {:.1} s", s.routed, ctx.open().len(), ctx.elapsed());
+        }
+        json!({"routed": s.routed, "failed": s.failed})
+    }
+}
+
 /// Last, once the copper is settled: the shorter net of each pair is given bumps.
 pub struct LengthMatching;
 
