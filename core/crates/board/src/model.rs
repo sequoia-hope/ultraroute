@@ -167,6 +167,9 @@ pub const SOFT_NO_VIA: &str = "soft-novia";
 /// The zone of drawn copper: lines, shapes and text on a copper layer, which stay as drawn.
 pub const DRAWN: usize = usize::MAX;
 
+/// An outer copper layer's thickness where the file gives none: KiCad's 35 um (1 oz).
+const OUTER_COPPER_M: f64 = 35e-6;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Item {
     pub kind: Kind,
@@ -326,6 +329,10 @@ pub struct Board {
     /// What reading the board found and could not take as given: the reader's own warnings
     /// (drawings it skips, values it assumed) and an outline that does not close.
     pub warnings: Vec<String>,
+    /// How far a through via runs from its top copper to its bottom, as KiCad's length rules
+    /// count it: the board's thickness less one outer copper layer (kicad-cli 9.0.8, 2026-11-01:
+    /// 1.565 mm on a 1.6 mm board of 2, 4 or 6 layers, 0.965 mm on a 1.0 mm one).
+    pub via_height: Nm,
     /// Clearances per net number, in nanometres, so `clearance(a, b)` is two array lookups.
     net_clearances: Vec<Nm>,
     /// Each net's class as KiCad names it (`A,B,Default`), for the custom rules.
@@ -459,6 +466,7 @@ impl Board {
             regions: Vec::new(),
             pour_cost: 0.0,
             warnings: pcb.warnings.iter().chain(&copper.warnings).cloned().collect(),
+            via_height: nm((pcb.thickness_m - OUTER_COPPER_M).max(0.0)),
             net_clearances,
             class_names,
             names_nets: false,

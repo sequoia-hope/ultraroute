@@ -836,6 +836,11 @@ struct ViaCosts {
     negotiate: u32,
     open: u32,
     rip: u32,
+    /// Negotiation's and one connection at a time's prices for the nets a custom rule limits in
+    /// length: each via costs them at least [`VIA_COST_MM`], and the height KiCad counts it as
+    /// besides ([`Board::via_height`]): a via on a short net whose budget is tight is dear.
+    negotiate_limited: HashMap<u32, u32>,
+    open_limited: HashMap<u32, u32>,
 }
 
 /// What a via costs negotiation unless `--via-cost` says, in millimetres of straight track:
@@ -857,7 +862,10 @@ fn via_costs(a: &Args, board: &Board) -> ViaCosts {
         None if board.planes != 0 => (1.0, 0.4, 0.4),
         None => (VIA_COST_MM, VIA_COST_MM * 1.2, VIA_COST_MM * 0.8),
     };
-    ViaCosts { negotiate: at(negotiate), open: at(open), rip: at(rip) }
+    let height = board.via_height as f64 * 1e-6;
+    let limited: Vec<u32> = (1..board.nets.len() as u32).filter(|&n| board.net_maximum("length", n).is_some()).collect();
+    let dear = |mm: f64| limited.iter().map(|&n| (n, at(mm.max(VIA_COST_MM) + height))).collect::<HashMap<u32, u32>>();
+    ViaCosts { negotiate: at(negotiate), open: at(open), rip: at(rip), negotiate_limited: dear(negotiate), open_limited: dear(open) }
 }
 
 /// The share of the board one net's pour must cover on an inner layer for the layer to be taken

@@ -179,6 +179,9 @@ impl Stage for Prefanout {
         } else {
             HashSet::new()
         };
+        // A net a length rule limits is not escaped by a via it may not have length for: the
+        // routers reach its pads, pricing each via at its height.
+        let skip_nets: HashSet<u32> = skip_nets.into_iter().chain(length_limited(ctx.board)).collect();
         let options = grid::PrefanoutOptions {
             global_cell: a.cell.unwrap_or(defaults.global_cell),
             ring: a.prefanout_ring.unwrap_or(defaults.ring),
@@ -293,6 +296,7 @@ impl Stage for PairEscapes {
                 [air.from_item, air.to_item].iter().any(|&id| board.item(id).is_some_and(|it| matches!(it.kind, Kind::Pad { footprint, .. } if fine.contains(&footprint))))
             })
             .map(|air| air.net)
+            .filter(|n| board.net_maximum("length", *n).is_none())
             .collect();
         if open_fine_pair_nets.is_empty() {
             return json!({"nets": 0});
@@ -353,6 +357,7 @@ impl Stage for First {
         let options = grid::Options {
             cell: a.cell.unwrap_or(grid::Options::default().cell),
             via_cost: ctx.ledger.costs.open,
+            net_via_cost: ctx.ledger.costs.open_limited.clone(),
             directional: true,
             seed: a.seed,
             deadline: ctx.deadline(),
@@ -368,6 +373,17 @@ impl Stage for First {
         json!({"nets": first.len(), "routed": s.routed, "failed": s.failed, "vias": s.vias})
     }
 }
+
+/// The nets a custom rule limits in length.
+fn length_limited(board: &Board) -> Vec<u32> {
+    if !board.custom.has("length") {
+        return Vec::new();
+    }
+    (1..board.nets.len() as u32).filter(|&n| board.net_maximum("length", n).is_some()).collect()
+}
+
+/// The weight negotiation gives a net a length rule limits (see `NegotiationOptions::net_weight`).
+const LIMITED_WEIGHT: f64 = 0.5;
 
 /// Negotiated congestion: every connection routed at once, round after round, until none share.
 pub struct Negotiation;
@@ -390,6 +406,9 @@ impl Stage for Negotiation {
             threads: ctx.threads,
             cell: a.cell.unwrap_or(defaults.cell),
             via_cost: ctx.ledger.costs.negotiate,
+            net_via_cost: ctx.ledger.costs.negotiate_limited.clone(),
+            // The nets a length rule limits win the cells they contest, as the shortest way is theirs.
+            net_weight: ctx.ledger.costs.negotiate_limited.keys().map(|&n| (n, LIMITED_WEIGHT)).collect(),
             pours_block: a.pours_block,
             seed: a.seed,
             log: ctx.log.clone(),
@@ -433,6 +452,7 @@ impl Stage for Finishing {
         let options = grid::Options {
             cell: a.cell.unwrap_or(grid::Options::default().cell),
             via_cost: ctx.ledger.costs.open,
+            net_via_cost: ctx.ledger.costs.open_limited.clone(),
             seed: a.seed,
             deadline: ctx.deadline(),
             pours_block: a.pours_block,
@@ -733,6 +753,7 @@ impl Stage for Refinish {
         let options = grid::Options {
             cell: a.cell.unwrap_or(grid::Options::default().cell),
             via_cost: ctx.ledger.costs.open,
+            net_via_cost: ctx.ledger.costs.open_limited.clone(),
             seed: a.seed,
             deadline: ctx.deadline(),
             pours_block: a.pours_block,

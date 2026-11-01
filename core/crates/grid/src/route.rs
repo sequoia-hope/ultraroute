@@ -112,11 +112,14 @@ pub struct Options {
     /// shortest-first order exact.
     pub seed: u64,
     pub log: Option<Log>,
+    /// Nets whose vias cost other than `via_cost`: a net a length rule limits pays for each the
+    /// track its barrel counts as.
+    pub net_via_cost: HashMap<u32, u32>,
 }
 
 impl Default for Options {
     fn default() -> Options {
-        Options { cell: 50_000, via_cost: 80, deadline: Default::default(), nets: None, pours_block: false, directional: true, seed: 0, log: None }
+        Options { cell: 50_000, via_cost: 80, deadline: Default::default(), nets: None, pours_block: false, directional: true, seed: 0, log: None, net_via_cost: HashMap::new() }
     }
 }
 
@@ -324,7 +327,8 @@ fn attempt(board: &mut Board, solver: &mut dyn FieldSolver, options: &Options, m
     }
     let source_cells: Vec<usize> = sources.iter().map(|t| t.0).collect();
     let target_cells: Vec<usize> = targets.iter().map(|t| t.0).collect();
-    let path = solver.route(grid, &source_cells, &target_cells, options.via_cost).ok_or(Missed::Path)?;
+    let via_cost = options.net_via_cost.get(&airline.net).copied().unwrap_or(options.via_cost);
+    let path = solver.route(grid, &source_cells, &target_cells, via_cost).ok_or(Missed::Path)?;
     lay(board, grid, &path, &sources, &targets).ok_or(Missed::Refused)
 }
 

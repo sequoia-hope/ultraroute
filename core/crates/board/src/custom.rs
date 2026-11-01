@@ -112,7 +112,7 @@ impl Board {
     }
 
     /// The nets whose copper breaks a custom rule's `length` or `via_count` maximum, one line
-    /// each with the net's name: its tracks' total length (vias' heights not counted), its vias.
+    /// each with the net's name: its length as KiCad counts it ([`Board::net_length`]), its vias.
     pub fn rule_limits(&self) -> Vec<(String, String)> {
         if !self.custom.has("length") && !self.custom.has("via_count") {
             return Vec::new();
@@ -121,7 +121,11 @@ impl Board {
         for (_, it) in self.items().filter(|(_, it)| it.net != 0) {
             match (&it.kind, &it.shape) {
                 (Kind::Track, crate::geom::Shape::Capsule { a, b, .. }) => per_net.entry(it.net).or_default().0 += a.distance(*b) * 1e-6,
-                (Kind::Via, _) => per_net.entry(it.net).or_default().1 += 1,
+                (Kind::Via, _) => {
+                    let e = per_net.entry(it.net).or_default();
+                    e.0 += self.via_height as f64 * 1e-6;
+                    e.1 += 1;
+                }
                 _ => {}
             }
         }
@@ -152,6 +156,16 @@ impl Board {
     /// Whether a custom rule allows `net` no vias (`via_count (max 0)`).
     pub fn no_vias(&self, net: u32) -> bool {
         self.via_free.get(net as usize).copied().unwrap_or(false)
+    }
+
+    /// `net`'s length in millimetres as KiCad's `length` rule counts it: its tracks, and each via
+    /// at the board's [`Board::via_height`].
+    pub fn net_length(&self, net: u32) -> f64 {
+        self.items().filter(|(_, it)| it.net == net).map(|(_, it)| match (&it.kind, &it.shape) {
+            (Kind::Track, crate::geom::Shape::Capsule { a, b, .. }) => a.distance(*b) * 1e-6,
+            (Kind::Via, _) => self.via_height as f64 * 1e-6,
+            _ => 0.0,
+        }).sum()
     }
 
     /// How far apart `net`'s pads lie, in millimetres: the most any two are apart, which any

@@ -58,6 +58,12 @@ pub struct Pair {
     pub gap: Nm,
 }
 
+/// What each via costs a pair beyond the constants below, in nanometres of track: the height
+/// KiCad counts it as ([`Board::via_height`]) where a custom rule limits either net's length.
+fn length_via_extra(board: &Board, pair: &Pair) -> f64 {
+    if [pair.p, pair.n].iter().any(|&n| board.net_maximum("length", n).is_some()) { board.via_height as f64 } else { 0.0 }
+}
+
 impl Pair {
     /// Centre to centre of the two tracks.
     pub fn pitch(&self) -> Nm {
@@ -892,7 +898,7 @@ fn couple_end_to_end(
     let mut grid = coupled_grid(board, options, pair, profile, a, b)?;
     let all_blocked = grid.blocked.clone();
     let saved_via = grid.via.clone();
-    let paired_via_cost = ((VIA_COST / grid.h as f64) * STRAIGHT as f64).round().max(80.0) as u32;
+    let paired_via_cost = (((VIA_COST + length_via_extra(board, pair)) / grid.h as f64) * STRAIGHT as f64).round().max(80.0) as u32;
     let (pref_vp, min_vp) = via_pitches(board, pair, profile);
     let vp_tries: Vec<Nm> = if pref_vp > min_vp { vec![pref_vp, min_vp] } else { vec![min_vp] };
 
@@ -1144,6 +1150,7 @@ fn evaluate_stretches(
     pours_block: bool,
 ) -> Option<CoupledCandidate> {
     let first_line = &stretches.first()?.1;
+    let extra = length_via_extra(board, pair);
     let pref_p_left = side(first_line, centre(board, a.p)) >= side(first_line, centre(board, a.n));
     let ease_tries = [pair.pitch(), pair.pitch() / 2, 0];
     let vps: &[Nm] = if stretches.len() >= 2 { vp_tries } else { &vp_tries[..1] };
@@ -1200,8 +1207,8 @@ fn evaluate_stretches(
                 let transition_pen = (stretches.len().saturating_sub(1) as f64) * 350_000.0;
                 let score = coupled_len
                     + 0.4 * region_pen
-                    + body_vias as f64 * PER_VIA_COST
-                    + leg_vias * PER_LEG_VIA_COST
+                    + body_vias as f64 * (PER_VIA_COST + extra)
+                    + leg_vias * (PER_LEG_VIA_COST + extra)
                     + transition_pen
                     + 2.5 * avg_leg
                     + 3.0 * skew
@@ -2243,6 +2250,7 @@ fn legacy_run(board: &mut Board, options: &PairOptions, pair: &Pair, fat: &Profi
 
 fn couple_legacy(board: &mut Board, grid: &mut RouteGrid, pair: &Pair, a: PinPair, b: PinPair) -> Option<(Vec<ItemId>, f64, Vec<Point>)> {
     let all = grid.blocked.clone();
+    let extra = length_via_extra(board, pair);
     let mut best: Option<(f64, usize, Vec<Point>)> = None;
     for layer in 0..grid.layers.len() {
         let board_layer = grid.layers[layer];
@@ -2251,7 +2259,7 @@ fn couple_legacy(board: &mut Board, grid: &mut RouteGrid, pair: &Pair, a: PinPai
             let Some(line) = centreline_legacy(grid, &all, layer, a, b, ring).filter(|l| length(l) >= SHORTEST_COUPLED) else { continue };
             let Some(laid) = lay_pair_legacy(board, pair, a, &line, board_layer) else { continue };
             discard_all(board, laid);
-            let cost = length(&line) + vias * VIA_COST + 2.0 * ring.0 as f64;
+            let cost = length(&line) + vias * (VIA_COST + extra) + 2.0 * ring.0 as f64;
             if best.as_ref().is_none_or(|b| cost < b.0) {
                 best = Some((cost, layer, line));
             }

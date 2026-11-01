@@ -239,6 +239,7 @@ fn try_step(
         pours_block: options.pours_block,
         directional: false,
         log: None,
+        net_via_cost: Default::default(),
     };
     let again = route_open(board, solver, &reroute, &mut |_| {});
     let after = open_count(board, options.pours_block);

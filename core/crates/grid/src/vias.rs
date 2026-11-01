@@ -121,13 +121,10 @@ fn walk_chain(board: &Board, start_via: ItemId, first_track: ItemId, soft_set: &
     (chain, None)
 }
 
-/// Whether `net`'s tracks, all of them, keep to a custom rule's `length` maximum, where one
-/// limits it: a via is not traded for track length the rule cannot spare.
+/// Whether `net`, its tracks and vias as KiCad counts them, keeps to a custom rule's `length`
+/// maximum, where one limits it: a via is not traded for track length the rule cannot spare.
 fn within_length(board: &Board, net: u32) -> bool {
-    board.net_maximum("length", net).is_none_or(|(_, max)| {
-        let mm: f64 = board.items().filter(|(_, it)| it.net == net && it.kind == Kind::Track).map(|(_, it)| track_mm(it)).sum();
-        mm <= max * 1e3 + 1e-6
-    })
+    board.net_maximum("length", net).is_none_or(|(_, max)| board.net_length(net) <= max * 1e3 + 1e-6)
 }
 
 fn track_mm(item: &Item) -> f64 {

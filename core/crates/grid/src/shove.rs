@@ -274,7 +274,7 @@ pub fn shove_escape(
             let again = route_open(
                 board,
                 solver,
-                &Options { cell: options.cell, via_cost: options.via_cost, deadline: options.deadline.seconds(options.reroute_seconds), nets: None, pours_block: options.pours_block, directional: false, seed: 0, log: None },
+                &Options { cell: options.cell, via_cost: options.via_cost, deadline: options.deadline.seconds(options.reroute_seconds), nets: None, pours_block: options.pours_block, directional: false, seed: 0, log: None, net_via_cost: Default::default() },
                 &mut |_| {},
             );
             soft.extend(again.laid.iter().copied());
@@ -1055,6 +1055,7 @@ fn negotiate(
             directional: false,
             seed,
             log: None,
+            net_via_cost: Default::default(),
         },
         &mut |_| {},
     );

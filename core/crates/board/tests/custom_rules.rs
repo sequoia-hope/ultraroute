@@ -163,7 +163,8 @@ fn a_nets_length_and_vias_over_a_rules_maximum_are_reported() {
     b.insert(Item { kind: Kind::Via, net: 2, layers: 3, shape: Shape::Capsule { a: Point::new(nm(10e-3), nm(2e-3)), b: Point::new(nm(10e-3), nm(2e-3)), r: nm(0.3e-3) }, hole: Some((Point::new(nm(10e-3), nm(2e-3)), nm(0.15e-3))), locked: false, span: None });
     let found: Vec<String> = b.rule_limits().into_iter().map(|(line, _)| line).collect();
     assert_eq!(found.len(), 2, "{found:?}");
-    assert!(found[0].starts_with("length: B is 26.00 mm"), "{found:?}");
+    // 26 mm of track and the via's 1.565 mm (a 1.6 mm board less 35 um of copper), as KiCad counts.
+    assert!(found[0].starts_with("length: B is 27.57 mm"), "{found:?}");
     assert!(found[1].starts_with("vias: B has 1"), "{found:?}");
     track(&mut b, 1, 1, 20.0);
     assert_eq!(b.rule_limits().len(), 2, "net A has no limit");
