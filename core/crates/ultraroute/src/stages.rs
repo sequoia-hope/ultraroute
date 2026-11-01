@@ -872,6 +872,12 @@ impl Stage for Write {
             let mut seen_laid = HashSet::new();
             laid.retain(|id| board.item(*id).is_some() && seen_laid.insert(*id));
         }
+        // Ends joined only where round copper overlaps, narrower than the track: a piece onto
+        // the other track's centre line, which the split below makes an end-to-end joint.
+        let mended = grid::mend_joints(board, &mut laid);
+        if mended > 0 {
+            eprintln!("mended {mended} joints where round ends only overlapped");
+        }
         let (split, spans) = grid::split_at_joins(board, &mut laid);
         ledger.removed.extend(spans);
         if split > 0 {
@@ -900,6 +906,25 @@ impl Stage for Write {
             eprintln!("neck: {}", neck.line);
             ctx.stats.findings.push(Finding { severity: "warning", kind: "neck", message: neck.line.clone(), refs: neck.part.into_iter().collect(), nets: vec![neck.net], ends: None });
             ctx.say("necks", neck.line);
+        }
+        // What could not be mended: under the net's width rule it breaks the rules, which the
+        // board's check may not see, as KiCad counts overlapping round ends joined.
+        let board = &*ctx.board;
+        for joint in grid::narrow_joints(board, &laid) {
+            let net = board.net_name(joint.net).to_string();
+            let rule = board.min_track_width_of(joint.net) as f64;
+            let (severity, what) = if joint.width < rule { ("error", "under the net's width rule") } else { ("warning", "within the net's width rule") };
+            let line = format!(
+                "narrow joint: {net} on {} at ({:.3}, {:.3}) mm, {:.3} mm wide where its tracks are {:.3} mm ({what}, {:.3} mm): round ends only overlap",
+                board.layers[joint.layer],
+                joint.at.x as f64 * 1e-6,
+                joint.at.y as f64 * 1e-6,
+                joint.width * 1e-6,
+                joint.full * 1e-6,
+                rule * 1e-6
+            );
+            eprintln!("{line}");
+            ctx.stats.findings.push(Finding { severity, kind: "joint", message: line, refs: Vec::new(), nets: vec![net], ends: None });
         }
         let (board, ledger) = (&mut *ctx.board, &mut *ctx.ledger);
         let replace = crate::moved_parts(board, &ledger.original_at, ctx.text);
