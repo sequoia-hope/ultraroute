@@ -179,6 +179,9 @@ impl Stage for Prefanout {
         } else {
             HashSet::new()
         };
+        // A net a length rule limits is not escaped by a via it may not have length for: the
+        // routers reach its pads, pricing each via at its height.
+        let skip_nets: HashSet<u32> = skip_nets.into_iter().chain(length_limited(ctx.board)).collect();
         let options = grid::PrefanoutOptions {
             global_cell: a.cell.unwrap_or(defaults.global_cell),
             ring: a.prefanout_ring.unwrap_or(defaults.ring),
@@ -293,6 +296,7 @@ impl Stage for PairEscapes {
                 [air.from_item, air.to_item].iter().any(|&id| board.item(id).is_some_and(|it| matches!(it.kind, Kind::Pad { footprint, .. } if fine.contains(&footprint))))
             })
             .map(|air| air.net)
+            .filter(|n| !board.vias_cost_length() || board.net_maximum("length", *n).is_none())
             .collect();
         if open_fine_pair_nets.is_empty() {
             return json!({"nets": 0});
@@ -353,12 +357,14 @@ impl Stage for First {
         let options = grid::Options {
             cell: a.cell.unwrap_or(grid::Options::default().cell),
             via_cost: ctx.ledger.costs.open,
+            net_via_cost: ctx.ledger.costs.open_limited.clone(),
             directional: true,
             seed: a.seed,
             deadline: ctx.deadline(),
             nets: Some(first.clone()),
             pours_block: a.pours_block,
             log: ctx.log.clone(),
+            ..Default::default()
         };
         let watch = &mut *ctx.watch;
         let s = grid::route_open(ctx.board, ctx.solver, &options, &mut |b| watch.frame(b));
@@ -368,6 +374,18 @@ impl Stage for First {
         json!({"nets": first.len(), "routed": s.routed, "failed": s.failed, "vias": s.vias})
     }
 }
+
+/// The nets a custom rule limits in length, where a via costs them its height wherever it
+/// stands ([`Board::vias_cost_length`]); none elsewhere.
+fn length_limited(board: &Board) -> Vec<u32> {
+    if !board.custom.has("length") || !board.vias_cost_length() {
+        return Vec::new();
+    }
+    (1..board.nets.len() as u32).filter(|&n| board.net_maximum("length", n).is_some()).collect()
+}
+
+/// The weight negotiation gives a net a length rule limits (see `NegotiationOptions::net_weight`).
+const LIMITED_WEIGHT: f64 = 0.5;
 
 /// Negotiated congestion: every connection routed at once, round after round, until none share.
 pub struct Negotiation;
@@ -390,6 +408,9 @@ impl Stage for Negotiation {
             threads: ctx.threads,
             cell: a.cell.unwrap_or(defaults.cell),
             via_cost: ctx.ledger.costs.negotiate,
+            net_via_cost: ctx.ledger.costs.negotiate_limited.clone(),
+            // The nets a length rule limits win the cells they contest, as the shortest way is theirs.
+            net_weight: ctx.ledger.costs.negotiate_limited.keys().map(|&n| (n, LIMITED_WEIGHT)).collect(),
             pours_block: a.pours_block,
             seed: a.seed,
             log: ctx.log.clone(),
@@ -433,6 +454,7 @@ impl Stage for Finishing {
         let options = grid::Options {
             cell: a.cell.unwrap_or(grid::Options::default().cell),
             via_cost: ctx.ledger.costs.open,
+            net_via_cost: ctx.ledger.costs.open_limited.clone(),
             seed: a.seed,
             deadline: ctx.deadline(),
             pours_block: a.pours_block,
@@ -444,7 +466,10 @@ impl Stage for Finishing {
         ctx.ledger.laid.extend(s.laid.iter().copied());
         ctx.failed("finishing", &s.failures);
         narrowed(ctx, &s.narrowed);
-        let detail = json!({"routed": s.routed, "failed": s.failed, "no_terminal": s.no_terminal, "no_path": s.no_path, "refused": s.refused, "vias": s.vias, "narrowed": s.narrowed.len()});
+        if s.fine > 0 {
+            eprintln!("finishing: {} connections laid on a finer grid round them", s.fine);
+        }
+        let detail = json!({"routed": s.routed, "failed": s.failed, "no_terminal": s.no_terminal, "no_path": s.no_path, "refused": s.refused, "vias": s.vias, "narrowed": s.narrowed.len(), "fine": s.fine});
         ctx.ledger.routed = s;
         detail
     }
@@ -708,6 +733,43 @@ impl Stage for Cleaning {
             eprintln!("dropped {doubled} doubled, pruned {pruned} dangling, open {open_before} -> {}, {:.1} s", ctx.open().len(), ctx.elapsed());
         }
         json!({"doubled": doubled, "pruned": pruned})
+    }
+}
+
+/// What is still open once the copper is settled, routed one connection at a time again: the
+/// via pass, tightening and the clean-up move copper after the routing stages have given up, and
+/// may leave room where there was none.
+pub struct Refinish;
+
+impl Stage for Refinish {
+    fn name(&self) -> &'static str {
+        "refinishing"
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let before = ctx.open().len();
+        if before == 0 {
+            return json!({"routed": 0});
+        }
+        let a = ctx.args;
+        let options = grid::Options {
+            cell: a.cell.unwrap_or(grid::Options::default().cell),
+            via_cost: ctx.ledger.costs.open,
+            net_via_cost: ctx.ledger.costs.open_limited.clone(),
+            seed: a.seed,
+            deadline: ctx.deadline(),
+            pours_block: a.pours_block,
+            log: ctx.log.clone(),
+            ..Default::default()
+        };
+        let watch = &mut *ctx.watch;
+        let s = grid::route_open(ctx.board, ctx.solver, &options, &mut |b| watch.frame(b));
+        ctx.ledger.laid.extend(s.laid.iter().copied());
+        narrowed(ctx, &s.narrowed);
+        if s.routed > 0 {
+            eprintln!("refinished {} more ({} on a finer grid), open {before} -> {}, {:.1} s", s.routed, s.fine, ctx.open().len(), ctx.elapsed());
+        }
+        json!({"routed": s.routed, "failed": s.failed, "fine": s.fine})
     }
 }
 

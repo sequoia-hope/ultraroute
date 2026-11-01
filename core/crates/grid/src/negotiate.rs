@@ -72,6 +72,8 @@ pub struct NegotiationOptions {
     /// priced below `1.0` also route and commit before the rest, so a favoured escape keeps its
     /// way out of a pad while neighbours pay the full price to go round it.
     pub net_weight: HashMap<u32, f64>,
+    /// Nets whose vias cost other than `via_cost` (see [`crate::Options::net_via_cost`]).
+    pub net_via_cost: HashMap<u32, u32>,
     pub pours_block: bool,
     /// Zones as tight as the grid allows, and vias negotiated: the sites where a via would come
     /// too near another net's trace or via are priced and checked, and a net's own vias keep
@@ -115,6 +117,7 @@ impl Default for NegotiationOptions {
             patience: 4,
             nets: None,
             net_weight: HashMap::new(),
+            net_via_cost: HashMap::new(),
             pours_block: false,
             via_zones: true,
             repasses: 2,
@@ -842,7 +845,7 @@ fn run_pass(
                     });
                 }
                 let (sources, targets) = &ends[k];
-                c.path = solver.route(grid_buf, &cells_of(sources), &cells_of(targets), options.via_cost);
+                c.path = solver.route(grid_buf, &cells_of(sources), &cells_of(targets), options.net_via_cost.get(&c.net).copied().unwrap_or(options.via_cost));
                 c.walled = c.path.is_none() && !grid_buf.deadline.expired();
                 settle(k, c, claimer);
                 if let Some(r) = c.route() {

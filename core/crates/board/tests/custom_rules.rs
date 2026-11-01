@@ -163,6 +163,7 @@ fn a_nets_length_and_vias_over_a_rules_maximum_are_reported() {
     b.insert(Item { kind: Kind::Via, net: 2, layers: 3, shape: Shape::Capsule { a: Point::new(nm(10e-3), nm(2e-3)), b: Point::new(nm(10e-3), nm(2e-3)), r: nm(0.3e-3) }, hole: Some((Point::new(nm(10e-3), nm(2e-3)), nm(0.15e-3))), locked: false, span: None });
     let found: Vec<String> = b.rule_limits().into_iter().map(|(line, _)| line).collect();
     assert_eq!(found.len(), 2, "{found:?}");
+    // A via with copper on F.Cu alone counts nothing, as KiCad 9 counts it.
     assert!(found[0].starts_with("length: B is 26.00 mm"), "{found:?}");
     assert!(found[1].starts_with("vias: B has 1"), "{found:?}");
     track(&mut b, 1, 1, 20.0);
@@ -191,4 +192,16 @@ fn a_length_limit_shorter_than_the_pads_lie_apart_is_warned_of() {
     assert!(short.warnings.iter().any(|w| w.starts_with("length: B's pads lie 3.00 mm apart")), "{:?}", short.warnings);
     let room = board(pads, "(version 1)\n(rule \"loose\" (condition \"A.NetName == 'B'\") (constraint length (max 4mm)))");
     assert!(!room.warnings.iter().any(|w| w.starts_with("length:")), "{:?}", room.warnings);
+}
+
+#[test]
+fn a_via_joining_both_outer_layers_counts_the_boards_height() {
+    let mut b = board("", "(version 1)\n(rule \"short\" (condition \"A.NetName == 'B'\") (constraint length (max 20mm)))");
+    track(&mut b, 2, 1, 10.0);
+    let at = Point::new(nm(10e-3), nm(2e-3));
+    b.insert(Item { kind: Kind::Via, net: 2, layers: 3, shape: Shape::Capsule { a: at, b: at, r: nm(0.3e-3) }, hole: Some((at, nm(0.15e-3))), locked: false, span: None });
+    assert!((b.net_length(2) - 26.0).abs() < 1e-6, "on F.Cu only: {}", b.net_length(2));
+    b.insert(Item { kind: Kind::Track, net: 2, layers: 2, shape: Shape::Capsule { a: at, b: Point::new(nm(15e-3), nm(2e-3)), r: nm(0.1e-3) }, hole: None, locked: false, span: None });
+    // 26 + 5 mm of track and the via's 1.565 mm: a 1.6 mm board less 35 um of copper.
+    assert!((b.net_length(2) - 32.565).abs() < 1e-6, "{}", b.net_length(2));
 }

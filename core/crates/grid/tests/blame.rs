@@ -15,12 +15,13 @@ fn earring() -> Board {
     Board::load(&path).unwrap().0
 }
 
-/// The earring with its own tracks and vias kept and the rest routed on the coarse grid. Pours
-/// are left to be refilled, as the command line routes by default: kept as planes, the earring's
-/// pours wall off nearly every connection, and blame has nothing to say but that.
+/// The earring with its own tracks and vias kept and the rest routed on the coarse grid, with no
+/// retry on a finer one (which routes what the coarse grid leaves blame to name). Pours are left
+/// to be refilled, as the command line routes by default: kept as planes, the earring's pours
+/// wall off nearly every connection, and blame has nothing to say but that.
 fn routed() -> Board {
     let mut b = earring();
-    route_open(&mut b, &mut CpuSolver, &Options { cell: CELL, ..Default::default() }, &mut |_| {});
+    route_open(&mut b, &mut CpuSolver, &Options { cell: CELL, fine: false, ..Default::default() }, &mut |_| {});
     b
 }
 

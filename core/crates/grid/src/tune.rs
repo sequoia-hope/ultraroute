@@ -204,6 +204,13 @@ pub fn match_lengths_watch(board: &mut Board, pairs: &[Pair], soft: &mut Vec<Ite
         stats.pairs += 1;
         let before = (lp - ln).abs();
         let (mut want, tracks) = if lp < ln { (ln - lp, tp) } else { (lp - ln, tn) };
+        // The shorter net is lengthened no further than a custom rule's maximum for it lets it,
+        // as KiCad counts its length (vias' heights too).
+        let short = if lp < ln { pair.p } else { pair.n };
+        let within = |board: &Board| board.net_maximum("length", short).is_none_or(|(_, max)| board.net_length(short) <= max * 1e3 + 1e-6);
+        if let Some((_, max)) = board.net_maximum("length", short) {
+            want = want.min((max * 1e3 - board.net_length(short)).max(0.0) * 1e6);
+        }
         let mut tracks: Vec<ItemId> = tracks.into_iter().filter(|id| soft.contains(id)).collect();
         let skew = |board: &Board| pair_lengths(board, pair).map(|((lp, _), (ln, _))| (lp - ln).abs());
         let mut now = before;
@@ -218,7 +225,7 @@ pub fn match_lengths_watch(board: &mut Board, pairs: &[Pair], soft: &mut Vec<Ite
             let Some((_, (old, item), laid)) = add_bump(board, &tracks, want) else { break };
             // Measured again, as a bump off the measured way, or one that moves it, adds nothing.
             match skew(board) {
-                Some(next) if next < now => {
+                Some(next) if next < now && within(board) => {
                     watch(board, &TuneBump { pair, net: if lp < ln { pair.p } else { pair.n }, before: now, after: next, replaced: &item, laid: &laid });
                     now = next;
                     want = next;

@@ -313,10 +313,12 @@ fn item_checks(
     if item.kind == Kind::Via && board.no_vias(item.net) {
         found.push(Violation { rule: Rule::Keepout, a: id, b: None, layer: None, gap: 0.0, required: 0 });
     }
-    // A track or via of another net bared in an opening drawn in the mask would bridge there.
+    // A track or via of another net bared in an opening drawn in the mask would bridge there, and
+    // so would a bare via whose own opening meets it, or comes closer than the mask's narrowest
+    // web (a via beside an unplated hole's opening: digital_clock's Q17).
     if matches!(item.kind, Kind::Track | Kind::Via) {
         for (shape, layers, net) in &board.mask_areas {
-            let margin = board.mask_margin();
+            let margin = board.mask_margin() + board.via_opening_on(item, *layers);
             if layers & item.layers != 0 && (*net != item.net || *net == 0) && item.shape.gap_within(shape, margin as f64) < margin as f64 {
                 found.push(Violation { rule: Rule::Keepout, a: id, b: None, layer: Some(layers.trailing_zeros() as usize), gap: 0.0, required: margin });
             }

@@ -167,6 +167,9 @@ pub const SOFT_NO_VIA: &str = "soft-novia";
 /// The zone of drawn copper: lines, shapes and text on a copper layer, which stay as drawn.
 pub const DRAWN: usize = usize::MAX;
 
+/// An outer copper layer's thickness where the file gives none: KiCad's 35 um (1 oz).
+const OUTER_COPPER_M: f64 = 35e-6;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Item {
     pub kind: Kind,
@@ -326,6 +329,10 @@ pub struct Board {
     /// What reading the board found and could not take as given: the reader's own warnings
     /// (drawings it skips, values it assumed) and an outline that does not close.
     pub warnings: Vec<String>,
+    /// How far a through via runs from its top copper to its bottom, as KiCad's length rules
+    /// count it: the board's thickness less one outer copper layer (kicad-cli 9.0.8, 2026-11-01:
+    /// 1.565 mm on a 1.6 mm board of 2, 4 or 6 layers, 0.965 mm on a 1.0 mm one).
+    pub via_height: Nm,
     /// Clearances per net number, in nanometres, so `clearance(a, b)` is two array lookups.
     net_clearances: Vec<Nm>,
     /// Each net's class as KiCad names it (`A,B,Default`), for the custom rules.
@@ -459,6 +466,7 @@ impl Board {
             regions: Vec::new(),
             pour_cost: 0.0,
             warnings: pcb.warnings.iter().chain(&copper.warnings).cloned().collect(),
+            via_height: nm((pcb.thickness_m - OUTER_COPPER_M).max(0.0)),
             net_clearances,
             class_names,
             names_nets: false,
@@ -817,6 +825,16 @@ impl Board {
             .map(|(mine, theirs, pad)| format!("locked copper of {} lies on {pad} of {}: shorted before routing; move it with its part, or unlock it for --strip to take up", self.net_name(mine), self.net_name(theirs)))
             .chain((count > 10).then(|| format!("locked copper lies on {} more pads of other nets", count - 10)))
             .collect()
+    }
+
+    /// How far beyond `item`, a via, its own mask opening reaches on the sides in `layers`, and
+    /// the mask's narrowest web past that: what must keep it from another opening there. 0 for a
+    /// track, or a via the mask covers on those sides.
+    pub fn via_opening_on(&self, item: &Item, layers: u64) -> Nm {
+        match item.kind {
+            Kind::Via if self.via_openings.0 & layers & item.layers != 0 => self.via_openings.1 + self.mask_web,
+            _ => 0,
+        }
     }
 
     /// Inner copper layers that are planes in all but name: one net's pours cover at least
