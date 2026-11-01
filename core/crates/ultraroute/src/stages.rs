@@ -912,7 +912,7 @@ impl Stage for Write {
         let board = &*ctx.board;
         for joint in grid::narrow_joints(board, &laid) {
             let net = board.net_name(joint.net).to_string();
-            let rule = board.min_track_width_of(joint.net) as f64;
+            let rule = board.min_joint_of(joint.net) as f64;
             let (severity, what) = if joint.width < rule { ("error", "under the net's width rule") } else { ("warning", "within the net's width rule") };
             let line = format!(
                 "narrow joint: {net} on {} at ({:.3}, {:.3}) mm, {:.3} mm wide where its tracks are {:.3} mm ({what}, {:.3} mm): round ends only overlap",

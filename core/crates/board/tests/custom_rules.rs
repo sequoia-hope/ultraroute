@@ -205,3 +205,18 @@ fn a_via_joining_both_outer_layers_counts_the_boards_height() {
     // 26 + 5 mm of track and the via's 1.565 mm: a 1.6 mm board less 35 um of copper.
     assert!((b.net_length(2) - 32.565).abs() < 1e-6, "{}", b.net_length(2));
 }
+
+#[test]
+fn a_joint_is_held_to_the_widest_of_track_width_minimum_connection_and_connection_width() {
+    let b = board("", "");
+    assert_eq!(b.min_joint_of(1), 0, "KiCad checks no connection width unless a board sets one");
+    let b = board("", "(version 1)\n(rule \"supply\" (condition \"A.NetName == 'A'\") (constraint connection_width (min 0.25mm)))");
+    assert_eq!(b.min_joint_of(1), nm(0.25e-3));
+    assert_eq!(b.min_joint_of(2), 0, "the rule is A's");
+    assert!(b.rules.warnings.iter().any(|w| w.contains("\"supply\": connection_width checked after routing")), "{:?}", b.rules.warnings);
+    let mut rules = kicad_pcb::Rules::parse(r#"{"board":{"design_settings":{"rules":{"min_track_width":0.1,"min_connection":0.15}}}}"#).unwrap();
+    assert!((rules.min_connection - 0.15e-3).abs() < 1e-12);
+    rules.min_connection = 0.05e-3;
+    let (pcb, copper) = kicad_pcb::parse_board("(kicad_pcb (version 20240108) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal)) (net 0 \"\") (net 1 \"A\"))").unwrap();
+    assert_eq!(Board::new(&pcb, &copper, rules).min_joint_of(1), nm(0.1e-3), "never under the narrowest track");
+}
