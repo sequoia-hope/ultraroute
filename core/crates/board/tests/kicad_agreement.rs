@@ -137,6 +137,25 @@ fn overlapping_polygon_pads_join_while_touching_round_pads_stay_apart() {
     let r_overlap = b.insert(round_pad(1_999_000));
     assert!(!joined(&b, r0, r_touch));
     assert!(joined(&b, r0, r_overlap));
+    // A track whose round end grazes a pad by a tenth of a micron (as the router's outward pad
+    // outlines can make a touch) is no joint; one a micron in is.
+    let track_to = |into: i64| Item {
+        kind: Kind::Track,
+        net: 1,
+        layers: 1,
+        shape: Shape::Capsule { a: Point::new(-3_000_000 - 127_000 + into, 3_000_000), b: Point::new(-6_000_000, 3_000_000), r: 127_000 },
+        hole: None,
+        locked: false,
+        span: None,
+    };
+    let left = b.insert(round_pad(-4_000_000));
+    let left = b.item(left).map(|_| left).unwrap();
+    let pad_at = |b: &mut Board| b.insert(Item { shape: Shape::Capsule { a: Point::new(-2_000_000, 3_000_000), b: Point::new(-2_000_000, 3_000_000), r: 1_000_000 }, ..b.item(left).unwrap().clone() });
+    let target = pad_at(&mut b);
+    let grazing = b.insert(track_to(100));
+    let into = b.insert(track_to(1_000));
+    assert!(!joined(&b, grazing, target));
+    assert!(joined(&b, into, target));
 }
 
 #[test]

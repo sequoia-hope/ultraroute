@@ -67,6 +67,14 @@ fn cluster_member(board: &Board, item: &crate::model::Item, with_pours: bool) ->
     with_pours || !item.refilled() || board.is_plane(item)
 }
 
+/// How deep a round end must reach into other copper to join it, in nanometres: KiCad 9 joins
+/// shapes that collide (two round pads 1 um into each other, `kicad_agreement`), and the router's
+/// pad outlines are a hair larger than KiCad's (an oval's end polygonised outward, about 0.1 um on
+/// a 0.25 mm pin), so an end that only grazes a pad by less than this is no joint to KiCad
+/// (WeatherSpot's GND: a track end 0.251461 mm from an oval pad's end circle, radii summing to
+/// 0.25146 mm, judged unconnected).
+const MIN_OVERLAP: f64 = 500.0;
+
 /// As KiCad joins them: at anchors. A track anchors at its round ends, a via or a round pad at
 /// its whole disc, any other pad at its centre; two items join where an anchor of one overlaps
 /// the other's copper, so copper that merely overlaps a pad's corner or crosses a track does not
@@ -93,7 +101,7 @@ pub fn joined(board: &Board, a: ItemId, b: ItemId) -> bool {
         pts[..len].iter().any(|p| {
             let dot = Shape::Capsule { a: *p, b: *p, r: 0 };
             let gap = into.shape.gap_within(&dot, reach);
-            gap == 0.0 || gap < reach - 0.5
+            gap == 0.0 || gap < reach - MIN_OVERLAP
         })
     };
     reaches(x, a, y) || reaches(y, b, x)
