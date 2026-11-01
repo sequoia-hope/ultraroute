@@ -443,9 +443,25 @@ impl Stage for Finishing {
         let s = grid::route_open(ctx.board, ctx.solver, &options, &mut |b| watch.frame(b));
         ctx.ledger.laid.extend(s.laid.iter().copied());
         ctx.failed("finishing", &s.failures);
-        let detail = json!({"routed": s.routed, "failed": s.failed, "no_terminal": s.no_terminal, "no_path": s.no_path, "refused": s.refused, "vias": s.vias});
+        narrowed(ctx, &s.narrowed);
+        let detail = json!({"routed": s.routed, "failed": s.failed, "no_terminal": s.no_terminal, "no_path": s.no_path, "refused": s.refused, "vias": s.vias, "narrowed": s.narrowed.len()});
         ctx.ledger.routed = s;
         detail
+    }
+}
+
+/// Each connection a stage laid narrowed to its pins the whole way, said and made a finding.
+fn narrowed(ctx: &mut StageCtx, runs: &[(ItemId, ItemId, Nm)]) {
+    for &(from, to, width) in runs {
+        let net = ctx.board.item(from).map_or(0, |it| it.net);
+        let name = ctx.board.net_name(net).to_string();
+        let line = format!("{name} {} to {} runs {:.2} mm wide the whole way, its pins' width: no way at its own", grid::item_name(ctx.board, from), grid::item_name(ctx.board, to), width as f64 * 1e-6);
+        eprintln!("narrowed: {line}");
+        let refs = [from, to].iter().filter_map(|&id| match ctx.board.item(id).map(|it| &it.kind) {
+            Some(Kind::Pad { footprint, .. }) => Some(ctx.board.footprints[*footprint].reference.clone()),
+            _ => None,
+        }).collect();
+        ctx.stats.findings.push(Finding { severity: "warning", kind: "neck", message: line, refs, nets: vec![name], ends: None });
     }
 }
 
@@ -503,7 +519,8 @@ impl Stage for RipUp {
             r.no_better,
             ctx.elapsed()
         );
-        json!({"tries": r.attempts, "kept": r.kept, "ripped": r.ripped, "no_path": r.no_path, "hard_conflict": r.hard_conflict, "no_better": r.no_better})
+        narrowed(ctx, &r.narrowed);
+        json!({"tries": r.attempts, "kept": r.kept, "ripped": r.ripped, "no_path": r.no_path, "hard_conflict": r.hard_conflict, "no_better": r.no_better, "narrowed": r.narrowed.len()})
     }
 }
 

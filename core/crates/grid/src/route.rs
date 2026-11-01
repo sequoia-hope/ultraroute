@@ -133,6 +133,9 @@ pub struct Stats {
     pub laid: Vec<ItemId>,
     /// The connections given up, by their two ends, and why.
     pub failures: Vec<(ItemId, ItemId, &'static str)>,
+    /// The connections laid narrowed to their pins the whole way ([`narrow_run`]), by their two
+    /// ends, with the width.
+    pub narrowed: Vec<(ItemId, ItemId, Nm)>,
 }
 
 /// A place a path may start or end: a free cell, and, when the cell's centre is not on the
@@ -215,29 +218,38 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
                 let Some(map) = ObstacleMap::new_by(board, profile.clone(), options.cell, options.pours_block, &options.deadline) else { return stats };
                 maps.insert(profile.class.clone(), map);
             }
-            let map = &maps[&profile.class];
-            map.view_into(airline.net, &mut grid);
-            grid.directional = directional;
-            let sources = terminals(board, &grid, airline.from_item);
-            let targets = terminals(board, &grid, airline.to_item);
-            let laid = if sources.is_empty() || targets.is_empty() {
-                stats.no_terminal += 1;
-                stats.failures.push((airline.from_item, airline.to_item, if sources.is_empty() { "no terminal at the start" } else { "no terminal at the end" }));
-                None
-            } else {
-                let source_cells: Vec<usize> = sources.iter().map(|t| t.0).collect();
-                let target_cells: Vec<usize> = targets.iter().map(|t| t.0).collect();
-                match solver.route(&grid, &source_cells, &target_cells, options.via_cost) {
-                    None => {
-                        stats.no_path += 1;
-                        stats.failures.push((airline.from_item, airline.to_item, "no path"));
-                        None
+            let mut tried = attempt(board, solver, options, &maps[&profile.class], &mut grid, directional, &airline);
+            // A short connection of a net that carries current, which finds no way at its width,
+            // may go narrowed to its pin's width the whole way: as a designer runs a regulator's
+            // switch node from a fine-pitch pin through the gap beside its capacitors. Its map
+            // covers the connection's neighbourhood only.
+            if let (Err(_), Some(hw)) = (&tried, narrow_run(board, &profile, &airline)) {
+                let mut narrow = profile.clone();
+                (narrow.half_width, narrow.narrow_half_width) = (hw, hw);
+                let map = ObstacleMap::window(board, narrow, options.cell, narrow_window(&airline), options.pours_block);
+                if let Ok(items) = attempt(board, solver, options, &map, &mut grid, directional, &airline) {
+                    stats.narrowed.push((airline.from_item, airline.to_item, 2 * hw));
+                    tried = Ok(items);
+                }
+            }
+            let laid = match tried {
+                Ok(items) => Some(items),
+                Err(missed) => {
+                    let why = match missed {
+                        Missed::Start => "no terminal at the start",
+                        Missed::End => "no terminal at the end",
+                        Missed::Path => "no path",
+                        Missed::Refused => "refused",
+                    };
+                    match missed {
+                        Missed::Start | Missed::End => stats.no_terminal += 1,
+                        Missed::Path => stats.no_path += 1,
+                        _ => stats.refused += 1,
                     }
-                    Some(path) => {
-                        let laid = lay(board, &grid, &path, &sources, &targets);
-                        stats.refused += laid.is_none() as usize;
-                        laid
+                    if why != "refused" {
+                        stats.failures.push((airline.from_item, airline.to_item, why));
                     }
+                    None
                 }
             };
             match &laid {
@@ -273,6 +285,59 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
         }
     }
     stats
+}
+
+/// Why one try at a connection laid nothing.
+enum Missed {
+    Start,
+    End,
+    Path,
+    Refused,
+}
+
+/// One try at `airline` on `map`.
+fn attempt(board: &mut Board, solver: &mut dyn FieldSolver, options: &Options, map: &ObstacleMap, grid: &mut RouteGrid, directional: bool, airline: &board::Airline) -> Result<Vec<ItemId>, Missed> {
+    map.view_into(airline.net, grid);
+    grid.directional = directional;
+    let sources = terminals(board, grid, airline.from_item);
+    if sources.is_empty() {
+        return Err(Missed::Start);
+    }
+    let targets = terminals(board, grid, airline.to_item);
+    if targets.is_empty() {
+        return Err(Missed::End);
+    }
+    let source_cells: Vec<usize> = sources.iter().map(|t| t.0).collect();
+    let target_cells: Vec<usize> = targets.iter().map(|t| t.0).collect();
+    let path = solver.route(grid, &source_cells, &target_cells, options.via_cost).ok_or(Missed::Path)?;
+    lay(board, grid, &path, &sources, &targets).ok_or(Missed::Refused)
+}
+
+/// How far round a narrow run's two ends its map reaches, for the way between them to bend.
+const NARROW_RUN_MARGIN: Nm = 2_000_000;
+
+/// The part of the board a narrow run of `airline` is routed in.
+pub(crate) fn narrow_window(airline: &board::Airline) -> BBox {
+    BBox::of([airline.from, airline.to]).grow(NARROW_RUN_MARGIN)
+}
+
+/// How far apart a connection's ends may be for it to go narrowed the whole way.
+const NARROW_RUN_REACH: Nm = 5_000_000;
+
+/// The half width a connection of a net that carries current may run at, the whole way, where
+/// its own width finds no way: the narrower of its two pins (pads), never under the net's own
+/// minimum (the board's, or a custom rule's for the net), for ends no further apart than
+/// [`NARROW_RUN_REACH`]. `None` for a signal, which
+/// necks already, for ends that are not both pads, and where that is no narrower.
+pub(crate) fn narrow_run(board: &Board, profile: &Profile, airline: &board::Airline) -> Option<Nm> {
+    if profile.narrow_half_width < profile.half_width || airline.from.distance(airline.to) > NARROW_RUN_REACH as f64 {
+        return None;
+    }
+    let pin = |id: ItemId| board.item(id).filter(|p| matches!(p.kind, Kind::Pad { .. })).map(crate::grid::pad_half_side);
+    // Never under the net's own minimum: a custom rule's width for it holds the whole way, as
+    // it does not over a forced neck's millimetre.
+    let hw = pin(airline.from_item)?.min(pin(airline.to_item)?).max(profile.min_half_width);
+    (hw < profile.half_width).then_some(hw)
 }
 
 /// How far around a connection's chosen anchor `terminals` walks joined copper to gather escape
