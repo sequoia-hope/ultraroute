@@ -444,7 +444,10 @@ impl Stage for Finishing {
         ctx.ledger.laid.extend(s.laid.iter().copied());
         ctx.failed("finishing", &s.failures);
         narrowed(ctx, &s.narrowed);
-        let detail = json!({"routed": s.routed, "failed": s.failed, "no_terminal": s.no_terminal, "no_path": s.no_path, "refused": s.refused, "vias": s.vias, "narrowed": s.narrowed.len()});
+        if s.fine > 0 {
+            eprintln!("finishing: {} connections laid on a finer grid round them", s.fine);
+        }
+        let detail = json!({"routed": s.routed, "failed": s.failed, "no_terminal": s.no_terminal, "no_path": s.no_path, "refused": s.refused, "vias": s.vias, "narrowed": s.narrowed.len(), "fine": s.fine});
         ctx.ledger.routed = s;
         detail
     }
@@ -741,9 +744,9 @@ impl Stage for Refinish {
         ctx.ledger.laid.extend(s.laid.iter().copied());
         narrowed(ctx, &s.narrowed);
         if s.routed > 0 {
-            eprintln!("refinished {} more, open {before} -> {}, {:.1} s", s.routed, ctx.open().len(), ctx.elapsed());
+            eprintln!("refinished {} more ({} on a finer grid), open {before} -> {}, {:.1} s", s.routed, s.fine, ctx.open().len(), ctx.elapsed());
         }
-        json!({"routed": s.routed, "failed": s.failed})
+        json!({"routed": s.routed, "failed": s.failed, "fine": s.fine})
     }
 }
 

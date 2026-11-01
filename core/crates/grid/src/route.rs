@@ -136,6 +136,8 @@ pub struct Stats {
     /// The connections laid narrowed to their pins the whole way ([`narrow_run`]), by their two
     /// ends, with the width.
     pub narrowed: Vec<(ItemId, ItemId, Nm)>,
+    /// The connections laid on a finer grid round them, where the run's own found no way.
+    pub fine: usize,
 }
 
 /// A place a path may start or end: a free cell, and, when the cell's centre is not on the
@@ -232,6 +234,19 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
                     tried = Ok(items);
                 }
             }
+            // A way that fits by less than the grid's margin (a track between header pins at the
+            // rules' clearance, which a step between cell centres may stray into) shows on a finer
+            // grid: the connection's neighbourhood on cells half the size, once.
+            let fine = options.cell / 2;
+            let window = narrow_window(&airline);
+            let nodes = ((window.max.x - window.min.x) / fine.max(1)) as f64 * ((window.max.y - window.min.y) / fine.max(1)) as f64 * board.layers.len() as f64;
+            if tried.is_err() && fine >= FINE_CELL_FLOOR && nodes <= FINE_NODES {
+                let map = ObstacleMap::window(board, profile.clone(), fine, window, options.pours_block);
+                if let Ok(items) = attempt(board, solver, options, &map, &mut grid, directional, &airline) {
+                    stats.fine += 1;
+                    tried = Ok(items);
+                }
+            }
             let laid = match tried {
                 Ok(items) => Some(items),
                 Err(missed) => {
@@ -312,6 +327,11 @@ fn attempt(board: &mut Board, solver: &mut dyn FieldSolver, options: &Options, m
     let path = solver.route(grid, &source_cells, &target_cells, options.via_cost).ok_or(Missed::Path)?;
     lay(board, grid, &path, &sources, &targets).ok_or(Missed::Refused)
 }
+
+/// The finest cell a connection is tried again on, and the most nodes its map may have: a
+/// connection across the board is not worth a fine map of the board.
+const FINE_CELL_FLOOR: Nm = 10_000;
+const FINE_NODES: f64 = 4e6;
 
 /// How far round a narrow run's two ends its map reaches, for the way between them to bend.
 const NARROW_RUN_MARGIN: Nm = 2_000_000;
