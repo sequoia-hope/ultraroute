@@ -334,7 +334,7 @@ const NARROW_RUN_REACH: Nm = 5_000_000;
 /// minimum (the board's, or a custom rule's for the net), for ends no further apart than
 /// [`NARROW_RUN_REACH`]. `None` for a signal, which
 /// necks already, for ends that are not both pads, and where that is no narrower.
-fn narrow_run(board: &Board, profile: &Profile, airline: &board::Airline) -> Option<Nm> {
+pub(crate) fn narrow_run(board: &Board, profile: &Profile, airline: &board::Airline) -> Option<Nm> {
     if profile.narrow_half_width < profile.half_width || airline.from.distance(airline.to) > NARROW_RUN_REACH as f64 {
         return None;
     }

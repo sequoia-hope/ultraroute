@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use board::{check_item, connectivity, connectivity_without_pours, Airline, Board, Connectivity, Item, ItemId, Point};
+use board::{check_item, connectivity, connectivity_without_pours, Airline, Board, Connectivity, Item, ItemId, Nm, Point};
 
 use crate::grid::{ObstacleMap, Profile};
 use crate::report::{tell, Focus, Log};
@@ -58,6 +58,9 @@ pub struct RipStats {
     pub no_path: usize,
     pub hard_conflict: usize,
     pub no_better: usize,
+    /// Attempts kept that run narrowed to their pins the whole way (`route::narrow_run`), by
+    /// their two ends, with the width.
+    pub narrowed: Vec<(ItemId, ItemId, Nm)>,
 }
 
 fn joined(board: &Board, pours_block: bool) -> Connectivity {
@@ -166,55 +169,70 @@ pub fn rip_up_watch(
             );
             // Locked copper stays, even the router's own: a caller holds still what it must keep.
             let soft_set: HashSet<ItemId> = soft.iter().copied().filter(|id| board.item(*id).is_some_and(|it| !it.locked)).collect();
-            let profile = Profile::for_net(board, airline.net);
-            let hard_map = hard.entry(profile.class.clone()).or_insert_with(|| {
-                ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| soft_set.contains(&id))
-            });
-            hard_map.view_into(airline.net, &mut grid);
-            let plane = |id: ItemId| board.item(id).is_some_and(|it| plane_nets.contains(&it.net));
-            let soft_map = soft_maps.entry(profile.class.clone()).or_insert_with(|| {
-                ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| !soft_set.contains(&id) || plane(id))
-            });
-            // A plane net's soft copper is mostly vias joining pads to the planes, which
-            // `join_planes` puts back elsewhere: cheap to rip.
-            let plane_map = (!plane_nets.is_empty()).then(|| {
-                &*plane_maps.entry(profile.class.clone()).or_insert_with(|| {
-                    ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| !soft_set.contains(&id) || !plane(id))
-                })
-            });
-            let plane_cost = (options.rip_cost / 40).max(5);
-            let price = |soft: bool, plane: bool| if soft { options.rip_cost } else if plane { plane_cost } else { 0 };
-            grid.penalty.clear();
-            let nodes = grid.blocked.len();
-            let net = airline.net;
-            grid.penalty.extend((0..nodes).map(|n| price(soft_map.blocked_at(net, n), plane_map.is_some_and(|m| m.blocked_at(net, n)))));
-            if options.region_repair {
-                // A via is priced where it would rip, as a track is.
-                grid.via_penalty.resize(grid.cell_count(), 0);
-                for (c, p) in grid.via_penalty.iter_mut().enumerate() {
-                    *p += price(soft_map.via_blocked_at(net, c), plane_map.is_some_and(|m| m.via_blocked_at(net, c)));
+            // The net's own width, then, for a short current net that finds no way at it, its
+            // pins' width the whole way (`route::narrow_run`), each on maps of its own.
+            let base = Profile::for_net(board, airline.net);
+            let mut widths = vec![(base.clone(), base.class.clone())];
+            if let Some(hw) = crate::route::narrow_run(board, &base, &airline) {
+                let mut narrow = base.clone();
+                (narrow.half_width, narrow.narrow_half_width) = (hw, hw);
+                widths.push((narrow, format!("{}\u{0}{hw}", base.class)));
+            }
+            let mut found = None;
+            for (profile, key) in widths {
+                let hard_map = hard.entry(key.clone()).or_insert_with(|| {
+                    ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| soft_set.contains(&id))
+                });
+                hard_map.view_into(airline.net, &mut grid);
+                let plane = |id: ItemId| board.item(id).is_some_and(|it| plane_nets.contains(&it.net));
+                let soft_map = soft_maps.entry(key.clone()).or_insert_with(|| {
+                    ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| !soft_set.contains(&id) || plane(id))
+                });
+                // A plane net's soft copper is mostly vias joining pads to the planes, which
+                // `join_planes` puts back elsewhere: cheap to rip.
+                let plane_map = (!plane_nets.is_empty()).then(|| {
+                    &*plane_maps.entry(key.clone()).or_insert_with(|| {
+                        ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| !soft_set.contains(&id) || !plane(id))
+                    })
+                });
+                let plane_cost = (options.rip_cost / 40).max(5);
+                let price = |soft: bool, plane: bool| if soft { options.rip_cost } else if plane { plane_cost } else { 0 };
+                grid.penalty.clear();
+                let nodes = grid.blocked.len();
+                let net = airline.net;
+                grid.penalty.extend((0..nodes).map(|n| price(soft_map.blocked_at(net, n), plane_map.is_some_and(|m| m.blocked_at(net, n)))));
+                if options.region_repair {
+                    // A via is priced where it would rip, as a track is.
+                    grid.via_penalty.resize(grid.cell_count(), 0);
+                    for (c, p) in grid.via_penalty.iter_mut().enumerate() {
+                        *p += price(soft_map.via_blocked_at(net, c), plane_map.is_some_and(|m| m.via_blocked_at(net, c)));
+                    }
+                }
+                let (sources, targets) = if options.region_repair {
+                    let (conn, pads) = near.get_or_insert_with(|| {
+                        let conn = joined(board, options.pours_block);
+                        let pads = cluster_pads(board, &conn);
+                        (conn, pads)
+                    });
+                    let mut end = |id: ItemId| {
+                        let pads = conn.cluster.get(&id).and_then(|k| pads.get(k)).map_or(&[][..], Vec::as_slice);
+                        ends_with_pads(board, &grid, id, pads, &terminals)
+                    };
+                    (end(airline.from_item), end(airline.to_item))
+                } else {
+                    (terminals(board, &grid, airline.from_item), terminals(board, &grid, airline.to_item))
+                };
+                if sources.is_empty() || targets.is_empty() {
+                    continue;
+                }
+                let source_cells: Vec<usize> = sources.iter().map(|t| t.0).collect();
+                let target_cells: Vec<usize> = targets.iter().map(|t| t.0).collect();
+                if let Some(path) = solver.route(&grid, &source_cells, &target_cells, options.via_cost) {
+                    found = Some((path, sources, targets, profile.half_width < base.half_width));
+                    break;
                 }
             }
-            let (sources, targets) = if options.region_repair {
-                let (conn, pads) = near.get_or_insert_with(|| {
-                    let conn = joined(board, options.pours_block);
-                    let pads = cluster_pads(board, &conn);
-                    (conn, pads)
-                });
-                let mut end = |id: ItemId| {
-                    let pads = conn.cluster.get(&id).and_then(|k| pads.get(k)).map_or(&[][..], Vec::as_slice);
-                    ends_with_pads(board, &grid, id, pads, &terminals)
-                };
-                (end(airline.from_item), end(airline.to_item))
-            } else {
-                (terminals(board, &grid, airline.from_item), terminals(board, &grid, airline.to_item))
-            };
-            if sources.is_empty() || targets.is_empty() {
-                continue;
-            }
-            let source_cells: Vec<usize> = sources.iter().map(|t| t.0).collect();
-            let target_cells: Vec<usize> = targets.iter().map(|t| t.0).collect();
-            let Some(path) = solver.route(&grid, &source_cells, &target_cells, options.via_cost) else {
+            let Some((path, sources, targets, narrowed)) = found else {
                 stats.no_path += 1;
                 tell(&options.log, "ripping up", || format!("{net_name}: no way through, even ripping"), None);
                 watch(board, RipAttempt { airline: &airline, path: Vec::new(), ripped: Vec::new(), laid: Vec::new(), open_before: before, open_after: before, outcome: "no path" });
@@ -325,6 +343,9 @@ pub fn rip_up_watch(
                 }
                 stats.kept += 1;
                 stats.ripped += ripped;
+                if narrowed {
+                    stats.narrowed.push((airline.from_item, airline.to_item, 2 * grid.half_width));
+                }
                 soft_maps.clear();
                 plane_maps.clear();
                 tell(&options.log, "ripping up", || format!("{net_name}: kept, {after} connections open"), None);
