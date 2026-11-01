@@ -942,12 +942,16 @@ impl ObstacleMap {
                 }
             }
         }
-        // Custom rules may hold a via's hole further from this copper than the board's hole
-        // clearance (a fab's rule for through-hole pads, say): vias of other nets keep it.
+        // A via's hole keeps the hole clearance from this copper, the board's or a custom rule's
+        // (a fab's for through-hole pads, say): where that reaches further than the via's copper
+        // and its clearance (a board whose rules ask more of holes than of copper), vias of other
+        // nets keep it.
         let plain_hole = nm(rules.min_hole_clearance);
-        if item.is_copper() && board.custom.has("hole_clearance") {
-            let via_hole = self.rule_to(board, "hole_clearance", id, item, true, plain_hole);
-            if via_hole > plain_hole {
+        if item.is_copper() && (self.pours_block || !item.refilled()) {
+            let via_hole = if board.custom.has("hole_clearance") { self.rule_to(board, "hole_clearance", id, item, true, plain_hole) } else { plain_hole };
+            let own = board.pad_clearances.get(&id).copied().unwrap_or(0);
+            let via_clearance = self.rule_to(board, "clearance", id, item, true, self.clearance_to(board, item.net)).max(own);
+            if drill_radius + via_hole > via_radius + via_clearance {
                 let mut hit = Vec::new();
                 self.cells_near(&item.shape, drill_radius + via_hole, &mut |c| hit.push(c));
                 for c in hit {
