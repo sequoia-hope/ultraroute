@@ -4,9 +4,10 @@ baselines (FreeRouting, PcbRouter, RL-MCTS; PCBench/Baselines/Results_all.csv).
 
     pcbench.py prepare [--only ID,...]       convert each board to KiCad 9 once, strip it bare,
                                              and record KiCad's verdict on the bare board
-    pcbench.py run RUN [--recipe "..."] [--timeout S] [--only ID,...] [--sample N] [--seed N]
+    pcbench.py run RUN [--recipe "..."] [--timeout S] [--only ID,...] [--sample N] [--seed N] [--no-board-timeouts]
                                              route every prepared board (wrap in reserve: it
-                                             runs $RESERVED_CORES routes at once)
+                                             runs $RESERVED_CORES routes at once); the boards in
+                                             tools/pcbench_timeouts.json get their own time
     pcbench.py report RUN [RUN ...]          success, wirelength and vias against the baselines
     pcbench.py rescore RUN [RUN ...]         judge saved reports again (after the rules change)
     pcbench.py compare A B [C ...] [--noise N|auto] [--noise-from A B] [--json OUT] [--exact]
@@ -299,6 +300,18 @@ def prepare(a):
     print(f"{len(ids)} boards, {len(ids) - bad} prepared, {bad} not")
 
 
+# Boards given more than the run's --timeout, each the time it has routed clean in
+# (tools/pcbench_timeouts.json): those that fail at the default only for want of time.
+BOARD_TIMEOUTS = Path(__file__).with_name("pcbench_timeouts.json")
+
+
+def board_timeouts(a):
+    """Each listed board's own time limit, never under the run's; none with --no-board-timeouts."""
+    if a.no_board_timeouts or not BOARD_TIMEOUTS.exists():
+        return {}
+    return {b: max(float(t), a.timeout) for b, t in json.loads(BOARD_TIMEOUTS.read_text())["timeouts"].items()}
+
+
 def run(a):
     ids = [b for b in board_ids(a.only) if "error" not in json.loads((HOME / "boards" / b / "bare.json").read_text())] if (HOME / "boards").exists() else []
     if a.sample:
@@ -309,7 +322,8 @@ def run(a):
     meta = run_dir / "run.json"
     workers = int(os.environ.get("RESERVED_CORES", "4"))
     now = provenance(workers)
-    info = {"recipe": a.recipe, "timeout": a.timeout, "seed": a.seed, "boards": ids, **now, "started": time.strftime("%Y-%m-%dT%H:%M:%S"), "notes": [a.note] if a.note else []}
+    own = {b: t for b, t in board_timeouts(a).items() if b in ids}
+    info = {"recipe": a.recipe, "timeout": a.timeout, "board_timeouts": own, "seed": a.seed, "boards": ids, **now, "started": time.strftime("%Y-%m-%dT%H:%M:%S"), "notes": [a.note] if a.note else []}
     if meta.exists():
         info = json.loads(meta.read_text())
         differ = {k: (info.get(k), now[k]) for k in ("commit", "binary_sha256") if info.get(k) != now[k]}
@@ -324,7 +338,8 @@ def run(a):
         meta.write_text(json.dumps(info, indent=1))
     ok = 0
     with concurrent.futures.ThreadPoolExecutor(workers) as pool:
-        futures = [pool.submit(route_one, b, run_dir, a.recipe, a.timeout, a.seed) for b in ids]
+        own = info.get("board_timeouts", {})
+        futures = [pool.submit(route_one, b, run_dir, a.recipe, own.get(b, a.timeout), a.seed) for b in ids]
         for k, f in enumerate(concurrent.futures.as_completed(futures), 1):
             r = f.result()
             ok += bool(r.get("success"))
@@ -416,8 +431,10 @@ def compare(a):
         vias = [sum(rs[i].get("vias") or 0 for i in both) for rs in (base, new)]
         wl = [sum(rs[i].get("wirelength") or 0 for i in both) for rs in (base, new)]
         print(f"   on the {len(both)} boards clean in both: vias {vias[0]} -> {vias[1]}, wirelength {wl[0]:.0f} -> {wl[1]:.0f} mm")
-        limits = [m.get("timeout", 120) - 10 for m in (base_meta, meta)]
-        print(f"   at the time limit (>= timeout - 10 s): {sum(base[i]['seconds'] >= limits[0] for i in common)} -> {sum(new[i]['seconds'] >= limits[1] for i in common)}")
+        limit = lambda m, i: m.get("board_timeouts", {}).get(i, m.get("timeout", 120)) - 10
+        print(f"   at the time limit (>= timeout - 10 s): {sum(base[i]['seconds'] >= limit(base_meta, i) for i in common)} -> {sum(new[i]['seconds'] >= limit(meta, i) for i in common)}")
+        if (base_meta.get("board_timeouts") or {}) != (meta.get("board_timeouts") or {}):
+            print(f"   board timeouts differ: {len(base_meta.get('board_timeouts') or {})} -> {len(meta.get('board_timeouts') or {})} boards given their own")
         refs = [[i for i in common if "referee_error" in rs[i]] for rs in (base, new)]
         print(f"   referee failures: {len(refs[0])} -> {len(refs[1])}" + "".join(f"\n      {i}: {new[i]['referee_error'][:120]!r}" for i in refs[1]))
         broke = [[i for i in common if router_failed(rs[i])] for rs in (base, new)]
@@ -506,6 +523,7 @@ def main():
     s.add_argument("run")
     s.add_argument("--recipe", default=RECIPE)
     s.add_argument("--timeout", type=float, default=120)
+    s.add_argument("--no-board-timeouts", action="store_true", help="every board at --timeout, none at its own from pcbench_timeouts.json")
     s.add_argument("--seed", type=int, default=0)
     s.add_argument("--only")
     s.add_argument("--sample", type=int, help="route this many boards, drawn at random")
