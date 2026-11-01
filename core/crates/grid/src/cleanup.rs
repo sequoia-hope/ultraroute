@@ -933,6 +933,24 @@ mod tests {
     }
 
     #[test]
+    fn a_link_between_two_runs_one_step_apart_stays_though_each_run_ends_in_the_others_round_end() {
+        // sms-cart's /a5 on F.Cu: two diagonal runs whose ends lie a grid step apart, each inside
+        // the other's round end, and the step between them. The shove's tidy-up took the step out
+        // as dangling when an end inside a round end counted as a full-width joint.
+        let mut board = empty_board();
+        let r = 125_000;
+        pad_at(&mut board, 2_900_000, 2_950_000);
+        pad_at(&mut board, 0, 0);
+        let put = |board: &mut Board, a: (Nm, Nm), b: (Nm, Nm)| board.insert(Item { shape: Shape::Capsule { a: Point::new(a.0, a.1), b: Point::new(b.0, b.1), r }, ..seg(Point::new(0, 0), Point::new(0, 0)) });
+        let first = put(&mut board, (2_900_000, 2_950_000), (300_000, 350_000));
+        let link = put(&mut board, (300_000, 350_000), (300_000, 300_000));
+        let second = put(&mut board, (300_000, 300_000), (0, 0));
+        let mut soft = vec![first, link, second];
+        prune_dangling(&mut board, &mut soft);
+        assert!(board.item(link).is_some(), "the runs meet squarely only through the link");
+    }
+
+    #[test]
     fn a_joint_of_overlapping_round_ends_is_found_and_mended_onto_the_other_track() {
         let mut board = empty_board();
         pad_at(&mut board, 0, 0);
