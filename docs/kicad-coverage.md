@@ -115,15 +115,17 @@ way Stage 9 did; steps 1-3 also add the `~/pcb` rule files above as parser tests
 4. **Done (2026-10-31): zone connection and thermals.** No-connection pads stay unjoined;
    relief pads keep `min_resolved_spokes` spokes free of new copper (above). Left: a track
    into the pour for a pad short of room.
-5. **Length and via-count limits.** Done: reported after routing; a net a rule allows no vias
-   (`via_count (max 0)`) gets none, in the grid and in the checker; the via pass trades no via
-   for track length a net's `length` maximum cannot spare (bluebuzz's WL_DATA went from 31.4 mm
-   over its 25 back to within it); a maximum shorter than the net's pads lie apart is warned of
-   at loading (bluebuzz's VREG_LX: 2.52 mm apart, 2 mm allowed) (2026-10-31). Tried and dropped:
-   routing the limited nets first, as `--regions` limits are (bluebuzz: 22 s of the 120, 5
-   connections open instead of 3); and rerouting a net over its length alone after rip-up (the
-   grid found no way for VREG_LX, the only net over, and none can keep to it). Left: steering
-   negotiation itself by length, and `diff_pair_uncoupled`.
+5. **Length and via-count limits.** Done (2026-11-01): a net's length is counted as KiCad 9.0.8
+   counts it: its tracks, and each via the net's copper meets on both F.Cu and B.Cu at the
+   stackup's distance between them (KiCad looks for a via's connected layers by number from F.Cu
+   to B.Cu, which since KiCad 9 skips the inner ones, so a via to an inner layer counts nothing).
+   Where every via counts (the net routes on the outer layers alone), a net with a length maximum
+   pays each via its height on top of 5 mm, wins the cells it contests in negotiation, has its
+   pair's vias priced the same, and gets no escape vias; length matching lengthens no net past
+   its maximum, nor does the via pass; a maximum shorter than the pads lie apart is warned of at
+   loading; a net allowed no vias gets none. easy2350 routes all its seeds within its length
+   rules. Left: `diff_pair_uncoupled`; steering on boards with inner signal layers, where a via
+   counts or not by the layers its copper ends up on.
 6. **Pad geometry.** Done: clearance overrides judged as KiCad does; warnings for the rest. Left:
    padstacks per layer, `remove_unused_layers`, curves in custom pads and on copper.
 7. **Writer.** Done: tuned tracks held, teardrops warned of; `--arcs MM` rounds the router's

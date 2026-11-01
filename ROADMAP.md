@@ -182,7 +182,7 @@ order of work are in `docs/kicad-coverage.md`.
       them.
 - [x] Zone connections and thermals: pads that no zone joins; thermal spokes kept free as KiCad
       counts them (`min_resolved_spokes`).
-- [ ] Length and via-count limits: reported after routing (done); routed to.
+- [x] Length and via-count limits: reported after routing; routed to where every via counts.
 - [ ] Pad geometry: KiCad 9 padstacks, `remove_unused_layers`, curves (warned of now).
 - [x] Writer: arcs out (`--arcs MM`), tuning patterns held, teardrops warned of.
 - [x] A benchmark of KiCad 9 boards with `.kicad_dru` files, judged with their rules
