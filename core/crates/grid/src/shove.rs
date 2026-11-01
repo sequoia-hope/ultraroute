@@ -208,6 +208,7 @@ pub fn shove_escape(
     let mut cache = PassCache::of(board, options);
     if region {
         stats.removed_spans.extend(settle(board, soft, options.pours_block, &cache.plane_nets, None));
+        board::probe::mark("shove/settle-start", board);
     }
     let mut tried: HashSet<ItemId> = HashSet::new();
     let (mut reaches, mut net_reaches) = (options.reaches.clone(), options.net_reaches.clone());
@@ -244,6 +245,7 @@ pub fn shove_escape(
         // Copper of the net that reaches no pad is no part of the rest of the net: a way out to
         // it would join nothing, so it goes first.
         spans.extend(rip_floating(board, soft, t.net, options.pours_block));
+        board::probe::mark("shove/rip-floating", board);
         let mut far = if pad == airline.from_item { airline.to_item } else { airline.from_item };
         let mut rounds = options.rounds.max(1);
         if region {
@@ -251,6 +253,7 @@ pub fn shove_escape(
                 Some(end) => (t.pad, far, t.to) = end,
                 None => rounds = 0,
             }
+            board::probe::mark("shove/unzip", board);
         }
         for _ in 0..rounds {
             if out_of_time() {
@@ -269,6 +272,7 @@ pub fn shove_escape(
         let changed = t.routed || !spans.is_empty() || soft.len() != snapshot.1.len() || t.rounds.iter().any(|r| !r.ripped_items.is_empty() || r.moved > 0);
         if t.routed {
             cascade(board, solver, options, soft, &mut cache, &mut t, &open, &snapshot.1, &mut spans, &out_of_time, watch);
+            board::probe::mark("shove/cascade", board);
         }
         if changed {
             let again = route_open(
@@ -278,8 +282,10 @@ pub fn shove_escape(
                 &mut |_| {},
             );
             soft.extend(again.laid.iter().copied());
+            board::probe::mark("shove/route-open", board);
             if region {
                 spans.extend(settle(board, soft, options.pours_block, &cache.plane_nets, None));
+                board::probe::mark("shove/settle", board);
             }
             let worse = |board: &Board| score(&open_now(board, options.pours_block), &cache.plane_nets) >= score_before;
             if t.routed && options.repair_seconds > 0.0 && worse(board) {
@@ -288,9 +294,11 @@ pub fn shove_escape(
                 let held = hold(board, soft, &snapshot.1, &|n| n == t.net);
                 repair(board, solver, options, soft, if region { 0.55 } else { 1.0 });
                 release(board, held);
+                board::probe::mark("shove/repair", board);
                 if region && worse(board) && !out_of_time() {
                     repair(board, solver, options, soft, 0.45);
                     t.routed = connection_of(board, t.pad, options.pours_block).is_none();
+                    board::probe::mark("shove/repair-free", board);
                 }
                 if region {
                     spans.extend(settle(board, soft, options.pours_block, &cache.plane_nets, None));
@@ -330,6 +338,7 @@ pub fn shove_escape(
         } else {
             if changed {
                 (*board, *soft) = snapshot;
+                board::probe::mark("shove/undo", board);
             }
             if region {
                 // The region plough routes between both ends alike: from the far end, on the
@@ -419,12 +428,15 @@ fn repair(board: &mut Board, solver: &mut dyn FieldSolver, options: &ShoveOption
 /// spans among what went.
 fn settle(board: &mut Board, soft: &mut Vec<ItemId>, pours_block: bool, plane_nets: &HashSet<u32>, only: Option<&HashSet<u32>>) -> Vec<Span> {
     let (_, mut spans) = crate::cleanup::drop_duplicates(board, soft);
+    board::probe::mark("settle/duplicates", board);
     let open: HashSet<u32> = open_now(board, pours_block).into_iter().map(|a| a.net).collect();
     let pick = |it: &Item| !it.locked && !open.contains(&it.net) && only.is_none_or(|o| o.contains(&it.net));
     spans.extend(crate::cleanup::prune_dangling_of(board, soft, &pick, &mut |_, _| {}).1);
+    board::probe::mark("settle/prune", board);
     if !plane_nets.is_empty() {
         // A tidy-up finishes what it starts: the planes' joins are part of the board it leaves.
         soft.extend(crate::planes::join_planes(board, &None, &Default::default()).laid);
+        board::probe::mark("settle/planes", board);
     }
     spans
 }
@@ -602,6 +614,7 @@ fn plough_round(
     }
     // Lay the path as it stands, ripping exactly the other copper it runs into.
     let laid = force_lay(board, &grid, &path, &sources, &targets, &movable, spans, &mut round.ripped_items);
+    board::probe::mark("shove/force-lay", board);
     round.crossed = round.ripped_items.len();
     soft.retain(|id| board.item(*id).is_some());
     if let Some(items) = laid {
@@ -643,6 +656,7 @@ fn plough_round(
         }
     }
     soft.retain(|id| board.item(*id).is_some());
+    board::probe::mark("shove/rip-crossing", board);
 
     // How far each net's copper must clear the path: the path's half width (or its vias'), the
     // clearance between the nets, the net's widest piece, and the margin.
@@ -667,14 +681,17 @@ fn plough_round(
     let (_, moved, moved_spans) = morph::shift_copper(board, soft, 150_000.0, &linear);
     round.moved = moved;
     spans.extend(moved_spans);
+    board::probe::mark("shove/shift-copper", board);
     let loose: Vec<(ItemId, Item)> = board.items().filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked).map(|(id, it)| (id, it.clone())).collect();
     let (ripped, ripped_spans) = rip_broken(board, soft, options.pours_block);
     round.ripped_items.extend(loose.into_iter().filter(|(id, _)| board.item(*id).is_none()).map(|(_, it)| it));
     round.ripped = ripped;
     spans.extend(ripped_spans);
+    board::probe::mark("shove/rip-broken", board);
 
     // The trapped connection first, before anything else takes the room made for it.
     round.routed = route_one(board, solver, options, soft, pad);
+    board::probe::mark("shove/route-one", board);
     round
 }
 
@@ -909,6 +926,7 @@ fn renegotiate(
         .map(|(id, _)| id)
         .collect();
     let ripped = rip_near(board, near, options.pours_block, soft, spans, round);
+    board::probe::mark("shove/rip-near", board);
     let mut nets: HashSet<u32> = ripped.iter().copied().filter(|&n| signal(n)).collect();
     nets.insert(net);
     tell(&options.log, "shoving", || format!("{}: {} pieces of {} nets ripped round the way out; negotiating them again", board.net_name(net), round.crossed, ripped.len()), None);
@@ -996,6 +1014,7 @@ fn renegotiate(
         return;
     }
     nets.extend(rip_near(board, more, options.pours_block, soft, spans, round).into_iter().filter(|&n| signal(n)));
+    board::probe::mark("shove/rip-near-wider", board);
     // Ripped wider, the trapped net is still favoured, less; repacked, all are equals.
     let weights = if widened { HashMap::from([(net, 0.7)]) } else { HashMap::new() };
     negotiate(board, solver, options, soft, &nets, weights, options.seed.wrapping_add(31), None, &plane_nets, spans);
@@ -1043,6 +1062,7 @@ fn negotiate(
         on_round,
     );
     soft.extend(n.laid);
+    board::probe::mark("shove/negotiate", board);
     let again = route_open(
         board,
         solver,
@@ -1061,7 +1081,9 @@ fn negotiate(
         &mut |_| {},
     );
     soft.extend(again.laid);
+    board::probe::mark("shove/negotiate-route-open", board);
     spans.extend(settle(board, soft, options.pours_block, plane_nets, Some(nets)));
+    board::probe::mark("shove/settle", board);
 }
 
 /// Lays `path` as tracks and vias after ripping the other nets' movable copper the pieces would

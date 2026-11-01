@@ -175,6 +175,7 @@ pub(crate) fn prune_dangling_of(board: &mut Board, soft: &mut Vec<ItemId>, which
                         spans.extend(item.span.take());
                         pruned += 1;
                         watch(board, &item);
+                        board::probe::mark("prune/redundant", board);
                     }
                 }
                 continue;
@@ -184,12 +185,14 @@ pub(crate) fn prune_dangling_of(board: &mut Board, soft: &mut Vec<ItemId>, which
                     spans.extend(gone);
                     soft.extend(new_ids);
                     pruned += 1;
+                    board::probe::mark("prune/collapse-via", board);
                     continue;
                 }
                 if let Some((span, new_ids)) = trim_overhang(board, id) {
                     spans.extend(span);
                     soft.extend(new_ids);
                     pruned += 1;
+                    board::probe::mark("prune/trim-overhang", board);
                 }
                 continue;
             }
@@ -197,6 +200,7 @@ pub(crate) fn prune_dangling_of(board: &mut Board, soft: &mut Vec<ItemId>, which
                 spans.extend(item.span.take());
                 pruned += 1;
                 watch(board, &item);
+                board::probe::mark("prune/dangling", board);
             }
         }
         soft.retain(|id| board.item(*id).is_some());

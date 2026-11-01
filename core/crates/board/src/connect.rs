@@ -111,19 +111,20 @@ pub fn joined(board: &Board, a: ItemId, b: ItemId) -> bool {
 pub const FULL_JOINT: f64 = 0.98;
 
 /// How wide the copper is where the round end at `p` (radius `r1`) of one track reaches the
-/// track `q0`–`q1` (radius `r2`), in nm: full width when `p` lies inside it, else the lens two
-/// round ends make or the chord a side's edge cuts, however KiCad counts them joined. `None`
-/// when they do not overlap.
+/// track `q0`–`q1` (radius `r2`), in nm: full width when `p` lies on it or inside its straight
+/// body, else the lens two round ends make or the chord a side's edge cuts, however KiCad counts
+/// them joined. `None` when they do not overlap.
 pub fn end_neck(p: Point, r1: f64, q0: Point, q1: Point, r2: f64) -> Option<f64> {
     let full = 2.0 * r1.min(r2);
     let d = crate::geom::point_segment(p, q0, q1);
-    if d <= r2 {
+    let at_end = p.distance(q0).min(p.distance(q1)) <= d + 0.5;
+    if meets_squarely(p, r1, q0, q1, r2) || d + r1.min(r2) <= r1.max(r2) {
         return Some(full);
     }
     if d >= r1 + r2 {
         return None;
     }
-    let half = if p.distance(q0).min(p.distance(q1)) <= d + 0.5 {
+    let half = if at_end {
         let along = (d * d + r1 * r1 - r2 * r2) / (2.0 * d);
         (r1 * r1 - along * along).max(0.0).sqrt()
     } else {
@@ -145,17 +146,49 @@ pub fn joint_neck(board: &Board, a: ItemId, b: ItemId) -> Option<f64> {
     [end_neck(*xa, xr, *ya, *yb, yr), end_neck(*xb, xr, *ya, *yb, yr), end_neck(*ya, yr, *xa, *xb, xr), end_neck(*yb, yr, *xa, *xb, xr)].into_iter().flatten().reduce(f64::max)
 }
 
-/// [`joined`], and through copper as wide as the narrower piece: two tracks whose round ends only
-/// overlap are joined for KiCad but by a neck the fab may etch through.
+/// How near an end must come to another track's end or centre line to meet it there, in
+/// nanometres: points the router computes, not grid points, are rounded to the nanometre.
+const SQUARE: f64 = 1000.0;
+
+/// Whether the round end at `p` (radius `r1`) meets the track `q0`–`q1` (radius `r2`)
+/// squarely: on its end or its centre line, as a drawn joint does, inside its straight body,
+/// which its own body then crosses whole, or wholly inside its round end. An end near the other's
+/// end but not on it is joined, if at all, by whatever their round ends' overlap leaves, which
+/// narrows as they turn. A via is a track with its two ends at one point.
+pub fn meets_squarely(p: Point, r1: f64, q0: Point, q1: Point, r2: f64) -> bool {
+    let d = crate::geom::point_segment(p, q0, q1);
+    if d <= SQUARE || d + r1 <= r2 {
+        return true;
+    }
+    let to_end = p.distance(q0).min(p.distance(q1));
+    to_end > d + 0.5 && d <= r2
+}
+
+/// [`joined`], and as a drawn joint is: a track meets another track or a via squarely
+/// ([`meets_squarely`]) at an end of one, and a pad with an end inside it; other copper as
+/// KiCad joins it.
 pub fn firmly_joined(board: &Board, a: ItemId, b: ItemId) -> bool {
     if !joined(board, a, b) {
         return false;
     }
     let (Some(x), Some(y)) = (board.item(a), board.item(b)) else { return false };
-    match (&x.shape, &y.shape, joint_neck(board, a, b)) {
-        (Shape::Capsule { r: xr, .. }, Shape::Capsule { r: yr, .. }, Some(neck)) => neck >= FULL_JOINT * 2.0 * (*xr).min(*yr) as f64,
-        (_, _, None) if x.kind == Kind::Track && y.kind == Kind::Track => false,
-        _ => true,
+    let ends = |it: &crate::model::Item| match (&it.kind, &it.shape) {
+        (Kind::Track, Shape::Capsule { a, b, r }) => Some(([*a, *b], *r as f64)),
+        _ => None,
+    };
+    let meets = |track: &crate::model::Item, other: &crate::model::Item| {
+        let Some((pts, r1)) = ends(track) else { return false };
+        match (&other.kind, &other.shape) {
+            (Kind::Track | Kind::Via, Shape::Capsule { a: q0, b: q1, r: r2 }) => pts.iter().any(|&p| meets_squarely(p, r1, *q0, *q1, *r2 as f64)),
+            (Kind::Pad { .. }, shape) => pts.iter().any(|&p| shape.contains(p)),
+            _ => true,
+        }
+    };
+    match (ends(x).is_some(), ends(y).is_some()) {
+        (true, true) => meets(x, y) || meets(y, x),
+        (true, false) => meets(x, y),
+        (false, true) => meets(y, x),
+        (false, false) => true,
     }
 }
 
