@@ -10,6 +10,8 @@ baselines (FreeRouting, PcbRouter, RL-MCTS; PCBench/Baselines/Results_all.csv).
                                              tools/pcbench_timeouts.json get their own time
     pcbench.py report RUN [RUN ...]          success, wirelength and vias against the baselines
     pcbench.py rescore RUN [RUN ...]         judge saved reports again (after the rules change)
+    pcbench.py rejudge RUN [RUN ...]         ask KiCad again of saved boards and the bare ones,
+                                             when the judge asks more than it did (JUDGE)
     pcbench.py compare A B [C ...] [--noise N|auto] [--noise-from A B] [--json OUT] [--exact]
                                              each later run against A, board by board: boards
                                              lost and won, error types gained, vias, wirelength,
@@ -23,7 +25,9 @@ baselines (FreeRouting, PcbRouter, RL-MCTS; PCBench/Baselines/Results_all.csv).
 
 A board succeeds when KiCad finds nothing unconnected after a zone refill and no DRC error that
 involves routed copper (a track, arc or via) of a type the bare board did not have as often: routed copper that breaks the board's own rules is a
-failure, not a success. When KiCad itself fails (the zone refill or the DRC), the board gets
+failure, not a success. The judge adds one rule of its own: no copper narrower than the board's
+minimum track width (KiCad's connection width check), so tracks joined only where their round
+ends overlap fail. When KiCad itself fails (the zone refill or the DRC), the board gets
 `referee_error` and no verdict: the referee failed, not the router. When the router fails (a
 crash, which writes the input board back, a refusal or a hang), its file is not judged: the
 board fails, and `compare` counts it apart and never as noise. Wirelength is the routed tracks' length and vias their count, as the
@@ -102,13 +106,37 @@ def referee(name, cmd):
         raise RefereeError(f"{name}: exit {r.returncode}: {r.stderr[-300:]}")
 
 
+# What the judge asks of a board beyond its own rules; reports judged by an older one are judged
+# again by `rejudge`. 2: no copper narrower than the board's minimum track width.
+JUDGE = 2
+
+
+def joint_rule(pro):
+    """A KiCad rule holding the board's copper to its own minimum track width anywhere, as an
+    error: KiCad joins two tracks whose round ends barely overlap, and its connection width check
+    is off unless a board sets one, so a neck the fab may etch through passes the DRC. None when
+    the board sets no minimum."""
+    try:
+        width = json.loads(pro.read_text())["board"]["design_settings"]["rules"]["min_track_width"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not width:
+        return None
+    return f'\n(rule "pcbench: no copper narrower than a track"\n  (severity error)\n  (constraint connection_width (min {width}mm)))\n'
+
+
 def drc(pcb, out_dir, stem):
-    """Refill the zones and ask KiCad: (unconnected, {error type: count}, {warning type: count}).
-    Raises RefereeError when the refill or the DRC fails."""
+    """Refill the zones and ask KiCad, with the board's rules and [`joint_rule`]: (unconnected,
+    {error type: count}, {warning type: count}). Raises RefereeError when the refill or the DRC
+    fails."""
     filled, report = out_dir / f"{stem}.filled.kicad_pcb", out_dir / f"{stem}.drc.json"
     for suffix in (".kicad_pro", ".kicad_dru"):
         if pcb.with_suffix(suffix).exists():
             shutil.copy(pcb.with_suffix(suffix), filled.with_suffix(suffix))
+    rule = joint_rule(pcb.with_suffix(".kicad_pro"))
+    if rule:
+        dru = filled.with_suffix(".kicad_dru")
+        dru.write_text((dru.read_text() if dru.exists() else "(version 1)\n") + rule)
     report.unlink(missing_ok=True)
     referee("refill", [sys.executable, ROOT / "tools/refill_zones.py", pcb, filled])
     referee("kicad-cli drc", ["kicad-cli", "pcb", "drc", "--format", "json", "--severity-all", "-o", report, filled])
@@ -183,6 +211,7 @@ def prepare_one(b):
         else:
             try:
                 info["unconnected"], info["errors"], info["warnings"] = drc(bare, d, "bare")
+                info["judge"] = JUDGE
             except RefereeError as e:
                 info["error"] = f"drc failed on the bare board: {e}"
     (d / "bare.json").write_text(json.dumps(info, indent=1))
@@ -239,6 +268,7 @@ def route_one(b, run_dir, recipe, timeout, seed):
         try:
             drc(out, d, "out")
             score(res, run_dir, b)
+            res["judge"] = JUDGE
         except RefereeError as e:
             res["referee_error"] = str(e)
     (d / "result.json").write_text(json.dumps(res, indent=1))
@@ -285,6 +315,56 @@ def rescore(a):
         for f in run_dir.glob("*/result.json"):
             res = score(json.loads(f.read_text()), run_dir, f.parent.name)
             f.write_text(json.dumps(res, indent=1))
+
+
+def rejudge_bare(b):
+    """The bare board judged again when an older judge saw it."""
+    d = HOME / "boards" / b
+    info = json.loads((d / "bare.json").read_text())
+    if "error" in info or info.get("judge", 1) >= JUDGE:
+        return b, info
+    try:
+        info["unconnected"], info["errors"], info["warnings"] = drc(d / "bare.kicad_pcb", d, "bare")
+        info["judge"] = JUDGE
+    except RefereeError as e:
+        info["error"] = f"drc failed on the bare board: {e}"
+    (d / "bare.json").write_text(json.dumps(info, indent=1))
+    return b, info
+
+
+def rejudge_one(run_dir, b):
+    f = run_dir / b / "result.json"
+    res = json.loads(f.read_text())
+    out = run_dir / b / "out.kicad_pcb"
+    if router_failed(res) or res.get("judge", 1) >= JUDGE or not out.exists():
+        return res
+    res.pop("referee_error", None)
+    try:
+        drc(out, run_dir / b, "out")
+        score(res, run_dir, b)
+        res["judge"] = JUDGE
+    except RefereeError as e:
+        res["referee_error"] = str(e)
+    f.write_text(json.dumps(res, indent=1))
+    return res
+
+
+def rejudge(a):
+    """Asks KiCad again of each run's saved boards, and of the bare boards, what the judge asks now
+    ([`JUDGE`]), without routing them again."""
+    workers = int(os.environ.get("RESERVED_CORES", "4"))
+    with concurrent.futures.ThreadPoolExecutor(workers) as pool:
+        for name in a.runs:
+            run_dir = HOME / "runs" / name
+            ids = sorted(f.parent.name for f in run_dir.glob("*/result.json"))
+            list(pool.map(rejudge_bare, ids))
+            results = list(pool.map(lambda b: rejudge_one(run_dir, b), ids))
+            meta = run_dir / "run.json"
+            info = json.loads(meta.read_text())
+            info["judge"] = JUDGE
+            info.setdefault("notes", []).append(f"{time.strftime('%Y-%m-%d')}: judged again by judge {JUDGE}")
+            meta.write_text(json.dumps(info, indent=1))
+            print(f"{name}: {sum(bool(r.get('success')) for r in results)} of {len(results)} succeeded")
 
 
 def prepare(a):
@@ -534,6 +614,8 @@ def main():
     s.add_argument("runs", nargs="+")
     s = sub.add_parser("rescore")
     s.add_argument("runs", nargs="+")
+    s = sub.add_parser("rejudge")
+    s.add_argument("runs", nargs="+")
     s = sub.add_parser("compare")
     s.add_argument("runs", nargs="+", help="the reference run, then the runs to judge against it")
     s.add_argument("--noise", default="0", help="boards a run may lose and still pass, or auto")
@@ -546,7 +628,7 @@ def main():
     a = p.parse_args()
     if a.cmd == "compare" and len(a.runs) < 2:
         p.error("compare needs at least two runs")
-    {"prepare": prepare, "run": run, "report": report, "rescore": rescore, "compare": compare, "note": note}[a.cmd](a)
+    {"prepare": prepare, "run": run, "report": report, "rescore": rescore, "rejudge": rejudge, "compare": compare, "note": note}[a.cmd](a)
 
 
 if __name__ == "__main__":
