@@ -37,6 +37,10 @@ pub struct Rules {
     /// "minimum thermal relief spoke count"); 2, KiCad's default, where the project leaves it out.
     #[serde(default = "two")]
     pub min_resolved_spokes: f64,
+    /// The narrowest copper may be anywhere (KiCad's "minimum connection width"), in metres; 0,
+    /// KiCad's default, checks nothing.
+    #[serde(default)]
+    pub min_connection: f64,
     pub warnings: Vec<String>,
 }
 
@@ -223,6 +227,7 @@ impl Rules {
             assignments,
             custom: None,
             solder_mask_to_copper_clearance: rules["solder_mask_to_copper_clearance"].as_f64().unwrap_or(0.0) * MM,
+            min_connection: rules["min_connection"].as_f64().unwrap_or(0.0) * MM,
             min_resolved_spokes: rules["min_resolved_spokes"].as_f64().unwrap_or(2.0),
             warnings,
         })

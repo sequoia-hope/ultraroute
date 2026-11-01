@@ -4,7 +4,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use board::{check_item, joined, Board, Item, ItemId, Kind, Nm, Point, Shape};
+use board::{check_item, firmly_joined, joined, Board, Item, ItemId, Kind, Nm, Point, Shape};
 use kicad_pcb::Span;
 
 use crate::clock::Deadline;
@@ -256,6 +256,117 @@ pub fn split_at_joins(board: &mut Board, soft: &mut Vec<ItemId>) -> (usize, Vec<
     (split, spans)
 }
 
+/// A track end joined to the rest of its net only where round copper overlaps, narrower than
+/// the tracks: KiCad counts it joined, the fab may etch through it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NarrowJoint {
+    pub net: u32,
+    pub layer: usize,
+    pub at: Point,
+    /// The copper's width through the joint, and the narrower track's, in nm.
+    pub width: f64,
+    pub full: f64,
+    /// The track whose end it is, and the one its round end overlaps.
+    pub track: ItemId,
+    pub other: ItemId,
+}
+
+/// The ends of the router's tracks joined only through narrow overlaps: not at another
+/// track's end, nor on its body, nor in a pad or via of the net, yet overlapping another track
+/// of the net through less than [`board::FULL_JOINT`] of the narrower width. An end that meets
+/// nothing is a dangling end, not a joint.
+pub fn narrow_joints(board: &Board, laid: &[ItemId]) -> Vec<NarrowJoint> {
+    let mut out = Vec::new();
+    for &id in laid {
+        let Some(item) = board.item(id) else { continue };
+        let (Kind::Track, Shape::Capsule { a, b, r }) = (&item.kind, &item.shape) else { continue };
+        if item.net == 0 {
+            continue;
+        }
+        let layer = item.layers.trailing_zeros() as usize;
+        for p in [*a, *b] {
+            let near = board.near(layer, board::BBox::of([p]).grow(2 * *r));
+            let ours = || near.iter().copied().filter(|&o| o != id).filter_map(|o| board.item(o).map(|c| (o, c))).filter(|(_, c)| c.net == item.net && c.on(layer));
+            // In a pad, a via or a pour of the net: that copper joins it.
+            if ours().any(|(_, c)| c.kind != Kind::Track && c.is_copper() && c.shape.contains(p)) {
+                continue;
+            }
+            let mut best: Option<(f64, f64, ItemId)> = None;
+            for (o, c) in ours() {
+                let Shape::Capsule { a: q0, b: q1, r: r2 } = c.shape else { continue };
+                // A neighbour sharing this track's other end is joined there already: its round
+                // end against this end is a tip, not a joint.
+                let far = if p == *a { *b } else { *a };
+                if c.kind != Kind::Track || (far != p && (q0 == far || q1 == far)) {
+                    continue;
+                }
+                let Some(w) = board::end_neck(p, *r as f64, q0, q1, r2 as f64) else { continue };
+                let full = 2.0 * (*r).min(r2) as f64;
+                if best.is_none_or(|(bw, bf, _)| w / full > bw / bf) {
+                    best = Some((w, full, o));
+                }
+            }
+            if let Some((width, full, other)) = best {
+                if width < board::FULL_JOINT * full && !firmly_linked(board, id, other) {
+                    out.push(NarrowJoint { net: item.net, layer, at: p, width, full, track: id, other });
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Whether `a` reaches `b` through its net's copper joined at full width: then a narrow overlap
+/// between them is a tip grazing copper already joined, not the joint that carries the net.
+fn firmly_linked(board: &Board, a: ItemId, b: ItemId) -> bool {
+    let mut seen: HashSet<ItemId> = HashSet::from([a]);
+    let mut stack = vec![a];
+    while let Some(at) = stack.pop() {
+        for next in firm_neighbours(board, at) {
+            if next == b {
+                return true;
+            }
+            if seen.insert(next) {
+                stack.push(next);
+            }
+        }
+    }
+    false
+}
+
+/// Lays a short piece from each narrow joint's end onto the other track's centre line, at the
+/// end's width or, where that breaks a rule, the narrowest the net's rules allow; the pieces join
+/// `laid`. How many joints it mended.
+pub fn mend_joints(board: &mut Board, laid: &mut Vec<ItemId>) -> usize {
+    let mut mended = 0;
+    for joint in narrow_joints(board, laid) {
+        // A piece laid for the joint's other end may have mended this one.
+        if firmly_linked(board, joint.track, joint.other) {
+            continue;
+        }
+        let (Some(track), Some(other)) = (board.item(joint.track).cloned(), board.item(joint.other)) else { continue };
+        let (Shape::Capsule { r, .. }, Shape::Capsule { a: q0, b: q1, .. }) = (&track.shape, &other.shape) else { continue };
+        let (_, foot) = closest_on_segment(*q0, *q1, joint.at);
+        if foot == joint.at {
+            continue;
+        }
+        let least = (board.min_joint_of(track.net) + 1) / 2;
+        for r in [*r, least] {
+            if (2 * r) as f64 <= joint.width {
+                break;
+            }
+            let piece = board.insert(Item { shape: Shape::Capsule { a: joint.at, b: foot, r }, span: None, locked: false, ..track.clone() });
+            if check_item(board, piece).is_empty() {
+                laid.push(piece);
+                mended += 1;
+                break;
+            }
+            board.discard(piece);
+        }
+    }
+    mended
+}
+
 fn closest_on_segment(a: Point, b: Point, p: Point) -> (f64, Point) {
     let (dx, dy) = ((b.x - a.x) as f64, (b.y - a.y) as f64);
     let len_sq = dx * dx + dy * dy;
@@ -505,12 +616,21 @@ const DETOUR_LIMIT: usize = 400;
 
 /// Its net's copper joined to an item, leaving out pours a refill may take back.
 fn neighbours(board: &Board, id: ItemId) -> Vec<ItemId> {
+    neighbours_by(board, id, joined)
+}
+
+/// [`neighbours`] joined at full width, not by round ends that only overlap.
+fn firm_neighbours(board: &Board, id: ItemId) -> Vec<ItemId> {
+    neighbours_by(board, id, firmly_joined)
+}
+
+fn neighbours_by(board: &Board, id: ItemId, joins: fn(&Board, ItemId, ItemId) -> bool) -> Vec<ItemId> {
     let Some(item) = board.item(id) else { return Vec::new() };
     let bb = board.bbox(id).unwrap_or_else(|| item.shape.bbox());
     let mut out: Vec<ItemId> = (0..board.layers.len())
         .filter(|l| item.on(*l))
         .flat_map(|l| board.near(l, bb).into_iter().filter(move |&o| o != id))
-        .filter(|&o| board.item(o).is_some_and(|it| it.net == item.net && it.is_copper() && (!it.refilled() || board.is_plane(it))) && joined(board, id, o))
+        .filter(|&o| board.item(o).is_some_and(|it| it.net == item.net && it.is_copper() && (!it.refilled() || board.is_plane(it))) && joins(board, id, o))
         .collect();
     out.sort_unstable();
     out.dedup();
@@ -519,7 +639,8 @@ fn neighbours(board: &Board, id: ItemId) -> Vec<ItemId> {
 
 /// Whether taking the item out leaves everything it joins still joined: true when it joins at
 /// most one piece, or when a short search finds a way between all its neighbours without it.
-/// Whatever KiCad calls a dangling end, copper that carries a connection stays.
+/// Whatever KiCad calls a dangling end, copper that carries a connection stays, and so does a
+/// short link between two tracks whose round ends would be left joined only by overlapping.
 fn bridges_nothing(board: &Board, id: ItemId) -> bool {
     let around = neighbours(board, id);
     let Some((&first, rest)) = around.split_first() else { return true };
@@ -533,7 +654,7 @@ fn bridges_nothing(board: &Board, id: ItemId) -> bool {
         if seen.len() > DETOUR_LIMIT {
             return false;
         }
-        for next in neighbours(board, at) {
+        for next in firm_neighbours(board, at) {
             if seen.insert(next) {
                 wanted.remove(&next);
                 if wanted.is_empty() {
@@ -560,6 +681,12 @@ fn redundant(board: &Board, id: ItemId) -> bool {
     let ours = |o: ItemId| board.item(o).filter(|c| o != id && c.net == item.net && c.on(layer));
     // A piece into a via is how the via meets this layer, as KiCad sees it.
     if near.iter().any(|&o| ours(o).is_some_and(|c| c.kind == Kind::Via && c.shape.gap_within(&item.shape, 0.0) == 0.0)) {
+        return false;
+    }
+    // A link whose ends both meet other tracks' ends is a piece of a chain, which KiCad finds
+    // whole: taking it out would leave its neighbours joined only where their round ends overlap.
+    let meets_end = |p: Point| near.iter().any(|&o| ours(o).is_some_and(|c| matches!(c.shape, Shape::Capsule { a: q0, b: q1, .. } if c.kind == Kind::Track && (q0 == p || q1 == p))));
+    if meets_end(*a) && meets_end(*b) {
         return false;
     }
     // Nor into a pad: what else meets the pad may do so only by overlapping it, which KiCad
@@ -596,7 +723,7 @@ pub(crate) fn dangles(board: &Board, id: ItemId) -> bool {
             let neighbours: Vec<ItemId> = near.iter().copied().filter(|&o| ours(layer, o).is_some() && joined(board, id, o)).collect();
             near.iter().any(|&cover| {
                 ours(layer, cover).is_some_and(|c| !matches!(c.kind, Kind::Pour { .. } | Kind::Via) && c.shape.contains(*a) && c.shape.contains(*b))
-                    && neighbours.iter().all(|&o| o == cover || joined(board, cover, o))
+                    && neighbours.iter().all(|&o| o == cover || firmly_joined(board, cover, o))
             })
         }
         (Kind::Via, _) => {
@@ -747,6 +874,76 @@ mod tests {
         prune_dangling(&mut board, &mut soft);
         assert!(board.item(piece).is_none(), "the short piece into the stub's side adds nothing");
         assert!(board.item(stub).is_some() && board.item(route).is_some());
+        assert!(board::connectivity(&board).airlines.is_empty());
+    }
+
+    fn pad_at(board: &mut Board, x: Nm, y: Nm) -> ItemId {
+        board.insert(Item {
+            kind: Kind::Pad { footprint: 0, number: "1".into(), plated: false },
+            net: 1,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(x, y), b: Point::new(x, y), r: 150_000 },
+            hole: None,
+            locked: true,
+            span: None,
+        })
+    }
+
+    #[test]
+    fn short_links_of_a_chain_stay_so_no_joint_is_left_to_overlapping_round_ends() {
+        // MySRaspiGW's MOSI on B.Cu: a grid path's diagonal steps, each a link shorter than the
+        // track is wide. Taken out, they left the runs either side joined only where their round
+        // ends overlapped, 0.06 mm wide on a 0.254 mm track.
+        let mut board = empty_board();
+        let r = 127_000;
+        let pts = [(0, 0), (2_000_000, 0), (2_200_000, 100_000), (2_250_000, 150_000), (2_450_000, 300_000), (3_375_000, 565_000)];
+        pad_at(&mut board, 0, 0);
+        pad_at(&mut board, 3_375_000, 565_000);
+        let mut soft: Vec<ItemId> = pts
+            .windows(2)
+            .map(|w| board.insert(Item { shape: Shape::Capsule { a: Point::new(w[0].0, w[0].1), b: Point::new(w[1].0, w[1].1), r }, ..seg(Point::new(0, 0), Point::new(0, 0)) }))
+            .collect();
+        prune_dangling(&mut board, &mut soft);
+        assert_eq!(soft.len(), 5, "every link stays");
+        assert!(narrow_joints(&board, &soft).is_empty());
+        assert!(board::connectivity(&board).airlines.is_empty());
+    }
+
+    #[test]
+    fn a_link_inside_its_neighbour_stays_when_the_neighbours_would_join_only_by_their_ends() {
+        // The earring's VBATT on In2.Cu: a run, a link one diagonal grid step long lying wholly
+        // inside the next run's round end, then that run.
+        let mut board = empty_board();
+        let r = 75_000;
+        pad_at(&mut board, 0, 0);
+        pad_at(&mut board, 2_100_000, 1_100_000);
+        let put = |board: &mut Board, a: (Nm, Nm), b: (Nm, Nm)| board.insert(Item { shape: Shape::Capsule { a: Point::new(a.0, a.1), b: Point::new(b.0, b.1), r }, ..seg(Point::new(0, 0), Point::new(0, 0)) });
+        let first = put(&mut board, (0, 0), (1_000_000, 0));
+        let link = put(&mut board, (1_000_000, 0), (1_100_000, 100_000));
+        let second = put(&mut board, (1_100_000, 100_000), (1_100_000, 1_100_000));
+        let last = put(&mut board, (1_100_000, 1_100_000), (2_100_000, 1_100_000));
+        let mut soft = vec![first, link, second, last];
+        prune_dangling(&mut board, &mut soft);
+        assert!(board.item(link).is_some(), "the link carries the joint at full width");
+        assert!(narrow_joints(&board, &soft).is_empty());
+    }
+
+    #[test]
+    fn a_joint_of_overlapping_round_ends_is_found_and_mended_onto_the_other_track() {
+        let mut board = empty_board();
+        pad_at(&mut board, 0, 0);
+        pad_at(&mut board, 1_100_000, 1_100_000);
+        let wide = |a, b| Item { shape: Shape::Capsule { a, b, r: 75_000 }, ..seg(a, b) };
+        let first = board.insert(wide(Point::new(0, 0), Point::new(1_000_000, 0)));
+        // Its end one diagonal 0.1 mm grid step from the first's: 0.141 mm apart, 0.05 mm wide.
+        let second = board.insert(wide(Point::new(1_100_000, 100_000), Point::new(1_100_000, 1_100_000)));
+        let mut laid = vec![first, second];
+        let found = narrow_joints(&board, &laid);
+        assert_eq!(found.len(), 2, "each end overlaps the other's: {found:?}");
+        assert!(found.iter().all(|j| j.width < 0.75 * j.full), "{found:?}");
+        assert!(board::joined(&board, first, second), "KiCad counts it joined all the same");
+        assert_eq!(mend_joints(&mut board, &mut laid), 1, "one piece mends both ends");
+        assert!(narrow_joints(&board, &laid).is_empty());
         assert!(board::connectivity(&board).airlines.is_empty());
     }
 

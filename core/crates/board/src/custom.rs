@@ -18,9 +18,9 @@ use crate::geom::{nm, Nm};
 pub const APPLIED: [&str; 10] = ["clearance", "hole_clearance", "hole_to_hole", "edge_clearance", "physical_hole_clearance", "track_width", "disallow", "hole_size", "via_diameter", "annular_width"];
 
 /// Constraints the router checks once it has routed and reports, and keeps to in part: a
-/// `via_count` of 0 gets its net no vias, and the via pass trades no via for track length a
-/// `length` maximum cannot spare.
-pub const REPORTED: [&str; 2] = ["length", "via_count"];
+/// `via_count` of 0 gets its net no vias, the via pass trades no via for track length a
+/// `length` maximum cannot spare, and a `connection_width` holds where tracks join.
+pub const REPORTED: [&str; 3] = ["length", "via_count", "connection_width"];
 
 /// Constraints on things the router neither lays nor moves: KiCad checks them as before.
 const ELSEWHERE: [&str; 9] = ["silk_clearance", "text_height", "text_thickness", "courtyard_clearance", "assertion", "solder_mask_expansion", "solder_paste_abs_margin", "solder_paste_rel_margin", "creepage"];
@@ -107,6 +107,21 @@ impl Board {
         let class = self.class_names.get(net as usize).map_or("", String::as_str);
         (0..self.layers.len())
             .map(|l| self.rule_min("track_width", &Thing::New { board: self, via: false, net: Some(net), class, width: 0, drill: 0, layer: Some(l), area: Area::Unknown }, None, l, floor))
+            .max()
+            .unwrap_or(floor)
+    }
+
+    /// How narrow `net`'s copper may be where its tracks join: its narrowest track
+    /// ([`Board::min_track_width_of`]), or the board's minimum connection width or a custom
+    /// rule's `connection_width` for the net where that is wider.
+    pub fn min_joint_of(&self, net: u32) -> Nm {
+        let floor = self.min_track_width_of(net).max(nm(self.rules.min_connection));
+        if !self.custom.has("connection_width") {
+            return floor;
+        }
+        let class = self.class_names.get(net as usize).map_or("", String::as_str);
+        (0..self.layers.len())
+            .map(|l| self.rule_min("connection_width", &Thing::New { board: self, via: false, net: Some(net), class, width: 0, drill: 0, layer: Some(l), area: Area::Unknown }, None, l, floor))
             .max()
             .unwrap_or(floor)
     }

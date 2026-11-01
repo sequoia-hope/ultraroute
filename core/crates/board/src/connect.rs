@@ -107,6 +107,58 @@ pub fn joined(board: &Board, a: ItemId, b: ItemId) -> bool {
     reaches(x, a, y) || reaches(y, b, x)
 }
 
+/// A joint narrower than this share of the narrower track's width is a neck, not a joint.
+pub const FULL_JOINT: f64 = 0.98;
+
+/// How wide the copper is where the round end at `p` (radius `r1`) of one track reaches the
+/// track `q0`–`q1` (radius `r2`), in nm: full width when `p` lies inside it, else the lens two
+/// round ends make or the chord a side's edge cuts, however KiCad counts them joined. `None`
+/// when they do not overlap.
+pub fn end_neck(p: Point, r1: f64, q0: Point, q1: Point, r2: f64) -> Option<f64> {
+    let full = 2.0 * r1.min(r2);
+    let d = crate::geom::point_segment(p, q0, q1);
+    if d <= r2 {
+        return Some(full);
+    }
+    if d >= r1 + r2 {
+        return None;
+    }
+    let half = if p.distance(q0).min(p.distance(q1)) <= d + 0.5 {
+        let along = (d * d + r1 * r1 - r2 * r2) / (2.0 * d);
+        (r1 * r1 - along * along).max(0.0).sqrt()
+    } else {
+        (r1 * r1 - (d - r2) * (d - r2)).max(0.0).sqrt()
+    };
+    Some((2.0 * half).min(full))
+}
+
+/// The widest joint between two tracks of a net through either's round ends ([`end_neck`]).
+/// `None` for anything not two tracks on a shared layer, or tracks that do not meet.
+pub fn joint_neck(board: &Board, a: ItemId, b: ItemId) -> Option<f64> {
+    let (Some(x), Some(y)) = (board.item(a), board.item(b)) else { return None };
+    let (Kind::Track, Kind::Track) = (&x.kind, &y.kind) else { return None };
+    let (Shape::Capsule { a: xa, b: xb, r: xr }, Shape::Capsule { a: ya, b: yb, r: yr }) = (&x.shape, &y.shape) else { return None };
+    if x.layers & y.layers == 0 {
+        return None;
+    }
+    let (xr, yr) = (*xr as f64, *yr as f64);
+    [end_neck(*xa, xr, *ya, *yb, yr), end_neck(*xb, xr, *ya, *yb, yr), end_neck(*ya, yr, *xa, *xb, xr), end_neck(*yb, yr, *xa, *xb, xr)].into_iter().flatten().reduce(f64::max)
+}
+
+/// [`joined`], and through copper as wide as the narrower piece: two tracks whose round ends only
+/// overlap are joined for KiCad but by a neck the fab may etch through.
+pub fn firmly_joined(board: &Board, a: ItemId, b: ItemId) -> bool {
+    if !joined(board, a, b) {
+        return false;
+    }
+    let (Some(x), Some(y)) = (board.item(a), board.item(b)) else { return false };
+    match (&x.shape, &y.shape, joint_neck(board, a, b)) {
+        (Shape::Capsule { r: xr, .. }, Shape::Capsule { r: yr, .. }, Some(neck)) => neck >= FULL_JOINT * 2.0 * (*xr).min(*yr) as f64,
+        (_, _, None) if x.kind == Kind::Track && y.kind == Kind::Track => false,
+        _ => true,
+    }
+}
+
 pub fn connectivity(board: &Board) -> Connectivity {
     joined_copper(board, true, None)
 }

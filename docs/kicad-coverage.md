@@ -32,7 +32,12 @@ The checker (`board/src/check.rs`) and the grid (`grid/src/grid.rs`) ask the sam
 each pair, edge clearance per edge primitive, track widths, the router's via sizes (`hole_size`,
 `via_diameter`, `annular_width`), and `disallow` by net, class, layer and named area (zones and
 rule areas by name, `intersectsArea`, `insideArea`, `enclosedByArea`). `length` and `via_count`
-maximums are checked after routing and reported as findings of kind `length`. A rule whose
+maximums are checked after routing and reported as findings of kind `length`. Where two of the
+router's tracks join, the copper is held to the net's narrowest track, or the board's minimum
+connection width (`min_connection`) or a `connection_width` rule where wider: KiCad counts tracks
+joined wherever their round ends overlap at all, so cleanup takes out no piece that would leave
+such a joint, and before writing each one left gets a piece onto the other track's centre line;
+what cannot be mended is a finding of kind `joint`, an error under that width. A rule whose
 constraints the router does not keep is a warning naming them, and every warning is a finding
 of kind `rule` or `board` in `--report`.
 
