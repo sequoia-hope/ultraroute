@@ -350,7 +350,7 @@ pub fn mend_joints(board: &mut Board, laid: &mut Vec<ItemId>) -> usize {
         if foot == joint.at {
             continue;
         }
-        let least = (board.min_track_width_of(track.net) + 1) / 2;
+        let least = (board.min_joint_of(track.net) + 1) / 2;
         for r in [*r, least] {
             if (2 * r) as f64 <= joint.width {
                 break;
