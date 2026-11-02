@@ -59,11 +59,15 @@ pub(crate) fn chains(board: &Board, soft: &HashSet<ItemId>) -> Vec<Chain> {
         if at.get(key).map_or(0, Vec::len) != 2 || ends_at.get(&(key.0, key.1, key.3)).copied().unwrap_or(0) != 2 {
             return true;
         }
-        let (layers, _, _, p) = *key;
+        let (layers, net, _, p) = *key;
         let probe = board::BBox::of([p]);
+        // A kept pour of the chain's own net under the point fixes nothing: the chain lies in it
+        // whichever way it bends, and straightening keeps what it joined (easy2350's +3V3 into
+        // U1, a staircase inside a protected strip, every step held as a junction).
+        let own_pour = |o: &Item| matches!(o.kind, Kind::Pour { .. }) && o.net == net;
         (0..board.layers.len()).filter(|l| layers & (1 << l) != 0).any(|l| {
             board.near(l, probe).into_iter().any(|other| {
-                !soft.contains(&other) && board.item(other).is_some_and(|o| o.is_copper() && o.shape.contains(p) && !o.refilled())
+                !soft.contains(&other) && board.item(other).is_some_and(|o| o.is_copper() && o.shape.contains(p) && !o.refilled() && !own_pour(o))
                     || board.item(other).is_some_and(|o| matches!(o.kind, Kind::Via) && o.shape.contains(p))
             })
         })
@@ -461,12 +465,17 @@ pub fn grazes(board: &Board, laid: &[ItemId]) -> Vec<Graze> {
                 }
                 _ => continue,
             };
-            // Inside a via's or pad's copper the two are joined by it at full width already:
-            // no neck, and a bridge there only piles copper on copper (easy2350's USB_DM_C, a
-            // staircase inside its via's land bridged step to step).
+            // Inside a via's, pad's or kept pour's copper the two are joined by it at full width
+            // already: no neck, and a bridge there only piles copper on copper (easy2350's
+            // USB_DM_C, a staircase inside its via's land bridged step to step; its +3V3 into U1,
+            // inside a protected strip, bridged at 0.09 mm). A pour the refill redraws does not count.
             let covered = || {
                 board.near(layer, board::BBox::of([from, to])).into_iter().filter_map(|c| board.item(c)).any(|c| {
-                    matches!(c.kind, Kind::Via | Kind::Pad { .. }) && c.net == item.net && c.on(layer) && c.shape.contains(from) && c.shape.contains(to)
+                    matches!(c.kind, Kind::Via | Kind::Pad { .. } | Kind::Pour { kept: true, .. })
+                        && c.net == item.net
+                        && c.on(layer)
+                        && c.shape.contains(from)
+                        && c.shape.contains(to)
                 })
             };
             if overlap > 0.0 && overlap < full && !bridged(board, layer, id, item, other, o) && !covered() {
@@ -1605,6 +1614,15 @@ mod tests {
         let mut board = empty_board();
         let laid = [t(&mut board, (0, 0), (1_000_000, 0)), t(&mut board, (1_000_000, 0), (2_000_000, 500_000)), t(&mut board, (500_000, -500_000), (500_000, 500_000))];
         assert!(grazes(&board, &laid).is_empty(), "{:?}", grazes(&board, &laid));
+        // Inside a kept pour of their net (easy2350's protected +3V3 strip), the pour joins them:
+        // no graze. A pour the refill redraws still leaves one.
+        for (kept, want) in [(true, 0), (false, 1)] {
+            let mut board = empty_board();
+            let laid = [t(&mut board, (0, 0), (2_000_000, 0)), t(&mut board, (0, 197_000), (2_000_000, 197_000))];
+            let square = vec![Point::new(-500_000, -500_000), Point::new(2_500_000, -500_000), Point::new(2_500_000, 700_000), Point::new(-500_000, 700_000)];
+            board.insert(Item { kind: Kind::Pour { zone: 0, kept }, net: 1, layers: 1, shape: Shape::Polygon(square), hole: None, locked: true, span: None });
+            assert_eq!(grazes(&board, &laid).len(), want, "kept {kept}");
+        }
     }
 
     #[test]
