@@ -30,6 +30,9 @@ const END_RINGS: [(Nm, Nm); 5] = [
     (1_600_000, 2_500_000),
     (2_500_000, 3_400_000),
 ];
+/// A run this short or shorter may be laid as two matched tracks on one layer with no vias, when
+/// that scores better than any coupled run.
+const LONGEST_MATCHED: Nm = 6_000_000;
 /// A coupled run shorter than this is not worth laying.
 const SHORTEST_COUPLED: f64 = 500_000.0;
 /// What a paired layer change costs in search length, and what each paired body via vs uncoupled
@@ -94,8 +97,12 @@ pub struct PairStats {
     /// Runs between pin pairs worth coupling, and how many were laid.
     pub runs: usize,
     pub coupled: usize,
+    /// Runs laid as two matched tracks on one layer, uncoupled, as too short or crowded to couple.
+    pub matched: usize,
     /// Length of the coupled runs, along their centrelines.
     pub coupled_mm: f64,
+    /// Length of the coupled runs' tracks, pads to pads, averaged over the two nets.
+    pub run_mm: f64,
     pub laid: Vec<ItemId>,
 }
 
@@ -407,6 +414,60 @@ fn items_track_len(board: &Board, ids: &[ItemId]) -> f64 {
         .sum()
 }
 
+fn net_track_len(board: &Board, ids: &[ItemId], net: u32) -> f64 {
+    let ours: Vec<ItemId> = ids.iter().copied().filter(|&id| board.item(id).is_some_and(|it| it.net == net)).collect();
+    items_track_len(board, &ours)
+}
+
+fn lock(board: &mut Board, ids: &[ItemId]) {
+    for &id in ids {
+        if let Some(mut it) = board.remove(id) {
+            it.locked = true;
+            board.restore(id, it);
+        }
+    }
+}
+
+/// `end` and the pin pairs it was given, with each other pairing of a positive and a negative pad
+/// on its footprint no farther apart than its own: on a connector with duplicated pins (USB-C's
+/// A6/B6 and A7/B7) the neighbours a run attaches to decide whether its tracks must cross.
+fn with_sibling_pairings(board: &Board, pair: &Pair, end: PinPair, mut cands: Vec<PinPair>) -> Vec<PinPair> {
+    let Some(fp) = pad_footprint(board, end.p) else { return cands };
+    let span = 1.5 * centre(board, end.p).distance(centre(board, end.n));
+    let pads = |net: u32| -> Vec<ItemId> {
+        board
+            .items()
+            .filter(|(_, it)| it.net == net && it.layers != 0 && matches!(it.kind, Kind::Pad { footprint, .. } if footprint == fp))
+            .map(|(id, _)| id)
+            .collect()
+    };
+    let ns = pads(pair.n);
+    for p in pads(pair.p) {
+        for &n in &ns {
+            let (cp, cn) = (centre(board, p), centre(board, n));
+            if cp.distance(cn) > span || cands.iter().any(|c| c.p == p && c.n == n) {
+                continue;
+            }
+            let layers = board.item(p).map_or(0, |it| it.layers) & board.item(n).map_or(0, |it| it.layers);
+            cands.push(PinPair { p, n, mid: Point::new((cp.x + cn.x) / 2, (cp.y + cn.y) / 2), layers });
+        }
+    }
+    cands
+}
+
+/// The score of laying the run from `a` to `b` as two matched tracks on one layer with no vias,
+/// as `evaluate_stretches` scores a run that is all legs; the board is left as it was. `None` too
+/// when either net already joins the two ends, as no run is laid there to score.
+fn matched_score(board: &mut Board, pair: &Pair, profile: &Profile, a: PinPair, b: PinPair, pours_block: bool) -> Option<f64> {
+    if net_reaches(board, a.p, b.p, pours_block) || net_reaches(board, a.n, b.n, pours_block) {
+        return None;
+    }
+    let ids = route_matched_bridge(board, pair, profile, a, b, false, pours_block)?;
+    let (lp, ln) = (net_track_len(board, &ids, pair.p), net_track_len(board, &ids, pair.n));
+    discard_all(board, ids);
+    Some(2.5 * 0.5 * (lp + ln) + 3.0 * (lp - ln).abs())
+}
+
 fn items_via_count(board: &Board, ids: &[ItemId]) -> usize {
     ids.iter().filter(|&&id| board.item(id).is_some_and(|it| it.kind == Kind::Via)).count()
 }
@@ -544,8 +605,10 @@ pub fn route_pairs_watch(board: &mut Board, options: &PairOptions, watch: &mut d
                 .copied()
                 .filter(|&e| pad_footprint(board, e.p) == pad_footprint(board, b.p) && ends_joined(&conn, b, e))
                 .collect();
-            let a_cands = if a_alts.is_empty() { vec![a] } else { a_alts };
-            let b_cands = if b_alts.is_empty() { vec![b] } else { b_alts };
+            // On a connector with duplicated pins not yet jumpered, any neighbouring pads of the
+            // two nets may be the end, whichever polarity suits the far end.
+            let a_cands = with_sibling_pairings(board, &pair, a, if a_alts.is_empty() { vec![a] } else { a_alts });
+            let b_cands = with_sibling_pairings(board, &pair, b, if b_alts.is_empty() { vec![b] } else { b_alts });
 
             let mut best: Option<CoupledCandidate> = None;
             let out_of_time = || options.deadline.expired();
@@ -555,11 +618,55 @@ pub fn route_pairs_watch(board: &mut Board, options: &PairOptions, watch: &mut d
                     if out_of_time() {
                         break;
                     }
-                    if let Some(cand) = couple_end_to_end(board, options, &pair, &profile, ac, bc) {
+                if let Some(cand) = couple_end_to_end(board, options, &pair, &profile, ac, bc) {
                         if best.as_ref().is_none_or(|prev| cand.score < prev.score) {
                             best = Some(cand);
                         }
                     }
+                }
+            }
+            // A short run may do better as two matched tracks on one layer, no vias: a coupled run
+            // that has to change layers to get past the pads it starts between buys little. One
+            // that needs no vias stays coupled, however close the scores.
+            let mut matched: Option<(f64, PinPair, PinPair)> = None;
+            if a.mid.distance(b.mid) <= LONGEST_MATCHED as f64 && best.as_ref().is_none_or(|c| c.vias > 0) {
+                for &ac in &a_cands {
+                    for &bc in &b_cands {
+                        if out_of_time() {
+                            break;
+                        }
+                        if let Some(score) = matched_score(board, &pair, &profile, ac, bc, options.pours_block) {
+                            if matched.is_none_or(|(prev, _, _)| score < prev) {
+                                matched = Some((score, ac, bc));
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some((score, ac, bc)) = matched.filter(|m| best.as_ref().is_none_or(|c| m.0 < c.score)) {
+                if let Some(laid) = route_matched_bridge(board, &pair, &profile, ac, bc, false, options.pours_block) {
+                    lock(board, &laid);
+                    let (lp, ln) = (net_track_len(board, &laid, pair.p), net_track_len(board, &laid, pair.n));
+                    tell(
+                        &options.log,
+                        "pairs",
+                        || {
+                            format!(
+                                "matched {} and {} on one layer, uncoupled, {:.2} and {:.2} mm with no vias (scores {:.1} against coupling's {})",
+                                board.net_name(pair.p),
+                                board.net_name(pair.n),
+                                lp * 1e-6,
+                                ln * 1e-6,
+                                score * 1e-6,
+                                best.as_ref().map_or("none".to_string(), |c| format!("{:.1}", c.score * 1e-6))
+                            )
+                        },
+                        None,
+                    );
+                    stats.matched += 1;
+                    stats.laid.extend(laid.iter().copied());
+                    watch(board, &PairRun { pair: &pair, from: a.mid, to: b.mid, layer: None, centreline: &[], laid: &laid });
+                    continue;
                 }
             }
             if let Some(chosen) = best {
@@ -568,25 +675,28 @@ pub fn route_pairs_watch(board: &mut Board, options: &PairOptions, watch: &mut d
                     let layer_count = committed.stretch_layers;
                     let paired_vias = committed.paired_vias;
                     let coupled_len = committed.coupled_len;
+                    let run_len = 0.5 * (net_track_len(board, &committed.laid, pair.p) + net_track_len(board, &committed.laid, pair.n));
                     tell(
                         &options.log,
                         "pairs",
                         || {
                             if layer_count <= 1 {
                                 format!(
-                                    "coupled {} and {} on {} for {:.2} mm",
+                                    "coupled {} and {} on {} for {:.2} of {:.2} mm",
                                     board.net_name(pair.p),
                                     board.net_name(pair.n),
                                     board.layers[layer],
-                                    coupled_len * 1e-6
+                                    coupled_len * 1e-6,
+                                    run_len * 1e-6
                                 )
                             } else {
                                 format!(
-                                    "coupled {} and {} across {} layers for {:.2} mm ({} paired vias)",
+                                    "coupled {} and {} across {} layers for {:.2} of {:.2} mm ({} paired vias)",
                                     board.net_name(pair.p),
                                     board.net_name(pair.n),
                                     layer_count,
                                     coupled_len * 1e-6,
+                                    run_len * 1e-6,
                                     paired_vias
                                 )
                             }
@@ -595,6 +705,7 @@ pub fn route_pairs_watch(board: &mut Board, options: &PairOptions, watch: &mut d
                     );
                     stats.coupled += 1;
                     stats.coupled_mm += coupled_len * 1e-6;
+                    stats.run_mm += run_len * 1e-6;
                     stats.laid.extend(committed.laid.iter().copied());
                     watch(
                         board,
@@ -623,6 +734,7 @@ pub fn route_pairs_watch(board: &mut Board, options: &PairOptions, watch: &mut d
                 );
                 stats.coupled += 1;
                 stats.coupled_mm += laid.1 * 1e-6;
+                stats.run_mm += 0.5 * items_track_len(board, &laid.0) * 1e-6;
                 stats.laid.extend(laid.0.iter().copied());
                 watch(board, &PairRun { pair: &pair, from: a.mid, to: b.mid, layer: Some(layer), centreline: &laid.2, laid: &laid.0 });
                 continue;
@@ -638,13 +750,8 @@ pub fn route_pairs_watch(board: &mut Board, options: &PairOptions, watch: &mut d
             if ends_joined(&conn, a, b) {
                 continue;
             }
-            if let Some(bridged) = route_matched_bridge(board, &pair, &profile, a, b, options.pours_block) {
-                for &id in &bridged {
-                    if let Some(mut it) = board.remove(id) {
-                        it.locked = true;
-                        board.restore(id, it);
-                    }
-                }
+            if let Some(bridged) = route_matched_bridge(board, &pair, &profile, a, b, true, options.pours_block) {
+                lock(board, &bridged);
                 stats.laid.extend(bridged);
                 watch(board, &PairRun { pair: &pair, from: a.mid, to: b.mid, layer: None, centreline: &[], laid: &[] });
             }
@@ -654,7 +761,12 @@ pub fn route_pairs_watch(board: &mut Board, options: &PairOptions, watch: &mut d
         let extra = bridge_siblings(board, &pair, &profile, options.pours_block);
         stats.laid.extend(extra);
     }
-    tell(&options.log, "pairs", || format!("{} of {} pair runs coupled, {:.1} mm", stats.coupled, stats.runs, stats.coupled_mm), None);
+    tell(
+        &options.log,
+        "pairs",
+        || format!("{} of {} pair runs coupled, {:.1} of their {:.1} mm, {} matched uncoupled", stats.coupled, stats.runs, stats.coupled_mm, stats.run_mm, stats.matched),
+        None,
+    );
     stats
 }
 
@@ -667,6 +779,8 @@ struct CoupledCandidate {
     vp: Nm,
     ease_by: Nm,
     score: f64,
+    /// Its vias, paired in the body and in the legs.
+    vias: usize,
 }
 
 struct CommittedRun {
@@ -1223,6 +1337,7 @@ fn evaluate_stretches(
                         vp,
                         ease_by,
                         score,
+                        vias: body_vias + vias_a + vias_b,
                     });
                 }
                 // Once the sharpest corner-easing at this polarity and via pitch works, looser
@@ -2102,6 +2217,7 @@ fn route_matched_bridge(
     profile: &Profile,
     a: PinPair,
     b: PinPair,
+    may_via: bool,
     pours_block: bool,
 ) -> Option<Vec<ItemId>> {
     let (ap, an, bp, bn) = (centre(board, a.p), centre(board, a.n), centre(board, b.p), centre(board, b.n));
@@ -2136,7 +2252,7 @@ fn route_matched_bridge(
     }
 
     let bounds = BBox::of([ap, an, bp, bn]).grow(LEG_WINDOW);
-    for allow_vias in [false, true] {
+    for allow_vias in [false, true].into_iter().filter(|&v| may_via || !v) {
         for &r in &radii {
             let prof = Profile { half_width: r, ..profile.clone() };
             for p_first in [true, false] {
@@ -2404,6 +2520,57 @@ mod tests {
     }
 
     #[test]
+    fn a_short_run_coupling_only_through_vias_is_laid_matched_on_its_own_layer() {
+        let mut board = synthetic_board("(0 \"F.Cu\" signal) (31 \"B.Cu\" signal)", default_pair_rules());
+        // easy2350's USB-C receptacle, its pins 0.5 mm apart with the pair's pins doubled (B6 A7
+        // A6 B7), 2.4 mm above the left side of an ESD array whose pins for the pair are 1.9 mm
+        // apart with another net's pin between them.
+        let pad = |board: &mut Board, fp, num: &str, net, (x, y): (Nm, Nm), (w, h): (Nm, Nm)| {
+            let (dx, dy, r) = if w > h { ((w - h) / 2, 0, h / 2) } else { (0, (h - w) / 2, w / 2) };
+            board.insert(Item {
+                kind: Kind::Pad { footprint: fp, number: num.into(), plated: false },
+                net,
+                layers: 1,
+                shape: Shape::Capsule { a: Point::new(x - dx, y - dy), b: Point::new(x + dx, y + dy), r },
+                hole: None,
+                locked: true,
+                span: None,
+            })
+        };
+        for (k, (num, net)) in [("B5", 3), ("A8", 3), ("B6", 1), ("A7", 2), ("A6", 1), ("B7", 2), ("A5", 3), ("B8", 3)].into_iter().enumerate() {
+            pad(&mut board, 0, num, net, (8_750_000 + 500_000 * k as Nm, 7_235_000), (300_000, 1_450_000));
+        }
+        for (num, net, (x, y)) in [("1", 2, (10_062_000, 9_650_000)), ("2", 3, (10_062_000, 10_600_000)), ("3", 1, (10_062_000, 11_550_000))] {
+            pad(&mut board, 1, num, net, (x, y), (1_325_000, 600_000));
+        }
+        // Another net's copper across F.Cu between them, with a slot for each track but no room
+        // for the two coupled: coupling must go by B.Cu, through vias.
+        for (x0, x1) in [(7_000_000, 8_550_000), (9_450_000, 9_900_000), (10_800_000, 13_500_000)] {
+            board.insert(Item {
+                kind: Kind::Track,
+                net: 3,
+                layers: 1,
+                shape: Shape::Capsule { a: Point::new(x0, 8_400_000), b: Point::new(x1, 8_400_000), r: 100_000 },
+                hole: None,
+                locked: true,
+                span: None,
+            });
+        }
+
+        let stats = route_pairs(&mut board, &PairOptions::default(), &mut |_| {});
+        assert_eq!((stats.runs, stats.matched, stats.coupled), (1, 1, 0), "{stats:?}");
+        assert!(board::connectivity(&board).airlines.iter().all(|a| a.net == 3), "end-to-end connected");
+        // The run itself has none: the only via is the jumper of whichever doubled pin crosses
+        // the other's, which can't stay on F.Cu.
+        let vias = board.items().filter(|(_, it)| it.kind == Kind::Via).count();
+        assert!(vias <= 2, "{vias} vias");
+        for &id in &stats.laid {
+            assert!(board::check_item(&board, id).is_empty());
+            assert!(board.item(id).unwrap().locked);
+        }
+    }
+
+    #[test]
     fn coupled_run_changes_layers_through_paired_vias_and_respects_via_gap() {
         let mut board = synthetic_board("(0 \"F.Cu\" signal) (31 \"B.Cu\" signal)", default_pair_rules());
         // Source pads on F.Cu, destination pads on B.Cu, with an F.Cu obstacle wall across the
@@ -2523,9 +2690,9 @@ mod tests {
         let names: Vec<(&str, &str)> = pairs.iter().map(|p| (board.net_name(p.p), board.net_name(p.n))).collect();
         assert_eq!(names, [("USB_C_DP", "USB_C_DN"), ("USB_DP", "USB_DM")]);
         let stats = route_pairs(&mut board, &PairOptions::default(), &mut |_| {});
-        // Every run worth coupling was coupled, and each pair had at least one. How the runs are
-        // counted is the pair stage's business; that no pair is left open is checked below.
-        assert!(stats.runs >= pairs.len() && stats.coupled == stats.runs, "{stats:?}");
+        // Every run worth coupling was coupled or, too short to, matched. How the runs are counted
+        // is the pair stage's business; that no pair is left open is checked below.
+        assert!(stats.runs >= pairs.len() && stats.coupled + stats.matched == stats.runs, "{stats:?}");
         for id in &stats.laid {
             assert!(legal_pair_item(&board, *id, false));
         }
@@ -2545,7 +2712,7 @@ mod tests {
         let pairs = diff_pairs(&board);
         assert_eq!(pairs.len(), 2);
         let stats = route_pairs(&mut board, &PairOptions::default(), &mut |_| {});
-        assert!(stats.runs >= pairs.len() && stats.coupled == stats.runs, "{stats:?}");
+        assert!(stats.runs >= pairs.len() && stats.coupled + stats.matched == stats.runs, "{stats:?}");
         for id in &stats.laid {
             assert!(legal_pair_item(&board, *id, false));
         }
