@@ -38,7 +38,7 @@ pub use stages::{Ledger, Stage, StageCtx};
 pub use stats::{Finding, RunStats, StageStats};
 pub use watch::{Cleaned, Flow, StageEvent, Unwatched, Watch};
 
-pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--negotiate-jacobi] [--negotiate-reroute-all] [--diff-pairs] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner|same] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--negotiate] [--rip-up] [--nudge] [--tighten] [--arcs MM] [--via-cost MM[,OPEN_MM]] [--gpu] \
+pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--plane-via-reach MM] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--negotiate-jacobi] [--negotiate-reroute-all] [--diff-pairs] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner|same] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--negotiate] [--rip-up] [--nudge] [--tighten] [--arcs MM] [--via-cost MM[,OPEN_MM]] [--gpu] \
 [--timeout SECONDS] [--cell MM] [--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--uuid-seed N] [--adopt] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
 [--recipe default|bench|minimal] [--live PATH|-] [--live-fps N] [--live-step MS] [--blame] [--stats|--report FILE] [-h|--help]
 --place takes millimetres with y pointing up: give KiCad's y negated (KiCad y 127.5 is -127.5).";
@@ -125,6 +125,9 @@ pub struct Args {
     pub pour_cost: Option<f64>,
     /// Take inner layers that one net's pour all but fills as planes, as --planes would.
     pub auto_planes: bool,
+    /// Every pad of a plane's net gets a via of its own within this many millimetres, edge to
+    /// edge, laid before routing and kept; a pad with no room for one is reported.
+    pub plane_via_reach: Option<f64>,
     /// Treat the board's unlocked tracks and vias as the router's own: free to rip, move and
     /// rewrite, as if this run had laid them.
     pub adopt: bool,
@@ -234,6 +237,7 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
         regions: None,
         pour_cost: None,
         auto_planes: false,
+        plane_via_reach: None,
         adopt: false,
         verbose: false,
         live_step: 0,
@@ -366,6 +370,13 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
                 a.via_avoid.push([x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1)]);
             }
             "--auto-planes" => a.auto_planes = true,
+            "--plane-via-reach" => {
+                let r: f64 = value()?.parse().map_err(|e| format!("--plane-via-reach: {e}"))?;
+                if !(r > 0.0 && r.is_finite()) {
+                    return Err("--plane-via-reach: a positive distance in millimetres".into());
+                }
+                a.plane_via_reach = Some(r);
+            }
             "--regions" => a.regions = Some(value()?),
             "--pour-cost" => a.pour_cost = Some(value()?.parse().map_err(|e| format!("--pour-cost: {e}"))?),
             "--via-avoid-cost" => a.via_avoid_cost = Some(value()?.parse().map_err(|e| format!("--via-avoid-cost: {e}"))?),

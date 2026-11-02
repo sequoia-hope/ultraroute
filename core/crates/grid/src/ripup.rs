@@ -310,7 +310,7 @@ pub fn rip_up_watch(
             tell(&options.log, "ripping up", || format!("{net_name}: ripped {ripped} pieces, rerouting them"), None);
             let mut again = route_open(board, solver, &reroute, &mut |_| {}).laid;
             if !plane_nets.is_empty() {
-                again.extend(crate::planes::join_planes(board, &None, &options.deadline).laid);
+                again.extend(crate::planes::join_planes(board, &None, &options.deadline, None).laid);
             }
             let mut score_after = score(board);
             // One after another, the first rerouted may take the only lane of the next. The
@@ -345,7 +345,7 @@ pub fn rip_up_watch(
                 again.extend(negotiated.laid);
                 again.extend(route_open(board, solver, &reroute, &mut |_| {}).laid);
                 if !plane_nets.is_empty() {
-                    again.extend(crate::planes::join_planes(board, &None, &options.deadline).laid);
+                    again.extend(crate::planes::join_planes(board, &None, &options.deadline, None).laid);
                 }
                 score_after = score(board);
             }

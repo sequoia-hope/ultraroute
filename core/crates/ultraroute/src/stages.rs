@@ -23,8 +23,8 @@ pub struct Ledger {
     pub fanout: Vec<ItemId>,
     /// The differential pairs' copper, locked through the single-ended stages.
     pub pairs: Vec<ItemId>,
-    /// Vias stitching the ends of strips a zone keeps as laid, locked through every stage and
-    /// written as they stand.
+    /// Vias stitching the ends of strips a zone keeps as laid, and plane pads' own vias with
+    /// their tracks: locked through every stage and written as they stand.
     pub stitches: Vec<ItemId>,
     /// The board file's spans of what was taken out.
     pub removed: Vec<Span>,
@@ -236,12 +236,18 @@ impl Stage for Planes {
     }
 
     fn run(&self, ctx: &mut StageCtx) -> Value {
-        let p = grid::join_planes(ctx.board, ctx.log, &ctx.deadline());
+        let reach = ctx.args.plane_via_reach.map(|mm| board::nm(mm * 1e-3));
+        let p = grid::join_planes(ctx.board, ctx.log, &ctx.deadline(), reach);
+        if let Some(mm) = ctx.args.plane_via_reach {
+            ctx.say("planes", format!("{} of {} plane pads have a via of their own within {mm} mm", p.owned, p.own));
+            eprintln!("planes: {} of {} plane pads with a via of their own within {mm} mm, {} laid", p.owned, p.own, p.own_laid.iter().filter(|&&id| ctx.board.item(id).is_some_and(|it| it.kind == board::Kind::Via)).count());
+        }
         ctx.say("planes", format!("{} of {} pads joined to their planes by a via", p.joined, p.pads));
         eprintln!("planes: {} of {} pads off their planes joined, {:.1} s", p.joined, p.pads, ctx.elapsed());
         ctx.watch.step(ctx.board);
         ctx.ledger.laid.extend(p.laid);
-        json!({"pads": p.pads, "joined": p.joined})
+        ctx.ledger.stitches.extend(p.own_laid);
+        json!({"pads": p.pads, "joined": p.joined, "own": p.own, "owned": p.owned})
     }
 }
 
@@ -975,6 +981,17 @@ impl Stage for Write {
             );
             eprintln!("{line}");
             ctx.stats.findings.push(Finding { severity, kind: "joint", message: line, refs: vec![pad], nets: vec![net], ends: None });
+        }
+        // A plane pad with no via of its own within the reach asked.
+        if let Some(mm) = a.plane_via_reach {
+            for pv in grid::planes::pad_vias(ctx.board, board::nm(mm * 1e-3)).into_iter().filter(|pv| pv.via.is_none()) {
+                let board = &*ctx.board;
+                let (pad, net) = (grid::report::item_name(board, pv.pad), board.net_name(board.item(pv.pad).map_or(0, |it| it.net)).to_string());
+                let nearest = if pv.nearest.is_finite() { format!("its nearest {:.2} mm away", pv.nearest * 1e-6) } else { "none of its copper's near".to_string() };
+                let line = format!("plane pad without its own via: {pad} ({net}) has no via of its own within {mm} mm, {nearest}");
+                eprintln!("{line}");
+                ctx.stats.findings.push(Finding { severity: "warning", kind: "plane-via", message: line, refs: vec![pad], nets: vec![net], ends: None });
+            }
         }
         let (board, ledger) = (&mut *ctx.board, &mut *ctx.ledger);
         let replace = crate::moved_parts(board, &ledger.original_at, ctx.text);

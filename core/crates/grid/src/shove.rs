@@ -435,7 +435,7 @@ fn settle(board: &mut Board, soft: &mut Vec<ItemId>, pours_block: bool, plane_ne
     board::probe::mark("settle/prune", board);
     if !plane_nets.is_empty() {
         // A tidy-up finishes what it starts: the planes' joins are part of the board it leaves.
-        soft.extend(crate::planes::join_planes(board, &None, &Default::default()).laid);
+        soft.extend(crate::planes::join_planes(board, &None, &Default::default(), None).laid);
         board::probe::mark("settle/planes", board);
     }
     spans
@@ -622,7 +622,7 @@ fn plough_round(
         round.routed = true;
     }
     if !round.ripped_items.is_empty() && !cache.plane_nets.is_empty() {
-        soft.extend(crate::planes::join_planes(board, &None, &options.deadline).laid);
+        soft.extend(crate::planes::join_planes(board, &None, &options.deadline, None).laid);
     }
     if round.routed {
         return round;
