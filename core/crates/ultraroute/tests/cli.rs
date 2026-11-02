@@ -57,3 +57,17 @@ fn the_readme_names_every_flag() {
     let missing: Vec<&&str> = usage.iter().filter(|f| !named.contains(*f)).collect();
     assert!(missing.is_empty(), "core/README.md does not name {missing:?}");
 }
+
+#[test]
+fn scale_and_compact_help_and_ratio_factors_work() {
+    let s_help = Command::new(env!("CARGO_BIN_EXE_ultraroute")).args(["scale", "--help"]).output().unwrap();
+    assert!(s_help.status.success());
+    assert_eq!(String::from_utf8_lossy(&s_help.stdout).trim_end(), ultraroute::SCALE_USAGE);
+
+    let c_help = Command::new(env!("CARGO_BIN_EXE_ultraroute")).args(["compact", "-h"]).output().unwrap();
+    assert!(c_help.status.success());
+    assert_eq!(String::from_utf8_lossy(&c_help.stdout).trim_end(), ultraroute::COMPACT_USAGE);
+
+    assert!((ultraroute::parse_factor("1/1.1").unwrap() - (1.0 / 1.1)).abs() < 1e-12);
+    assert!((ultraroute::parse_factor("0.85").unwrap() - 0.85).abs() < 1e-12);
+}

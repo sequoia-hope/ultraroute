@@ -529,3 +529,74 @@ pub fn edge_distance(board: &Board, p: Point) -> f64 {
         .flat_map(|poly| (0..poly.len()).map(move |i| point_segment(p, poly[i], poly[(i + 1) % poly.len()])))
         .fold(f64::INFINITY, f64::min)
 }
+
+impl Board {
+    /// Whether a net tie lets two items touch without a clearance violation.
+    pub fn is_tied(&self, a: ItemId, item: &Item, b: ItemId, other: &Item) -> bool {
+        tied(self, a, item, b, other)
+    }
+
+    /// How far `copper` (`copper_id`) must keep from the drilled hole of `hole` (`hole_id`),
+    /// custom rules included; 0 where the rule does not hold between them.
+    pub fn hole_clearance(&self, hole_id: ItemId, hole: &Item, copper_id: ItemId, copper: &Item) -> Nm {
+        if hole_id == copper_id || !holds_clear(hole, copper) || same_pad(hole, copper) {
+            return 0;
+        }
+        hole_required(self, &self.limits, hole_id, hole, copper_id, copper).0
+    }
+
+    /// How far the drilled holes of `a` (`a_id`) and `b` (`b_id`) must keep apart, custom rules
+    /// included; 0 where both belong to the same pad.
+    pub fn hole_to_hole_clearance(&self, a_id: ItemId, a: &Item, b_id: ItemId, b: &Item) -> Nm {
+        if a_id == b_id || same_pad(a, b) || a.hole.is_none() || b.hole.is_none() {
+            return 0;
+        }
+        self.limits.hole_to_hole(self, a_id, a, b_id, b)
+    }
+
+    /// Upper bound on how far any rule on this board reaches around an item.
+    pub fn max_rule_reach(&self) -> Nm {
+        self.limits.max_clearance.max(self.limits.hole_reach).max(self.limits.edge)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hole_clearances_follow_the_rules_and_let_joined_tracks_in() {
+        let text = "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal)) (net 0 \"\") (net 1 \"A\") (net 2 \"B\")
+            (footprint \"P\" (layer \"F.Cu\") (uuid \"f1\") (at 5 5)
+                (pad \"1\" thru_hole circle (at 0 0) (size 1.2 1.2) (drill 0.6) (layers \"*.Cu\") (net 1 \"A\") (uuid \"p1\"))))";
+        let (pcb, copper) = kicad_pcb::parse_board(text).unwrap();
+        let mut rules = kicad_pcb::Rules::parse("{}").unwrap();
+        rules.apply_custom(
+            "(version 1)\n(rule \"pth\" (condition \"A.Pad_Type == 'Through-hole'\") (constraint hole_clearance (min 0.28mm)))\n",
+            "test.kicad_dru",
+        );
+        let mut board = Board::new(&pcb, &copper, rules);
+        let pad_id = board.items().find(|(_, it)| matches!(it.kind, Kind::Pad { .. })).unwrap().0;
+        let other_track = board.insert(Item {
+            kind: Kind::Track,
+            net: 2,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(6_000_000, 5_000_000), b: Point::new(7_000_000, 5_000_000), r: 100_000 },
+            hole: None,
+            locked: false,
+            span: None,
+        });
+        let own_track = board.insert(Item {
+            kind: Kind::Track,
+            net: 1,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(5_000_000, 5_000_000), b: Point::new(7_000_000, 5_000_000), r: 100_000 },
+            hole: None,
+            locked: false,
+            span: None,
+        });
+        let pad = board.item(pad_id).unwrap();
+        assert_eq!(board.hole_clearance(pad_id, pad, other_track, board.item(other_track).unwrap()), 280_000);
+        assert_eq!(board.hole_clearance(pad_id, pad, own_track, board.item(own_track).unwrap()), 0);
+    }
+}

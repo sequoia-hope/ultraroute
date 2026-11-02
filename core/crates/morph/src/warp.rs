@@ -1,7 +1,8 @@
 //! A harmonic displacement field with rigid inclusions on a regular grid, after the rubber and
 //! pcbmorph warp fields: inside an inclusion the field is that inclusion's vector, elsewhere it
-//! is harmonic, and it falls to zero on the border of a domain reaching past the board. Copper
-//! carried by it flows smoothly around moving parts and stays put against still ones.
+//! is harmonic, and on the border of a domain reaching past the board it holds zero (or a given
+//! boundary displacement such as uniform scaling). Copper carried by it flows smoothly around
+//! moving parts and stays put against still ones.
 
 use board::{BBox, Point, Shape};
 
@@ -38,6 +39,19 @@ impl WarpField {
     pub fn add_inclusion(&mut self, shapes: &[Shape], vector: (f64, f64), with_hull: bool) {
         self.vectors.push(vector);
         self.pending.push((shapes.to_vec(), with_hull));
+    }
+
+    /// Sets the Dirichlet displacement on the domain border before [`WarpField::solve`], evaluated
+    /// at each border cell's `(x, y)` centre in nanometres.
+    pub fn set_border(&mut self, border: &dyn Fn((f64, f64)) -> (f64, f64)) {
+        let (nx, ny) = (self.nx, self.ny);
+        for j in 0..ny {
+            for i in 0..nx {
+                if i == 0 || j == 0 || i + 1 == nx || j + 1 == ny {
+                    self.u[j * nx + i] = border(self.cell_center(i, j));
+                }
+            }
+        }
     }
 
     fn claim_territory(&mut self) {
@@ -80,8 +94,9 @@ impl WarpField {
     }
 
     /// Solves for the harmonic field: owned cells hold their inclusion's vector, the domain border
-    /// holds zero, everything else is the discrete Laplace solution, by conjugate gradients on the
-    /// reduced, symmetric positive definite system.
+    /// holds zero (or what [`WarpField::set_border`] put there), and everything else is the
+    /// discrete Laplace solution, by conjugate gradients on the reduced, symmetric positive
+    /// definite system.
     pub fn solve(&mut self) {
         self.claim_territory();
         for (cell, owner) in self.owner.iter().enumerate() {
@@ -333,5 +348,28 @@ mod tests {
         field.add_inclusion(&[square(400, 500, 20), square(600, 500, 20)], (0.0, 30.0), true);
         field.solve();
         assert!((field.displacement(Point::new(500, 500)).1 - 30.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_scaled_border_reproduces_uniform_scaling_and_blends_around_rigid_parts() {
+        let bounds = BBox { min: Point::new(0, 0), max: Point::new(1000, 1000) };
+        let (cx, cy, f) = (500.0, 500.0, 1.1);
+        let mut pure = WarpField::new(bounds, 20.0, 100.0);
+        pure.set_border(&|(x, y)| ((f - 1.0) * (x - cx), (f - 1.0) * (y - cy)));
+        pure.solve();
+        for &(x, y) in &[(100, 200), (500, 500), (830, 170)] {
+            let (dx, dy) = pure.displacement(Point::new(x, y));
+            assert!((dx - (f - 1.0) * (x as f64 - cx)).abs() < 1e-3, "dx={dx}");
+            assert!((dy - (f - 1.0) * (y as f64 - cy)).abs() < 1e-3, "dy={dy}");
+        }
+
+        let mut rigid = WarpField::new(bounds, 20.0, 100.0);
+        rigid.set_border(&|(x, y)| ((f - 1.0) * (x - cx), (f - 1.0) * (y - cy)));
+        // Part centred at (200, 500) translates rigidly by (-30, 0), keeping its size.
+        rigid.add_inclusion(&[square(150, 500, 20), square(250, 500, 20)], (-30.0, 0.0), true);
+        rigid.solve();
+        assert!((rigid.displacement(Point::new(150, 500)).0 - -30.0).abs() < 1e-6);
+        assert!((rigid.displacement(Point::new(250, 500)).0 - -30.0).abs() < 1e-6);
+        assert!(rigid.displacement(Point::new(900, 500)).0 > 30.0);
     }
 }

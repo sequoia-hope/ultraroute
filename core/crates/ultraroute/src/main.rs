@@ -5,15 +5,26 @@
 //! newline-delimited JSON frames, and a line `stop` on standard input stops the run. With
 //! `--blame`, every connection still open at the end is listed with what stands in its way.
 
+use std::collections::HashSet;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use board::Board;
-use ultraroute::{fit_memory, parse, peak_memory_mb, route, Finding, Live, RunStats, USAGE};
+use serde_json::json;
+use ultraroute::{
+    fit_memory, parse, parse_compact, parse_scale, peak_memory_mb, route, Finding, Live, RunStats,
+    COMPACT_USAGE, SCALE_USAGE, USAGE,
+};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
+        Some("scale") => return run_scale(&args),
+        Some("compact") => return run_compact(&args),
+        _ => {}
+    }
     // Asked for: the flags on standard output, and success. A mistake prints them as an error.
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!("{USAGE}");
@@ -117,6 +128,207 @@ fn main() {
         std::process::exit(1);
     }
     std::process::exit(code);
+}
+
+fn warn_unknown_locks(board: &Board, locks: &[String]) -> HashSet<String> {
+    let known: HashSet<&str> = board.footprints.iter().map(|f| f.reference.as_str()).collect();
+    let mut set = HashSet::new();
+    for r in locks {
+        if !known.contains(r.as_str()) {
+            eprintln!("warning: --lock {r}: no such part");
+        } else {
+            set.insert(r.clone());
+        }
+    }
+    set
+}
+
+fn run_scale(args: &[String]) {
+    if args.iter().any(|a| a == "-h" || a == "--help") {
+        println!("{SCALE_USAGE}");
+        return;
+    }
+    let a = match parse_scale(args) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(2);
+        }
+    };
+    let started = Instant::now();
+    let (board, text) = match Board::load(a.input.as_ref()) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+    for w in board.rules.warnings.iter().chain(&board.warnings) {
+        eprintln!("warning: {w}");
+    }
+    let lock = warn_unknown_locks(&board, &a.lock);
+    let rep = match morph::scale(
+        &text,
+        board.rules,
+        &morph::ScaleOptions { factor: a.factor, lock, uuid_seed: a.uuid_seed },
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+    if let Err(e) = std::fs::write(&a.output, &rep.text) {
+        eprintln!("{}: {e}", a.output);
+        std::process::exit(1);
+    }
+    eprintln!(
+        "scale {:.4}: {:.3} x {:.3} mm -> {:.3} x {:.3} mm, {} footprints moved, {} tracks, {} vias, {:.2} s",
+        a.factor,
+        rep.before_mm[0],
+        rep.before_mm[1],
+        rep.after_mm[0],
+        rep.after_mm[1],
+        rep.moved_footprints,
+        rep.tracks,
+        rep.vias,
+        started.elapsed().as_secs_f64()
+    );
+}
+
+fn run_compact(args: &[String]) {
+    if args.iter().any(|a| a == "-h" || a == "--help") {
+        println!("{COMPACT_USAGE}");
+        return;
+    }
+    let a = match parse_compact(args) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(2);
+        }
+    };
+    let started = Instant::now();
+    let (board, text) = match Board::load(a.input.as_ref()) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+    for w in board.rules.warnings.iter().chain(&board.warnings) {
+        eprintln!("warning: {w}");
+    }
+    let lock = warn_unknown_locks(&board, &a.lock);
+    let rep = match morph::compact(
+        &text,
+        board.rules,
+        &morph::CompactOptions {
+            factor: a.factor,
+            steps: a.steps,
+            lock,
+            uuid_seed: a.uuid_seed,
+            verbose: a.verbose,
+        },
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+    let elapsed = started.elapsed().as_secs_f64();
+    if !a.verbose {
+        for s in &rep.steps {
+            let status = if s.step == 0 {
+                "base"
+            } else if s.accepted {
+                "kept"
+            } else {
+                "jam "
+            };
+            eprintln!(
+                "step {:>2}/{} [{}] factor {:.4}: {:.3} x {:.3} mm | violations {} | length {:.2} mm | vias {} | acid traps {} ({} acute, {} slots){}",
+                s.step,
+                rep.steps_requested,
+                status,
+                s.factor,
+                s.size_mm[0],
+                s.size_mm[1],
+                s.violations,
+                s.track_length_mm,
+                s.vias,
+                s.acid_traps.acute + s.acid_traps.slots,
+                s.acid_traps.acute,
+                s.acid_traps.slots,
+                s.jam.as_ref().map_or_else(String::new, |j| format!(" | {j}"))
+            );
+        }
+    }
+    let last_kept = rep.steps.iter().rev().find(|s| s.accepted).unwrap();
+    match &rep.jam {
+        None => eprintln!(
+            "compact done: reached factor {:.4} ({}/{} steps), {:.3} x {:.3} mm, {:.2} mm track, {:.2} s",
+            rep.achieved_factor,
+            rep.steps_accepted,
+            rep.steps_requested,
+            last_kept.size_mm[0],
+            last_kept.size_mm[1],
+            last_kept.track_length_mm,
+            elapsed
+        ),
+        Some(reason) => eprintln!(
+            "compact stopped at factor {:.4} ({}/{} steps toward {:.4}), {:.3} x {:.3} mm, {:.2} s: {reason}",
+            rep.achieved_factor,
+            rep.steps_accepted,
+            rep.steps_requested,
+            rep.target_factor,
+            last_kept.size_mm[0],
+            last_kept.size_mm[1],
+            elapsed
+        ),
+    }
+
+    if let Some(path) = &a.stats {
+        let steps_json: Vec<_> = rep
+            .steps
+            .iter()
+            .map(|s| {
+                json!({
+                    "step": s.step,
+                    "factor": s.factor,
+                    "accepted": s.accepted,
+                    "size_mm": s.size_mm,
+                    "violations": s.violations,
+                    "track_length_mm": s.track_length_mm,
+                    "vias": s.vias,
+                    "acid_traps": { "acute": s.acid_traps.acute, "slots": s.acid_traps.slots },
+                    "courtyard_stops": s.courtyard_stops,
+                    "jam": s.jam,
+                })
+            })
+            .collect();
+        let summary = json!({
+            "input": a.input,
+            "output": a.output,
+            "target_factor": rep.target_factor,
+            "achieved_factor": rep.achieved_factor,
+            "steps_requested": rep.steps_requested,
+            "steps_accepted": rep.steps_accepted,
+            "elapsed_s": elapsed,
+            "peak_memory_mb": peak_memory_mb(),
+            "jam": rep.jam,
+            "steps": steps_json,
+        });
+        if let Err(e) = std::fs::write(path, serde_json::to_string_pretty(&summary).unwrap() + "\n") {
+            eprintln!("{path}: {e}");
+        }
+    }
+
+    if let Err(e) = std::fs::write(&a.output, &rep.text) {
+        eprintln!("{}: {e}", a.output);
+        std::process::exit(1);
+    }
 }
 
 /// The stats of a run that crashed: what it was asked, and the crash as its one finding.

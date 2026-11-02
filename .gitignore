@@ -6,6 +6,7 @@
 
 # Logs and bulky per-attempt outputs; leaderboards, best results and recipes are kept
 *.log
+/runs/
 /jobs/*/runs/
 /jobs/*/bin/
 /jobs/*/e1/grid/
