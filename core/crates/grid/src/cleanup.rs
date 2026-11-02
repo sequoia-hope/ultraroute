@@ -227,7 +227,10 @@ pub fn split_at_joins(board: &mut Board, soft: &mut Vec<ItemId>) -> (usize, Vec<
         }
         let layer = item.layers.trailing_zeros() as usize;
         // An end of another track of the net on the centre line, away from this track's ends:
-        // within a quarter of the width, so the halves bend by no more than that.
+        // within a quarter of the width, so the halves bend by no more than that. Away is
+        // measured along the line: an end beside a short track, near its middle but off to the
+        // side, would split it into two halves each of which the other's far end then splits,
+        // making the track again, for ever.
         let lean = (r / 2).max(1);
         let at = board.near(layer, item.shape.bbox()).into_iter().filter(|&o| o != id).find_map(|o| {
             let other = board.item(o)?;
@@ -237,7 +240,7 @@ pub fn split_at_joins(board: &mut Board, soft: &mut Vec<ItemId>) -> (usize, Vec<
             }
             [*p, *q].into_iter().find(|&e| {
                 let (_, foot) = closest_on_segment(a, b, e);
-                foot.distance(e) <= lean as f64 && e.distance(a) > lean as f64 && e.distance(b) > lean as f64
+                foot.distance(e) <= lean as f64 && foot.distance(a) > lean as f64 && foot.distance(b) > lean as f64
             })
         });
         let Some(at) = at else { continue };
@@ -948,6 +951,22 @@ mod tests {
         let mut soft = vec![first, link, second];
         prune_dangling(&mut board, &mut soft);
         assert!(board.item(link).is_some(), "the runs meet squarely only through the link");
+    }
+
+    #[test]
+    fn a_short_track_is_not_split_where_an_end_lies_beside_it() {
+        // PCIE-to-MXM's write stage: a 64 um piece of a 0.25 mm track, another track's end 60 um
+        // to the side of its middle. Split there, each half was split again at the other's far
+        // end, making the piece again, for ever.
+        let mut board = empty_board();
+        let r = 125_000;
+        let put = |board: &mut Board, a: (Nm, Nm), b: (Nm, Nm)| board.insert(Item { shape: Shape::Capsule { a: Point::new(a.0, a.1), b: Point::new(b.0, b.1), r }, ..seg(Point::new(0, 0), Point::new(0, 0)) });
+        let piece = put(&mut board, (85_950_000, 126_630_000), (85_910_000, 126_580_000));
+        let beside = put(&mut board, (85_976_850, 126_567_500), (86_976_850, 126_567_500));
+        let mut soft = vec![piece, beside];
+        let (split, _) = split_at_joins(&mut board, &mut soft);
+        assert_eq!(split, 0);
+        assert!(board.item(piece).is_some());
     }
 
     #[test]
