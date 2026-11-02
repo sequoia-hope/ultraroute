@@ -113,9 +113,13 @@ impl Board {
 
     /// How narrow `net`'s copper may be where its tracks join: its narrowest track
     /// ([`Board::min_track_width_of`]), or the board's minimum connection width or a custom
-    /// rule's `connection_width` for the net where that is wider.
+    /// rule's `connection_width` for the net where that is wider. Never under its narrowest track:
+    /// a rule matching the net replaces the board's connection width, not its track width, and
+    /// the joint is laid as a track (earring's VBUS, 0.2 mm wide by its class's rule, mended into
+    /// J1 at the 0.09 mm a board-wide connection width rule allows).
     pub fn min_joint_of(&self, net: u32) -> Nm {
-        let floor = self.min_track_width_of(net).max(nm(self.rules.min_connection));
+        let track = self.min_track_width_of(net);
+        let floor = track.max(nm(self.rules.min_connection));
         if !self.custom.has("connection_width") {
             return floor;
         }
@@ -124,6 +128,7 @@ impl Board {
             .map(|l| self.rule_min("connection_width", &Thing::New { board: self, via: false, net: Some(net), class, width: 0, drill: 0, layer: Some(l), area: Area::Unknown }, None, l, floor))
             .max()
             .unwrap_or(floor)
+            .max(track)
     }
 
     /// The nets whose copper breaks a custom rule's `length` or `via_count` maximum, one line
