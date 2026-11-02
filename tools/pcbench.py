@@ -28,7 +28,9 @@ involves routed copper (a track, arc or via) of a type the bare board did not ha
 failure, not a success. Apart from the verdict, the judge counts necks: copper narrower than
 NECK times the board's minimum track width (KiCad's connection width check at warning severity),
 the joints a router leaves where tracks meet only where their round ends overlap; KiCad's own DRC
-passes them, as PCBench's boards set no connection width. When KiCad itself fails (the zone refill or the DRC), the board gets
+passes them, as PCBench's boards set no connection width. It counts acid traps the same way
+(tools/dfm.py): tracks meeting at an acute angle, and slots where a net's copper comes within the
+board's clearance of itself without joining. When KiCad itself fails (the zone refill or the DRC), the board gets
 `referee_error` and no verdict: the referee failed, not the router. When the router fails (a
 crash, which writes the input board back, a refusal or a hang), its file is not judged: the
 board fails, and `compare` counts it apart and never as noise. Wirelength is the routed tracks' length and vias their count, as the
@@ -108,8 +110,8 @@ def referee(name, cmd):
 
 
 # What the judge asks of a board beyond its own rules; reports judged by an older one are judged
-# again by `rejudge`. 2: necks counted (`neck_rule`).
-JUDGE = 2
+# again by `rejudge`. 2: necks counted (`neck_rule`); 3: acid traps too (`acid_traps`).
+JUDGE = 3
 # A neck is copper narrower than this share of the board's minimum track width: under KiCad's
 # reading of a track drawn at exactly the minimum (about 0.88 of it), over the necks a router's
 # overlapping round ends leave (the earring's 0.05 mm on 0.15 mm track, a third).
@@ -128,6 +130,16 @@ def neck_rule(pro):
     if not width:
         return None
     return f'\n(rule "{NECK_RULE}"\n  (severity warning)\n  (constraint connection_width (min {NECK * width:.6f}mm)))\n'
+
+
+def acid_traps(pcb):
+    """{"acute": N, "slots": N} for a routed board (tools/dfm.py), or {} when the check fails:
+    a manufacturing count, never a verdict, so its failure fails nothing."""
+    r = subprocess.run([sys.executable, str(ROOT / "tools/dfm.py"), str(pcb), "--json"], capture_output=True, text=True, timeout=600)
+    try:
+        return json.loads(r.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return {}
 
 
 def drc(pcb, out_dir, stem):
@@ -274,6 +286,7 @@ def route_one(b, run_dir, recipe, timeout, seed):
         try:
             drc(out, d, "out")
             score(res, run_dir, b)
+            res.update(acid_traps(out))
             res["judge"] = JUDGE
         except RefereeError as e:
             res["referee_error"] = str(e)
@@ -328,7 +341,8 @@ def rejudge_bare(b):
     """The bare board judged again when an older judge saw it."""
     d = HOME / "boards" / b
     info = json.loads((d / "bare.json").read_text())
-    if "error" in info or info.get("judge", 1) >= JUDGE:
+    # A bare board has no tracks, so no acid traps: judged for necks, it is judged enough.
+    if "error" in info or info.get("judge", 1) >= 2:
         return b, info
     try:
         info["unconnected"], info["errors"], info["warnings"] = drc(d / "bare.kicad_pcb", d, "bare")
@@ -347,8 +361,11 @@ def rejudge_one(run_dir, b):
         return res
     res.pop("referee_error", None)
     try:
-        drc(out, run_dir / b, "out")
-        score(res, run_dir, b)
+        # A run judged for necks lacks only the acid traps; an older one asks KiCad again.
+        if res.get("judge", 1) < 2:
+            drc(out, run_dir / b, "out")
+            score(res, run_dir, b)
+        res.update(acid_traps(out))
         res["judge"] = JUDGE
     except RefereeError as e:
         res["referee_error"] = str(e)
@@ -372,7 +389,8 @@ def rejudge(a):
             info.setdefault("notes", []).append(f"{time.strftime('%Y-%m-%d')}: judged again by judge {JUDGE}")
             meta.write_text(json.dumps(info, indent=1))
             necks = [r.get("necks", 0) for r in results]
-            print(f"{name}: {sum(bool(r.get('success')) for r in results)} of {len(results)} succeeded; {sum(necks)} necks on {sum(n > 0 for n in necks)} boards")
+            acute, slots = sum(r.get("acute", 0) for r in results), sum(r.get("slots", 0) for r in results)
+            print(f"{name}: {sum(bool(r.get('success')) for r in results)} of {len(results)} succeeded; {sum(necks)} necks on {sum(n > 0 for n in necks)} boards; acid traps: {acute} acute, {slots} slots")
 
 
 def prepare(a):
@@ -529,6 +547,11 @@ def compare(a):
             necks = lambda r: r.get("necks", 0)
             more = sorted((i for i in judged if necks(new[i]) > necks(base[i])), key=lambda i: necks(base[i]) - necks(new[i]))
             print(f"   necks (copper under {NECK}x the minimum track width) on {len(judged)} boards judged for them: {sum(necks(base[i]) for i in judged)} -> {sum(necks(new[i]) for i in judged)}, boards with any {sum(necks(base[i]) > 0 for i in judged)} -> {sum(necks(new[i]) > 0 for i in judged)}, more on {len(more)}" + "".join(f"\n      {i}: {necks(base[i])} -> {necks(new[i])}" for i in more[:10]))
+        trapped = [i for i in common if base[i].get("judge", 1) >= 3 and new[i].get("judge", 1) >= 3]
+        if trapped:
+            for kind in ("acute", "slots"):
+                more = sorted((i for i in trapped if new[i].get(kind, 0) > base[i].get(kind, 0)), key=lambda i: base[i].get(kind, 0) - new[i].get(kind, 0))
+                print(f"   {kind} (acid traps) on {len(trapped)} boards: {sum(base[i].get(kind, 0) for i in trapped)} -> {sum(new[i].get(kind, 0) for i in trapped)}, more on {len(more)}" + "".join(f"\n      {i}: {base[i].get(kind, 0)} -> {new[i].get(kind, 0)}" for i in more[:5]))
         print(f"   referee failures: {len(refs[0])} -> {len(refs[1])}" + "".join(f"\n      {i}: {new[i]['referee_error'][:120]!r}" for i in refs[1]))
         broke = [[i for i in common if router_failed(rs[i])] for rs in (base, new)]
         newly_broke = [i for i in broke[1] if i not in broke[0]]
@@ -611,6 +634,9 @@ def report(a):
             print(f"   necks (copper under {NECK}x the board's minimum track width, apart from the verdict): {sum(results[b].get('necks', 0) for b in judged)} on {len(necked)} of {len(judged)} boards; clean boards with any: {sum(1 for b in necked if results[b].get('success'))}")
         else:
             print("   necks: not judged (pcbench.py rejudge)")
+        traps = [b for b in ids if results[b].get("judge", 1) >= 3]
+        if traps:
+            print(f"   acid traps (apart from the verdict): {sum(results[b].get('acute', 0) for b in traps)} acute angles, {sum(results[b].get('slots', 0) for b in traps)} slots, on {len(traps)} boards judged for them")
 
 
 def main():
