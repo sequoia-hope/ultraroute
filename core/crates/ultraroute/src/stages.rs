@@ -294,12 +294,21 @@ impl Stage for Pairs {
         let options = grid::PairOptions { cell: a.cell.unwrap_or(grid::PairOptions::default().cell), pours_block: a.pours_block, deadline: ctx.deadline(), log: ctx.log.clone() };
         let watch = &mut *ctx.watch;
         let p = grid::route_pairs_watch(ctx.board, &options, &mut |b, run| watch.pair_run(b, run));
-        eprintln!("pairs: {} pairs, {} of {} runs coupled, {:.1} mm, {:.1} s", p.pairs, p.coupled, p.runs, p.coupled_mm, ctx.elapsed());
+        eprintln!(
+            "pairs: {} pairs, {} of {} runs coupled, {:.1} mm of their {:.1}, {} matched uncoupled, {:.1} s",
+            p.pairs,
+            p.coupled,
+            p.runs,
+            p.coupled_mm,
+            p.run_mm,
+            p.matched,
+            ctx.elapsed()
+        );
         ctx.watch.step(ctx.board);
         ctx.ledger.pairs.extend(p.laid);
         let board = &*ctx.board;
         ctx.ledger.fanout.retain(|&id| board.item(id).is_some_and(|it| !it.locked));
-        json!({"pairs": p.pairs, "runs": p.runs, "coupled": p.coupled, "coupled_mm": p.coupled_mm})
+        json!({"pairs": p.pairs, "runs": p.runs, "coupled": p.coupled, "matched": p.matched, "coupled_mm": p.coupled_mm, "run_mm": p.run_mm})
     }
 }
 
