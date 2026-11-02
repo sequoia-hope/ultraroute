@@ -7,8 +7,10 @@ use std::path::PathBuf;
 use board::*;
 use ::grid::*;
 
-/// Cells coarse enough that a debug build routes in seconds; the earring's tracks still fit.
-const CELL: Nm = 100_000;
+/// Cells coarse enough that a debug build routes in seconds; the earring's tracks still fit, and
+/// coarse enough to leave connections open with a movable part to blame (at 100 um, once routes
+/// ended half their width inside pads, none was left).
+const CELL: Nm = 120_000;
 
 fn earring() -> Board {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/earring.kicad_pcb");

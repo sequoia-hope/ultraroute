@@ -570,14 +570,30 @@ pub(crate) fn item_terminals(board: &mut Board, grid: &RouteGrid, id: ItemId, le
             Kind::Pour { .. } => grid.half_width.max(grid.via.as_ref().map_or(0, |v| v.radius)) as f64 + grid.h as f64,
             _ => 0.0,
         };
+        // A route into a pad ends half its width inside it, where the pad has room, so its round
+        // end lies wholly in the pad: one ending on a cell at the pad's edge, the track running
+        // along that edge, joins it only by the copper round the corner (59pct_keyboard's 0.18 mm
+        // tracks 1 um inside 1 mm pads, 0.13 mm across as KiCad measures it). A pad too small
+        // for that takes any cell inside it.
+        let pad = matches!(item.kind, Kind::Pad { .. });
+        let mut shallow = Vec::new();
+        let before = out.len();
         for j in lo.1..=hi.1 {
             for i in lo.0..=hi.0 {
                 let index = grid.index(layer, i, j);
                 let centre = grid.centre(i, j);
-                if !grid.blocked[index] && item.shape.contains(centre) && (deep == 0.0 || item.shape.depth(centre) >= deep) {
+                if grid.blocked[index] || !item.shape.contains(centre) {
+                    continue;
+                }
+                if pad && item.shape.depth(centre) < grid.half_width as f64 {
+                    shallow.push((index, None));
+                } else if deep == 0.0 || item.shape.depth(centre) >= deep {
                     out.push((index, None));
                 }
             }
+        }
+        if pad && out.len() == before {
+            out.extend(shallow);
         }
         let extent = match &item.kind {
             Kind::Track => 0,
