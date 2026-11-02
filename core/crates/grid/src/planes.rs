@@ -23,7 +23,8 @@ pub struct PlaneStats {
     pub joined: usize,
     pub laid: Vec<ItemId>,
     /// With a reach, the plane nets' pads that must each have a via of their own within it, how
-    /// many have one, and the copper laid for them, locked so no later stage takes it away.
+    /// many have one, and the copper laid for them: the router's own, which a signal that needs
+    /// the room may rip, as an open signal is worse than a capacitor sharing its via.
     pub own: usize,
     pub owned: usize,
     pub own_laid: Vec<ItemId>,
@@ -85,6 +86,16 @@ pub fn pad_vias(board: &Board, reach: Nm) -> Vec<PadVia> {
     pads.into_iter().map(|pad| PadVia { pad, via: owner.get(&pad).copied(), nearest: nearest.get(&pad).copied().unwrap_or(f64::INFINITY) }).collect()
 }
 
+/// Gives each plane-net pad without one a via of its own within `reach`, as [`join_planes`] does
+/// first: once routing is done, for the pads whose via a signal took, where one still fits.
+pub fn own_planes_vias(board: &mut Board, log: &Option<Log>, deadline: &Deadline, reach: Nm) -> PlaneStats {
+    let mut stats = PlaneStats::default();
+    if board.planes != 0 {
+        own_vias(board, log, deadline, reach, &mut stats);
+    }
+    stats
+}
+
 /// Gives each plane-net pad without one a via of its own within `reach`: in the pad, where the
 /// pad holds a whole via and the rules let one stand there (an exposed pad), else beside it on
 /// the rings no further out than `reach`, with a short track to it.
@@ -130,12 +141,6 @@ fn own_vias(board: &mut Board, log: &Option<Log>, deadline: &Deadline, reach: Nm
             continue;
         };
         tell(log, "planes", || format!("{} has a via of its own", crate::report::item_name(board, pad)), None);
-        for &id in &laid {
-            if let Some(mut it) = board.remove(id) {
-                it.locked = true;
-                board.restore(id, it);
-            }
-        }
         stats.owned += 1;
         stats.own_laid.extend(laid);
     }
@@ -391,6 +396,12 @@ mod tests {
         assert_eq!(vias(&own), 2);
         let owned = pad_vias(&own, 1_000_000);
         assert!(pads.iter().all(|p| owned.iter().any(|pv| pv.pad == *p && pv.via.is_some_and(|v| own.item(v).unwrap().shape.gap(&own.item(*p).unwrap().shape) <= 1_000_000.0))), "{owned:?}");
-        assert!(stats.own_laid.iter().all(|&id| own.item(id).unwrap().locked), "kept through the stages");
+        assert!(stats.own_laid.iter().all(|&id| !own.item(id).unwrap().locked), "the router's own copper, a signal may rip");
+        // Taken by a signal, a pad's via is laid again once routing is done.
+        let via = stats.own_laid.iter().copied().find(|&id| own.item(id).unwrap().kind == Kind::Via).unwrap();
+        own.remove(via);
+        assert_eq!(pad_vias(&own, 1_000_000).iter().filter(|pv| pv.via.is_none()).count(), 1);
+        let again = own_planes_vias(&mut own, &None, &Default::default(), 1_000_000);
+        assert_eq!((again.own, again.owned), (2, 2), "{again:?}");
     }
 }
