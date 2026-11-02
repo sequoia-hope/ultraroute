@@ -753,6 +753,11 @@ impl Stage for Cleaning {
                 board.restore(id, it);
             }
         }
+        // Pulling tight left the pairs alone: a turn-back in their escapes is taken out here.
+        let turns = grid::straighten_turn_backs(board, &mut ledger.pairs);
+        if turns > 0 {
+            eprintln!("straightened {turns} places where a pair's track ran on and came back");
+        }
         // The pairs' copper is cleaned with the rest: a run whose legs never came is taken out.
         ledger.laid.extend(ledger.pairs.iter().copied().filter(|id| board.item(*id).is_some()));
         let watch = &mut *ctx.watch;

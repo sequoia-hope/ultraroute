@@ -860,6 +860,82 @@ pub fn pull_tight(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &Deadline
     pull_tight_watch(board, soft, deadline, &mut |_, _, _, _| {})
 }
 
+/// The straight track from `chain`'s point `i` to its point `j` in place of the tracks between,
+/// if whatever joined those tracks still joins it or the chain's tracks either side, and it
+/// breaks no rule: its id and the tracks it replaced. The board is left as it was otherwise.
+fn straighten(board: &mut Board, chain: &Chain, i: usize, j: usize) -> Option<(ItemId, Vec<Item>)> {
+    let span: HashSet<ItemId> = chain.tracks[i..j].iter().copied().collect();
+    let mut partners: Vec<ItemId> = Vec::new();
+    for &t in &chain.tracks[i..j] {
+        let Some(track) = board.item(t) else { continue };
+        for l in (0..board.layers.len()).filter(|l| track.on(*l)) {
+            for other in board.near(l, track.shape.bbox()) {
+                if !span.contains(&other) && board.item(other).is_some_and(|o| o.net == chain.net) && joined(board, t, other) {
+                    partners.push(other);
+                }
+            }
+        }
+    }
+    partners.sort_unstable();
+    partners.dedup();
+    let sides: Vec<ItemId> = [i.checked_sub(1).map(|k| chain.tracks[k]), chain.tracks.get(j).copied()].into_iter().flatten().collect();
+    let removed: Vec<(ItemId, Item)> = chain.tracks[i..j].iter().filter_map(|t| Some((*t, board.remove(*t)?))).collect();
+    let straight = Item {
+        kind: Kind::Track,
+        net: chain.net,
+        layers: chain.layer,
+        shape: Shape::Capsule { a: chain.points[i], b: chain.points[j], r: chain.half_width },
+        hole: None,
+        locked: false,
+        span: None,
+    };
+    let id = board.insert(straight);
+    let still_joined = partners.iter().all(|&p| joined(board, p, id) || sides.iter().any(|&s| s == p || joined(board, p, s)));
+    if still_joined && check_item(board, id).is_empty() {
+        return Some((id, removed.into_iter().map(|(_, it)| it).collect()));
+    }
+    board.discard(id);
+    // Put back what was taken, under the ids the chain knows them by.
+    for (old, item) in removed {
+        board.restore(old, item);
+    }
+    None
+}
+
+/// Takes out the router's turn-backs: where a chain turns by more than 135 degrees (it runs past
+/// a point and comes back, as a pair's escape overshooting its via did on the earring's USB_C_DN),
+/// the straight track across the turn in its place, where it joins all the turn joined and breaks
+/// no rule. Pulling tight does this for the single-ended copper; this reaches a differential
+/// pair's too, which pulling tight leaves alone, without pulling its coupled runs apart (they
+/// never turn back). How many it took out.
+pub fn straighten_turn_backs(board: &mut Board, soft: &mut Vec<ItemId>) -> usize {
+    let soft_set: HashSet<ItemId> = soft.iter().copied().filter(|id| board.item(*id).is_some()).collect();
+    let mut replaced: HashSet<ItemId> = HashSet::new();
+    let mut added: Vec<ItemId> = Vec::new();
+    let mut taken = 0;
+    for chain in chains(board, &soft_set) {
+        let mut k = 1;
+        while k + 1 < chain.points.len() {
+            let (a, p, b) = (chain.points[k - 1], chain.points[k], chain.points[k + 1]);
+            let (u, v) = (((a.x - p.x) as f64, (a.y - p.y) as f64), ((b.x - p.x) as f64, (b.y - p.y) as f64));
+            let inside = (u.0 * v.1 - u.1 * v.0).atan2(u.0 * v.0 + u.1 * v.1).abs();
+            if inside < 45f64.to_radians() && chain.tracks[k - 1..=k].iter().all(|t| !replaced.contains(t)) {
+                if let Some((id, _)) = straighten(board, &chain, k - 1, k + 1) {
+                    replaced.extend(&chain.tracks[k - 1..=k]);
+                    added.push(id);
+                    taken += 1;
+                    k += 2;
+                    continue;
+                }
+            }
+            k += 1;
+        }
+    }
+    soft.retain(|id| !replaced.contains(id) && board.item(*id).is_some());
+    soft.extend(added);
+    taken
+}
+
 /// Sees a chain pulled tight: the board after, the net, the tracks replaced and the new ones.
 pub type TightWatch<'a> = dyn FnMut(&Board, u32, &[Item], &[ItemId]) + 'a;
 
@@ -887,45 +963,10 @@ pub fn pull_tight_watch(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &De
             let mut laid = None;
             let mut taken_here: Vec<Item> = Vec::new();
             while j > i + 1 {
-                // Try the straight track from point i to point j in place of the tracks between.
-                // Whatever joined those tracks must still join the straight one, or the chain's
-                // tracks on either side of it.
-                let span: HashSet<ItemId> = chain.tracks[i..j].iter().copied().collect();
-                let mut partners: Vec<ItemId> = Vec::new();
-                for &t in &chain.tracks[i..j] {
-                    let Some(track) = board.item(t) else { continue };
-                    for l in (0..board.layers.len()).filter(|l| track.on(*l)) {
-                        for other in board.near(l, track.shape.bbox()) {
-                            if !span.contains(&other) && board.item(other).is_some_and(|o| o.net == chain.net) && joined(board, t, other) {
-                                partners.push(other);
-                            }
-                        }
-                    }
-                }
-                partners.sort_unstable();
-                partners.dedup();
-                let sides: Vec<ItemId> = [i.checked_sub(1).map(|k| chain.tracks[k]), chain.tracks.get(j).copied()].into_iter().flatten().collect();
-                let removed: Vec<(ItemId, Item)> = chain.tracks[i..j].iter().filter_map(|t| Some((*t, board.remove(*t)?))).collect();
-                let straight = Item {
-                    kind: Kind::Track,
-                    net: chain.net,
-                    layers: chain.layer,
-                    shape: Shape::Capsule { a: chain.points[i], b: chain.points[j], r: chain.half_width },
-                    hole: None,
-                    locked: false,
-                    span: None,
-                };
-                let id = board.insert(straight);
-                let still_joined = partners.iter().all(|&p| joined(board, p, id) || sides.iter().any(|&s| s == p || joined(board, p, s)));
-                if still_joined && check_item(board, id).is_empty() {
-                    taken_here = removed.into_iter().map(|(_, it)| it).collect();
+                if let Some((id, taken)) = straighten(board, &chain, i, j) {
+                    taken_here = taken;
                     laid = Some(id);
                     break;
-                }
-                board.discard(id);
-                // Put back what was taken, under the ids the chain knows them by.
-                for (old, item) in removed {
-                    board.restore(old, item);
                 }
                 j -= 1;
             }
@@ -1142,6 +1183,21 @@ mod tests {
         let [cut] = soft[..] else { panic!("one track in place of the run: {soft:?}") };
         assert_eq!(board.item(cut).unwrap().shape, Shape::Capsule { a: Point::new(1_000_000, 0), b: Point::new(3_000_000, 0), r: 75_000 });
         assert!(board::connectivity(&board).airlines.is_empty());
+    }
+
+    #[test]
+    fn a_track_that_runs_past_its_via_and_comes_back_is_straightened() {
+        // The earring's USB_C_DN escape: from its via 0.24 mm on past it, then back up past the via
+        // the way it came, a turn of 177 degrees.
+        let mut board = empty_board();
+        let via = board.insert(Item { kind: Kind::Via, net: 1, layers: 1, shape: Shape::Capsule { a: Point::new(0, 0), b: Point::new(0, 0), r: 200_000 }, hole: Some((Point::new(0, 0), 100_000)), locked: false, span: None });
+        pad_at(&mut board, 600_000, -2_100_000);
+        let t = |board: &mut Board, a: (Nm, Nm), b: (Nm, Nm)| board.insert(Item { shape: Shape::Capsule { a: Point::new(a.0, a.1), b: Point::new(b.0, b.1), r: 75_000 }, ..seg(Point::new(0, 0), Point::new(0, 0)) });
+        let mut soft = vec![t(&mut board, (0, 0), (-78_000, 230_000)), t(&mut board, (-78_000, 230_000), (600_000, -2_100_000))];
+        assert_eq!(straighten_turn_backs(&mut board, &mut soft), 1);
+        let [one] = soft[..] else { panic!("{soft:?}") };
+        assert_eq!(board.item(one).unwrap().shape, Shape::Capsule { a: Point::new(0, 0), b: Point::new(600_000, -2_100_000), r: 75_000 });
+        assert!(board.item(via).is_some() && board::connectivity(&board).airlines.is_empty());
     }
 
     #[test]
