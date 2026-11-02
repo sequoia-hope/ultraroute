@@ -367,27 +367,33 @@ fn a_pad_whose_zone_connection_is_none_is_not_joined_by_the_pour() {
 
 /// A strip of net A's pour on B.Cu, apart from both of A's pads: an island KiCad drops, unless
 /// its zone keeps islands (`island_removal_mode 1`), when it must join the net, and is copper
-/// laid as it stands, not refilled (easy2350's transplanted 1V1 spokes).
+/// laid as it stands, not refilled (easy2350's transplanted 1V1 spokes). A wide island, a
+/// plane's, is still poured round the routes.
 #[test]
 fn an_island_of_a_zone_that_keeps_its_islands_must_join_its_net() {
-    let with = |mode: &str| {
+    let with = |mode: &str, tall: f64| {
+        let y1 = 20.0 + tall;
         board(&format!(
             "(footprint \"R\" (layer \"F.Cu\") (at 10 10) (property \"Reference\" \"R1\")
                (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\") (net 1 \"A\"))
                (pad \"2\" smd rect (at 5 0) (size 1 1) (layers \"F.Cu\") (net 1 \"A\")))
              (zone (net 1) (net_name \"A\") (layer \"B.Cu\") (hatch edge 0.5) (connect_pads (clearance 0.2)) (min_thickness 0.25)
                (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5) {mode})
-               (polygon (pts (xy 10 20) (xy 15 20) (xy 15 20.6) (xy 10 20.6)))
-               (filled_polygon (layer \"B.Cu\") (pts (xy 10 20) (xy 15 20) (xy 15 20.6) (xy 10 20.6))))"
+               (polygon (pts (xy 10 20) (xy 15 20) (xy 15 {y1}) (xy 10 {y1})))
+               (filled_polygon (layer \"B.Cu\") (pts (xy 10 20) (xy 15 20) (xy 15 {y1}) (xy 10 {y1}))))"
         ))
     };
     let joined_pads = |b: &mut Board| {
         b.insert(Item { kind: Kind::Track, net: 1, layers: 1, shape: Shape::Capsule { a: Point::new(nm(10e-3), nm(10e-3)), b: Point::new(nm(15e-3), nm(10e-3)), r: nm(0.1e-3) }, hole: None, locked: false, span: None });
     };
-    let mut dropped = with("");
+    let mut dropped = with("", 0.6);
     joined_pads(&mut dropped);
     assert!(connectivity(&dropped).airlines.is_empty(), "an island alone needs no joining");
-    let mut kept = with("(island_removal_mode 1)");
+    let mut wide = with("(island_removal_mode 1)", 5.0);
+    joined_pads(&mut wide);
+    assert!(connectivity(&wide).airlines.is_empty(), "a plane's island is poured round the routes");
+    assert!(wide.items().any(|(_, it)| it.refilled()));
+    let mut kept = with("(island_removal_mode 1)", 0.6);
     joined_pads(&mut kept);
     let air = connectivity(&kept).airlines;
     assert_eq!(air.len(), 1, "the island must join the pads");

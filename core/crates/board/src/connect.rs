@@ -59,7 +59,7 @@ pub fn anchors(board: &Board, id: ItemId) -> ([Point; 2], usize) {
         }
         // An island that must join its net: the point of it deepest in from its edge, on a
         // strip its middle, where a via or a track's end joins it.
-        (Kind::Pour { .. }, crate::geom::Shape::Polygon(_)) if board.must_join(item) => ([deepest(&item.shape), z], 1),
+        (Kind::Pour { .. }, crate::geom::Shape::Polygon(_)) if board.must_join(id) => ([deepest(&item.shape), z], 1),
         _ => ([z, z], 0),
     }
 }
@@ -264,7 +264,7 @@ fn joined_copper(board: &Board, with_pours: bool, only: Option<u32>) -> Connecti
         let c = sets.find(id);
         cluster.insert(id, c);
         let item = board.item(id).expect("listed above");
-        if matches!(item.kind, Kind::Pour { .. }) && !board.must_join(item) {
+        if matches!(item.kind, Kind::Pour { .. }) && !board.must_join(id) {
             continue;
         }
         match net_first_cluster.entry(item.net) {
@@ -286,7 +286,7 @@ fn joined_copper(board: &Board, with_pours: bool, only: Option<u32>) -> Connecti
     if !multi_cluster_nets.is_empty() {
         for &id in &ids {
             let item = board.item(id).expect("listed above");
-            if (matches!(item.kind, Kind::Pour { .. }) && !board.must_join(item)) || !multi_cluster_nets.contains(&item.net) {
+            if (matches!(item.kind, Kind::Pour { .. }) && !board.must_join(id)) || !multi_cluster_nets.contains(&item.net) {
                 continue;
             }
             let (pts, len) = anchors(board, id);

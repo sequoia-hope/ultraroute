@@ -566,7 +566,7 @@ pub(crate) fn item_terminals(board: &mut Board, grid: &RouteGrid, id: ItemId, le
         // An island kept as laid, often a strip no wider than a via, is not refilled: a cell
         // inside it joins it.
         let deep = match item.kind {
-            Kind::Pour { .. } if board.must_join(&item) => grid.h as f64 / 2.0,
+            Kind::Pour { .. } if board.must_join(id) => grid.h as f64 / 2.0,
             Kind::Pour { .. } => grid.half_width.max(grid.via.as_ref().map_or(0, |v| v.radius)) as f64 + grid.h as f64,
             _ => 0.0,
         };
