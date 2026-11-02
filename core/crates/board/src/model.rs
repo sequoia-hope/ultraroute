@@ -315,6 +315,10 @@ pub struct Board {
     /// Zones of a net saved with no fill (KiCad not having filled them): their zone, net, layers
     /// and outline, to stand in for their copper where it must be there, on a plane.
     pub unfilled: Vec<(usize, u32, u64, Shape)>,
+    /// Zones that keep every island of their fill (`island_removal_mode 1`): their poured
+    /// copper is kept as laid, and each island of it must join its net, or KiCad reports it
+    /// isolated.
+    pub island_zones: std::collections::BTreeSet<usize>,
     /// Areas where a via costs the router dearly but is allowed, on every layer: rule areas
     /// whose name starts `soft-novia`, and boxes given on the command line. Room kept for silk.
     pub via_avoid: Vec<Shape>,
@@ -461,6 +465,7 @@ impl Board {
             ties: HashMap::new(),
             keepout_holes: HashMap::new(),
             unfilled: Vec::new(),
+            island_zones: Default::default(),
             via_avoid: Vec::new(),
             via_avoid_cost: 3_000,
             regions: Vec::new(),
@@ -697,7 +702,14 @@ impl Board {
                 }
                 continue;
             }
-            let kept = blocks.iter().any(|b| b.zones.contains(&z));
+            // A fill that keeps its islands is copper laid by hand, as a reference layout's
+            // strips are: the router steers clear of it and joins each island, as KiCad will
+            // not drop one that touches nothing.
+            let islands = zone.keep_islands && zone.net != 0 && !zone.filled.is_empty();
+            if islands {
+                board.island_zones.insert(z);
+            }
+            let kept = islands || blocks.iter().any(|b| b.zones.contains(&z));
             // A zone saved unfilled has no copper to read. Kept, as a block's, its outline stands
             // for it, as it would for a plane's (`set_planes`); a pour refilled round the routes
             // needs none.
@@ -1106,6 +1118,12 @@ impl Board {
     }
 
     /// Whether an item is a plane's pour.
+    /// Whether `item` is an island of a zone that keeps its islands, which must join its net
+    /// like a loose piece of track.
+    pub fn must_join(&self, item: &Item) -> bool {
+        matches!(item.kind, Kind::Pour { zone, .. } if self.island_zones.contains(&zone))
+    }
+
     pub fn is_plane(&self, item: &Item) -> bool {
         matches!(item.kind, Kind::Pour { .. }) && item.layers & self.planes != 0
     }

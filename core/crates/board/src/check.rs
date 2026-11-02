@@ -385,7 +385,7 @@ fn item_checks(
                 if other == id || !holds_clear(o, item) || same_pad(item, o) {
                     continue;
                 }
-                let required = hole_required(board, limits, other, o, id, item);
+                let (required, slack) = hole_required(board, limits, other, o, id, item);
                 if required == 0 {
                     continue;
                 }
@@ -393,7 +393,7 @@ fn item_checks(
                     continue;
                 }
                 let gap = item.shape.gap_within(&h, required as f64);
-                if gap + SLACK < required as f64 {
+                if gap + slack < required as f64 {
                     found.push(Violation { rule: Rule::HoleClearance, a: id, b: Some(other), layer: None, gap, required });
                 }
             }
@@ -425,12 +425,12 @@ fn item_checks(
                 if other == id || !o.is_copper() || !o.on(layer) || same_pad(item, o) || failed_pairs.contains(&(id.min(other), id.max(other))) {
                     continue;
                 }
-                let required = hole_required(board, limits, id, item, other, o);
+                let (required, slack) = hole_required(board, limits, id, item, other, o);
                 if required == 0 {
                     continue;
                 }
                 let gap = shape.gap_within(&o.shape, required as f64);
-                if gap + SLACK < required as f64 {
+                if gap + slack < required as f64 {
                     failed_pairs.insert((id.min(other), id.max(other)));
                     found.push(Violation { rule: Rule::HoleClearance, a: id, b: Some(other), layer: Some(layer), gap, required });
                 }
@@ -444,13 +444,22 @@ fn item_checks(
 /// sets, which holds whatever the nets, between holes and the copper of other holes (a via
 /// beside a via of its own net) or of pads (a via drilled in its own net's SMD pad, which KiCad
 /// flags), not the tracks that join them.
-fn hole_required(board: &Board, limits: &Limits, id: ItemId, hole: &Item, other_id: ItemId, other: &Item) -> Nm {
+///
+/// With it, the slack the shortfall is allowed: none where the physical clearance sets the
+/// distance, as KiCad measures physical clearances exactly (easy2350's GND via 0.19988 mm from
+/// C26's rounded corner, flagged under a 0.2 mm rule).
+fn hole_required(board: &Board, limits: &Limits, id: ItemId, hole: &Item, other_id: ItemId, other: &Item) -> (Nm, f64) {
     let joined = hole.plated_hole() && other.net == hole.net && hole.net != 0;
     let clearance = if joined { 0 } else { limits.hole_keep(board, id, hole, other_id, other) };
     if joined && other.hole.is_none() && !matches!(other.kind, Kind::Pad { .. }) {
-        return clearance;
+        return (clearance, SLACK);
     }
-    clearance.max(limits.physical_hole(board, id, hole, other_id, other))
+    let physical = limits.physical_hole(board, id, hole, other_id, other);
+    if physical > clearance {
+        (physical, 0.0)
+    } else {
+        (clearance, SLACK)
+    }
 }
 
 /// Whether copper reaches into a keepout by more than the slack; touching its edge is allowed,
