@@ -219,6 +219,10 @@ fn a_joint_is_held_to_the_widest_of_track_width_minimum_connection_and_connectio
     rules.min_connection = 0.05e-3;
     let (pcb, copper) = kicad_pcb::parse_board("(kicad_pcb (version 20240108) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal)) (net 0 \"\") (net 1 \"A\"))").unwrap();
     assert_eq!(Board::new(&pcb, &copper, rules).min_joint_of(1), nm(0.1e-3), "never under the narrowest track");
+    // earring: a board-wide connection width rule under a net's own track width rule.
+    let b = board("", "(version 1)\n(rule \"power\" (condition \"A.NetName == 'A'\") (constraint track_width (min 0.2mm)))\n(rule \"joints\" (constraint connection_width (min 0.09mm)))");
+    assert_eq!(b.min_joint_of(1), nm(0.2e-3), "never under the net's own track width rule");
+    assert_eq!(b.min_joint_of(2), nm(0.09e-3));
 }
 
 #[test]
