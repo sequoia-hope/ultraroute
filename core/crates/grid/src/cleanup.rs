@@ -496,6 +496,89 @@ pub fn mend_grazes(board: &mut Board, laid: &mut Vec<ItemId>) -> usize {
     mended
 }
 
+/// Two vias of a net whose lands overlap by less than the net's narrowest joint, or half the
+/// smaller land:
+/// KiCad measures the sliver between them as a neck on every layer both have lands on (the
+/// earring's VLED_C vias 0.403 mm apart, 0.4 mm lands, 0.029 mm across). Each pair, the router's
+/// via first, once.
+fn via_grazes(board: &Board, laid: &[ItemId]) -> Vec<(ItemId, ItemId)> {
+    let mine: HashSet<ItemId> = laid.iter().copied().collect();
+    let mut out = Vec::new();
+    for &id in laid {
+        let Some(v) = board.item(id) else { continue };
+        let (Kind::Via, Shape::Capsule { a, r, .. }) = (&v.kind, &v.shape) else { continue };
+        if v.net == 0 {
+            continue;
+        }
+        let layer = v.layers.trailing_zeros() as usize;
+        for other in board.near(layer, v.shape.bbox().grow(*r)) {
+            if other == id || (mine.contains(&other) && other < id) {
+                continue;
+            }
+            let Some(o) = board.item(other) else { continue };
+            let (Kind::Via, Shape::Capsule { a: c, r: r2, .. }) = (&o.kind, &o.shape) else { continue };
+            if o.net != v.net || o.layers & v.layers == 0 {
+                continue;
+            }
+            // The chord where the two lands cross, as wide as the copper joining them is.
+            let d = a.distance(*c);
+            let (r1, r2) = (*r as f64, *r2 as f64);
+            if d >= r1 + r2 || d <= (r1 - r2).abs() {
+                continue;
+            }
+            let x = (d * d + r1 * r1 - r2 * r2) / (2.0 * d);
+            let chord = 2.0 * (r1 * r1 - x * x).max(0.0).sqrt();
+            // As wide as the net's narrowest joint, and at least half the smaller land.
+            let least = (board.min_joint_of(v.net) as f64).max(r1.min(r2));
+            if chord < least {
+                out.push((id, other));
+            }
+        }
+    }
+    out
+}
+
+/// Mends each pair of [`via_grazes`]: one of the router's two goes where its net stays as joined
+/// without it, as one of the two needs not be there; else a track of the net's narrowest joint
+/// width joins their centres on every layer both have lands on, where that breaks no rule. The
+/// spans of what went, and how many pairs were mended.
+pub fn mend_via_grazes(board: &mut Board, laid: &mut Vec<ItemId>) -> (usize, Vec<Span>) {
+    let (mut mended, mut spans) = (0, Vec::new());
+    'pairs: for (id, other) in via_grazes(board, laid) {
+        let (Some(v), Some(o)) = (board.item(id).cloned(), board.item(other).cloned()) else { continue };
+        let before = board::net_connectivity(board, v.net, false).airlines.len();
+        for gone in [id, other].into_iter().filter(|g| laid.contains(g)) {
+            let removed = board.remove(gone).expect("listed above");
+            if board::net_connectivity(board, v.net, false).airlines.len() <= before {
+                spans.extend(removed.span);
+                laid.retain(|t| *t != gone);
+                mended += 1;
+                continue 'pairs;
+            }
+            board.restore(gone, removed);
+        }
+        let (Shape::Capsule { a, .. }, Shape::Capsule { a: c, .. }) = (&v.shape, &o.shape) else { continue };
+        let r = (board.min_joint_of(v.net) + 1) / 2;
+        let mut pieces = Vec::new();
+        for layer in (0..board.layers.len()).filter(|&l| v.on(l) && o.on(l)) {
+            let piece = board.insert(Item { kind: Kind::Track, net: v.net, layers: 1 << layer, shape: Shape::Capsule { a: *a, b: *c, r }, hole: None, locked: false, span: None });
+            pieces.push(piece);
+            if !check_item(board, piece).is_empty() {
+                break;
+            }
+        }
+        if pieces.iter().all(|&p| check_item(board, p).is_empty()) {
+            laid.extend(pieces);
+            mended += 1;
+        } else {
+            for p in pieces {
+                board.discard(p);
+            }
+        }
+    }
+    (mended, spans)
+}
+
 /// A track end joined to a pad of its net only where its round end overlaps the pad's edge:
 /// KiCad counts them joined, but the copper across the edge is the chord the end cuts there,
 /// narrower than the track.
@@ -1403,6 +1486,23 @@ mod tests {
         let [one] = soft[..] else { panic!("{soft:?}") };
         assert_eq!(board.item(one).unwrap().shape, Shape::Capsule { a: Point::new(0, 0), b: Point::new(600_000, -2_100_000), r: 75_000 });
         assert!(board.item(via).is_some() && board::connectivity(&board).airlines.is_empty());
+    }
+
+    #[test]
+    fn of_two_vias_whose_lands_only_touch_the_one_not_needed_goes() {
+        // The earring's VLED_C: two vias 0.403 mm apart with 0.4 mm lands, a 0.029 mm sliver.
+        let mut board = empty_board();
+        let via = |board: &mut Board, x: Nm| board.insert(Item { kind: Kind::Via, net: 1, layers: 1, shape: Shape::Capsule { a: Point::new(x, 0), b: Point::new(x, 0), r: 200_000 }, hole: Some((Point::new(x, 0), 100_000)), locked: false, span: None });
+        let pad = pad_at(&mut board, -2_000_000, 0);
+        let keep = via(&mut board, 0);
+        let spare = via(&mut board, 395_000);
+        let track = board.insert(seg(Point::new(-2_000_000, 0), Point::new(0, 0)));
+        let mut laid = vec![keep, spare, track];
+        assert_eq!(via_grazes(&board, &laid).len(), 1);
+        let (mended, _) = mend_via_grazes(&mut board, &mut laid);
+        assert_eq!(mended, 1);
+        assert!(board.item(spare).is_none() && board.item(keep).is_some() && board.item(pad).is_some());
+        assert!(via_grazes(&board, &laid).is_empty());
     }
 
     #[test]

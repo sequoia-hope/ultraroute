@@ -920,6 +920,12 @@ impl Stage for Write {
         if into > 0 {
             eprintln!("mended {into} pad joints where a track's end only reached the pad's edge");
         }
+        // Two vias of a net whose lands only touch: the one not needed goes, else they are joined.
+        let (vias, spans) = grid::mend_via_grazes(board, &mut laid);
+        ledger.removed.extend(spans);
+        if vias > 0 {
+            eprintln!("mended {vias} pairs of vias whose lands only touched");
+        }
         // Copper of a net that only grazes other copper of it: a piece across, at full width.
         let bridged = grid::mend_grazes(board, &mut laid);
         if bridged > 0 {
