@@ -760,6 +760,11 @@ impl Stage for Cleaning {
         }
         // The pairs' copper is cleaned with the rest: a run whose legs never came is taken out.
         ledger.laid.extend(ledger.pairs.iter().copied().filter(|id| board.item(*id).is_some()));
+        // Staircases pulling tight never reached, the pairs' or where time ran out, smoothed.
+        let steps = grid::smooth_staircases(board, &mut ledger.laid);
+        if steps > 0 {
+            eprintln!("smoothed {steps} steps of staircases");
+        }
         let watch = &mut *ctx.watch;
         let (doubled, spans) = grid::drop_duplicates_watch(board, &mut ledger.laid, &mut |b, it| watch.cleaned(b, it, Cleaned::Duplicate));
         ledger.removed.extend(spans);

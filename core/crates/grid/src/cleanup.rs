@@ -455,7 +455,15 @@ pub fn grazes(board: &Board, laid: &[ItemId]) -> Vec<Graze> {
                 }
                 _ => continue,
             };
-            if overlap > 0.0 && overlap < full && !bridged(board, layer, id, item, other, o) {
+            // Inside a via's or pad's copper the two are joined by it at full width already:
+            // no neck, and a bridge there only piles copper on copper (easy2350's USB_DM_C, a
+            // staircase inside its via's land bridged step to step).
+            let covered = || {
+                board.near(layer, board::BBox::of([from, to])).into_iter().filter_map(|c| board.item(c)).any(|c| {
+                    matches!(c.kind, Kind::Via | Kind::Pad { .. }) && c.net == item.net && c.on(layer) && c.shape.contains(from) && c.shape.contains(to)
+                })
+            };
+            if overlap > 0.0 && overlap < full && !bridged(board, layer, id, item, other, o) && !covered() {
                 out.push(Graze { track: id, other, from, to, overlap });
             }
         }
@@ -480,6 +488,14 @@ pub fn mend_grazes(board: &mut Board, laid: &mut Vec<ItemId>) -> usize {
         let Some(track) = board.item(graze.track).cloned() else { continue };
         let Shape::Capsule { r, .. } = track.shape else { continue };
         if graze.from == graze.to {
+            continue;
+        }
+        // A track of the net already lying from one end to the other is the bridge.
+        let layer = track.layers.trailing_zeros() as usize;
+        let span = board::BBox::of([graze.from, graze.to]);
+        if board.near(layer, span).into_iter().filter_map(|t| board.item(t)).any(|t| {
+            t.kind == Kind::Track && t.net == track.net && matches!(t.shape, Shape::Capsule { a, b, .. } if (a == graze.from && b == graze.to) || (a == graze.to && b == graze.from))
+        }) {
             continue;
         }
         let least = (board.min_joint_of(track.net) + 1) / 2;
@@ -1073,6 +1089,46 @@ fn straighten(board: &mut Board, chain: &Chain, i: usize, j: usize) -> Option<(I
     None
 }
 
+/// How far a bend may lie off the straight line between its neighbours and still be taken out
+/// as a step of a staircase: a grid path's 10 um steps, which pulling tight never reaches on a
+/// differential pair's copper (or anywhere, once time runs out), and which the graze bridging
+/// then joined to each other pairwise (easy2350's USB_DP_C, 162 pieces where a dozen do).
+const STEP_TOLERANCE: f64 = 15_000.0;
+
+/// Takes out the steps of the router's staircases: each bend lying within [`STEP_TOLERANCE`] of
+/// the straight line between its neighbours, replaced by that line where it joins all the bend
+/// did and breaks no rule, round after round until none is left. Too slight to pull a coupled
+/// pair apart. How many it took out.
+pub fn smooth_staircases(board: &mut Board, soft: &mut Vec<ItemId>) -> usize {
+    let mut taken = 0;
+    loop {
+        let soft_set: HashSet<ItemId> = soft.iter().copied().filter(|id| board.item(*id).is_some()).collect();
+        let mut replaced: HashSet<ItemId> = HashSet::new();
+        let mut added: Vec<ItemId> = Vec::new();
+        for chain in chains(board, &soft_set) {
+            let mut k = 1;
+            while k + 1 < chain.points.len() {
+                let (a, p, b) = (chain.points[k - 1], chain.points[k], chain.points[k + 1]);
+                if board::point_segment(p, a, b) <= STEP_TOLERANCE && chain.tracks[k - 1..=k].iter().all(|t| !replaced.contains(t)) {
+                    if let Some((id, _)) = straighten(board, &chain, k - 1, k + 1) {
+                        replaced.extend(&chain.tracks[k - 1..=k]);
+                        added.push(id);
+                        k += 2;
+                        continue;
+                    }
+                }
+                k += 1;
+            }
+        }
+        if added.is_empty() {
+            return taken;
+        }
+        taken += added.len();
+        soft.retain(|id| !replaced.contains(id) && board.item(*id).is_some());
+        soft.extend(added);
+    }
+}
+
 /// Takes out the router's turn-backs: where a chain turns by more than 135 degrees (it runs past
 /// a point and comes back, as a pair's escape overshooting its via did on the earring's USB_C_DN),
 /// the straight track across the turn in its place, where it joins all the turn joined and breaks
@@ -1387,6 +1443,26 @@ mod tests {
         assert!(board.item(run).is_none());
         let [cut] = soft[..] else { panic!("one track in place of the run: {soft:?}") };
         assert_eq!(board.item(cut).unwrap().shape, Shape::Capsule { a: Point::new(1_000_000, 0), b: Point::new(3_000_000, 0), r: 75_000 });
+        assert!(board::connectivity(&board).airlines.is_empty());
+    }
+
+    #[test]
+    fn a_staircase_of_small_steps_is_smoothed_into_one_track() {
+        // easy2350's USB_DP_C escape: 10 um steps, the track zigzagging 10 um off its line.
+        let mut board = empty_board();
+        pad_at(&mut board, 0, 0);
+        pad_at(&mut board, 1_000_000, 0);
+        let t = |board: &mut Board, a: (Nm, Nm), b: (Nm, Nm)| board.insert(Item { shape: Shape::Capsule { a: Point::new(a.0, a.1), b: Point::new(b.0, b.1), r: 100_000 }, ..seg(Point::new(0, 0), Point::new(0, 0)) });
+        let pts: Vec<(Nm, Nm)> = (0..=10).map(|k| (k * 100_000, if k % 2 == 1 && k < 10 { 10_000 } else { 0 })).collect();
+        let mut soft: Vec<ItemId> = pts.windows(2).map(|w| t(&mut board, w[0], w[1])).collect();
+        assert!(smooth_staircases(&mut board, &mut soft) > 0);
+        // One track runs between the pads; a bend inside a pad stays, as pulling tight leaves it.
+        assert!(soft.len() <= 3, "{} pieces left", soft.len());
+        let longest = soft.iter().filter_map(|id| match board.item(*id).unwrap().shape {
+            Shape::Capsule { a, b, .. } => Some((a, b)),
+            _ => None,
+        }).max_by(|x, y| x.0.distance(x.1).total_cmp(&y.0.distance(y.1))).unwrap();
+        assert!(longest.0.distance(longest.1) >= 800_000.0, "the run between the pads is one track: {longest:?}");
         assert!(board::connectivity(&board).airlines.is_empty());
     }
 
