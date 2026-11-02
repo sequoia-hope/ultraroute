@@ -449,6 +449,10 @@ impl Thing<'_> {
                 },
                 _ => Value::Null,
             },
+            "padnumber" => match self {
+                Thing::Item(_, _, Item { kind: Kind::Pad { number, .. }, .. }) => str(number),
+                _ => Value::Null,
+            },
             "holesizex" | "holesizey" | "holesize" | "drill" => match self {
                 Thing::Item(_, _, it) => it.hole.map_or(Value::Null, |(_, r)| Value::Len(2.0 * r as f64 / 1e9)),
                 Thing::New { via: true, drill, .. } => Value::Len(*drill as f64 / 1e9),

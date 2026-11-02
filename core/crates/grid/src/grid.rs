@@ -961,6 +961,18 @@ impl ObstacleMap {
                 }
             }
         }
+        // A physical hole clearance to a pad holds for vias of the pad's own net too (KiCad flags
+        // a via drilled in its own SMD pad): no via's drill comes that close.
+        if matches!(item.kind, Kind::Pad { .. }) && item.hole.is_none() && board.custom.has("physical_hole_clearance") {
+            let physical = self.rule_to(board, "physical_hole_clearance", id, item, true, 0);
+            if physical > 0 {
+                let mut hit = Vec::new();
+                self.cells_near(&item.shape, drill_radius + physical, &mut |c| hit.push(c));
+                for c in hit {
+                    self.via_owner[c] = SEVERAL;
+                }
+            }
+        }
         if let Some(hole) = board.hole_shape(id, item) {
             let hole_clearance = self.rule_to(board, "hole_clearance", id, item, true, plain_hole);
             let track_hole = self.rule_to(board, "hole_clearance", id, item, false, plain_hole);
