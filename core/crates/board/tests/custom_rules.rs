@@ -274,3 +274,28 @@ fn a_physical_hole_clearance_allows_no_slack() {
     assert_eq!(short(10.5498), 1, "0.2 um short is short");
     assert_eq!(short(10.5501), 0);
 }
+
+#[test]
+fn a_copper_zone_a_rule_keeps_other_nets_off_is_laid() {
+    // easy2350's way of protecting its 1V1 strips: a rule disallowing other nets' tracks and
+    // vias in the named copper zone (`A.intersectsArea`), and a pad of B so another net exists.
+    let body = "(footprint \"R\" (layer \"F.Cu\") (at 25 25) (property \"Reference\" \"R1\") (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\") (net 2 \"B\")))
+                (zone (net 1) (net_name \"A\") (layer \"B.Cu\") (name \"strip A\") (hatch edge 0.5) (connect_pads (clearance 0.2)) (min_thickness 0.25)
+                  (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5) (island_removal_mode 1))
+                  (polygon (pts (xy 10 20) (xy 15 20) (xy 15 20.6) (xy 10 20.6)))
+                  (filled_polygon (layer \"B.Cu\") (pts (xy 10 20) (xy 15 20) (xy 15 20.6) (xy 10 20.6))))";
+    let strip = |b: &Board| b.items().find(|(_, it)| matches!(it.kind, Kind::Pour { .. })).map(|(id, _)| id).unwrap();
+    let open = board(body, "");
+    assert!(!open.is_laid(strip(&open)), "no rule: a pour");
+    let rule = "(version 1)\n(rule \"keep strip A\" (condition \"A.intersectsArea('strip A') && A.NetName != 'A'\") (constraint disallow track via))";
+    let kept = board(body, rule);
+    assert!(kept.is_laid(strip(&kept)) && kept.must_join(strip(&kept)));
+    // A via of A in it is part of that copper; one of B, or one of A outside it, is not.
+    let via = |net, x: f64| Item { kind: Kind::Via, net, layers: u64::MAX >> (64 - kept.layers.len()), shape: Shape::Capsule { a: Point::new(nm(x * 1e-3), nm(20.3e-3)), b: Point::new(nm(x * 1e-3), nm(20.3e-3)), r: nm(0.3e-3) }, hole: Some((Point::new(nm(x * 1e-3), nm(20.3e-3)), nm(0.15e-3))), locked: false, span: None };
+    assert!(kept.in_laid_copper(&via(1, 12.0)));
+    assert!(!kept.in_laid_copper(&via(2, 12.0)) && !kept.in_laid_copper(&via(1, 18.0)) && !open.in_laid_copper(&via(1, 12.0)));
+    // A rule that lets B's vias in protects nothing: a via of B would cut the fill.
+    let tracks_only = "(version 1)\n(rule \"keep strip A\" (condition \"A.intersectsArea('strip A') && A.NetName != 'A'\") (constraint disallow track))";
+    let half = board(body, tracks_only);
+    assert!(!half.is_laid(strip(&half)));
+}
