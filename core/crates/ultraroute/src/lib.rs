@@ -126,7 +126,8 @@ pub struct Args {
     /// Take inner layers that one net's pour all but fills as planes, as --planes would.
     pub auto_planes: bool,
     /// Every pad of a plane's net gets a via of its own within this many millimetres, edge to
-    /// edge, laid before routing and kept; a pad with no room for one is reported.
+    /// edge, laid before routing as the router's own copper, which a signal may rip, and laid
+    /// again after routing where it still fits; a pad left without one is reported.
     pub plane_via_reach: Option<f64>,
     /// Treat the board's unlocked tracks and vias as the router's own: free to rip, move and
     /// rewrite, as if this run had laid them.

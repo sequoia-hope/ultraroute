@@ -23,8 +23,8 @@ pub struct Ledger {
     pub fanout: Vec<ItemId>,
     /// The differential pairs' copper, locked through the single-ended stages.
     pub pairs: Vec<ItemId>,
-    /// Vias stitching the ends of strips a zone keeps as laid, and plane pads' own vias with
-    /// their tracks: locked through every stage and written as they stand.
+    /// Vias stitching the ends of strips a zone keeps as laid, locked through every stage and
+    /// written, unlocked, as they stand.
     pub stitches: Vec<ItemId>,
     /// The board file's spans of what was taken out.
     pub removed: Vec<Span>,
@@ -246,7 +246,7 @@ impl Stage for Planes {
         eprintln!("planes: {} of {} pads off their planes joined, {:.1} s", p.joined, p.pads, ctx.elapsed());
         ctx.watch.step(ctx.board);
         ctx.ledger.laid.extend(p.laid);
-        ctx.ledger.stitches.extend(p.own_laid);
+        ctx.ledger.laid.extend(p.own_laid);
         json!({"pads": p.pads, "joined": p.joined, "own": p.own, "owned": p.owned})
     }
 }
@@ -927,8 +927,15 @@ impl Stage for Write {
                 eprintln!("pruned {pruned} dangling after the split");
             }
         }
-        // The strips' stitches stood through every stage; they are written with the rest.
-        laid.extend(ledger.stitches.iter().copied().filter(|id| board.item(*id).is_some()));
+        // The strips' stitches stood through every stage, locked; they are written with the rest
+        // as the router's own copper, unlocked, so the next run lays them afresh.
+        for &id in &ledger.stitches {
+            if let Some(mut it) = board.remove(id) {
+                it.locked = false;
+                board.restore(id, it);
+                laid.push(id);
+            }
+        }
         for (line, nets) in regions::report(board, &ledger.lengths, &laid) {
             eprintln!("regions: {line}");
             let kind = if line.starts_with("length:") { "length" } else { "region" };
@@ -982,8 +989,15 @@ impl Stage for Write {
             eprintln!("{line}");
             ctx.stats.findings.push(Finding { severity, kind: "joint", message: line, refs: vec![pad], nets: vec![net], ends: None });
         }
-        // A plane pad with no via of its own within the reach asked.
+        // A plane pad whose own via a signal took gets one again where it still fits; one with
+        // none within the reach asked is reported.
         if let Some(mm) = a.plane_via_reach {
+            let again = grid::planes::own_planes_vias(ctx.board, ctx.log, &grid::Deadline::default(), board::nm(mm * 1e-3));
+            let vias = again.own_laid.iter().filter(|&&id| ctx.board.item(id).is_some_and(|it| it.kind == board::Kind::Via)).count();
+            if vias > 0 {
+                eprintln!("planes: {vias} plane pads' own vias laid again after routing");
+            }
+            laid.extend(again.own_laid);
             for pv in grid::planes::pad_vias(ctx.board, board::nm(mm * 1e-3)).into_iter().filter(|pv| pv.via.is_none()) {
                 let board = &*ctx.board;
                 let (pad, net) = (grid::report::item_name(board, pv.pad), board.net_name(board.item(pv.pad).map_or(0, |it| it.net)).to_string());
