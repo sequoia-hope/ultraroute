@@ -390,7 +390,10 @@ pub struct PadJoint {
 }
 
 /// The ends of the router's tracks that meet nothing of their net squarely ([`end_square`]) yet
-/// overlap a pad of it: the end's centre lies outside the pad.
+/// overlap a pad of it, the end's centre outside the pad; and those whose round end, inside a
+/// pad, sticks out past one of its corners ([`straddled_corner`]): the copper round the corner is
+/// narrower than the track (59pct_keyboard's 0.18 mm tracks ending 1 um inside a square pad's
+/// corner, 0.13 mm across, as KiCad's connection width check measures it).
 pub fn pad_joints(board: &Board, laid: &[ItemId]) -> Vec<PadJoint> {
     let mut out = Vec::new();
     for &id in laid {
@@ -409,6 +412,14 @@ pub fn pad_joints(board: &Board, laid: &[ItemId]) -> Vec<PadJoint> {
                 .filter_map(|o| board.item(o).map(|c| (o, c)))
                 .filter(|(_, c)| c.net == item.net && c.on(layer) && c.is_copper() && (!c.refilled() || board.is_plane(c)))
                 .collect();
+            if let Some(&(pad, c)) = ours.iter().find(|(_, c)| matches!(c.kind, Kind::Pad { .. }) && c.shape.contains(p)) {
+                if let Some(width) = straddled_corner(&c.shape, p, if p == *a { *b } else { *a }, *r) {
+                    if !ours.iter().any(|(o, c)| *o != pad && !matches!(c.kind, Kind::Pad { .. }) && end_square(p, *r, c)) {
+                        out.push(PadJoint { net: item.net, layer, at: p, width, full: 2.0 * *r as f64, track: id, pad });
+                    }
+                    continue;
+                }
+            }
             if ours.iter().any(|(_, c)| end_square(p, *r, c)) {
                 continue;
             }
@@ -465,6 +476,44 @@ pub fn mend_pad_joints(board: &mut Board, laid: &mut Vec<ItemId>) -> usize {
         }
     }
     mended
+}
+
+/// Where a track's round end at `p`, inside a polygon pad, is not wholly inside it and a corner
+/// of the pad (a turn of more than 30 degrees) lies under the track near its end, `q` the track's
+/// other end: the copper's width round that corner, from the corner across the track to its far
+/// edge.
+fn straddled_corner(pad: &Shape, p: Point, q: Point, r: Nm) -> Option<f64> {
+    let Shape::Polygon(poly) = pad else { return None };
+    let r = r as f64;
+    if pad.depth(p) >= r - 500.0 || poly.len() < 3 {
+        return None;
+    }
+    let (dx, dy) = ((p.x - q.x) as f64, (p.y - q.y) as f64);
+    let len = dx.hypot(dy);
+    if len == 0.0 {
+        return None;
+    }
+    let (ux, uy) = (dx / len, dy / len);
+    let n = poly.len();
+    let mut narrowest: Option<f64> = None;
+    for i in 0..n {
+        let (prev, v, next) = (poly[(i + n - 1) % n], poly[i], poly[(i + 1) % n]);
+        let (ax, ay) = ((v.x - prev.x) as f64, (v.y - prev.y) as f64);
+        let (bx, by) = ((next.x - v.x) as f64, (next.y - v.y) as f64);
+        let turn = (ax * by - ay * bx).atan2(ax * bx + ay * by).abs();
+        if turn < 30f64.to_radians() {
+            continue;
+        }
+        // The corner's place along the track from its end, and across it.
+        let (cx, cy) = ((v.x - p.x) as f64, (v.y - p.y) as f64);
+        let (along, across) = (cx * ux + cy * uy, -cx * uy + cy * ux);
+        if along > r || along < -2.0 * r || across.abs() >= r {
+            continue;
+        }
+        let width = r + across.abs();
+        narrowest = Some(narrowest.map_or(width, |w: f64| w.min(width)));
+    }
+    narrowest.filter(|&w| w < 2.0 * r)
 }
 
 fn closest_on_segment(a: Point, b: Point, p: Point) -> (f64, Point) {
@@ -1081,6 +1130,35 @@ mod tests {
         assert!(found[0].width < found[0].full);
         assert_eq!(mend_pad_joints(&mut board, &mut laid), 1);
         assert!(pad_joints(&board, &laid).is_empty());
+    }
+
+    #[test]
+    fn a_track_ending_in_a_pads_corner_is_carried_on_into_it_and_one_along_an_edge_is_left() {
+        // 59pct_keyboard's D01:9: a 0.18 mm track ending 1 um inside a 1 mm square pad's corner,
+        // half its round end outside, 0.13 mm of copper round the corner as KiCad measures it.
+        let mut board = empty_board();
+        let pad = board.insert(Item {
+            kind: Kind::Pad { footprint: 0, number: "C".into(), plated: false },
+            net: 1,
+            layers: 1,
+            shape: Shape::Polygon(vec![Point::new(-500_000, -500_000), Point::new(500_000, -500_000), Point::new(500_000, 500_000), Point::new(-500_000, 500_000)]),
+            hole: None,
+            locked: true,
+            span: None,
+        });
+        let track = |board: &mut Board, end: (Nm, Nm), from: (Nm, Nm)| board.insert(Item { shape: Shape::Capsule { a: Point::new(end.0, end.1), b: Point::new(from.0, from.1), r: 90_000 }, ..seg(Point::new(0, 0), Point::new(0, 0)) });
+        let corner = track(&mut board, (499_000, 497_000), (5_149_000, 13_197_000));
+        let mut laid = vec![corner];
+        let found = pad_joints(&board, &laid);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!((found[0].track, found[0].pad), (corner, pad));
+        assert_eq!(mend_pad_joints(&mut board, &mut laid), 1);
+        assert!(pad_joints(&board, &laid).is_empty(), "{:?}", pad_joints(&board, &laid));
+        // An end as shallow in the middle of an edge crosses it at the track's full width.
+        let mut board = empty_board();
+        board.insert(Item { kind: Kind::Pad { footprint: 0, number: "C".into(), plated: false }, net: 1, layers: 1, shape: Shape::Polygon(vec![Point::new(-500_000, -500_000), Point::new(500_000, -500_000), Point::new(500_000, 500_000), Point::new(-500_000, 500_000)]), hole: None, locked: true, span: None });
+        let edge = track(&mut board, (0, 497_000), (0, 5_000_000));
+        assert!(pad_joints(&board, &[edge]).is_empty());
     }
 
     #[test]
