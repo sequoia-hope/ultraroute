@@ -28,6 +28,7 @@ use board::{connectivity, connectivity_without_pours, Board, Item, ItemId, Kind,
 use kicad_pcb::{apply, mm, Edit};
 use serde_json::{json, Value};
 
+mod joint_trace;
 mod regions;
 pub mod stages;
 pub mod stats;
@@ -1211,6 +1212,8 @@ pub fn route(
     let threads = a.threads.unwrap_or_else(default_threads);
     let mut mark = Mark::take(a, &board, &mut stats);
     let (mut ran, mut stopped): (Vec<&str>, bool) = (Vec::new(), false);
+    let mut trace = joint_trace::Trace::from_env();
+    trace.after("input", &board);
     for entry in STAGES {
         let name = entry.stage.name();
         if entry.within.is_some_and(|w| !ran.contains(&w)) || !entry.stage.enabled(a, &board, &ledger) {
@@ -1249,7 +1252,9 @@ pub fn route(
         let done = mark.close(a, &board, name, (begun, from), detail, &mut stats);
         stopped |= hooks.stage(name, &board, &ledger, StageEvent::End(&done)) == Flow::Stop;
         stats.stages.push(done);
+        trace.after(name, &board);
     }
+    trace.write(&board);
     timeline.enter(&clock.run, "done");
     finish(a, &board, &mut ledger, &live, stats, &timeline, (begun, started), &cancel)
 }

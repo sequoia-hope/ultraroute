@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kissing joints</title>
+<style>
+:root {
+  --bg: #f7f6f2; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a64; --rule: #dedcd4;
+  --copper: #c9822b; --copper-line: #5a3510; --other: #c9c6bb; --gone: #d23c3c; --mark: #1f6fd1;
+  --pad: #b9a26a; --via: #8f7a4a; --good: #2f8a4c;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161614; --panel: #1f1f1c; --ink: #ecebe6; --muted: #a09f97; --rule: #383731;
+    --copper: #d9953e; --copper-line: #fff1d6; --other: #4a4842; --gone: #ff6b6b; --mark: #6fb0ff;
+    --pad: #8c7b50; --via: #a68d58; --good: #5cc27f;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161614; --panel: #1f1f1c; --ink: #ecebe6; --muted: #a09f97; --rule: #383731;
+  --copper: #d9953e; --copper-line: #fff1d6; --other: #4a4842; --gone: #ff6b6b; --mark: #6fb0ff;
+  --pad: #8c7b50; --via: #a68d58; --good: #5cc27f;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, sans-serif; }
+main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 64px; }
+h1 { font-size: 26px; margin: 0 0 4px; }
+h2 { font-size: 19px; margin: 36px 0 8px; border-top: 1px solid var(--rule); padding-top: 20px; }
+p { max-width: 760px; }
+.muted { color: var(--muted); }
+table { border-collapse: collapse; font-variant-numeric: tabular-nums; margin: 8px 0; }
+th, td { padding: 3px 10px; text-align: right; border-bottom: 1px solid var(--rule); }
+th:first-child, td:first-child { text-align: left; }
+th { font-weight: 600; color: var(--muted); font-size: 13px; }
+.wrap { overflow-x: auto; }
+.bar { display: inline-block; height: 9px; background: var(--copper); vertical-align: middle; border-radius: 2px; }
+.bar.after { background: var(--good); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 14px; }
+.card { background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 10px; }
+.card h3 { font-size: 13px; margin: 0 0 6px; font-weight: 600; word-break: break-all; }
+.pair { display: flex; gap: 6px; }
+.pair figure { margin: 0; flex: 1; min-width: 0; }
+.pair figcaption { font-size: 12px; color: var(--muted); text-align: center; }
+svg.view { width: 100%; height: auto; display: block; background: var(--bg); border-radius: 4px; }
+.legend span { display: inline-flex; align-items: center; gap: 5px; margin-right: 14px; font-size: 13px; }
+.sw { width: 14px; height: 10px; border-radius: 2px; display: inline-block; }
+.controls { margin: 8px 0 12px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; font-size: 14px; }
+select, button { font: inherit; background: var(--panel); color: var(--ink); border: 1px solid var(--rule); border-radius: 5px; padding: 3px 8px; }
+.diagram { display: flex; gap: 16px; flex-wrap: wrap; }
+.diagram figure { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 8px; flex: 1; min-width: 240px; }
+.diagram figcaption { font-size: 13px; color: var(--muted); }
+code { font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+<h1>Kissing joints: where they come from</h1>
+<p class="muted">Track ends that touch their net's copper without meeting it squarely: not on another track's end or centre line, nor in a pad or at a via's centre. Recorded by <code>ULTRAROUTE_JOINT_TRACE</code> after every stage and at marks inside the shove and the pruning. Branch <code>fix/square-joints</code>.</p>
+
+<h2>The shape of the problem</h2>
+<div class="diagram" id="diagram"></div>
+
+<h2>What makes them</h2>
+<p>Every gap is a whole grid step: 50 µm, 70.7 µm (a diagonal), 100 µm or 111.8 µm. A short link of the grid path was taken out after the path was laid, and the tracks either side were left joined only where their round ends overlap. Off-centre ends born in each stage, and how many reach the output (37 boards plus the earring, recipe default, seed 0):</p>
+<div class="wrap" id="stages"></div>
+<p>Inside the shove: the region plough tidies up after every try (<code>settle</code>), and that runs the router's dangling-copper pruning (<code>prune_dangling_of</code>). The pruning removed a link as "dangling" or "covered" whenever the tracks on either side counted as <em>firmly joined</em> without it. It judged firmness by overlap width, and it counted an end lying inside the other track's round end as full width. Tracks one grid step apart passed that test, so the link that actually joined them went. Steps, before the fix (4 boards with the finest marks):</p>
+<div class="wrap" id="steps"></div>
+
+<h2>The pruning step, before and after (old rule)</h2>
+<p class="legend"><span><i class="sw" style="background:var(--copper)"></i>the net's copper on that layer</span><span><i class="sw" style="background:var(--copper-line)"></i>centre lines and ends</span><span><i class="sw" style="background:var(--gone)"></i>the link the pruning took out</span><span><i class="sw" style="background:var(--mark)"></i>the end left off-centre</span><span><i class="sw" style="background:var(--other)"></i>other nets</span></p>
+<div class="controls"><label>Step <select id="evstep"><option value="">all</option><option>prune/dangling</option><option>prune/redundant</option></select></label><label>Board <select id="evboard"><option value="">all</option></select></label></div>
+<div class="grid" id="events"></div>
+
+<h2>The fix</h2>
+<p>Firm now means square, the way drawn copper joins: a track end on another track's end or centre line, inside its straight body (which its own body then crosses at full width), or wholly inside its round end; at a via's centre or wholly inside the via; or inside a pad. There is no width threshold. A link is pruned only if its neighbours meet squarely without it.</p>
+<div class="wrap" id="boards"></div>
+<p>After the fix, by stage:</p>
+<div class="wrap" id="stages-after"></div>
+
+<h2>What is left after the fix</h2>
+<p>The off-centre ends still in the output, with the stage or step that made them. Each one is drawn as routed.</p>
+<div class="controls"><label>Kind <select id="rmkind"><option value="">all</option><option>cap</option><option>via</option><option>pad</option></select></label><label>Made by <select id="rmstep"><option value="">all</option></select></label></div>
+<div class="grid" id="remain"></div>
+</main>
+<script>
+const NS = "http://www.w3.org/2000/svg";
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function el(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+const H = (tag, html, parent) => { const e = document.createElement(tag); e.innerHTML = html; if (parent) parent.appendChild(e); return e; };
+const key = c => JSON.stringify(c);
+
+// One view: the copper of `items` near `at` on layer bit `lbit`, `gone` drawn red, ends marked.
+// Drawn in micrometres from `at`: board nanometres are too large for the renderer's floats.
+function view(items, at, lbit, net, ends, gone, half = 380000) {
+  const u = v => v / 1000, X = p => u(p[0] - at[0]), Y = p => u(p[1] - at[1]), h = u(half);
+  const svg = el("svg", { class: "view", viewBox: `${-h} ${-h} ${2 * h} ${2 * h}` });
+  const onLayer = c => (c[2] & lbit) !== 0;
+  const draw = (c, fill) => {
+    const [kind, , , r, pts] = c;
+    if (r === 0) {
+      el("polygon", { points: pts.map(p => `${X(p)},${Y(p)}`).join(" "), fill }, svg);
+    } else {
+      el("line", { x1: X(pts[0]), y1: Y(pts[0]), x2: X(pts[1]), y2: Y(pts[1]), stroke: fill, "stroke-width": 2 * u(r), "stroke-linecap": "round" }, svg);
+    }
+  };
+  const mine = items.filter(c => c[1] === net && onLayer(c));
+  for (const c of items) if (onLayer(c) && c[1] !== net) draw(c, css("--other"));
+  for (const c of mine) draw(c, c[0] === "p" ? css("--pad") : c[0] === "v" ? css("--via") : css("--copper"));
+  for (const c of gone || []) draw(c, css("--gone"));
+  for (const c of [...mine, ...(gone || [])]) {
+    if (c[0] !== "t") continue;
+    const [a, b] = c[4];
+    el("line", { x1: X(a), y1: Y(a), x2: X(b), y2: Y(b), stroke: css("--copper-line"), "stroke-width": 5 }, svg);
+    for (const p of [a, b]) el("circle", { cx: X(p), cy: Y(p), r: 9, fill: css("--copper-line") }, svg);
+  }
+  for (const e of ends || []) el("circle", { cx: X(e), cy: Y(e), r: u(e[3]), fill: "none", stroke: css("--mark"), "stroke-width": 9, "stroke-dasharray": "22 14" }, svg);
+  el("line", { x1: -h + 30, y1: h - 40, x2: -h + 130, y2: h - 40, stroke: css("--muted"), "stroke-width": 8 }, svg);
+  const t = el("text", { x: -h + 30, y: h - 60, "font-size": 36, fill: css("--muted") }, svg);
+  t.textContent = "0.1 mm";
+  return svg;
+}
+
+function diagram() {
+  const box = document.getElementById("diagram");
+  const shapes = [
+    ["Drawn joint: the two tracks share an end, so their round ends are concentric and the copper is full width through the bend.", [[[-300000, 100000], [0, 0]], [[0, 0], [250000, -200000]]], null],
+    ["Kissing joint: the 70.7 µm link between the ends was pruned. What joins them now is the overlap of two offset round ends, narrower than the track.", [[[-300000, 100000], [-50000, 50000]], [[0, 0], [250000, -200000]]], [[-50000, 50000], [0, 0]]],
+  ];
+  for (const [cap, segs, gone] of shapes) {
+    const f = document.createElement("figure");
+    const items = segs.map(s => ["t", 1, 1, 125000, s]);
+    f.appendChild(view(items, [0, 0], 1, 1, gone ? [[-50000, 50000, 0, 125000]] : [], gone ? [["t", 1, 1, 125000, gone]] : [], 420000));
+    H("figcaption", cap, f);
+    box.appendChild(f);
+  }
+}
+
+function stageTable(rows, id) {
+  const max = Math.max(...rows.map(r => r.made.cap + r.made.via + r.made.pad), 1);
+  let h = "<table><tr><th>stage</th><th>track-track</th><th>track-via</th><th>track-pad</th><th>made</th><th></th><th>in output</th></tr>";
+  for (const r of rows) {
+    const m = r.made.cap + r.made.via + r.made.pad, o = r.out.cap + r.out.via + r.out.pad;
+    h += `<tr><td>${r.stage}</td><td>${r.made.cap}</td><td>${r.made.via}</td><td>${r.made.pad}</td><td>${m}</td><td style="width:180px;text-align:left"><span class="bar" style="width:${(170 * m / max).toFixed(1)}px"></span></td><td><b>${o}</b></td></tr>`;
+  }
+  const tm = rows.reduce((s, r) => s + r.made.cap + r.made.via + r.made.pad, 0), to = rows.reduce((s, r) => s + r.out.cap + r.out.via + r.out.pad, 0);
+  h += `<tr><td><b>total</b></td><td></td><td></td><td></td><td><b>${tm}</b></td><td></td><td><b>${to}</b></td></tr></table>`;
+  document.getElementById(id).innerHTML = h;
+}
+
+function stepTable(rows, id) {
+  let h = "<table><tr><th>step</th><th>made</th><th>undone later</th><th>in output</th></tr>";
+  for (const r of rows) h += `<tr><td><code>${r.step}</code></td><td>${r.made}</td><td>${r.undone}</td><td><b>${r.out}</b></td></tr>`;
+  document.getElementById(id).innerHTML = h + "</table>";
+}
+
+function boardTable(rows) {
+  const max = Math.max(...rows.map(r => r.before), 1);
+  let h = "<table><tr><th>board</th><th>before</th><th>after</th><th style='text-align:left'>off-centre ends in the output</th></tr>";
+  let tb = 0, ta = 0;
+  for (const r of rows) {
+    tb += r.before; ta += r.after;
+    if (!r.before && !r.after) continue;
+    h += `<tr><td>${r.board}</td><td>${r.before}</td><td>${r.after}</td><td style="text-align:left;width:260px"><span class="bar" style="width:${(240 * r.before / max).toFixed(1)}px"></span><br><span class="bar after" style="width:${Math.max(1, 240 * r.after / max).toFixed(1)}px"></span></td></tr>`;
+  }
+  h += `<tr><td><b>${rows.length} boards</b></td><td><b>${tb}</b></td><td><b>${ta}</b></td><td></td></tr></table>`;
+  document.getElementById("boards").innerHTML = h;
+}
+
+function events(data) {
+  const box = document.getElementById("events");
+  const step = document.getElementById("evstep").value, board = document.getElementById("evboard").value;
+  box.innerHTML = "";
+  for (const e of data.events.filter(e => (!step || e.step === step) && (!board || e.board === board))) {
+    const after = new Set(e.after.map(key));
+    const gone = e.before.filter(c => !after.has(key(c)) && c[1] === e.netid);
+    const card = H("div", `<h3>${e.board} · ${e.net} · ${e.layer} · <code>${e.step}</code></h3>`, box);
+    card.className = "card";
+    const pair = H("div", "", card); pair.className = "pair";
+    const f1 = H("figure", "", pair), f2 = H("figure", "", pair);
+    f1.appendChild(view(e.before.filter(c => after.has(key(c)) || c[1] !== e.netid), e.at, e.lbit, e.netid, [], gone));
+    H("figcaption", "before: the link in red", f1);
+    f2.appendChild(view(e.after, e.at, e.lbit, e.netid, e.ends, []));
+    H("figcaption", "after: ends one step apart", f2);
+  }
+}
+
+function remain(data) {
+  const box = document.getElementById("remain");
+  const kind = document.getElementById("rmkind").value, step = document.getElementById("rmstep").value;
+  box.innerHTML = "";
+  for (const r of data.remain.filter(r => (!kind || r.kind === kind) && (!step || r.step === step))) {
+    const card = H("div", `<h3>${r.board} · ${r.net} · ${r.layer}<br><span class="muted">${r.kind}, ${(r.off / 1000).toFixed(1)} µm off · made by <code>${r.step}</code></span></h3>`, box);
+    card.className = "card";
+    card.appendChild(view(r.after, r.at, r.lbit, r.netid, r.ends, []));
+  }
+}
+
+fetch("data.json").then(r => r.json()).then(data => {
+  diagram();
+  stageTable(data.before_stages, "stages");
+  stepTable(data.steps_before, "steps");
+  stageTable(data.after_stages, "stages-after");
+  boardTable(data.boards);
+  const evb = document.getElementById("evboard");
+  for (const b of [...new Set(data.events.map(e => e.board))]) H("option", b, evb);
+  const rms = document.getElementById("rmstep");
+  for (const s of [...new Set(data.remain.map(r => r.step))].sort()) H("option", s, rms);
+  for (const id of ["evstep", "evboard"]) document.getElementById(id).onchange = () => events(data);
+  for (const id of ["rmkind", "rmstep"]) document.getElementById(id).onchange = () => remain(data);
+  events(data);
+  remain(data);
+});
+</script>
+</body>
+</html>

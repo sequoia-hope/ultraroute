@@ -175,6 +175,7 @@ pub(crate) fn prune_dangling_of(board: &mut Board, soft: &mut Vec<ItemId>, which
                         spans.extend(item.span.take());
                         pruned += 1;
                         watch(board, &item);
+                        board::probe::mark("prune/redundant", board);
                     }
                 }
                 continue;
@@ -184,12 +185,14 @@ pub(crate) fn prune_dangling_of(board: &mut Board, soft: &mut Vec<ItemId>, which
                     spans.extend(gone);
                     soft.extend(new_ids);
                     pruned += 1;
+                    board::probe::mark("prune/collapse-via", board);
                     continue;
                 }
                 if let Some((span, new_ids)) = trim_overhang(board, id) {
                     spans.extend(span);
                     soft.extend(new_ids);
                     pruned += 1;
+                    board::probe::mark("prune/trim-overhang", board);
                 }
                 continue;
             }
@@ -197,6 +200,7 @@ pub(crate) fn prune_dangling_of(board: &mut Board, soft: &mut Vec<ItemId>, which
                 spans.extend(item.span.take());
                 pruned += 1;
                 watch(board, &item);
+                board::probe::mark("prune/dangling", board);
             }
         }
         soft.retain(|id| board.item(*id).is_some());
@@ -223,7 +227,10 @@ pub fn split_at_joins(board: &mut Board, soft: &mut Vec<ItemId>) -> (usize, Vec<
         }
         let layer = item.layers.trailing_zeros() as usize;
         // An end of another track of the net on the centre line, away from this track's ends:
-        // within a quarter of the width, so the halves bend by no more than that.
+        // within a quarter of the width, so the halves bend by no more than that. Away is
+        // measured along the line: an end beside a short track, near its middle but off to the
+        // side, would split it into two halves each of which the other's far end then splits,
+        // making the track again, for ever.
         let lean = (r / 2).max(1);
         let at = board.near(layer, item.shape.bbox()).into_iter().filter(|&o| o != id).find_map(|o| {
             let other = board.item(o)?;
@@ -233,7 +240,7 @@ pub fn split_at_joins(board: &mut Board, soft: &mut Vec<ItemId>) -> (usize, Vec<
             }
             [*p, *q].into_iter().find(|&e| {
                 let (_, foot) = closest_on_segment(a, b, e);
-                foot.distance(e) <= lean as f64 && e.distance(a) > lean as f64 && e.distance(b) > lean as f64
+                foot.distance(e) <= lean as f64 && foot.distance(a) > lean as f64 && foot.distance(b) > lean as f64
             })
         });
         let Some(at) = at else { continue };
@@ -367,6 +374,99 @@ pub fn mend_joints(board: &mut Board, laid: &mut Vec<ItemId>) -> usize {
     mended
 }
 
+/// A track end joined to a pad of its net only where its round end overlaps the pad's edge:
+/// KiCad counts them joined, but the copper across the edge is the chord the end cuts there,
+/// narrower than the track.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PadJoint {
+    pub net: u32,
+    pub layer: usize,
+    pub at: Point,
+    /// The chord across the pad's edge, and the track's width, in nm.
+    pub width: f64,
+    pub full: f64,
+    pub track: ItemId,
+    pub pad: ItemId,
+}
+
+/// The ends of the router's tracks that meet nothing of their net squarely ([`end_square`]) yet
+/// overlap a pad of it: the end's centre lies outside the pad.
+pub fn pad_joints(board: &Board, laid: &[ItemId]) -> Vec<PadJoint> {
+    let mut out = Vec::new();
+    for &id in laid {
+        let Some(item) = board.item(id) else { continue };
+        let (Kind::Track, Shape::Capsule { a, b, r }) = (&item.kind, &item.shape) else { continue };
+        if item.net == 0 || a == b {
+            continue;
+        }
+        let layer = item.layers.trailing_zeros() as usize;
+        for p in [*a, *b] {
+            let near = board.near(layer, board::BBox::of([p]).grow(2 * *r));
+            let ours: Vec<(ItemId, &Item)> = near
+                .iter()
+                .copied()
+                .filter(|&o| o != id)
+                .filter_map(|o| board.item(o).map(|c| (o, c)))
+                .filter(|(_, c)| c.net == item.net && c.on(layer) && c.is_copper() && (!c.refilled() || board.is_plane(c)))
+                .collect();
+            if ours.iter().any(|(_, c)| end_square(p, *r, c)) {
+                continue;
+            }
+            let pad = ours
+                .iter()
+                .filter(|(_, c)| matches!(c.kind, Kind::Pad { .. }))
+                .map(|&(o, c)| (o, point_gap(&c.shape, p)))
+                .filter(|&(_, d)| d < *r as f64)
+                .min_by(|x, y| x.1.total_cmp(&y.1));
+            if let Some((pad, d)) = pad {
+                let r = *r as f64;
+                out.push(PadJoint { net: item.net, layer, at: p, width: 2.0 * (r * r - d * d).max(0.0).sqrt(), full: 2.0 * r, track: id, pad });
+            }
+        }
+    }
+    out
+}
+
+/// Lays a short piece from each pad joint's end into the pad, so the track ends inside it: to
+/// where the pad is as deep as the piece's half width, else to its centre, at the end's width or,
+/// where that breaks a rule, the narrowest the net's rules allow; the pieces join `laid`. How
+/// many it mended.
+pub fn mend_pad_joints(board: &mut Board, laid: &mut Vec<ItemId>) -> usize {
+    let mut mended = 0;
+    for joint in pad_joints(board, laid) {
+        let (Some(track), Some(pad)) = (board.item(joint.track).cloned(), board.item(joint.pad).cloned()) else { continue };
+        let Shape::Capsule { r, .. } = track.shape else { continue };
+        let centre = match &pad.shape {
+            Shape::Capsule { a, b, .. } => closest_on_segment(*a, *b, joint.at).1,
+            Shape::Polygon(p) => {
+                let n = p.len().max(1) as Nm;
+                Point::new(p.iter().map(|q| q.x).sum::<Nm>() / n, p.iter().map(|q| q.y).sum::<Nm>() / n)
+            }
+        };
+        if !pad.shape.contains(centre) || centre == joint.at {
+            continue;
+        }
+        let least = (board.min_joint_of(track.net) + 1) / 2;
+        let along = |t: f64| Point::new(joint.at.x + ((centre.x - joint.at.x) as f64 * t).round() as Nm, joint.at.y + ((centre.y - joint.at.y) as f64 * t).round() as Nm);
+        'widths: for r in [r, least] {
+            if (2 * r) as f64 <= joint.width {
+                break;
+            }
+            let deep = (1..=20).map(|k| along(k as f64 / 20.0)).find(|&q| pad.shape.depth(q) >= r as f64).unwrap_or(centre);
+            for to in [deep, centre] {
+                let piece = board.insert(Item { shape: Shape::Capsule { a: joint.at, b: to, r }, span: None, locked: false, ..track.clone() });
+                if check_item(board, piece).is_empty() {
+                    laid.push(piece);
+                    mended += 1;
+                    break 'widths;
+                }
+                board.discard(piece);
+            }
+        }
+    }
+    mended
+}
+
 fn closest_on_segment(a: Point, b: Point, p: Point) -> (f64, Point) {
     let (dx, dy) = ((b.x - a.x) as f64, (b.y - a.y) as f64);
     let len_sq = dx * dx + dy * dy;
@@ -462,6 +562,17 @@ fn end_overlaps(board: &Board, track_id: ItemId, p: Point, q: Point, r: Nm, othe
         gap == 0.0 || gap < reach - 0.5
     };
     touches && (other.shape.contains(p) || point_gap(&other.shape, p) <= point_gap(&other.shape, q))
+}
+
+/// Whether a track's round end at `p` (radius `r`) meets `other` squarely: on a track's end or
+/// centre line, at a via's centre or wholly inside it ([`board::meets_squarely`]), inside a pad
+/// (to within a micrometre of its edge), or anywhere in a pour.
+fn end_square(p: Point, r: Nm, other: &Item) -> bool {
+    match (&other.kind, &other.shape) {
+        (Kind::Track | Kind::Via, Shape::Capsule { a, b, r: r2 }) => board::meets_squarely(p, r as f64, *a, *b, *r2 as f64),
+        (Kind::Pad { .. }, shape) => shape.contains(p) || point_gap(shape, p) <= 1_000.0,
+        _ => true,
+    }
 }
 
 /// When a track has one loose end because another track joined it mid-segment (such as a global
@@ -714,8 +825,10 @@ pub(crate) fn dangles(board: &Board, id: ItemId) -> bool {
         (Kind::Track, Shape::Capsule { a, b, r }) => {
             let layer = item.layers.trailing_zeros() as usize;
             let near = board.near(layer, item.shape.bbox());
+            // An end that only grazes copper, off its centre line or outside a pad, leads nowhere
+            // a drawn joint would: the overlap left is narrower than the track.
             let loose_end = [(*a, *b), (*b, *a)].iter().any(|&(p, q)| {
-                !near.iter().any(|&o| ours(layer, o).is_some_and(|other| end_overlaps(board, id, p, q, *r, o, other)))
+                !near.iter().any(|&o| ours(layer, o).is_some_and(|other| end_overlaps(board, id, p, q, *r, o, other) && end_square(p, *r, other)))
             });
             if loose_end {
                 return true;
@@ -926,6 +1039,64 @@ mod tests {
         prune_dangling(&mut board, &mut soft);
         assert!(board.item(link).is_some(), "the link carries the joint at full width");
         assert!(narrow_joints(&board, &soft).is_empty());
+    }
+
+    #[test]
+    fn a_link_between_two_runs_one_step_apart_stays_though_each_run_ends_in_the_others_round_end() {
+        // sms-cart's /a5 on F.Cu: two diagonal runs whose ends lie a grid step apart, each inside
+        // the other's round end, and the step between them. The shove's tidy-up took the step out
+        // as dangling when an end inside a round end counted as a full-width joint.
+        let mut board = empty_board();
+        let r = 125_000;
+        pad_at(&mut board, 2_900_000, 2_950_000);
+        pad_at(&mut board, 0, 0);
+        let put = |board: &mut Board, a: (Nm, Nm), b: (Nm, Nm)| board.insert(Item { shape: Shape::Capsule { a: Point::new(a.0, a.1), b: Point::new(b.0, b.1), r }, ..seg(Point::new(0, 0), Point::new(0, 0)) });
+        let first = put(&mut board, (2_900_000, 2_950_000), (300_000, 350_000));
+        let link = put(&mut board, (300_000, 350_000), (300_000, 300_000));
+        let second = put(&mut board, (300_000, 300_000), (0, 0));
+        let mut soft = vec![first, link, second];
+        prune_dangling(&mut board, &mut soft);
+        assert!(board.item(link).is_some(), "the runs meet squarely only through the link");
+    }
+
+    #[test]
+    fn a_track_ending_short_of_its_pad_is_found_and_carried_on_into_it() {
+        // easy2350's U1-6 on +1V1: a 0.25 mm track's end 0.1 mm short of a QFN pad's end, joined
+        // only by the chord its round end cuts across the pad's edge.
+        let mut board = empty_board();
+        let pad = board.insert(Item {
+            kind: Kind::Pad { footprint: 0, number: "6".into(), plated: false },
+            net: 1,
+            layers: 1,
+            shape: Shape::Polygon(vec![Point::new(-100_000, -437_500), Point::new(100_000, -437_500), Point::new(100_000, 437_500), Point::new(-100_000, 437_500)]),
+            hole: None,
+            locked: true,
+            span: None,
+        });
+        let track = board.insert(Item { shape: Shape::Capsule { a: Point::new(0, 537_500), b: Point::new(0, 2_000_000), r: 125_000 }, ..seg(Point::new(0, 0), Point::new(0, 0)) });
+        let mut laid = vec![track];
+        let found = pad_joints(&board, &laid);
+        assert_eq!(found.len(), 1);
+        assert_eq!((found[0].track, found[0].pad), (track, pad));
+        assert!(found[0].width < found[0].full);
+        assert_eq!(mend_pad_joints(&mut board, &mut laid), 1);
+        assert!(pad_joints(&board, &laid).is_empty());
+    }
+
+    #[test]
+    fn a_short_track_is_not_split_where_an_end_lies_beside_it() {
+        // PCIE-to-MXM's write stage: a 64 um piece of a 0.25 mm track, another track's end 60 um
+        // to the side of its middle. Split there, each half was split again at the other's far
+        // end, making the piece again, for ever.
+        let mut board = empty_board();
+        let r = 125_000;
+        let put = |board: &mut Board, a: (Nm, Nm), b: (Nm, Nm)| board.insert(Item { shape: Shape::Capsule { a: Point::new(a.0, a.1), b: Point::new(b.0, b.1), r }, ..seg(Point::new(0, 0), Point::new(0, 0)) });
+        let piece = put(&mut board, (85_950_000, 126_630_000), (85_910_000, 126_580_000));
+        let beside = put(&mut board, (85_976_850, 126_567_500), (86_976_850, 126_567_500));
+        let mut soft = vec![piece, beside];
+        let (split, _) = split_at_joins(&mut board, &mut soft);
+        assert_eq!(split, 0);
+        assert!(board.item(piece).is_some());
     }
 
     #[test]
