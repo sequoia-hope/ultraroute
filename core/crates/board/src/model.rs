@@ -1129,6 +1129,15 @@ impl Board {
         self.laid_islands.contains(&id)
     }
 
+    /// Whether `item`, a via, stands in laid copper of its own net ([`Board::laid_islands`]): a
+    /// reference layout's via in a zone the rules protect, which is part of that copper and
+    /// stays when the board is stripped for routing (easy2350's PGND and COUT vias).
+    pub fn in_laid_copper(&self, item: &Item) -> bool {
+        let Shape::Capsule { a, .. } = item.shape else { return false };
+        item.kind == Kind::Via
+            && self.laid_islands.iter().filter_map(|&id| self.item(id)).any(|piece| piece.net == item.net && piece.layers & item.layers != 0 && piece.shape.contains(a))
+    }
+
     /// Finds the [`Board::laid_islands`] and [`Board::join_islands`] among the zones' fills, and
     /// keeps them as laid. `keep_islands` are the zones that keep every island of their fill.
     fn lay_protected_copper(&mut self, keep_islands: &std::collections::BTreeSet<usize>) {

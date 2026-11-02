@@ -1313,7 +1313,12 @@ fn prepare(a: &Args, board: &mut Board, ledger: &mut Ledger) {
         ledger.removed.extend(ripped.iter().filter_map(|it| it.span));
     }
     if a.strip || a.strip_all {
-        let loose: Vec<ItemId> = board.items().filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via) && (a.strip_all || !it.locked)).map(|(id, _)| id).collect();
+        // A via in laid copper of its net is part of that copper: --strip keeps it.
+        let loose: Vec<ItemId> = board
+            .items()
+            .filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via) && (a.strip_all || (!it.locked && !board.in_laid_copper(it))))
+            .map(|(id, _)| id)
+            .collect();
         for id in loose {
             if let Some(it) = board.remove(id) {
                 ledger.removed.extend(it.span);

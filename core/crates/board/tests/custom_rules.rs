@@ -290,6 +290,10 @@ fn a_copper_zone_a_rule_keeps_other_nets_off_is_laid() {
     let rule = "(version 1)\n(rule \"keep strip A\" (condition \"A.intersectsArea('strip A') && A.NetName != 'A'\") (constraint disallow track via))";
     let kept = board(body, rule);
     assert!(kept.is_laid(strip(&kept)) && kept.must_join(strip(&kept)));
+    // A via of A in it is part of that copper; one of B, or one of A outside it, is not.
+    let via = |net, x: f64| Item { kind: Kind::Via, net, layers: u64::MAX >> (64 - kept.layers.len()), shape: Shape::Capsule { a: Point::new(nm(x * 1e-3), nm(20.3e-3)), b: Point::new(nm(x * 1e-3), nm(20.3e-3)), r: nm(0.3e-3) }, hole: Some((Point::new(nm(x * 1e-3), nm(20.3e-3)), nm(0.15e-3))), locked: false, span: None };
+    assert!(kept.in_laid_copper(&via(1, 12.0)));
+    assert!(!kept.in_laid_copper(&via(2, 12.0)) && !kept.in_laid_copper(&via(1, 18.0)) && !open.in_laid_copper(&via(1, 12.0)));
     // A rule that lets B's vias in protects nothing: a via of B would cut the fill.
     let tracks_only = "(version 1)\n(rule \"keep strip A\" (condition \"A.intersectsArea('strip A') && A.NetName != 'A'\") (constraint disallow track))";
     let half = board(body, tracks_only);
