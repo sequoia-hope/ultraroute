@@ -951,10 +951,10 @@ impl Stage for Write {
         // nowhere, which KiCad reports as dangling.
         let (doubled, spans) = grid::drop_duplicates(board, &mut laid);
         ledger.removed.extend(spans);
-        let mut rest: Vec<ItemId> = laid.iter().copied().filter(|id| !pieces.contains(id)).collect();
+        let (mut rest, kept): (Vec<ItemId>, Vec<ItemId>) = laid.iter().partition(|id| !pieces.contains(id));
         let (pruned, spans) = grid::prune_dangling(board, &mut rest);
         ledger.removed.extend(spans);
-        rest.extend(pieces.into_iter().filter(|&id| board.item(id).is_some()));
+        rest.extend(kept.into_iter().filter(|&id| board.item(id).is_some()));
         laid = rest;
         if doubled + pruned > 0 {
             eprintln!("dropped {doubled} doubled and pruned {pruned} dangling after the mends");
