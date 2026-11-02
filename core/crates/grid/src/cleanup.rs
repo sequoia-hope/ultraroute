@@ -382,6 +382,120 @@ pub fn mend_joints(board: &mut Board, laid: &mut Vec<ItemId>) -> usize {
     mended
 }
 
+/// Where one of the router's tracks grazes other copper of its net on its layer without joining
+/// it end to end: their copper overlaps, but by less than the narrower is wide, so KiCad measures
+/// the sliver between them as a neck (Own-Mailbox's GND, two 0.2 mm tracks 0.197 mm apart centre
+/// to centre, 0.03 mm across). `from` on the track's centre line and `to` in the other copper,
+/// nearest each other, and the overlap, in nm.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Graze {
+    pub track: ItemId,
+    pub other: ItemId,
+    pub from: Point,
+    pub to: Point,
+    pub overlap: f64,
+}
+
+/// The closest points of segments `ab` and `cd`, which do not cross.
+fn closest_points(a: Point, b: Point, c: Point, d: Point) -> (Point, Point) {
+    let candidates = [(a, closest_on_segment(c, d, a).1), (b, closest_on_segment(c, d, b).1), (closest_on_segment(a, b, c).1, c), (closest_on_segment(a, b, d).1, d)];
+    candidates.into_iter().min_by(|x, y| x.0.distance(x.1).total_cmp(&y.0.distance(y.1))).expect("four")
+}
+
+/// The router's tracks that graze copper of their net ([`Graze`]): a track or via whose centre
+/// line stays clear of the track's, or a pad its centre line stays outside of, overlapping it by
+/// less than the narrower's width, and neither meeting the other squarely at an end.
+pub fn grazes(board: &Board, laid: &[ItemId]) -> Vec<Graze> {
+    let mine: HashSet<ItemId> = laid.iter().copied().collect();
+    let mut out = Vec::new();
+    for &id in laid {
+        let Some(item) = board.item(id) else { continue };
+        let (Kind::Track, Shape::Capsule { a, b, r }) = (&item.kind, &item.shape) else { continue };
+        if item.net == 0 || a == b {
+            continue;
+        }
+        let layer = item.layers.trailing_zeros() as usize;
+        for other in board.near(layer, item.shape.bbox().grow(*r)) {
+            // Each pair of the router's tracks once.
+            if other == id || (mine.contains(&other) && other < id) {
+                continue;
+            }
+            let Some(o) = board.item(other) else { continue };
+            if o.net != item.net || !o.on(layer) || !o.is_copper() || o.refilled() || o.shape.gap_within(&item.shape, 0.0) > 0.0 {
+                continue;
+            }
+            let squarely = |p: Point, r: Nm, x: &Item| end_square(p, r, x);
+            if squarely(*a, *r, o) || squarely(*b, *r, o) {
+                continue;
+            }
+            let (from, to, overlap, full) = match (&o.kind, &o.shape) {
+                (Kind::Track | Kind::Via, Shape::Capsule { a: c, b: d, r: r2 }) => {
+                    if o.kind == Kind::Track && (squarely(*c, *r2, item) || squarely(*d, *r2, item)) {
+                        continue;
+                    }
+                    let gap = board::geom::segment_segment(*a, *b, *c, *d);
+                    if gap == 0.0 {
+                        continue;
+                    }
+                    let (p, q) = closest_points(*a, *b, *c, *d);
+                    (p, q, (*r + *r2) as f64 - gap, 2.0 * (*r).min(*r2) as f64)
+                }
+                (Kind::Pad { .. }, shape) => {
+                    let line = Shape::Capsule { a: *a, b: *b, r: 0 };
+                    let gap = shape.gap(&line);
+                    if gap == 0.0 {
+                        continue;
+                    }
+                    // The centre line's point nearest the pad, and the pad's nearest it.
+                    let p = (0..=32).map(|k| Point::new(a.x + (b.x - a.x) * k / 32, a.y + (b.y - a.y) * k / 32)).min_by(|x, y| point_gap(shape, *x).total_cmp(&point_gap(shape, *y))).expect("points");
+                    let centre = shape.bbox();
+                    let centre = Point::new((centre.min.x + centre.max.x) / 2, (centre.min.y + centre.max.y) / 2);
+                    let into = (1..=20).map(|k| Point::new(p.x + (centre.x - p.x) * k / 20, p.y + (centre.y - p.y) * k / 20)).find(|&q| shape.depth(q) >= *r as f64).unwrap_or(centre);
+                    (p, into, *r as f64 - gap, 2.0 * *r as f64)
+                }
+                _ => continue,
+            };
+            if overlap > 0.0 && overlap < full && !bridged(board, layer, id, item, other, o) {
+                out.push(Graze { track: id, other, from, to, overlap });
+            }
+        }
+    }
+    out
+}
+
+/// Whether a track of the net already bridges `x` and `y`: one end squarely on each.
+fn bridged(board: &Board, layer: usize, xi: ItemId, x: &Item, yi: ItemId, y: &Item) -> bool {
+    board.near(layer, x.shape.bbox()).into_iter().filter(|&t| t != xi && t != yi).filter_map(|t| board.item(t)).any(|t| {
+        let (Kind::Track, Shape::Capsule { a, b, r }) = (&t.kind, &t.shape) else { return false };
+        t.net == x.net && t.on(layer) && ((end_square(*a, *r, x) && end_square(*b, *r, y)) || (end_square(*b, *r, x) && end_square(*a, *r, y)))
+    })
+}
+
+/// Bridges each graze with a short piece from the track's centre line into the other copper, so
+/// they meet at the narrower's full width: at the track's width or, where that breaks a rule, the
+/// narrowest the net's rules allow; the pieces join `laid`. How many it mended.
+pub fn mend_grazes(board: &mut Board, laid: &mut Vec<ItemId>) -> usize {
+    let mut mended = 0;
+    for graze in grazes(board, laid) {
+        let Some(track) = board.item(graze.track).cloned() else { continue };
+        let Shape::Capsule { r, .. } = track.shape else { continue };
+        if graze.from == graze.to {
+            continue;
+        }
+        let least = (board.min_joint_of(track.net) + 1) / 2;
+        for r in [r, least] {
+            let piece = board.insert(Item { shape: Shape::Capsule { a: graze.from, b: graze.to, r }, span: None, locked: false, ..track.clone() });
+            if check_item(board, piece).is_empty() {
+                laid.push(piece);
+                mended += 1;
+                break;
+            }
+            board.discard(piece);
+        }
+    }
+    mended
+}
+
 /// A track end joined to a pad of its net only where its round end overlaps the pad's edge:
 /// KiCad counts them joined, but the copper across the edge is the chord the end cuts there,
 /// narrower than the track.
@@ -420,7 +534,7 @@ pub fn pad_joints(board: &Board, laid: &[ItemId]) -> Vec<PadJoint> {
                 .filter_map(|o| board.item(o).map(|c| (o, c)))
                 .filter(|(_, c)| c.net == item.net && c.on(layer) && c.is_copper() && (!c.refilled() || board.is_plane(c)))
                 .collect();
-            if let Some(&(pad, c)) = ours.iter().find(|(_, c)| matches!(c.kind, Kind::Pad { .. }) && c.shape.contains(p)) {
+            if let Some(&(pad, c)) = ours.iter().find(|(_, c)| matches!(c.kind, Kind::Pad { .. }) && end_square(p, *r, c)) {
                 if let Some(width) = straddled_corner(&c.shape, p, if p == *a { *b } else { *a }, *r) {
                     if !ours.iter().any(|(o, c)| *o != pad && !matches!(c.kind, Kind::Pad { .. }) && end_square(p, *r, c)) {
                         out.push(PadJoint { net: item.net, layer, at: p, width, full: 2.0 * *r as f64, track: id, pad });
@@ -1162,6 +1276,11 @@ mod tests {
         assert_eq!((found[0].track, found[0].pad), (corner, pad));
         assert_eq!(mend_pad_joints(&mut board, &mut laid), 1);
         assert!(pad_joints(&board, &laid).is_empty(), "{:?}", pad_joints(&board, &laid));
+        // dc25_spqr_badge's C25: the end a micrometre outside the corner, as good as inside.
+        let mut board = empty_board();
+        board.insert(Item { kind: Kind::Pad { footprint: 0, number: "1".into(), plated: false }, net: 1, layers: 1, shape: Shape::Polygon(vec![Point::new(-500_000, -500_000), Point::new(500_000, -500_000), Point::new(500_000, 500_000), Point::new(-500_000, 500_000)]), hole: None, locked: true, span: None });
+        let outside = track(&mut board, (500_400, 500_500), (5_149_000, 13_197_000));
+        assert_eq!(pad_joints(&board, &[outside]).len(), 1);
         // An end as shallow in the middle of an edge crosses it at the track's full width.
         let mut board = empty_board();
         board.insert(Item { kind: Kind::Pad { footprint: 0, number: "C".into(), plated: false }, net: 1, layers: 1, shape: Shape::Polygon(vec![Point::new(-500_000, -500_000), Point::new(500_000, -500_000), Point::new(500_000, 500_000), Point::new(-500_000, 500_000)]), hole: None, locked: true, span: None });
@@ -1228,6 +1347,26 @@ mod tests {
         let [cut] = soft[..] else { panic!("one track in place of the run: {soft:?}") };
         assert_eq!(board.item(cut).unwrap().shape, Shape::Capsule { a: Point::new(1_000_000, 0), b: Point::new(3_000_000, 0), r: 75_000 });
         assert!(board::connectivity(&board).airlines.is_empty());
+    }
+
+    #[test]
+    fn tracks_that_only_graze_are_bridged_and_joined_or_crossing_ones_left() {
+        // Own-Mailbox's GND: two 0.2 mm tracks 0.197 mm apart, centre to centre, overlapping by
+        // 3 um, which KiCad measures as a 0.03 mm neck.
+        let mut board = empty_board();
+        let t = |board: &mut Board, a: (Nm, Nm), b: (Nm, Nm)| board.insert(Item { shape: Shape::Capsule { a: Point::new(a.0, a.1), b: Point::new(b.0, b.1), r: 100_000 }, ..seg(Point::new(0, 0), Point::new(0, 0)) });
+        let one = t(&mut board, (0, 0), (2_000_000, 0));
+        let two = t(&mut board, (0, 197_000), (2_000_000, 197_000));
+        let mut laid = vec![one, two];
+        let found = grazes(&board, &laid);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!((found[0].overlap - 3_000.0).abs() < 1.0);
+        assert_eq!(mend_grazes(&mut board, &mut laid), 1);
+        assert!(grazes(&board, &laid).is_empty(), "{:?}", grazes(&board, &laid));
+        // End to end, and crossing outright: joints, not grazes.
+        let mut board = empty_board();
+        let laid = [t(&mut board, (0, 0), (1_000_000, 0)), t(&mut board, (1_000_000, 0), (2_000_000, 500_000)), t(&mut board, (500_000, -500_000), (500_000, 500_000))];
+        assert!(grazes(&board, &laid).is_empty(), "{:?}", grazes(&board, &laid));
     }
 
     #[test]

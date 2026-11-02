@@ -915,6 +915,11 @@ impl Stage for Write {
         if into > 0 {
             eprintln!("mended {into} pad joints where a track's end only reached the pad's edge");
         }
+        // Copper of a net that only grazes other copper of it: a piece across, at full width.
+        let bridged = grid::mend_grazes(board, &mut laid);
+        if bridged > 0 {
+            eprintln!("bridged {bridged} places where a track only grazed its net's copper");
+        }
         let (split, spans) = grid::split_at_joins(board, &mut laid);
         ledger.removed.extend(spans);
         if split > 0 {
