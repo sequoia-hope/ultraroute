@@ -220,3 +220,37 @@ fn a_joint_is_held_to_the_widest_of_track_width_minimum_connection_and_connectio
     let (pcb, copper) = kicad_pcb::parse_board("(kicad_pcb (version 20240108) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal)) (net 0 \"\") (net 1 \"A\"))").unwrap();
     assert_eq!(Board::new(&pcb, &copper, rules).min_joint_of(1), nm(0.1e-3), "never under the narrowest track");
 }
+
+#[test]
+fn a_physical_hole_clearance_keeps_a_via_out_of_its_own_nets_smd_pad() {
+    // easy2350's "no via hole in an SMD pad": a fan-out via drilled in a pad of its own net,
+    // which KiCad flags, while the via's own track still joins it.
+    let pads = "(footprint \"R\" (layer \"F.Cu\") (at 10 15) (property \"Reference\" \"R1\")
+                  (pad \"1\" smd rect (at 0 0) (size 0.6 0.6) (layers \"F.Cu\") (net 1 \"A\"))
+                  (pad \"2\" smd rect (at 3 0) (size 0.6 0.6) (layers \"F.Cu\") (net 1 \"A\")))";
+    let rule = "(version 1)\n(rule \"no via hole in an SMD pad\" (condition \"A.Type == 'Via' && B.Type == 'Pad' && B.Pad_Type == 'SMD' && !(B.memberOfFootprint('R1') && B.Pad_Number == '2')\") (constraint physical_hole_clearance (min 0.1mm)))";
+    let via = |b: &mut Board, x: f64| {
+        b.insert(Item {
+            kind: Kind::Via,
+            net: 1,
+            layers: u64::MAX >> (64 - b.layers.len()),
+            shape: Shape::Capsule { a: Point::new(nm(x * 1e-3), nm(15e-3)), b: Point::new(nm(x * 1e-3), nm(15e-3)), r: nm(0.3e-3) },
+            hole: Some((Point::new(nm(x * 1e-3), nm(15e-3)), nm(0.15e-3))),
+            locked: false,
+            span: None,
+        })
+    };
+    let holes = |b: &Board, id: ItemId| check_item(b, id).iter().filter(|v| v.rule == Rule::HoleClearance).count();
+    let mut plain = board(pads, "");
+    let v = via(&mut plain, 10.0);
+    assert_eq!(holes(&plain, v), 0, "no rule: a via of the pad's net may sit in it");
+    let mut ruled = board(pads, rule);
+    let v = via(&mut ruled, 10.0);
+    assert_eq!(holes(&ruled, v), 1, "the rule keeps the drill out of its own net's pad");
+    let v = via(&mut ruled, 13.0);
+    assert_eq!(holes(&ruled, v), 0, "the excepted pad takes it");
+    let v = via(&mut ruled, 11.0);
+    let t = ruled.insert(Item { kind: Kind::Track, net: 1, layers: 1, shape: Shape::Capsule { a: Point::new(nm(10e-3), nm(15e-3)), b: Point::new(nm(11e-3), nm(15e-3)), r: nm(0.1e-3) }, hole: None, locked: false, span: None });
+    assert_eq!(holes(&ruled, v), 0, "beside the pad, joined by its track");
+    assert!(check_item(&ruled, t).is_empty());
+}

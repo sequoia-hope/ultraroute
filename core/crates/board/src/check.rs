@@ -442,11 +442,12 @@ fn item_checks(
 /// How far copper `other` keeps from the hole of `hole` (item `id`): the hole clearance where
 /// their nets differ (or the hole is unplated), and any physical hole clearance a custom rule
 /// sets, which holds whatever the nets, between holes and the copper of other holes (a via
-/// beside a via of its own net), not the tracks that join them.
+/// beside a via of its own net) or of pads (a via drilled in its own net's SMD pad, which KiCad
+/// flags), not the tracks that join them.
 fn hole_required(board: &Board, limits: &Limits, id: ItemId, hole: &Item, other_id: ItemId, other: &Item) -> Nm {
     let joined = hole.plated_hole() && other.net == hole.net && hole.net != 0;
     let clearance = if joined { 0 } else { limits.hole_keep(board, id, hole, other_id, other) };
-    if joined && other.hole.is_none() {
+    if joined && other.hole.is_none() && !matches!(other.kind, Kind::Pad { .. }) {
         return clearance;
     }
     clearance.max(limits.physical_hole(board, id, hole, other_id, other))
