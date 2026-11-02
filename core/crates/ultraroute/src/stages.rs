@@ -878,6 +878,11 @@ impl Stage for Write {
         if mended > 0 {
             eprintln!("mended {mended} joints where round ends only overlapped");
         }
+        // Ends that only graze a pad's edge: a piece on into the pad.
+        let into = grid::mend_pad_joints(board, &mut laid);
+        if into > 0 {
+            eprintln!("mended {into} pad joints where a track's end only reached the pad's edge");
+        }
         let (split, spans) = grid::split_at_joins(board, &mut laid);
         ledger.removed.extend(spans);
         if split > 0 {
@@ -925,6 +930,23 @@ impl Stage for Write {
             );
             eprintln!("{line}");
             ctx.stats.findings.push(Finding { severity, kind: "joint", message: line, refs: Vec::new(), nets: vec![net], ends: None });
+        }
+        for joint in grid::pad_joints(board, &laid) {
+            let net = board.net_name(joint.net).to_string();
+            let rule = board.min_joint_of(joint.net) as f64;
+            let pad = grid::report::item_name(board, joint.pad);
+            let (severity, what) = if joint.width < rule { ("error", "under the net's width rule") } else { ("warning", "within the net's width rule") };
+            let line = format!(
+                "narrow pad joint: {net} on {} at ({:.3}, {:.3}) mm, {:.3} mm wide where its track is {:.3} mm ({what}, {:.3} mm): the track ends outside {pad}",
+                board.layers[joint.layer],
+                joint.at.x as f64 * 1e-6,
+                joint.at.y as f64 * 1e-6,
+                joint.width * 1e-6,
+                joint.full * 1e-6,
+                rule * 1e-6
+            );
+            eprintln!("{line}");
+            ctx.stats.findings.push(Finding { severity, kind: "joint", message: line, refs: vec![pad], nets: vec![net], ends: None });
         }
         let (board, ledger) = (&mut *ctx.board, &mut *ctx.ledger);
         let replace = crate::moved_parts(board, &ledger.original_at, ctx.text);

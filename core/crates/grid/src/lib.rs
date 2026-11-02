@@ -30,7 +30,7 @@ pub mod work;
 
 pub use arcs::{round_corners, RoundArc};
 pub use blame::{blame, Blame, BlameOptions, BlameReport};
-pub use cleanup::{drop_duplicates, drop_duplicates_watch, mend_joints, narrow_joints, prune_dangling, prune_dangling_watch, pull_tight, pull_tight_watch, split_at_joins, CleanStats, NarrowJoint};
+pub use cleanup::{drop_duplicates, drop_duplicates_watch, mend_joints, mend_pad_joints, narrow_joints, pad_joints, prune_dangling, prune_dangling_watch, pull_tight, pull_tight_watch, split_at_joins, CleanStats, NarrowJoint};
 pub use grid::{ObstacleMap, Profile, RouteGrid, ViaSpec};
 pub use nudge::{nudge, nudge_watch, NudgeEvent, NudgeOptions, NudgeStats};
 pub use push::{push, push_watch, rip_broken, rip_broken_items, PushOptions, PushStats, PushStep};
