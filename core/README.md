@@ -144,6 +144,7 @@ lengths, the deadline, and, of kind `rule`, every project or custom rule left ou
 | `--pours-block` | treat pours as walls, and count connections through them as made |
 | `--planes LAYER,...` | layers given whole to a plane: no tracks on them, vias through them |
 | `--auto-planes` | take inner layers one net's pour all but fills as planes |
+| `--plane-via-reach MM` | every surface pad of a plane's net gets a via of its own within MM, edge to edge, laid before routing and kept; a pad with no room is reported (a `plane-via` finding) |
 | `--regions FILE` | a planner's routing regions and length limits (circuit-composer's `routing.json`) |
 | `--rip-region X,Y,R` | rip every unlocked track and via in this disc (mm, KiCad's frame) first; repeatable |
 | `--lock REF,...` | parts that may not move |
