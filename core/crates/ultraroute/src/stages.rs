@@ -914,6 +914,7 @@ impl Stage for Write {
             let mut seen_laid = HashSet::new();
             laid.retain(|id| board.item(*id).is_some() && seen_laid.insert(*id));
         }
+        let unmended: HashSet<ItemId> = laid.iter().copied().collect();
         // Ends joined only where round copper overlaps, narrower than the track: a piece onto
         // the other track's centre line, which the split below makes an end-to-end joint.
         let mended = grid::mend_joints(board, &mut laid);
@@ -936,6 +937,9 @@ impl Stage for Write {
         if bridged > 0 {
             eprintln!("bridged {bridged} places where a track only grazed its net's copper");
         }
+        // The mends' pieces lie wholly in their net's copper, which the prune below would take as
+        // redundant and undo (nanoTracer: 44 pad joints mended, 44 pieces pruned, 10 necks).
+        let pieces: HashSet<ItemId> = laid.iter().copied().filter(|id| !unmended.contains(id)).collect();
         let (split, spans) = grid::split_at_joins(board, &mut laid);
         ledger.removed.extend(spans);
         if split > 0 {
@@ -947,8 +951,11 @@ impl Stage for Write {
         // nowhere, which KiCad reports as dangling.
         let (doubled, spans) = grid::drop_duplicates(board, &mut laid);
         ledger.removed.extend(spans);
-        let (pruned, spans) = grid::prune_dangling(board, &mut laid);
+        let mut rest: Vec<ItemId> = laid.iter().copied().filter(|id| !pieces.contains(id)).collect();
+        let (pruned, spans) = grid::prune_dangling(board, &mut rest);
         ledger.removed.extend(spans);
+        rest.extend(pieces.into_iter().filter(|&id| board.item(id).is_some()));
+        laid = rest;
         if doubled + pruned > 0 {
             eprintln!("dropped {doubled} doubled and pruned {pruned} dangling after the mends");
         }
