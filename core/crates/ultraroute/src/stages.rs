@@ -23,6 +23,9 @@ pub struct Ledger {
     pub fanout: Vec<ItemId>,
     /// The differential pairs' copper, locked through the single-ended stages.
     pub pairs: Vec<ItemId>,
+    /// Vias stitching the ends of strips a zone keeps as laid, locked through every stage and
+    /// written as they stand.
+    pub stitches: Vec<ItemId>,
     /// The board file's spans of what was taken out.
     pub removed: Vec<Span>,
     /// Where each part stood before the run.
@@ -239,6 +242,29 @@ impl Stage for Planes {
         ctx.watch.step(ctx.board);
         ctx.ledger.laid.extend(p.laid);
         json!({"pads": p.pads, "joined": p.joined})
+    }
+}
+
+/// Strips of copper a zone keeps as laid get a via at each end over their net's copper on
+/// another layer, before anything is routed, so they carry their current end to end.
+pub struct Islands;
+
+impl Stage for Islands {
+    fn name(&self) -> &'static str {
+        "islands"
+    }
+
+    fn enabled(&self, _: &Args, board: &Board, _: &Ledger) -> bool {
+        !board.laid_islands.is_empty()
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let s = grid::stitch_islands(ctx.board, ctx.log);
+        ctx.say("islands", format!("{} of {} ends of laid strips stitched by a via", s.stitched, s.ends));
+        eprintln!("islands: {} of {} strip ends over their net's copper stitched, {} vias, {:.1} s", s.stitched, s.ends, s.laid.len(), ctx.elapsed());
+        ctx.watch.step(ctx.board);
+        ctx.ledger.stitches.extend(s.laid);
+        json!({"ends": s.ends, "stitched": s.stitched})
     }
 }
 
@@ -895,6 +921,8 @@ impl Stage for Write {
                 eprintln!("pruned {pruned} dangling after the split");
             }
         }
+        // The strips' stitches stood through every stage; they are written with the rest.
+        laid.extend(ledger.stitches.iter().copied().filter(|id| board.item(*id).is_some()));
         for (line, nets) in regions::report(board, &ledger.lengths, &laid) {
             eprintln!("regions: {line}");
             let kind = if line.starts_with("length:") { "length" } else { "region" };

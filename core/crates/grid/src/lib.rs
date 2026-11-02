@@ -4,6 +4,7 @@
 pub mod arcs;
 #[cfg(feature = "gpu")]
 pub mod gpu;
+pub mod islands;
 pub mod blame;
 pub mod cleanup;
 pub mod clock;
@@ -35,6 +36,7 @@ pub use grid::{ObstacleMap, Profile, RouteGrid, ViaSpec};
 pub use nudge::{nudge, nudge_watch, NudgeEvent, NudgeOptions, NudgeStats};
 pub use push::{push, push_watch, rip_broken, rip_broken_items, PushOptions, PushStats, PushStep};
 pub use planes::{join_planes, PlaneStats};
+pub use islands::{stitch_islands, IslandStats};
 pub use pairs::{diff_pairs, pair_has_open_runs, route_pairs, route_pairs_watch, shares_layer, Pair, PairOptions, PairRun, PairStats};
 pub use prefanout::{prefanout, prune_closed_escapes, EscapeMode, EscapeOrder, PrefanoutOptions, PrefanoutStats};
 pub use report::{item_name, Activity, Focus, Log};

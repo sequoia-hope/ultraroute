@@ -967,6 +967,7 @@ const fn row(stage: &'static dyn Stage, clock: Clock, budget: Budget, within: Op
 /// and the write run whatever the time.
 pub const STAGES: &[Entry] = &[
     row(&stages::SetUp, Clock::Untold, Budget::Untimed, None),
+    row(&stages::Islands, Clock::Untold, Budget::Untimed, None),
     row(&stages::Prefanout, Clock::Timed, Budget::Left(0.15), None),
     row(&stages::Planes, Clock::Timed, Budget::Left(0.05), None),
     row(&stages::Pairs, Clock::Timed, Budget::Until(0.25), None),
