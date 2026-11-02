@@ -626,9 +626,10 @@ pub fn route_pairs_watch(board: &mut Board, options: &PairOptions, watch: &mut d
                 }
             }
             // A short run may do better as two matched tracks on one layer, no vias: a coupled run
-            // that has to change layers to get past the pads it starts between buys little.
+            // that has to change layers to get past the pads it starts between buys little. One
+            // that needs no vias stays coupled, however close the scores.
             let mut matched: Option<(f64, PinPair, PinPair)> = None;
-            if a.mid.distance(b.mid) <= LONGEST_MATCHED as f64 {
+            if a.mid.distance(b.mid) <= LONGEST_MATCHED as f64 && best.as_ref().is_none_or(|c| c.vias > 0) {
                 for &ac in &a_cands {
                     for &bc in &b_cands {
                         if out_of_time() {
@@ -733,6 +734,7 @@ pub fn route_pairs_watch(board: &mut Board, options: &PairOptions, watch: &mut d
                 );
                 stats.coupled += 1;
                 stats.coupled_mm += laid.1 * 1e-6;
+                stats.run_mm += 0.5 * items_track_len(board, &laid.0) * 1e-6;
                 stats.laid.extend(laid.0.iter().copied());
                 watch(board, &PairRun { pair: &pair, from: a.mid, to: b.mid, layer: Some(layer), centreline: &laid.2, laid: &laid.0 });
                 continue;
@@ -777,6 +779,8 @@ struct CoupledCandidate {
     vp: Nm,
     ease_by: Nm,
     score: f64,
+    /// Its vias, paired in the body and in the legs.
+    vias: usize,
 }
 
 struct CommittedRun {
@@ -1333,6 +1337,7 @@ fn evaluate_stretches(
                         vp,
                         ease_by,
                         score,
+                        vias: body_vias + vias_a + vias_b,
                     });
                 }
                 // Once the sharpest corner-easing at this polarity and via pitch works, looser
@@ -2515,7 +2520,7 @@ mod tests {
     }
 
     #[test]
-    fn a_short_run_into_spread_pins_is_laid_matched_on_its_own_layer_without_vias() {
+    fn a_short_run_coupling_only_through_vias_is_laid_matched_on_its_own_layer() {
         let mut board = synthetic_board("(0 \"F.Cu\" signal) (31 \"B.Cu\" signal)", default_pair_rules());
         // easy2350's USB-C receptacle, its pins 0.5 mm apart with the pair's pins doubled (B6 A7
         // A6 B7), 2.4 mm above the left side of an ESD array whose pins for the pair are 1.9 mm
@@ -2538,11 +2543,27 @@ mod tests {
         for (num, net, (x, y)) in [("1", 2, (10_062_000, 9_650_000)), ("2", 3, (10_062_000, 10_600_000)), ("3", 1, (10_062_000, 11_550_000))] {
             pad(&mut board, 1, num, net, (x, y), (1_325_000, 600_000));
         }
+        // Another net's copper across F.Cu between them, with a slot for each track but no room
+        // for the two coupled: coupling must go by B.Cu, through vias.
+        for (x0, x1) in [(7_000_000, 8_550_000), (9_450_000, 9_900_000), (10_800_000, 13_500_000)] {
+            board.insert(Item {
+                kind: Kind::Track,
+                net: 3,
+                layers: 1,
+                shape: Shape::Capsule { a: Point::new(x0, 8_400_000), b: Point::new(x1, 8_400_000), r: 100_000 },
+                hole: None,
+                locked: true,
+                span: None,
+            });
+        }
 
         let stats = route_pairs(&mut board, &PairOptions::default(), &mut |_| {});
         assert_eq!((stats.runs, stats.matched, stats.coupled), (1, 1, 0), "{stats:?}");
         assert!(board::connectivity(&board).airlines.iter().all(|a| a.net == 3), "end-to-end connected");
-        assert!(board.items().all(|(_, it)| it.kind != Kind::Via), "no vias");
+        // The run itself has none: the only via is the jumper of whichever doubled pin crosses
+        // the other's, which can't stay on F.Cu.
+        let vias = board.items().filter(|(_, it)| it.kind == Kind::Via).count();
+        assert!(vias <= 2, "{vias} vias");
         for &id in &stats.laid {
             assert!(board::check_item(&board, id).is_empty());
             assert!(board.item(id).unwrap().locked);
