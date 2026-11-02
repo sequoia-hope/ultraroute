@@ -760,6 +760,11 @@ impl Stage for Cleaning {
         }
         // The pairs' copper is cleaned with the rest: a run whose legs never came is taken out.
         ledger.laid.extend(ledger.pairs.iter().copied().filter(|id| board.item(*id).is_some()));
+        // Staircases pulling tight never reached, the pairs' or where time ran out, smoothed.
+        let steps = grid::smooth_staircases(board, &mut ledger.laid);
+        if steps > 0 {
+            eprintln!("smoothed {steps} steps of staircases");
+        }
         let watch = &mut *ctx.watch;
         let (doubled, spans) = grid::drop_duplicates_watch(board, &mut ledger.laid, &mut |b, it| watch.cleaned(b, it, Cleaned::Duplicate));
         ledger.removed.extend(spans);
@@ -909,6 +914,7 @@ impl Stage for Write {
             let mut seen_laid = HashSet::new();
             laid.retain(|id| board.item(*id).is_some() && seen_laid.insert(*id));
         }
+        let unmended: HashSet<ItemId> = laid.iter().copied().collect();
         // Ends joined only where round copper overlaps, narrower than the track: a piece onto
         // the other track's centre line, which the split below makes an end-to-end joint.
         let mended = grid::mend_joints(board, &mut laid);
@@ -920,22 +926,38 @@ impl Stage for Write {
         if into > 0 {
             eprintln!("mended {into} pad joints where a track's end only reached the pad's edge");
         }
+        // Two vias of a net whose lands only touch: the one not needed goes, else they are joined.
+        let (vias, spans) = grid::mend_via_grazes(board, &mut laid);
+        ledger.removed.extend(spans);
+        if vias > 0 {
+            eprintln!("mended {vias} pairs of vias whose lands only touched");
+        }
         // Copper of a net that only grazes other copper of it: a piece across, at full width.
         let bridged = grid::mend_grazes(board, &mut laid);
         if bridged > 0 {
             eprintln!("bridged {bridged} places where a track only grazed its net's copper");
         }
+        // The mends' pieces lie wholly in their net's copper, which the prune below would take as
+        // redundant and undo (nanoTracer: 44 pad joints mended, 44 pieces pruned, 10 necks).
+        let pieces: HashSet<ItemId> = laid.iter().copied().filter(|id| !unmended.contains(id)).collect();
         let (split, spans) = grid::split_at_joins(board, &mut laid);
         ledger.removed.extend(spans);
         if split > 0 {
             eprintln!("split {split} tracks where others end on them");
-            // A track that ran past a join leaves that overhang a piece of its own, leading
-            // nowhere, which KiCad reports as dangling.
-            let (pruned, spans) = grid::prune_dangling(board, &mut laid);
-            ledger.removed.extend(spans);
-            if pruned > 0 {
-                eprintln!("pruned {pruned} dangling after the split");
-            }
+        }
+        // The mends lay their pieces after cleaning: one may double a track (easy2350's +3V3,
+        // one piece written four times) or lie along a wider one, a 0.09 mm neck under a 0.2 mm
+        // track; and a track that ran past a join leaves that overhang a piece of its own, leading
+        // nowhere, which KiCad reports as dangling.
+        let (doubled, spans) = grid::drop_duplicates(board, &mut laid);
+        ledger.removed.extend(spans);
+        let (mut rest, kept): (Vec<ItemId>, Vec<ItemId>) = laid.iter().partition(|id| !pieces.contains(id));
+        let (pruned, spans) = grid::prune_dangling(board, &mut rest);
+        ledger.removed.extend(spans);
+        rest.extend(kept.into_iter().filter(|&id| board.item(id).is_some()));
+        laid = rest;
+        if doubled + pruned > 0 {
+            eprintln!("dropped {doubled} doubled and pruned {pruned} dangling after the mends");
         }
         // The strips' stitches stood through every stage, locked; they are written with the rest
         // as the router's own copper, unlocked, so the next run lays them afresh.

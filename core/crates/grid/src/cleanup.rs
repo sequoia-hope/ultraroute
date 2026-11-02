@@ -118,9 +118,9 @@ pub(crate) fn chains(board: &Board, soft: &HashSet<ItemId>) -> Vec<Chain> {
     out
 }
 
-/// Takes out the router's tracks lying exactly on another of the same net, layer and width, which
-/// a reroute along copper its net already has can lay. Which one goes does not matter; the
-/// router's own goes before the board file's. How many, and the file's spans among them.
+/// Takes out the router's tracks lying exactly on another of the same net and layer, end to end,
+/// which a reroute along copper its net already has, or a mend, can lay. Of two the narrower goes,
+/// and of two as wide the router's own before the board file's. How many, and the file's spans among them.
 pub fn drop_duplicates(board: &mut Board, soft: &mut Vec<ItemId>) -> (usize, Vec<Span>) {
     drop_duplicates_watch(board, soft, &mut |_, _| {})
 }
@@ -128,14 +128,20 @@ pub fn drop_duplicates(board: &mut Board, soft: &mut Vec<ItemId>) -> (usize, Vec
 /// As [`drop_duplicates`], showing `watch` each duplicate removed and the board after it goes.
 pub fn drop_duplicates_watch(board: &mut Board, soft: &mut Vec<ItemId>, watch: &mut dyn FnMut(&Board, &Item)) -> (usize, Vec<Span>) {
     let soft_set: HashSet<ItemId> = soft.iter().copied().collect();
+    // Whatever its width: a narrower track with the same ends lies wholly inside the wider and
+    // joins what it joins (easy2350's USB_DM_C, a 0.09 mm neck under a 0.2 mm track).
     let key = |item: &Item| match &item.shape {
-        Shape::Capsule { a, b, r } if item.kind == Kind::Track => Some((item.net, item.layers, *r, (*a).min(*b), (*a).max(*b))),
+        Shape::Capsule { a, b, .. } if item.kind == Kind::Track => Some((item.net, item.layers, (*a).min(*b), (*a).max(*b))),
         _ => None,
     };
-    let mut seen: HashMap<(u32, u64, board::Nm, Point, Point), ItemId> = HashMap::new();
-    // The file's tracks first, so a duplicate of one is the router's and goes.
+    let width = |id: &ItemId| match board.item(*id).map(|it| &it.shape) {
+        Some(Shape::Capsule { r, .. }) => *r,
+        _ => 0,
+    };
+    let mut seen: HashMap<(u32, u64, Point, Point), ItemId> = HashMap::new();
+    // The widest first, and of those the file's, so a duplicate is the narrower or the router's.
     let mut ids: Vec<ItemId> = board.items().filter(|(_, it)| it.kind == Kind::Track).map(|(id, _)| id).collect();
-    ids.sort_by_key(|id| (soft_set.contains(id), *id));
+    ids.sort_by_key(|id| (std::cmp::Reverse(width(id)), soft_set.contains(id), *id));
     let mut doubled = Vec::new();
     for id in ids {
         let Some(k) = board.item(id).and_then(key) else { continue };
@@ -455,7 +461,15 @@ pub fn grazes(board: &Board, laid: &[ItemId]) -> Vec<Graze> {
                 }
                 _ => continue,
             };
-            if overlap > 0.0 && overlap < full && !bridged(board, layer, id, item, other, o) {
+            // Inside a via's or pad's copper the two are joined by it at full width already:
+            // no neck, and a bridge there only piles copper on copper (easy2350's USB_DM_C, a
+            // staircase inside its via's land bridged step to step).
+            let covered = || {
+                board.near(layer, board::BBox::of([from, to])).into_iter().filter_map(|c| board.item(c)).any(|c| {
+                    matches!(c.kind, Kind::Via | Kind::Pad { .. }) && c.net == item.net && c.on(layer) && c.shape.contains(from) && c.shape.contains(to)
+                })
+            };
+            if overlap > 0.0 && overlap < full && !bridged(board, layer, id, item, other, o) && !covered() {
                 out.push(Graze { track: id, other, from, to, overlap });
             }
         }
@@ -482,6 +496,14 @@ pub fn mend_grazes(board: &mut Board, laid: &mut Vec<ItemId>) -> usize {
         if graze.from == graze.to {
             continue;
         }
+        // A track of the net already lying from one end to the other is the bridge.
+        let layer = track.layers.trailing_zeros() as usize;
+        let span = board::BBox::of([graze.from, graze.to]);
+        if board.near(layer, span).into_iter().filter_map(|t| board.item(t)).any(|t| {
+            t.kind == Kind::Track && t.net == track.net && matches!(t.shape, Shape::Capsule { a, b, .. } if (a == graze.from && b == graze.to) || (a == graze.to && b == graze.from))
+        }) {
+            continue;
+        }
         let least = (board.min_joint_of(track.net) + 1) / 2;
         for r in [r, least] {
             let piece = board.insert(Item { shape: Shape::Capsule { a: graze.from, b: graze.to, r }, span: None, locked: false, ..track.clone() });
@@ -494,6 +516,89 @@ pub fn mend_grazes(board: &mut Board, laid: &mut Vec<ItemId>) -> usize {
         }
     }
     mended
+}
+
+/// Two vias of a net whose lands overlap by less than the net's narrowest joint, or half the
+/// smaller land:
+/// KiCad measures the sliver between them as a neck on every layer both have lands on (the
+/// earring's VLED_C vias 0.403 mm apart, 0.4 mm lands, 0.029 mm across). Each pair, the router's
+/// via first, once.
+fn via_grazes(board: &Board, laid: &[ItemId]) -> Vec<(ItemId, ItemId)> {
+    let mine: HashSet<ItemId> = laid.iter().copied().collect();
+    let mut out = Vec::new();
+    for &id in laid {
+        let Some(v) = board.item(id) else { continue };
+        let (Kind::Via, Shape::Capsule { a, r, .. }) = (&v.kind, &v.shape) else { continue };
+        if v.net == 0 {
+            continue;
+        }
+        let layer = v.layers.trailing_zeros() as usize;
+        for other in board.near(layer, v.shape.bbox().grow(*r)) {
+            if other == id || (mine.contains(&other) && other < id) {
+                continue;
+            }
+            let Some(o) = board.item(other) else { continue };
+            let (Kind::Via, Shape::Capsule { a: c, r: r2, .. }) = (&o.kind, &o.shape) else { continue };
+            if o.net != v.net || o.layers & v.layers == 0 {
+                continue;
+            }
+            // The chord where the two lands cross, as wide as the copper joining them is.
+            let d = a.distance(*c);
+            let (r1, r2) = (*r as f64, *r2 as f64);
+            if d >= r1 + r2 || d <= (r1 - r2).abs() {
+                continue;
+            }
+            let x = (d * d + r1 * r1 - r2 * r2) / (2.0 * d);
+            let chord = 2.0 * (r1 * r1 - x * x).max(0.0).sqrt();
+            // As wide as the net's narrowest joint, and at least half the smaller land.
+            let least = (board.min_joint_of(v.net) as f64).max(r1.min(r2));
+            if chord < least {
+                out.push((id, other));
+            }
+        }
+    }
+    out
+}
+
+/// Mends each pair of [`via_grazes`]: one of the router's two goes where its net stays as joined
+/// without it, as one of the two needs not be there; else a track of the net's narrowest joint
+/// width joins their centres on every layer both have lands on, where that breaks no rule. The
+/// spans of what went, and how many pairs were mended.
+pub fn mend_via_grazes(board: &mut Board, laid: &mut Vec<ItemId>) -> (usize, Vec<Span>) {
+    let (mut mended, mut spans) = (0, Vec::new());
+    'pairs: for (id, other) in via_grazes(board, laid) {
+        let (Some(v), Some(o)) = (board.item(id).cloned(), board.item(other).cloned()) else { continue };
+        let before = board::net_connectivity(board, v.net, false).airlines.len();
+        for gone in [id, other].into_iter().filter(|g| laid.contains(g)) {
+            let removed = board.remove(gone).expect("listed above");
+            if board::net_connectivity(board, v.net, false).airlines.len() <= before {
+                spans.extend(removed.span);
+                laid.retain(|t| *t != gone);
+                mended += 1;
+                continue 'pairs;
+            }
+            board.restore(gone, removed);
+        }
+        let (Shape::Capsule { a, .. }, Shape::Capsule { a: c, .. }) = (&v.shape, &o.shape) else { continue };
+        let r = (board.min_joint_of(v.net) + 1) / 2;
+        let mut pieces = Vec::new();
+        for layer in (0..board.layers.len()).filter(|&l| v.on(l) && o.on(l)) {
+            let piece = board.insert(Item { kind: Kind::Track, net: v.net, layers: 1 << layer, shape: Shape::Capsule { a: *a, b: *c, r }, hole: None, locked: false, span: None });
+            pieces.push(piece);
+            if !check_item(board, piece).is_empty() {
+                break;
+            }
+        }
+        if pieces.iter().all(|&p| check_item(board, p).is_empty()) {
+            laid.extend(pieces);
+            mended += 1;
+        } else {
+            for p in pieces {
+                board.discard(p);
+            }
+        }
+    }
+    (mended, spans)
 }
 
 /// A track end joined to a pad of its net only where its round end overlaps the pad's edge:
@@ -1073,6 +1178,46 @@ fn straighten(board: &mut Board, chain: &Chain, i: usize, j: usize) -> Option<(I
     None
 }
 
+/// How far a bend may lie off the straight line between its neighbours and still be taken out
+/// as a step of a staircase: a grid path's 10 um steps, which pulling tight never reaches on a
+/// differential pair's copper (or anywhere, once time runs out), and which the graze bridging
+/// then joined to each other pairwise (easy2350's USB_DP_C, 162 pieces where a dozen do).
+const STEP_TOLERANCE: f64 = 15_000.0;
+
+/// Takes out the steps of the router's staircases: each bend lying within [`STEP_TOLERANCE`] of
+/// the straight line between its neighbours, replaced by that line where it joins all the bend
+/// did and breaks no rule, round after round until none is left. Too slight to pull a coupled
+/// pair apart. How many it took out.
+pub fn smooth_staircases(board: &mut Board, soft: &mut Vec<ItemId>) -> usize {
+    let mut taken = 0;
+    loop {
+        let soft_set: HashSet<ItemId> = soft.iter().copied().filter(|id| board.item(*id).is_some()).collect();
+        let mut replaced: HashSet<ItemId> = HashSet::new();
+        let mut added: Vec<ItemId> = Vec::new();
+        for chain in chains(board, &soft_set) {
+            let mut k = 1;
+            while k + 1 < chain.points.len() {
+                let (a, p, b) = (chain.points[k - 1], chain.points[k], chain.points[k + 1]);
+                if board::point_segment(p, a, b) <= STEP_TOLERANCE && chain.tracks[k - 1..=k].iter().all(|t| !replaced.contains(t)) {
+                    if let Some((id, _)) = straighten(board, &chain, k - 1, k + 1) {
+                        replaced.extend(&chain.tracks[k - 1..=k]);
+                        added.push(id);
+                        k += 2;
+                        continue;
+                    }
+                }
+                k += 1;
+            }
+        }
+        if added.is_empty() {
+            return taken;
+        }
+        taken += added.len();
+        soft.retain(|id| !replaced.contains(id) && board.item(*id).is_some());
+        soft.extend(added);
+    }
+}
+
 /// Takes out the router's turn-backs: where a chain turns by more than 135 degrees (it runs past
 /// a point and comes back, as a pair's escape overshooting its via did on the earring's USB_C_DN),
 /// the straight track across the turn in its place, where it joins all the turn joined and breaks
@@ -1391,6 +1536,26 @@ mod tests {
     }
 
     #[test]
+    fn a_staircase_of_small_steps_is_smoothed_into_one_track() {
+        // easy2350's USB_DP_C escape: 10 um steps, the track zigzagging 10 um off its line.
+        let mut board = empty_board();
+        pad_at(&mut board, 0, 0);
+        pad_at(&mut board, 1_000_000, 0);
+        let t = |board: &mut Board, a: (Nm, Nm), b: (Nm, Nm)| board.insert(Item { shape: Shape::Capsule { a: Point::new(a.0, a.1), b: Point::new(b.0, b.1), r: 100_000 }, ..seg(Point::new(0, 0), Point::new(0, 0)) });
+        let pts: Vec<(Nm, Nm)> = (0..=10).map(|k| (k * 100_000, if k % 2 == 1 && k < 10 { 10_000 } else { 0 })).collect();
+        let mut soft: Vec<ItemId> = pts.windows(2).map(|w| t(&mut board, w[0], w[1])).collect();
+        assert!(smooth_staircases(&mut board, &mut soft) > 0);
+        // One track runs between the pads; a bend inside a pad stays, as pulling tight leaves it.
+        assert!(soft.len() <= 3, "{} pieces left", soft.len());
+        let longest = soft.iter().filter_map(|id| match board.item(*id).unwrap().shape {
+            Shape::Capsule { a, b, .. } => Some((a, b)),
+            _ => None,
+        }).max_by(|x, y| x.0.distance(x.1).total_cmp(&y.0.distance(y.1))).unwrap();
+        assert!(longest.0.distance(longest.1) >= 800_000.0, "the run between the pads is one track: {longest:?}");
+        assert!(board::connectivity(&board).airlines.is_empty());
+    }
+
+    #[test]
     fn a_track_that_runs_past_its_via_and_comes_back_is_straightened() {
         // The earring's USB_C_DN escape: from its via 0.24 mm on past it, then back up past the via
         // the way it came, a turn of 177 degrees.
@@ -1403,6 +1568,23 @@ mod tests {
         let [one] = soft[..] else { panic!("{soft:?}") };
         assert_eq!(board.item(one).unwrap().shape, Shape::Capsule { a: Point::new(0, 0), b: Point::new(600_000, -2_100_000), r: 75_000 });
         assert!(board.item(via).is_some() && board::connectivity(&board).airlines.is_empty());
+    }
+
+    #[test]
+    fn of_two_vias_whose_lands_only_touch_the_one_not_needed_goes() {
+        // The earring's VLED_C: two vias 0.403 mm apart with 0.4 mm lands, a 0.029 mm sliver.
+        let mut board = empty_board();
+        let via = |board: &mut Board, x: Nm| board.insert(Item { kind: Kind::Via, net: 1, layers: 1, shape: Shape::Capsule { a: Point::new(x, 0), b: Point::new(x, 0), r: 200_000 }, hole: Some((Point::new(x, 0), 100_000)), locked: false, span: None });
+        let pad = pad_at(&mut board, -2_000_000, 0);
+        let keep = via(&mut board, 0);
+        let spare = via(&mut board, 395_000);
+        let track = board.insert(seg(Point::new(-2_000_000, 0), Point::new(0, 0)));
+        let mut laid = vec![keep, spare, track];
+        assert_eq!(via_grazes(&board, &laid).len(), 1);
+        let (mended, _) = mend_via_grazes(&mut board, &mut laid);
+        assert_eq!(mended, 1);
+        assert!(board.item(spare).is_none() && board.item(keep).is_some() && board.item(pad).is_some());
+        assert!(via_grazes(&board, &laid).is_empty());
     }
 
     #[test]
