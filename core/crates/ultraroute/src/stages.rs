@@ -934,13 +934,17 @@ impl Stage for Write {
         ledger.removed.extend(spans);
         if split > 0 {
             eprintln!("split {split} tracks where others end on them");
-            // A track that ran past a join leaves that overhang a piece of its own, leading
-            // nowhere, which KiCad reports as dangling.
-            let (pruned, spans) = grid::prune_dangling(board, &mut laid);
-            ledger.removed.extend(spans);
-            if pruned > 0 {
-                eprintln!("pruned {pruned} dangling after the split");
-            }
+        }
+        // The mends lay their pieces after cleaning: one may double a track (easy2350's +3V3,
+        // one piece written four times) or lie along a wider one, a 0.09 mm neck under a 0.2 mm
+        // track; and a track that ran past a join leaves that overhang a piece of its own, leading
+        // nowhere, which KiCad reports as dangling.
+        let (doubled, spans) = grid::drop_duplicates(board, &mut laid);
+        ledger.removed.extend(spans);
+        let (pruned, spans) = grid::prune_dangling(board, &mut laid);
+        ledger.removed.extend(spans);
+        if doubled + pruned > 0 {
+            eprintln!("dropped {doubled} doubled and pruned {pruned} dangling after the mends");
         }
         // The strips' stitches stood through every stage, locked; they are written with the rest
         // as the router's own copper, unlocked, so the next run lays them afresh.

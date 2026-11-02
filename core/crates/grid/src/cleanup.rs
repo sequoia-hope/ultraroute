@@ -118,9 +118,9 @@ pub(crate) fn chains(board: &Board, soft: &HashSet<ItemId>) -> Vec<Chain> {
     out
 }
 
-/// Takes out the router's tracks lying exactly on another of the same net, layer and width, which
-/// a reroute along copper its net already has can lay. Which one goes does not matter; the
-/// router's own goes before the board file's. How many, and the file's spans among them.
+/// Takes out the router's tracks lying exactly on another of the same net and layer, end to end,
+/// which a reroute along copper its net already has, or a mend, can lay. Of two the narrower goes,
+/// and of two as wide the router's own before the board file's. How many, and the file's spans among them.
 pub fn drop_duplicates(board: &mut Board, soft: &mut Vec<ItemId>) -> (usize, Vec<Span>) {
     drop_duplicates_watch(board, soft, &mut |_, _| {})
 }
@@ -128,14 +128,20 @@ pub fn drop_duplicates(board: &mut Board, soft: &mut Vec<ItemId>) -> (usize, Vec
 /// As [`drop_duplicates`], showing `watch` each duplicate removed and the board after it goes.
 pub fn drop_duplicates_watch(board: &mut Board, soft: &mut Vec<ItemId>, watch: &mut dyn FnMut(&Board, &Item)) -> (usize, Vec<Span>) {
     let soft_set: HashSet<ItemId> = soft.iter().copied().collect();
+    // Whatever its width: a narrower track with the same ends lies wholly inside the wider and
+    // joins what it joins (easy2350's USB_DM_C, a 0.09 mm neck under a 0.2 mm track).
     let key = |item: &Item| match &item.shape {
-        Shape::Capsule { a, b, r } if item.kind == Kind::Track => Some((item.net, item.layers, *r, (*a).min(*b), (*a).max(*b))),
+        Shape::Capsule { a, b, .. } if item.kind == Kind::Track => Some((item.net, item.layers, (*a).min(*b), (*a).max(*b))),
         _ => None,
     };
-    let mut seen: HashMap<(u32, u64, board::Nm, Point, Point), ItemId> = HashMap::new();
-    // The file's tracks first, so a duplicate of one is the router's and goes.
+    let width = |id: &ItemId| match board.item(*id).map(|it| &it.shape) {
+        Some(Shape::Capsule { r, .. }) => *r,
+        _ => 0,
+    };
+    let mut seen: HashMap<(u32, u64, Point, Point), ItemId> = HashMap::new();
+    // The widest first, and of those the file's, so a duplicate is the narrower or the router's.
     let mut ids: Vec<ItemId> = board.items().filter(|(_, it)| it.kind == Kind::Track).map(|(id, _)| id).collect();
-    ids.sort_by_key(|id| (soft_set.contains(id), *id));
+    ids.sort_by_key(|id| (std::cmp::Reverse(width(id)), soft_set.contains(id), *id));
     let mut doubled = Vec::new();
     for id in ids {
         let Some(k) = board.item(id).and_then(key) else { continue };
