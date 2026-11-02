@@ -46,9 +46,17 @@ pub(crate) fn chains(board: &Board, soft: &HashSet<ItemId>) -> Vec<Chain> {
             at.entry((item.layers, item.net, r, p)).or_default().push(id);
         }
     }
-    // A point is fixed unless exactly two of the chain's tracks meet there and nothing else does.
+    // Per (layer, net, point): how many soft tracks end there, whatever their width.
+    let mut ends_at: HashMap<(u64, u32, Point), usize> = HashMap::new();
+    for ((layers, net, _, p), ids) in &at {
+        *ends_at.entry((*layers, *net, *p)).or_default() += ids.len();
+    }
+    // A point is fixed unless exactly two of the chain's tracks meet there and nothing else does:
+    // a track of another width ending there too is a junction, which pulling the chain tight
+    // would leave beside the line (BeaconBuddy's VDD, a 0.2 mm track ending on a 0.2032 mm
+    // chain's bend, left joined only where its round end overlapped the new line).
     let fixed = |board: &Board, key: &(u64, u32, board::Nm, Point)| -> bool {
-        if at.get(key).map_or(0, Vec::len) != 2 {
+        if at.get(key).map_or(0, Vec::len) != 2 || ends_at.get(&(key.0, key.1, key.3)).copied().unwrap_or(0) != 2 {
             return true;
         }
         let (layers, _, _, p) = *key;
@@ -1220,6 +1228,29 @@ mod tests {
         let [cut] = soft[..] else { panic!("one track in place of the run: {soft:?}") };
         assert_eq!(board.item(cut).unwrap().shape, Shape::Capsule { a: Point::new(1_000_000, 0), b: Point::new(3_000_000, 0), r: 75_000 });
         assert!(board::connectivity(&board).airlines.is_empty());
+    }
+
+    #[test]
+    fn tightening_keeps_a_bend_where_a_track_of_another_width_ends() {
+        // BeaconBuddy's VDD: a 0.2 mm track ending on the bend of a 0.2032 mm chain. Pulled
+        // tight past the bend, the chain left the narrower track's end beside its new line.
+        let mut board = empty_board();
+        let pad = |x| Item { kind: Kind::Pad { footprint: 0, number: "1".into(), plated: false }, net: 1, layers: 1, shape: Shape::Capsule { a: Point::new(x, 0), b: Point::new(x, 0), r: 200_000 }, hole: None, locked: true, span: None };
+        board.insert(pad(0));
+        board.insert(pad(2_000_000));
+        board.insert(Item { shape: Shape::Capsule { a: Point::new(1_000_000, 3_000_000), b: Point::new(1_000_000, 3_000_000), r: 200_000 }, ..pad(0) });
+        let wide = |a: (Nm, Nm), b: (Nm, Nm)| Item { shape: Shape::Capsule { a: Point::new(a.0, a.1), b: Point::new(b.0, b.1), r: 101_600 }, ..seg(Point::new(0, 0), Point::new(0, 0)) };
+        let mut soft = vec![
+            board.insert(wide((0, 0), (1_000_000, 100_000))),
+            board.insert(wide((1_000_000, 100_000), (2_000_000, 0))),
+            board.insert(Item { shape: Shape::Capsule { a: Point::new(1_000_000, 100_000), b: Point::new(1_000_000, 3_000_000), r: 100_000 }, ..seg(Point::new(0, 0), Point::new(0, 0)) }),
+        ];
+        pull_tight(&mut board, &mut soft, &Default::default());
+        // The bend 0.1 mm off the straight line: pulled tight, the narrower track's round end
+        // would still overlap it, joined only there.
+        let bend = Point::new(1_000_000, 100_000);
+        let wide_at_bend = soft.iter().filter_map(|&id| board.item(id)).filter(|it| matches!(it.shape, Shape::Capsule { a, b, r: 101_600 } if a == bend || b == bend)).count();
+        assert_eq!(wide_at_bend, 2, "the junction stays where the narrower track ends");
     }
 
     #[test]
