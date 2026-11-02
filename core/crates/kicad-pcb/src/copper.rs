@@ -171,6 +171,10 @@ pub struct Zone {
     pub thermal_bridge_width: f64,
     /// `(min_thickness …)`: the narrowest copper the fill keeps, in metres; 0 when unset.
     pub min_thickness: f64,
+    /// `(fill … (island_removal_mode 1))`: KiCad keeps every island of the fill, and its DRC
+    /// reports each one that touches none of the net's copper as isolated.
+    #[serde(default)]
+    pub keep_islands: bool,
     /// Inside a footprint, the footprint's index in `Pcb::footprints`.
     pub footprint: Option<usize>,
     pub uuid: String,
@@ -689,6 +693,7 @@ fn read_zone(z: &Node, footprint: Option<usize>) -> Result<Zone, KicadParse> {
         thermal_gap: thermal("thermal_gap"),
         thermal_bridge_width: thermal("thermal_bridge_width"),
         min_thickness: z.find("min_thickness").and_then(|t| t.number_arg(0, "min_thickness").ok()).map_or(0.0, |mm| mm * MM),
+        keep_islands: z.find("fill").and_then(|f| f.find("island_removal_mode")).and_then(|m| m.number_arg(0, "island_removal_mode").ok()) == Some(1.0),
         footprint,
         uuid: uuid(z),
         span: z.pos().into(),

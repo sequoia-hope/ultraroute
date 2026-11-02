@@ -266,6 +266,11 @@ impl Block {
     }
 }
 
+/// The widest island of a zone that keeps its islands taken for copper laid as a track: 2 mm,
+/// over easy2350's 0.6 mm 1V1 spokes and under any plane (comms' and servodrive's ground planes,
+/// which keep their islands too, must stay poured round the routes).
+pub const LAID_WIDTH: Nm = 2_000_000;
+
 #[derive(Debug, Clone)]
 pub struct Board {
     pub layers: Vec<String>,
@@ -315,6 +320,10 @@ pub struct Board {
     /// Zones of a net saved with no fill (KiCad not having filled them): their zone, net, layers
     /// and outline, to stand in for their copper where it must be there, on a plane.
     pub unfilled: Vec<(usize, u32, u64, Shape)>,
+    /// Islands of zones that keep every island of their fill (`island_removal_mode 1`), each no
+    /// wider than [`LAID_WIDTH`]: copper laid as a track is, kept as it stands, and each must join
+    /// its net, or KiCad reports it isolated.
+    pub laid_islands: std::collections::BTreeSet<ItemId>,
     /// Areas where a via costs the router dearly but is allowed, on every layer: rule areas
     /// whose name starts `soft-novia`, and boxes given on the command line. Room kept for silk.
     pub via_avoid: Vec<Shape>,
@@ -461,6 +470,7 @@ impl Board {
             ties: HashMap::new(),
             keepout_holes: HashMap::new(),
             unfilled: Vec::new(),
+            laid_islands: Default::default(),
             via_avoid: Vec::new(),
             via_avoid_cost: 3_000,
             regions: Vec::new(),
@@ -711,15 +721,15 @@ impl Board {
             }
             for (layer, poly) in &zone.filled {
                 if poly.len() >= 3 {
-                    board.insert(Item {
-                        kind: Kind::Pour { zone: z, kept },
-                        net: zone.net,
-                        layers: one(layer),
-                        shape: Shape::Polygon(poly.iter().copied().map(Point::from_m).collect()),
-                        hole: None,
-                        locked: true,
-                        span: None,
-                    });
+                    let shape = Shape::Polygon(poly.iter().copied().map(Point::from_m).collect());
+                    // An island a zone keeps, narrow as a track, is copper laid by hand, as a
+                    // reference layout's strips are: the router steers clear of it and joins it,
+                    // as KiCad will not drop it. A wider one, a plane's, is poured round the routes.
+                    let laid = zone.keep_islands && zone.net != 0 && shape.depth(crate::connect::deepest(&shape)) <= (LAID_WIDTH / 2) as f64;
+                    let id = board.insert(Item { kind: Kind::Pour { zone: z, kept: kept || laid }, net: zone.net, layers: one(layer), shape, hole: None, locked: true, span: None });
+                    if laid {
+                        board.laid_islands.insert(id);
+                    }
                 }
             }
         }
@@ -1106,6 +1116,12 @@ impl Board {
     }
 
     /// Whether an item is a plane's pour.
+    /// Whether item `id` is one of the [`Board::laid_islands`], which must join its net like a
+    /// loose piece of track.
+    pub fn must_join(&self, id: ItemId) -> bool {
+        self.laid_islands.contains(&id)
+    }
+
     pub fn is_plane(&self, item: &Item) -> bool {
         matches!(item.kind, Kind::Pour { .. }) && item.layers & self.planes != 0
     }

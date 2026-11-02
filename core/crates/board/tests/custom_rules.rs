@@ -254,3 +254,23 @@ fn a_physical_hole_clearance_keeps_a_via_out_of_its_own_nets_smd_pad() {
     assert_eq!(holes(&ruled, v), 0, "beside the pad, joined by its track");
     assert!(check_item(&ruled, t).is_empty());
 }
+
+#[test]
+fn a_physical_hole_clearance_allows_no_slack() {
+    // KiCad measures physical clearances exactly: easy2350's GND via 0.19988 mm from C26's
+    // rounded corner was flagged under a 0.2 mm rule, though inside the DRC's 0.5 um epsilon.
+    let pads = "(footprint \"R\" (layer \"F.Cu\") (at 10 15) (property \"Reference\" \"R1\")
+                  (pad \"1\" smd rect (at 0 0) (size 0.6 0.6) (layers \"F.Cu\") (net 1 \"A\")))";
+    let rule = "(version 1)\n(rule \"no via hole in an SMD pad\" (condition \"A.Type == 'Via' && B.Type == 'Pad' && B.Pad_Type == 'SMD'\") (constraint physical_hole_clearance (min 0.1mm)))";
+    let mut b = board(pads, rule);
+    // The pad's edge at x 10.3 mm, the hole's radius 0.15 mm: its centre must be 10.55 mm out.
+    let mut short = |x: f64| {
+        let at = Point::new(nm(x * 1e-3), nm(15e-3));
+        let v = b.insert(Item { kind: Kind::Via, net: 1, layers: u64::MAX >> (64 - b.layers.len()), shape: Shape::Capsule { a: at, b: at, r: nm(0.3e-3) }, hole: Some((at, nm(0.15e-3))), locked: false, span: None });
+        let n = check_item(&b, v).iter().filter(|v| v.rule == Rule::HoleClearance).count();
+        b.remove(v);
+        n
+    };
+    assert_eq!(short(10.5498), 1, "0.2 um short is short");
+    assert_eq!(short(10.5501), 0);
+}

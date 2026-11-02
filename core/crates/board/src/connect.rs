@@ -57,8 +57,32 @@ pub fn anchors(board: &Board, id: ItemId) -> ([Point; 2], usize) {
             let n = p.len().max(1) as i64;
             ([Point::new(p.iter().map(|q| q.x).sum::<i64>() / n, p.iter().map(|q| q.y).sum::<i64>() / n), z], 1)
         }
+        // An island that must join its net: the point of it deepest in from its edge, on a
+        // strip its middle, where a via or a track's end joins it.
+        (Kind::Pour { .. }, crate::geom::Shape::Polygon(_)) if board.must_join(id) => ([deepest(&item.shape), z], 1),
         _ => ([z, z], 0),
     }
+}
+
+/// The point of a shape furthest in from its edge, to a twentieth of its box; the box's centre
+/// when no point sampled lies inside.
+pub fn deepest(shape: &crate::geom::Shape) -> Point {
+    let b = shape.bbox();
+    let (w, h) = ((b.max.x - b.min.x).max(1), (b.max.y - b.min.y).max(1));
+    let mut best = (f64::NEG_INFINITY, Point::new((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2));
+    const N: i64 = 20;
+    for j in 0..=N {
+        for i in 0..=N {
+            let p = Point::new(b.min.x + w * i / N, b.min.y + h * j / N);
+            if shape.contains(p) {
+                let d = shape.depth(p);
+                if d > best.0 {
+                    best = (d, p);
+                }
+            }
+        }
+    }
+    best.1
 }
 
 /// Whether copper joins its net's clusters: all of it with pours counted; without, all but pours
@@ -240,7 +264,7 @@ fn joined_copper(board: &Board, with_pours: bool, only: Option<u32>) -> Connecti
         let c = sets.find(id);
         cluster.insert(id, c);
         let item = board.item(id).expect("listed above");
-        if matches!(item.kind, Kind::Pour { .. }) {
+        if matches!(item.kind, Kind::Pour { .. }) && !board.must_join(id) {
             continue;
         }
         match net_first_cluster.entry(item.net) {
@@ -256,12 +280,13 @@ fn joined_copper(board: &Board, with_pours: bool, only: Option<u32>) -> Connecti
     }
 
     // Per net, the clusters that must be joined and each cluster's anchor points. As in KiCad, a
-    // loose piece of track or a via still needs connecting; a pour island alone does not.
+    // loose piece of track or a via still needs connecting; a pour island alone does not, unless
+    // its zone keeps its islands.
     let mut by_net: BTreeMap<u32, BTreeMap<usize, Vec<(Point, ItemId)>>> = BTreeMap::new();
     if !multi_cluster_nets.is_empty() {
         for &id in &ids {
             let item = board.item(id).expect("listed above");
-            if matches!(item.kind, Kind::Pour { .. }) || !multi_cluster_nets.contains(&item.net) {
+            if (matches!(item.kind, Kind::Pour { .. }) && !board.must_join(id)) || !multi_cluster_nets.contains(&item.net) {
                 continue;
             }
             let (pts, len) = anchors(board, id);
