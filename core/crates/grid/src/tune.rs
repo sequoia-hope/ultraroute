@@ -12,7 +12,9 @@ use crate::pairs::{pin_pairs, Pair};
 
 /// Lengths within this of each other are matched.
 pub const TOLERANCE: f64 = 100_000.0;
-/// Straight track kept before the first bump and after the last.
+/// Straight track kept before the first bump and after the last, at the least: a bump also keeps
+/// its own width from either end of the track it goes into, so it never jogs where the track
+/// turns, and from the bump before it, so their sides stand a bump's width apart.
 const LEAD: Nm = 150_000;
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -129,31 +131,51 @@ fn bump(a: Point, b: Point, at: f64, w: f64, h: f64, sign: f64) -> [Point; 6] {
     [a, p(at, 0.0), p(at, h), p(at + w, h), p(at + w, 0.0), b]
 }
 
-/// One bump put into one of `tracks`, the tallest that lays cleanly, up to `want / 2` high.
-/// Returns the length added, the track replaced (its id and itself) and the new ones.
-fn add_bump(board: &mut Board, tracks: &[ItemId], want: f64) -> Option<(f64, (ItemId, Item), Vec<ItemId>)> {
+/// Whether a bump's piece keeps the clearance from its own net's copper too, all but the pieces
+/// of its own track (`chain`) and what the track ends on: a bump folded against its own track or
+/// pad leaves a slot too narrow to etch cleanly, an acid trap.
+fn own_room(board: &Board, piece: ItemId, chain: &[ItemId], ends: [Point; 2]) -> bool {
+    let Some(item) = board.item(piece) else { return false };
+    let gap = board.clearance(item.net, item.net) as f64;
+    let layer = item.layers.trailing_zeros() as usize;
+    board.near(layer, item.shape.bbox().grow(gap as Nm)).into_iter().all(|o| {
+        o == piece
+            || chain.contains(&o)
+            || board.item(o).is_none_or(|it| it.net != item.net || !it.is_copper() || it.refilled() || !it.on(layer) || ends.iter().any(|&e| it.shape.contains(e)) || it.shape.gap_within(&item.shape, gap) >= gap)
+    })
+}
+
+/// One bump put into one of `tracks`, the tallest that lays cleanly, up to `want / 2` high and
+/// no lower than the track is wide. Returns the length added, the track replaced (its id and
+/// itself), the new pieces, and of those the two straight leads either side of the bump, which
+/// may take a bump of their own; its sides and top may not.
+type Bumped = (f64, (ItemId, Item), Vec<ItemId>, Vec<ItemId>);
+
+fn add_bump(board: &mut Board, tracks: &[ItemId], want: f64) -> Option<Bumped> {
     for h in HEIGHTS {
-        let h = (h as f64).min(want / 2.0);
         for &id in tracks {
             let Some(item) = board.item(id).cloned() else { continue };
             let Shape::Capsule { a, b, r } = item.shape else { continue };
-            // A bump three tracks wide, so its sides stand apart.
+            // No lower than the track is wide, so its sides do not fold back on themselves: one
+            // that overshoots is kept only if it leaves the pair closer than it found it.
+            let least = (2 * r) as f64;
+            let h = (h as f64).min(want / 2.0);
+            let h = if h >= least { h } else if want > least { least } else { continue };
+            // A bump three tracks wide, so its sides stand apart, kept its width from the ends.
             let (len, w) = (a.distance(b), (6 * r) as f64);
-            let room = len - w - 2.0 * LEAD as f64;
+            let lead = (LEAD as f64).max(w);
+            let room = len - w - 2.0 * lead;
             if room < 0.0 {
                 continue;
             }
             let removed = board.remove(id)?;
             for k in 0..PLACES {
-                let at = LEAD as f64 + room * (k as f64 + 0.5) / PLACES as f64;
+                let at = lead + room * (k as f64 + 0.5) / PLACES as f64;
                 for sign in [1.0, -1.0] {
                     let line = bump(a, b, at, w, h, sign);
                     let mut laid = Vec::new();
                     let mut clean = true;
                     for p in line.windows(2) {
-                        if p[0] == p[1] {
-                            continue;
-                        }
                         let nid = board.insert(Item { shape: Shape::Capsule { a: p[0], b: p[1], r }, span: None, ..item.clone() });
                         laid.push(nid);
                         if !check_item(board, nid).is_empty() {
@@ -161,8 +183,11 @@ fn add_bump(board: &mut Board, tracks: &[ItemId], want: f64) -> Option<(f64, (It
                             break;
                         }
                     }
+                    // The sides and top keep clear of the rest of their own net's copper.
+                    clean = clean && laid.len() == 5 && laid[1..4].iter().all(|&nid| own_room(board, nid, &laid, [a, b]));
                     if clean {
-                        return Some((2.0 * h, (id, removed), laid));
+                        let leads = vec![laid[0], laid[4]];
+                        return Some((2.0 * h, (id, removed), laid, leads));
                     }
                     for nid in laid.into_iter().rev() {
                         board.discard(nid);
@@ -170,9 +195,6 @@ fn add_bump(board: &mut Board, tracks: &[ItemId], want: f64) -> Option<(f64, (It
                 }
             }
             board.restore(id, removed);
-        }
-        if h < (HEIGHTS[HEIGHTS.len() - 1] as f64) {
-            break;
         }
     }
     None
@@ -222,7 +244,7 @@ pub fn match_lengths_watch(board: &mut Board, pairs: &[Pair], soft: &mut Vec<Ite
                 let l = board.item(*id).map_or(0.0, track_length);
                 (beside(board, *id, other, pair.pitch()), Reverse(l as Nm))
             });
-            let Some((_, (old, item), laid)) = add_bump(board, &tracks, want) else { break };
+            let Some((_, (old, item), laid, leads)) = add_bump(board, &tracks, want) else { break };
             // Measured again, as a bump off the measured way, or one that moves it, adds nothing.
             match skew(board) {
                 Some(next) if next < now && within(board) => {
@@ -242,7 +264,7 @@ pub fn match_lengths_watch(board: &mut Board, pairs: &[Pair], soft: &mut Vec<Ite
             stats.bumps += 1;
             tracks.retain(|t| *t != old);
             soft.retain(|t| *t != old);
-            tracks.extend(laid.iter().copied());
+            tracks.extend(leads);
             soft.extend(laid);
         }
         let after = skew(board).unwrap_or(before);
