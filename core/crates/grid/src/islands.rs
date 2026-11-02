@@ -173,29 +173,38 @@ pub fn stitch_islands(board: &mut Board, log: &Option<Log>) -> IslandStats {
 mod tests {
     use super::*;
 
-    /// A 0.6 mm strip of A on B.Cu from x 10 to 14 mm, kept as laid: a pour of A over its left
-    /// end on F.Cu (the ring), and a laid stub of A on F.Cu from x 13 to 16 over its right end,
-    /// which reaches back over the strip's body.
+    /// A 0.6 mm strip of A on B.Cu from x 10 to 14 mm, which a custom rule keeps other nets off,
+    /// so laid: a pour of A over its left end on F.Cu (the ring), and a laid stub of A on F.Cu
+    /// from x 13 to 16 over its right end, which reaches back over the strip's body.
     #[test]
     fn a_laid_strip_gets_a_via_at_each_end_over_its_nets_copper_and_no_more() {
         let zone = |layer: &str, x0: f64, x1: f64, keep: bool| {
             let mode = if keep { "(island_removal_mode 1)" } else { "" };
+            let name = match (layer, keep) {
+                ("B.Cu", _) => "strip",
+                (_, true) => "stub",
+                _ => "ring",
+            };
             format!(
-                "(zone (net 1) (net_name \"A\") (layer \"{layer}\") (hatch edge 0.5) (connect_pads (clearance 0.2)) (min_thickness 0.2)
+                "(zone (net 1) (net_name \"A\") (layer \"{layer}\") (name \"{name}\") (hatch edge 0.5) (connect_pads (clearance 0.2)) (min_thickness 0.2)
                    (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5) {mode})
                    (polygon (pts (xy {x0} 9.7) (xy {x1} 9.7) (xy {x1} 10.3) (xy {x0} 10.3)))
                    (filled_polygon (layer \"{layer}\") (pts (xy {x0} 9.7) (xy {x1} 9.7) (xy {x1} 10.3) (xy {x0} 10.3))))"
             )
         };
         let text = format!(
-            "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal)) (net 0 \"\") (net 1 \"A\")
-             (gr_rect (start 0 0) (end 30 20) (layer \"Edge.Cuts\") (width 0.1)) {} {} {})",
+            "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal)) (net 0 \"\") (net 1 \"A\") (net 2 \"B\")
+             (gr_rect (start 0 0) (end 30 20) (layer \"Edge.Cuts\") (width 0.1)) {} {} {}
+             (footprint \"R\" (layer \"F.Cu\") (at 25 15) (property \"Reference\" \"R1\") (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\") (net 2 \"B\"))))",
             zone("B.Cu", 10.0, 14.0, true),
             zone("F.Cu", 7.0, 10.8, false),
             zone("F.Cu", 13.0, 16.0, true)
         );
         let (pcb, copper) = kicad_pcb::parse_board(&text).unwrap();
-        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+        // The strips are kept other nets' tracks and vias off by name, their own net's vias let in.
+        let mut rules = kicad_pcb::Rules::parse("{}").unwrap();
+        rules.apply_custom("(version 1)\n(rule \"keep the strips\" (condition \"(A.intersectsArea('strip') || A.intersectsArea('stub')) && A.NetName != 'A'\") (constraint disallow track via))", "test.kicad_dru");
+        let mut board = Board::new(&pcb, &copper, rules);
         assert_eq!(board.laid_islands.len(), 2);
         let stats = stitch_islands(&mut board, &None);
         let at: Vec<Point> = stats.laid.iter().filter_map(|&v| match board.item(v)?.shape {

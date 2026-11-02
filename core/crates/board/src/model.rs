@@ -266,11 +266,6 @@ impl Block {
     }
 }
 
-/// The widest island of a zone that keeps its islands taken for copper laid as a track: 2 mm,
-/// over easy2350's 0.6 mm 1V1 spokes and under any plane (comms' and servodrive's ground planes,
-/// which keep their islands too, must stay poured round the routes).
-pub const LAID_WIDTH: Nm = 2_000_000;
-
 #[derive(Debug, Clone)]
 pub struct Board {
     pub layers: Vec<String>,
@@ -320,10 +315,14 @@ pub struct Board {
     /// Zones of a net saved with no fill (KiCad not having filled them): their zone, net, layers
     /// and outline, to stand in for their copper where it must be there, on a plane.
     pub unfilled: Vec<(usize, u32, u64, Shape)>,
-    /// Islands of zones that keep every island of their fill (`island_removal_mode 1`), each no
-    /// wider than [`LAID_WIDTH`]: copper laid as a track is, kept as it stands, and each must join
-    /// its net, or KiCad reports it isolated.
+    /// Pieces of zone fill the board's own rules keep every other net off: rule areas that forbid
+    /// tracks and vias, or custom rules that disallow them there for every net but the zone's.
+    /// Nothing can cut such copper on a refill, so it is kept as laid: it joins the pads and vias
+    /// it touches, and other nets steer clear of it.
     pub laid_islands: std::collections::BTreeSet<ItemId>,
+    /// Those of [`Board::laid_islands`] whose zone keeps every island of its fill
+    /// (`island_removal_mode 1`): each must join its net, or KiCad reports it isolated.
+    pub join_islands: std::collections::BTreeSet<ItemId>,
     /// Areas where a via costs the router dearly but is allowed, on every layer: rule areas
     /// whose name starts `soft-novia`, and boxes given on the command line. Room kept for silk.
     pub via_avoid: Vec<Shape>,
@@ -471,6 +470,7 @@ impl Board {
             keepout_holes: HashMap::new(),
             unfilled: Vec::new(),
             laid_islands: Default::default(),
+            join_islands: Default::default(),
             via_avoid: Vec::new(),
             via_avoid_cost: 3_000,
             regions: Vec::new(),
@@ -721,15 +721,15 @@ impl Board {
             }
             for (layer, poly) in &zone.filled {
                 if poly.len() >= 3 {
-                    let shape = Shape::Polygon(poly.iter().copied().map(Point::from_m).collect());
-                    // An island a zone keeps, narrow as a track, is copper laid by hand, as a
-                    // reference layout's strips are: the router steers clear of it and joins it,
-                    // as KiCad will not drop it. A wider one, a plane's, is poured round the routes.
-                    let laid = zone.keep_islands && zone.net != 0 && shape.depth(crate::connect::deepest(&shape)) <= (LAID_WIDTH / 2) as f64;
-                    let id = board.insert(Item { kind: Kind::Pour { zone: z, kept: kept || laid }, net: zone.net, layers: one(layer), shape, hole: None, locked: true, span: None });
-                    if laid {
-                        board.laid_islands.insert(id);
-                    }
+                    board.insert(Item {
+                        kind: Kind::Pour { zone: z, kept },
+                        net: zone.net,
+                        layers: one(layer),
+                        shape: Shape::Polygon(poly.iter().copied().map(Point::from_m).collect()),
+                        hole: None,
+                        locked: true,
+                        span: None,
+                    });
                 }
             }
         }
@@ -806,6 +806,8 @@ impl Board {
             board.ties.insert(id, (fp, nets));
         }
         board.limits = crate::check::Limits::of(&board);
+        let keep_islands: std::collections::BTreeSet<usize> = copper.zones.iter().enumerate().filter(|(_, z)| z.keep_islands).map(|(k, _)| k).collect();
+        board.lay_protected_copper(&keep_islands);
         board.reserve_spokes(pcb, copper, &pad_items);
         let short = board.lengths_out_of_reach();
         board.warnings.extend(short);
@@ -1116,10 +1118,77 @@ impl Board {
     }
 
     /// Whether an item is a plane's pour.
-    /// Whether item `id` is one of the [`Board::laid_islands`], which must join its net like a
+    /// Whether item `id` is one of the [`Board::join_islands`], which must join its net like a
     /// loose piece of track.
     pub fn must_join(&self, id: ItemId) -> bool {
+        self.join_islands.contains(&id)
+    }
+
+    /// Whether item `id` is one of the [`Board::laid_islands`], copper kept as laid.
+    pub fn is_laid(&self, id: ItemId) -> bool {
         self.laid_islands.contains(&id)
+    }
+
+    /// Finds the [`Board::laid_islands`] and [`Board::join_islands`] among the zones' fills, and
+    /// keeps them as laid. `keep_islands` are the zones that keep every island of their fill.
+    fn lay_protected_copper(&mut self, keep_islands: &std::collections::BTreeSet<usize>) {
+        let keepouts = self.items().any(|(_, it)| matches!(it.kind, Kind::Keepout { forbids, .. } if forbids.tracks && forbids.vias));
+        if !keepouts && !self.custom.has("disallow") {
+            return;
+        }
+        let nets: std::collections::BTreeSet<u32> = self.items().filter(|(_, it)| it.is_copper() && it.net != 0).map(|(_, it)| it.net).collect();
+        let pours: Vec<ItemId> = self.items().filter(|(_, it)| matches!(it.kind, Kind::Pour { zone, .. } if zone != DRAWN) && it.net != 0).map(|(id, _)| id).collect();
+        for id in pours {
+            let Some(piece) = self.item(id).cloned() else { continue };
+            if !self.protected(&piece, &nets) {
+                continue;
+            }
+            let Kind::Pour { zone, .. } = piece.kind else { continue };
+            if let Some(mut it) = self.remove(id) {
+                it.kind = Kind::Pour { zone, kept: true };
+                self.restore(id, it);
+            }
+            self.laid_islands.insert(id);
+            if keep_islands.contains(&zone) {
+                self.join_islands.insert(id);
+            }
+        }
+    }
+
+    /// Whether the rules keep every other net's tracks and vias off `piece`, at points sampled
+    /// across it: a rule area forbidding both there, or for each other net a custom rule
+    /// disallowing its tracks there and one disallowing its vias.
+    fn protected(&self, piece: &Item, nets: &std::collections::BTreeSet<u32>) -> bool {
+        let layer = piece.layers.trailing_zeros() as usize;
+        let b = piece.shape.bbox();
+        const N: i64 = 8;
+        let mut points: Vec<Point> = (0..=N)
+            .flat_map(|j| (0..=N).map(move |i| (i, j)))
+            .map(|(i, j)| Point::new(b.min.x + (b.max.x - b.min.x) * i / N, b.min.y + (b.max.y - b.min.y) * j / N))
+            .filter(|&p| piece.shape.contains(p))
+            .collect();
+        points.push(crate::connect::deepest(&piece.shape));
+        let r = (self.min_track_width_any().max(1) + 1) / 2;
+        let all = (1u64 << self.layers.len()) - 1;
+        points.iter().all(|&p| {
+            let dot = BBox::of([p]);
+            let in_keepout = self.near(layer, dot).into_iter().any(|k| {
+                self.item(k).is_some_and(|it| {
+                    matches!(it.kind, Kind::Keepout { forbids, .. } if forbids.tracks && forbids.vias)
+                        && it.on(layer)
+                        && it.shape.contains(p)
+                        && !self.keepout_holes.get(&k).is_some_and(|holes| holes.iter().any(|h| h.contains(p)))
+                })
+            });
+            in_keepout
+                || (self.custom.has("disallow")
+                    && nets.iter().filter(|&&n| n != piece.net).all(|&net| {
+                        let track = Item { kind: Kind::Track, net, layers: 1 << layer, shape: Shape::Capsule { a: p, b: p, r }, hole: None, locked: false, span: None };
+                        let via = Item { kind: Kind::Via, net, layers: all, shape: Shape::Capsule { a: p, b: p, r }, hole: Some((p, r / 2)), locked: false, span: None };
+                        self.disallowed("track", &crate::custom::Thing::Item(self, ItemId::MAX, &track), layer) == kicad_pcb::dru::Tri::True
+                            && self.disallowed("via", &crate::custom::Thing::Item(self, ItemId::MAX, &via), layer) == kicad_pcb::dru::Tri::True
+                    }))
+        })
     }
 
     pub fn is_plane(&self, item: &Item) -> bool {
