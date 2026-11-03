@@ -17,10 +17,18 @@ checkout that holds it, and point `ULTRAROUTE_BIN` at another build when needed.
 (about 16 minutes on 16 workers). Leave it out to route all 1,182 boards; `--only ID,ID` routes
 the boards named (the directory names under `boards/`). Each board gets `--strip-all`, the
 recipe (`--recipe default` unless `--recipe "..."` is given), `--seed`, `--uuid-seed`,
-`--threads 1` and `--timeout` (120 s by default), under an 8 GB memory cap; the run takes as
+`--threads 1`, `--timeout` (120 s by default) and `--cpu-clock`, under an 8 GB memory cap; the run takes as
 many workers as `reserve` booked (`RESERVED_CORES`, 4 without it). Boards and runs live in
 `~/Software/ultraroute-lab/pcbench/` (`ULTRAROUTE_LAB` moves it). Conversion gives each repeated
 uuid a fresh one (KiCad 5 numbers footprints 0, 1, ...).
+
+**The clock.** Since 2026-11-03 `--timeout` counts the router's CPU seconds (`--cpu-clock`; with
+`--threads 1` that is one core's), so a board routes as far on a loaded machine as on an idle one.
+On the wall clock the verdicts followed the load: 12 of 34 time-limited near misses of
+s1-padvia3 (sequoia-server, 15 routes at once) routed clean at 120 s on an idle loaf. Each
+result records `cpu_seconds` beside `seconds` (wall), and run.json `clock`. `--wall-clock` times
+a run the old way, and is needed for a binary built before `--cpu-clock`; `compare` says when two
+runs' clocks differ, and their verdicts are then not comparable on time-limited boards.
 
 A two-board check of the command line (2026-10-30, loaf, the Stage 11 build):
 

@@ -151,6 +151,7 @@ lengths, the deadline, and, of kind `rule`, every project or custom rule left ou
 | `--place REF=X,Y` | put a part at X,Y mm before routing; Y points up (KiCad's y negated); repeatable |
 | `--cell MM` | the grid cell for every stage (0.005 to 1; default 0.05) |
 | `--timeout SECONDS` | the run's time; the board routed so far is written when it runs out |
+| `--cpu-clock` | `--timeout` and every stage's share count the process's CPU seconds (all threads together), not the wall's, so a loaded machine gets as far as an idle one; the benchmark runs with it |
 | `--seed N` | reorders connections of nearly equal length, for a search over runs (default 0) |
 | `--uuid-seed N` | draw the new copper's uuids from this seed, so the output is the same every time |
 | `--threads N` | threads for pre-fanout and Jacobi negotiation (default half the machine's) |

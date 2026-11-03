@@ -4,7 +4,7 @@ baselines (FreeRouting, PcbRouter, RL-MCTS; PCBench/Baselines/Results_all.csv).
 
     pcbench.py prepare [--only ID,...]       convert each board to KiCad 9 once, strip it bare,
                                              and record KiCad's verdict on the bare board
-    pcbench.py run RUN [--recipe "..."] [--timeout S] [--only ID,...] [--sample N] [--seed N] [--no-board-timeouts]
+    pcbench.py run RUN [--recipe "..."] [--timeout S] [--only ID,...] [--sample N] [--seed N] [--no-board-timeouts] [--wall-clock]
                                              route every prepared board (wrap in reserve: it
                                              runs $RESERVED_CORES routes at once); the boards in
                                              tools/pcbench_timeouts.json get their own time
@@ -257,7 +257,7 @@ def lengths(pcb):
     return total, len(re.findall(r"^\s*\(via\b", text, re.M))
 
 
-def route_one(b, run_dir, recipe, timeout, seed, router=ROUTER):
+def route_one(b, run_dir, recipe, timeout, seed, router=ROUTER, clock="cpu"):
     d = run_dir / b
     if (d / "result.json").exists():
         return json.loads((d / "result.json").read_text())
@@ -266,7 +266,8 @@ def route_one(b, run_dir, recipe, timeout, seed, router=ROUTER):
     out = d / "out.kicad_pcb"
     res = {"id": b}
     timing = d / "time.txt"
-    args = ["/usr/bin/time", "-f", "%e %M", "-o", str(timing), str(router), "route", str(src / "board.kicad_pcb"), "-o", str(out), "--strip-all", *recipe.split(), "--seed", str(seed), "--uuid-seed", str(seed), "--threads", "1", "--timeout", str(timeout)]
+    # /usr/bin/time's user and system seconds are the CPU time `--cpu-clock` counts the timeout in.
+    args = ["/usr/bin/time", "-f", "%e %U %S %M", "-o", str(timing), str(router), "route", str(src / "board.kicad_pcb"), "-o", str(out), "--strip-all", *recipe.split(), "--seed", str(seed), "--uuid-seed", str(seed), "--threads", "1", "--timeout", str(timeout), *(["--cpu-clock"] if clock == "cpu" else [])]
     started = time.time()
     try:
         r = subprocess.run(CAP + args, capture_output=True, text=True, timeout=timeout * 3 + 300)
@@ -278,7 +279,10 @@ def route_one(b, run_dir, recipe, timeout, seed, router=ROUTER):
     res["seconds"] = round(time.time() - started, 1)
     try:
         # /usr/bin/time's last line; a router killed by a signal gets a "Command terminated" line first.
-        res["peak_mb"] = round(int(timing.read_text().split()[-1]) / 1024)
+        times = timing.read_text().split()
+        res["peak_mb"] = round(int(times[-1]) / 1024)
+        if len(times) >= 4:
+            res["cpu_seconds"] = round(float(times[-3]) + float(times[-2]), 1)
     except (OSError, ValueError, IndexError):
         pass
     # A router that failed wrote the input board, the designer's copper and all, or nothing: what
@@ -532,6 +536,21 @@ def chosen(a):
     return ids
 
 
+# What `--timeout` counts. The CPU's (the router's `--cpu-clock`) unless `--wall-clock`: on the wall
+# clock a board's verdict depended on the machine's load (12 of 34 near misses failed on
+# sequoia-server running 15 routes and routed clean on an idle loaf, 2026-11-02).
+def clock_of(a, router):
+    if a.wall_clock:
+        return "wall"
+    try:
+        usage = subprocess.run([str(router), "route", "--help"], capture_output=True, text=True, timeout=30)
+    except OSError as e:
+        sys.exit(f"{router}: {e}")
+    if "--cpu-clock" not in usage.stdout + usage.stderr:
+        sys.exit(f"{router} has no --cpu-clock (built before it): pass --wall-clock to time it on the wall clock")
+    return "cpu"
+
+
 def start(name, ids, a, router, workers, commit=True):
     """A run's directory and its run.json, written when it starts and checked when it resumes."""
     run_dir = HOME / "runs" / name
@@ -539,7 +558,7 @@ def start(name, ids, a, router, workers, commit=True):
     meta = run_dir / "run.json"
     now = provenance(workers, router, commit)
     own = {b: t for b, t in board_timeouts(a).items() if b in ids}
-    info = {"recipe": a.recipe, "timeout": a.timeout, "board_timeouts": own, "seed": a.seed, "boards": ids, "tier": a.tier, **now, "started": time.strftime("%Y-%m-%dT%H:%M:%S"), "notes": [a.note] if a.note else []}
+    info = {"recipe": a.recipe, "timeout": a.timeout, "clock": clock_of(a, router), "board_timeouts": own, "seed": a.seed, "boards": ids, "tier": a.tier, **now, "started": time.strftime("%Y-%m-%dT%H:%M:%S"), "notes": [a.note] if a.note else []}
     if meta.exists():
         info = json.loads(meta.read_text())
         differ = {k: (info.get(k), now[k]) for k in ("commit", "binary_sha256") if info.get(k) != now[k]}
@@ -559,7 +578,7 @@ def route_all(jobs, a, workers):
     """Routes (run name, run dir, run.json, router, board) jobs, `workers` at once, and prints each verdict."""
     ok = {}
     with concurrent.futures.ThreadPoolExecutor(workers) as pool:
-        futures = {pool.submit(route_one, b, run_dir, a.recipe, info.get("board_timeouts", {}).get(b, a.timeout), a.seed, router): name for name, run_dir, info, router, b in jobs}
+        futures = {pool.submit(route_one, b, run_dir, a.recipe, info.get("board_timeouts", {}).get(b, a.timeout), a.seed, router, info.get("clock", "wall")): name for name, run_dir, info, router, b in jobs}
         for k, f in enumerate(concurrent.futures.as_completed(futures), 1):
             r, name = f.result(), futures[f]
             ok[name] = ok.get(name, 0) + bool(r.get("success"))
@@ -678,7 +697,11 @@ def compare(a):
         wl = [sum(rs[i].get("wirelength") or 0 for i in both) for rs in (base, new)]
         print(f"   on the {len(both)} boards clean in both: vias {vias[0]} -> {vias[1]}, wirelength {wl[0]:.0f} -> {wl[1]:.0f} mm")
         limit = lambda m, i: m.get("board_timeouts", {}).get(i, m.get("timeout", 120)) - 10
-        print(f"   at the time limit (>= timeout - 10 s): {sum(base[i]['seconds'] >= limit(base_meta, i) for i in common)} -> {sum(new[i]['seconds'] >= limit(meta, i) for i in common)}")
+        # On the clock the run's timeout counted: a run on the CPU's is at its limit by CPU seconds.
+        spent = lambda m, r: r.get("cpu_seconds", r["seconds"]) if m.get("clock") == "cpu" else r["seconds"]
+        print(f"   at the time limit (>= timeout - 10 s): {sum(spent(base_meta, base[i]) >= limit(base_meta, i) for i in common)} -> {sum(spent(meta, new[i]) >= limit(meta, i) for i in common)}")
+        if base_meta.get("clock", "wall") != meta.get("clock", "wall"):
+            print(f"   clocks differ: {base_meta.get('clock', 'wall')} -> {meta.get('clock', 'wall')}")
         if (base_meta.get("board_timeouts") or {}) != (meta.get("board_timeouts") or {}):
             print(f"   board timeouts differ: {len(base_meta.get('board_timeouts') or {})} -> {len(meta.get('board_timeouts') or {})} boards given their own")
         refs = [[i for i in common if "referee_error" in rs[i]] for rs in (base, new)]
@@ -789,6 +812,7 @@ def main():
     s.add_argument("--recipe", default=RECIPE)
     s.add_argument("--timeout", type=float, default=120)
     s.add_argument("--no-board-timeouts", action="store_true", help="every board at --timeout, none at its own from pcbench_timeouts.json")
+    s.add_argument("--wall-clock", action="store_true", help="--timeout in wall seconds, as runs before 2026-11-03 were (default: the router's CPU seconds)")
     s.add_argument("--seed", type=int, default=0)
     s.add_argument("--only")
     s.add_argument("--sample", type=int, help="route this many boards, drawn at random")
@@ -800,6 +824,7 @@ def main():
     s.add_argument("base", help="the run of --base-bin's routes")
     s.add_argument("new", help="the run of this checkout's router (ULTRAROUTE_BIN)")
     s.add_argument("--base-bin", required=True, help="the reference router binary")
+    s.add_argument("--wall-clock", action="store_true", help="--timeout in wall seconds (default: CPU seconds; both routers need --cpu-clock)")
     s.add_argument("--recipe", default=RECIPE)
     s.add_argument("--timeout", type=float, default=120)
     s.add_argument("--no-board-timeouts", action="store_true")

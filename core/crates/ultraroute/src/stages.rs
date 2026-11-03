@@ -66,7 +66,7 @@ impl StageCtx<'_> {
 
     /// Seconds since the run's clock started, as the stages' lines print it.
     pub fn elapsed(&self) -> f64 {
-        self.clock.started.elapsed().as_secs_f64()
+        grid::clock::since(self.clock.started).as_secs_f64()
     }
 
     /// Tells the log, if anyone listens.
@@ -1157,7 +1157,7 @@ fn shove_pass(
         let routed = s.tries.iter().filter(|t| t.routed).count();
         let kept = s.tries.iter().filter(|t| t.kept).count();
         let after = open_now(board);
-        eprintln!("shove pass {}: {} trapped tried, {routed} routed out, {kept} kept, {} -> {} open, {:.1} s", pass + 1, s.tries.len(), before.1, after.1, started.elapsed().as_secs_f64());
+        eprintln!("shove pass {}: {} trapped tried, {routed} routed out, {kept} kept, {} -> {} open, {:.1} s", pass + 1, s.tries.len(), before.1, after.1, grid::clock::since(started).as_secs_f64());
         // Passes go on, each in another order, until `--shove-patience` of them in a row free
         // nothing more, or nothing is left open.
         // The region plough tries a connection it could not free twice as far round its path

@@ -390,6 +390,7 @@ version = "0.1.0"
 dependencies = [
  "board",
  "kicad-pcb",
+ "libc",
  "morph",
  "pollster",
  "web-time",
