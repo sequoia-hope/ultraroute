@@ -38,8 +38,8 @@ pub use stages::{Ledger, Stage, StageCtx};
 pub use stats::{Finding, RunStats, StageStats};
 pub use watch::{Cleaned, Flow, StageEvent, Unwatched, Watch};
 
-pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--plane-via-reach MM] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--negotiate-jacobi] [--negotiate-reroute-all] [--diff-pairs] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner|same] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--negotiate] [--rip-up] [--nudge] [--tighten] [--arcs MM] [--via-cost MM[,OPEN_MM]] [--gpu] \
-[--timeout SECONDS] [--cpu-clock] [--cell MM] [--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--uuid-seed N] [--adopt] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
+pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--plane-via-reach MM] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--negotiate-jacobi] [--negotiate-reroute-all] [--diff-pairs] [--prefanout] [--escape-room|--no-escape-room] [--prefanout-mode stub|dogbone|grid|inner|same] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--negotiate] [--rip-up] [--rip-boxed|--no-rip-boxed] [--nudge] [--tighten] [--arcs MM] [--via-cost MM[,OPEN_MM]] [--gpu] \
+[--timeout SECONDS] [--cpu-clock] [--cell MM] [--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--guard-ties|--no-guard-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--uuid-seed N] [--adopt] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
 [--recipe default|bench|minimal] [--live PATH|-] [--live-fps N] [--live-step MS] [--blame] [--stats|--report FILE] [-h|--help]
 --place takes millimetres with y pointing up: give KiCad's y negated (KiCad y 127.5 is -127.5).
 Copper and mask text is stroked by the kicad-text program ($ULTRAROUTE_TEXT_HELPER, else next to this one, else on PATH; none: boxes);
@@ -69,11 +69,18 @@ pub struct Args {
     /// Escape every fine-pitch part's pads before routing: how, in what order, and how far out
     /// the escapes end.
     pub prefanout: bool,
+    /// Pick parts for pre-fanout by pin escape room against neighbours and the board edge rather
+    /// than a fixed 0.5 mm pitch, and keep sibling and held-back pad mouths open. The parts so
+    /// picked are also the pair escapes' and the rip plough's.
+    pub escape_room: bool,
     pub prefanout_mode: Option<grid::EscapeMode>,
     pub prefanout_order: Option<grid::EscapeOrder>,
     pub prefanout_ring: Option<Nm>,
     pub negotiate: bool,
     pub rip_up: bool,
+    /// Rip-up's connections boxed in by the router's copper tried with it lifted and on a finer
+    /// window, and held while what they ripped is rerouted (`grid::RipOptions::rip_boxed`).
+    pub rip_boxed: bool,
     pub tighten: bool,
     /// Corners of the router's tracks rounded, by arcs of at most this radius.
     pub arcs: Option<Nm>,
@@ -108,6 +115,8 @@ pub struct Args {
     pub shove_repair: Option<f64>,
     pub shove_passes: usize,
     pub shove_ties: bool,
+    /// Refuse a shove tie move that leaves a newly opened connection boxed in around its end.
+    pub guard_ties: bool,
     /// Reorders the connections negotiation and the grid router take, for a search over runs.
     pub seed: u64,
     /// The new copper's uuids drawn from this seed, so that a run's output is the same every time;
@@ -150,7 +159,7 @@ pub struct Args {
 
 /// The stages and settings the router runs with unless told otherwise: the benchmark's recipe
 /// (`docs/pcbench.md`), measured as the best of what the router has.
-pub const RECIPE: &str = "--negotiate --rip-up --tighten --prefanout --diff-pairs --shove-plough region --shove-reach 0.5 --shove-repair 20 --shove-ties --shove-passes 60 --shove-patience 8";
+pub const RECIPE: &str = "--negotiate --rip-up --rip-boxed --tighten --prefanout --escape-room --diff-pairs --shove-plough region --shove-reach 0.5 --shove-repair 20 --shove-ties --guard-ties --shove-passes 60 --shove-patience 8";
 
 /// Flags that name a stage to run. A run naming none gets [`RECIPE`]; one naming its own stages
 /// gets those alone, as before there was a default.
@@ -205,11 +214,13 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
         negotiate_jacobi: false,
         negotiate_reroute_all: false,
         prefanout: false,
+        escape_room: false,
         prefanout_mode: None,
         prefanout_order: None,
         prefanout_ring: None,
         negotiate: false,
         rip_up: false,
+        rip_boxed: false,
         tighten: false,
         arcs: None,
         via_cost: None,
@@ -233,6 +244,7 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
         shove_repair: None,
         shove_passes: 1,
         shove_ties: false,
+        guard_ties: false,
         seed: 0,
         uuid_seed: None,
         shove_cascade: None,
@@ -277,6 +289,8 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
             "--negotiate-reroute-all" => a.negotiate_reroute_all = true,
             "--planes" => a.planes.extend(value()?.split(',').filter(|s| !s.is_empty()).map(String::from)),
             "--prefanout" => a.prefanout = true,
+            "--escape-room" => a.escape_room = true,
+            "--no-escape-room" => a.escape_room = false,
             "--prefanout-mode" => {
                 a.prefanout = true;
                 let v = value()?;
@@ -309,6 +323,8 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
             }
             "--negotiate" => a.negotiate = true,
             "--rip-up" => a.rip_up = true,
+            "--rip-boxed" => a.rip_boxed = true,
+            "--no-rip-boxed" => a.rip_boxed = false,
             "--tighten" => a.tighten = true,
             "--arcs" => {
                 let mm: f64 = value()?.parse().map_err(|e| format!("--arcs: {e}"))?;
@@ -362,6 +378,8 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
             "--shove-repair" => a.shove_repair = Some(value()?.parse().map_err(|e| format!("--shove-repair: {e}"))?),
             "--shove-passes" => a.shove_passes = value()?.parse().map_err(|e| format!("--shove-passes: {e}"))?,
             "--shove-ties" => a.shove_ties = true,
+            "--guard-ties" => a.guard_ties = true,
+            "--no-guard-ties" => a.guard_ties = false,
             "--shove-cascade" => a.shove_cascade = Some(value()?.parse().map_err(|e| format!("--shove-cascade: {e}"))?),
             "--shove-patience" => a.shove_patience = value()?.parse().map_err(|e| format!("--shove-patience: {e}"))?,
             "--seed" => a.seed = value()?.parse().map_err(|e| format!("--seed: {e}"))?,
@@ -1273,7 +1291,13 @@ pub fn route(
             text,
         };
         let detail = entry.stage.run(&mut ctx);
+        let before: HashSet<(ItemId, ItemId)> = mark.open.iter().map(stages::pair_key).collect();
         let done = mark.close(a, &board, name, (begun, from), detail, &mut stats);
+        // The connections the stage leaves open, filed: the failures are the open set after it.
+        let t = Instant::now();
+        let given_up = std::mem::take(&mut ledger.given_up);
+        stages::reconcile_failures(&board, &mut stats.failures, given_up, name, entry.stage.leaves_open(), &before, &mark.open);
+        stats.stats_seconds += t.elapsed().as_secs_f64();
         stopped |= hooks.stage(name, &board, &ledger, StageEvent::End(&done)) == Flow::Stop;
         stats.stages.push(done);
         trace.after(name, &board);
@@ -1497,7 +1521,7 @@ fn run_log(a: &Args, live: &Arc<Mutex<Option<Live>>>, started: Instant, extra: O
 /// The board between two stages, to tell what the stage after did: connections open, the
 /// router's copper by identity and shape, vias, and the work counts.
 struct Mark {
-    open: usize,
+    open: Vec<board::Airline>,
     copper: HashSet<(ItemId, u64, [Nm; 5])>,
     vias: usize,
     work: grid::work::Work,
@@ -1506,7 +1530,7 @@ struct Mark {
 impl Mark {
     fn take(a: &Args, board: &Board, stats: &mut RunStats) -> Mark {
         let t = Instant::now();
-        let (open, copper, vias) = (open_airlines(a, board).len(), stages::copper_keys(board), vias_on(board));
+        let (open, copper, vias) = (open_airlines(a, board), stages::copper_keys(board), vias_on(board));
         stats.stats_seconds += t.elapsed().as_secs_f64();
         // Last, so the counting itself is not counted as the next stage's work.
         Mark { open, copper, vias, work: grid::work::Work::now() }
@@ -1522,8 +1546,8 @@ impl Mark {
             started: from.duration_since(begun).as_secs_f64(),
             seconds,
             cut: false,
-            open_before: self.open,
-            open_after: next.open,
+            open_before: self.open.len(),
+            open_after: next.open.len(),
             laid: next.copper.difference(&self.copper).count(),
             ripped: self.copper.difference(&next.copper).count(),
             vias: next.vias,
@@ -1547,7 +1571,8 @@ mod tests {
     fn a_line_naming_no_stage_runs_the_recipe_and_one_naming_stages_runs_those() {
         let recipe = parse(&words(&format!("route in.kicad_pcb -o out.kicad_pcb {RECIPE}"))).unwrap();
         let same = |a: &Args, b: &Args| {
-            (a.negotiate, a.rip_up, a.tighten, a.prefanout, a.diff_pairs, a.shove_passes, a.shove_patience) == (b.negotiate, b.rip_up, b.tighten, b.prefanout, b.diff_pairs, b.shove_passes, b.shove_patience)
+            (a.negotiate, a.rip_up, a.rip_boxed, a.tighten, a.prefanout, a.escape_room, a.diff_pairs, a.shove_passes, a.shove_patience, a.guard_ties)
+                == (b.negotiate, b.rip_up, b.rip_boxed, b.tighten, b.prefanout, b.escape_room, b.diff_pairs, b.shove_passes, b.shove_patience, b.guard_ties)
         };
         assert!(same(&parse(&words("route in.kicad_pcb -o out.kicad_pcb")).unwrap(), &recipe));
         assert!(same(&parse(&words("route in.kicad_pcb -o out.kicad_pcb --recipe default")).unwrap(), &recipe));

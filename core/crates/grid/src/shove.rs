@@ -59,6 +59,8 @@ pub struct ShoveOptions {
     /// Keep a try that frees its trapped connection and leaves no more open than it found, not
     /// only one that leaves fewer.
     pub accept_ties: bool,
+    /// Refuse a tie try that leaves a newly opened connection boxed in around its end.
+    pub guard_ties: bool,
     /// Passes after the first when the region plough renegotiates what it ripped, as
     /// [`crate::NegotiationOptions::repasses`].
     pub negotiate_repasses: usize,
@@ -85,6 +87,7 @@ impl Default for ShoveOptions {
             reroute_seconds: 20.0,
             repair_seconds: 10.0,
             accept_ties: false,
+            guard_ties: false,
             negotiate_repasses: 1,
             seed: 0,
             deadline: Default::default(),
@@ -312,6 +315,10 @@ pub fn shove_escape(
                 && score_after == score_before
                 && connection_of(board, t.pad, options.pours_block).is_none()
                 && (!region || (ties.get(&t.net).copied().unwrap_or(0) < TIES_PER_NET && ties.values().sum::<usize>() < TIES));
+            // A tie refused spends the budget as one kept does: the same check is not made again
+            // and again.
+            let refused = tie && options.guard_ties && tie_boxes_end(board, solver, options, &mut cache, &ties, &after, &snapshot.0, &open);
+            let tie = tie && !refused;
             t.kept = score_after < score_before || tie;
             if region && score_after < score_before {
                 // The board has changed: every connection may be tried again, at the narrowest reach.
@@ -319,7 +326,7 @@ pub fn shove_escape(
                 tried.clear();
                 reaches.clear();
                 net_reaches.clear();
-            } else if region && tie {
+            } else if region && (tie || refused) {
                 *ties.entry(t.net).or_default() += 1;
             }
         } else {
@@ -402,6 +409,237 @@ fn joined(board: &Board, pours_block: bool) -> Connectivity {
 /// Signal connections open, then all: what a try must leave fewer of.
 fn score(open: &[Airline], plane_nets: &HashSet<u32>) -> (usize, usize) {
     (open.iter().filter(|a| !plane_nets.contains(&a.net)).count(), open.len())
+}
+
+/// Whether `after` trades a tie into an open signal connection that cannot recover: one that
+/// cannot even plough out through movable copper, or one boxed around its end when the
+/// connections the try closed had fewer boxed ends, when `parts` will not try it, or when the
+/// tie budget will not let it swap back out. Connections open both before and after are taken
+/// as boxed or not alike.
+#[allow(clippy::too_many_arguments)]
+fn tie_boxes_end(
+    board: &mut Board,
+    solver: &mut dyn FieldSolver,
+    options: &ShoveOptions,
+    cache: &mut PassCache,
+    ties: &HashMap<u32, usize>,
+    after: &[Airline],
+    before_board: &Board,
+    before_open: &[Airline],
+) -> bool {
+    let pair = |a: &Airline| (a.from_item.min(a.to_item), a.from_item.max(a.to_item));
+    let before_pairs: HashSet<(ItemId, ItemId)> = before_open.iter().map(pair).collect();
+    let after_pairs: HashSet<(ItemId, ItemId)> = after.iter().map(pair).collect();
+    let opened: Vec<Airline> = after.iter().filter(|a| !cache.plane_nets.contains(&a.net) && !before_pairs.contains(&pair(a))).cloned().collect();
+    if opened.is_empty() {
+        return false;
+    }
+    let closed: Vec<Airline> = before_open.iter().filter(|a| !after_pairs.contains(&pair(a))).cloned().collect();
+    // The board as the try found it, made once and only when asked; the pass's walls hold for
+    // it as for every board in the pass.
+    let mut before: Option<Board> = None;
+    let mut conn_before: Option<Connectivity> = None;
+    let conn_after = joined(board, options.pours_block);
+    for a in &opened {
+        if walled_way(board, solver, options, cache, &conn_after, a.net, a.from_item, a.to_item).is_some() {
+            continue;
+        }
+        let check_before = before.get_or_insert_with(|| before_board.clone());
+        let conn_before = conn_before.get_or_insert_with(|| joined(check_before, options.pours_block));
+        let was_dead = before_open
+            .iter()
+            .filter(|b| b.net == a.net)
+            .any(|b| walled_way(check_before, solver, options, cache, conn_before, b.net, b.from_item, b.to_item).is_none());
+        if !was_dead {
+            return true;
+        }
+    }
+
+    let plane_nets = &cache.plane_nets;
+    let boxed_after = boxed_open_ends(board, &opened, options.cell, options.pours_block, plane_nets);
+    if boxed_after.is_empty() {
+        return false;
+    }
+    let check_before = before.get_or_insert_with(|| before_board.clone());
+    let boxed_before = boxed_open_ends(check_before, &closed, options.cell, options.pours_block, plane_nets);
+    if boxed_after.len() > boxed_before.len() {
+        return true;
+    }
+    let region = options.plough == Plough::Region;
+    let total_ties_after = ties.values().sum::<usize>() + 1;
+    let mut used = vec![false; boxed_before.len()];
+    for &(net, pt) in &boxed_after {
+        if let Some(k) = boxed_before
+            .iter()
+            .enumerate()
+            .position(|(k, &(b_net, b_pt))| !used[k] && b_net == net && b_pt.distance(pt) <= 250_000.0)
+        {
+            used[k] = true;
+            continue;
+        }
+        let untried_part = after
+            .iter()
+            .filter(|a| a.net == net)
+            .all(|a| ![a.from_item, a.to_item].into_iter().any(|id| on_parts(board, id, &options.parts)));
+        let budget_spent = region && (ties.get(&net).copied().unwrap_or(0) >= TIES_PER_NET || total_ties_after >= TIES);
+        if untried_part || budget_spent {
+            return true;
+        }
+    }
+    false
+}
+
+/// Every open signal endpoint in `open` that has no legal terminal or is sealed inside a local
+/// pocket around its cluster, as `(net, anchor)`.
+fn boxed_open_ends(
+    board: &mut Board,
+    open: &[Airline],
+    cell: Nm,
+    pours_block: bool,
+    plane_nets: &HashSet<u32>,
+) -> Vec<(u32, Point)> {
+    let mut out: Vec<(u32, Point)> = Vec::new();
+    for airline in open {
+        if plane_nets.contains(&airline.net) {
+            continue;
+        }
+        for (end, end_pt, other, other_pt) in [
+            (airline.from_item, airline.from, airline.to_item, airline.to),
+            (airline.to_item, airline.to, airline.from_item, airline.from),
+        ] {
+            let anchor = local_cluster(board, end)
+                .into_iter()
+                .filter_map(|id| {
+                    let it = board.item(id)?;
+                    matches!(it.kind, Kind::Pad { .. }).then(|| {
+                        let bb = it.shape.bbox();
+                        Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2)
+                    })
+                })
+                .min_by(|a, b| a.distance(end_pt).total_cmp(&b.distance(end_pt)))
+                .unwrap_or(end_pt);
+            if out.iter().any(|&(n, p)| n == airline.net && p.distance(anchor) <= 100_000.0) {
+                continue;
+            }
+            if endpoint_boxed(board, airline, end, end_pt, other, other_pt, cell, pours_block) {
+                out.push((airline.net, anchor));
+            }
+        }
+    }
+    out
+}
+
+/// Whether `airline`'s `end` has no way out of its neighbourhood on `cell`, nor on `cell / 2`
+/// where `route_open` can try a finer window.
+#[allow(clippy::too_many_arguments)]
+fn endpoint_boxed(
+    board: &mut Board,
+    airline: &Airline,
+    end: ItemId,
+    end_pt: Point,
+    other: ItemId,
+    other_pt: Point,
+    cell: Nm,
+    pours_block: bool,
+) -> bool {
+    if !endpoint_boxed_at(board, airline.net, end, end_pt, other, other_pt, cell, pours_block) {
+        return false;
+    }
+    let fine = cell / 2;
+    let win = crate::route::narrow_window(airline);
+    let nodes = ((win.max.x - win.min.x) / fine.max(1)) as f64
+        * ((win.max.y - win.min.y) / fine.max(1)) as f64
+        * board.layers.len() as f64;
+    if fine >= crate::route::FINE_CELL_FLOOR && nodes <= crate::route::FINE_NODES {
+        return endpoint_boxed_at(board, airline.net, end, end_pt, other, other_pt, fine, pours_block);
+    }
+    true
+}
+
+#[allow(clippy::too_many_arguments)]
+fn endpoint_boxed_at(
+    board: &mut Board,
+    net: u32,
+    end: ItemId,
+    end_pt: Point,
+    other: ItemId,
+    other_pt: Point,
+    cell: Nm,
+    pours_block: bool,
+) -> bool {
+    let Some(item) = board.item(end) else { return false };
+    let cap = board::BBox::of([end_pt]).grow(1_300_000);
+    let mut base = match (&item.kind, &item.shape) {
+        (Kind::Pad { .. } | Kind::Via, _) => item.shape.bbox(),
+        (_, board::Shape::Capsule { r, .. }) => board::BBox::of([end_pt]).grow(*r),
+        _ => board::BBox::of([end_pt]),
+    };
+    for member in local_cluster(board, end) {
+        if let Some(bb) = board.bbox(member) {
+            if bb.overlaps(cap) {
+                base.min.x = base.min.x.min(bb.min.x.max(cap.min.x));
+                base.min.y = base.min.y.min(bb.min.y.max(cap.min.y));
+                base.max.x = base.max.x.max(bb.max.x.min(cap.max.x));
+                base.max.y = base.max.y.max(bb.max.y.min(cap.max.y));
+            }
+        }
+    }
+    let pocket = base.grow(750_000);
+    let bounds = pocket.grow((cell * 6).max(350_000));
+    let profile = Profile::for_net(board, net);
+    let map = ObstacleMap::window(board, profile, cell, bounds, pours_block);
+    let grid = map.view(net);
+    let srcs = terminals(board, &grid, end);
+    if srcs.is_empty() {
+        return true;
+    }
+    let other_bb = board.bbox(other).unwrap_or_else(|| board::BBox::of([other_pt]));
+    let tgts: HashSet<usize> = if bounds.overlaps(other_bb) {
+        terminals(board, &grid, other).into_iter().map(|t| t.0).collect()
+    } else {
+        HashSet::new()
+    };
+    let cells = grid.cell_count();
+    let mut seen = vec![false; grid.blocked.len()];
+    let mut queue = std::collections::VecDeque::new();
+    for (s, _) in srcs {
+        if s < grid.blocked.len() && !grid.blocked[s] && !seen[s] {
+            seen[s] = true;
+            queue.push_back(s);
+        }
+    }
+    while let Some(idx) = queue.pop_front() {
+        if tgts.contains(&idx) {
+            return false;
+        }
+        let layer = idx / cells;
+        let c = idx % cells;
+        let (i, j) = (c % grid.nx, c / grid.nx);
+        if !pocket.contains(grid.centre(i, j)) {
+            return false;
+        }
+        for (di, dj, _) in crate::search::NEIGHBOURS {
+            let (ni, nj) = (i as i32 + di, j as i32 + dj);
+            if ni < 0 || nj < 0 || ni >= grid.nx as i32 || nj >= grid.ny as i32 {
+                continue;
+            }
+            let next = grid.index(layer, ni as usize, nj as usize);
+            if !seen[next] && !grid.blocked[next] {
+                seen[next] = true;
+                queue.push_back(next);
+            }
+        }
+        if grid.via.is_some() && !grid.via_blocked[c] {
+            for other_layer in 0..grid.layers.len() {
+                let next = other_layer * cells + c;
+                if other_layer != layer && !seen[next] && !grid.blocked[next] {
+                    seen[next] = true;
+                    queue.push_back(next);
+                }
+            }
+        }
+    }
+    true
 }
 
 /// Rip-up and reroute after a try, for `share` of the repair time.
@@ -710,11 +948,11 @@ struct SoftPath {
     pinch: Vec<Point>,
 }
 
-/// The way from `pad` to `far` with movable copper passable at a price; `None` when what cannot
-/// move walls it in. For the region plough, an end crowded by copper about to be ripped is
-/// found as if that copper were gone, and either end may also be a pad of its cluster near it.
+/// The walls `net` meets, as a grid, and the ends of the way from `pad` to `far` on it, when
+/// there is a way through movable copper at all: [`soft_path`]'s first step, for callers that
+/// only ask whether there is one.
 #[allow(clippy::too_many_arguments)]
-fn soft_path(
+fn walled_way(
     board: &mut Board,
     solver: &mut dyn FieldSolver,
     options: &ShoveOptions,
@@ -723,7 +961,7 @@ fn soft_path(
     net: u32,
     pad: ItemId,
     far: ItemId,
-) -> Option<SoftPath> {
+) -> Option<(RouteGrid, Vec<Terminal>, Vec<Terminal>)> {
     let region = options.plough == Plough::Region;
     let movable = |it: &Item| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked && it.net != net;
     let profile = Profile::for_net(board, net);
@@ -745,6 +983,28 @@ fn soft_path(
     }
     let (src, tgt): (Vec<usize>, Vec<usize>) = (sources.iter().map(|t| t.0).collect(), targets.iter().map(|t| t.0).collect());
     solver.route(&grid, &src, &tgt, options.via_cost)?;
+    Some((grid, sources, targets))
+}
+
+/// The way from `pad` to `far` with movable copper passable at a price; `None` when what cannot
+/// move walls it in. For the region plough, an end crowded by copper about to be ripped is
+/// found as if that copper were gone, and either end may also be a pad of its cluster near it.
+#[allow(clippy::too_many_arguments)]
+fn soft_path(
+    board: &mut Board,
+    solver: &mut dyn FieldSolver,
+    options: &ShoveOptions,
+    cache: &mut PassCache,
+    conn: &Connectivity,
+    net: u32,
+    pad: ItemId,
+    far: ItemId,
+) -> Option<SoftPath> {
+    let (mut grid, sources, targets) = walled_way(board, solver, options, cache, conn, net, pad, far)?;
+    let region = options.plough == Plough::Region;
+    let movable = |it: &Item| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked && it.net != net;
+    let profile = Profile::for_net(board, net);
+    let (src, tgt): (Vec<usize>, Vec<usize>) = (sources.iter().map(|t| t.0).collect(), targets.iter().map(|t| t.0).collect());
     let planes = &cache.plane_nets;
     let signal = |it: &Item| movable(it) && !planes.contains(&it.net);
     let soft = ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, &|id| !board.item(id).is_some_and(signal)).view(net);
@@ -1448,5 +1708,80 @@ mod tests {
         for &id in &soft {
             assert!(board::check_item(&board, id).is_empty(), "{:?}", board.item(id));
         }
+    }
+
+    #[test]
+    fn guard_ties_refuses_a_tie_that_boxes_the_opened_connection() {
+        let make = || {
+            let (pcb, copper) = kicad_pcb::parse_board(
+                "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal))
+                 (net 0 \"\") (net 1 \"A\") (net 2 \"B\") (net 3 \"W1\") (net 4 \"W2\") (net 5 \"W3\")
+                 (gr_rect (start 0 0) (end 10 4.2) (layer \"Edge.Cuts\") (width 0.1)))",
+            )
+            .unwrap();
+            let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+            let mm = |v: f64| (v * 1e6) as Nm;
+            let pad = |net, x, y, r| Item {
+                kind: Kind::Pad { footprint: 0, number: "1".into(), plated: false },
+                net,
+                layers: 1,
+                shape: board::Shape::Capsule { a: Point::new(mm(x), mm(y)), b: Point::new(mm(x), mm(y)), r: mm(r) },
+                hole: None,
+                locked: true,
+                span: None,
+            };
+            board.insert(pad(1, 1.5, 2.0, 0.2));
+            board.insert(pad(1, 8.5, 2.0, 0.2));
+            board.insert(pad(2, 5.0, 1.0, 0.12));
+            board.insert(pad(2, 8.5, 3.1, 0.2));
+            // Two jaws leave a 0.60 mm mouth round B's fine pad (enough for its 0.12 mm escape,
+            // too narrow for 0.20 mm Default track once ripped); an upper wall leaves one lane.
+            for (net, a, b) in [(3, (4.5, 0.8), (4.5, 1.4)), (4, (5.5, 0.8), (5.5, 1.4)), (5, (5.0, 2.6), (5.0, 3.4))] {
+                board.insert(Item {
+                    kind: Kind::Track,
+                    net,
+                    layers: 1,
+                    shape: board::Shape::Capsule { a: Point::new(mm(a.0), mm(a.1)), b: Point::new(mm(b.0), mm(b.1)), r: mm(0.2) },
+                    hole: None,
+                    locked: true,
+                    span: None,
+                });
+            }
+            let mut soft = Vec::new();
+            for (a, b, r) in [((5.0, 1.0), (5.0, 2.0), 0.06), ((5.0, 2.0), (8.5, 2.0), 0.1), ((8.5, 2.0), (8.5, 3.1), 0.1)] {
+                soft.push(board.insert(Item {
+                    kind: Kind::Track,
+                    net: 2,
+                    layers: 1,
+                    shape: board::Shape::Capsule { a: Point::new(mm(a.0), mm(a.1)), b: Point::new(mm(b.0), mm(b.1)), r: mm(r) },
+                    hole: None,
+                    locked: false,
+                    span: None,
+                }));
+            }
+            (board, soft)
+        };
+
+        let (mut unguarded, mut soft_u) = make();
+        let u = shove_escape(
+            &mut unguarded,
+            &mut crate::route::CpuSolver,
+            &ShoveOptions { plough: Plough::Region, reach: 800_000, accept_ties: true, guard_ties: false, repair_seconds: 0.0, ..Default::default() },
+            &mut soft_u,
+            &mut |_, _| {},
+        );
+        assert!(u.tries.iter().any(|t| t.kept), "without guard_ties the tie swap is kept: {u:?}");
+        assert_eq!(connectivity_without_pours(&unguarded).airlines[0].net, 2);
+
+        let (mut guarded, mut soft_g) = make();
+        let g = shove_escape(
+            &mut guarded,
+            &mut crate::route::CpuSolver,
+            &ShoveOptions { plough: Plough::Region, reach: 800_000, accept_ties: true, guard_ties: true, repair_seconds: 0.0, ..Default::default() },
+            &mut soft_g,
+            &mut |_, _| {},
+        );
+        assert!(g.tries.iter().all(|t| !t.kept), "guard_ties refuses the tie that boxes B's pad: {g:?}");
+        assert_eq!(connectivity_without_pours(&guarded).airlines[0].net, 1);
     }
 }
