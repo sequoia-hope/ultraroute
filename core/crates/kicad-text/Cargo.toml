@@ -1,0 +1,18 @@
+[package]
+name = "kicad-text"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+publish = false
+
+# KiCad's newstroke font and text layout, as a program the MIT router runs, never a library it
+# links: the glyph table and the layout come from KiCad (GPL), the rest of the workspace is MIT.
+# No MIT crate may depend on this one; kicad-pcb's tests/gpl_boundary.rs checks it.
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+# The end-to-end test reads KiCad's own text through the MIT reader, which runs this program.
+kicad-pcb = { path = "../kicad-pcb" }

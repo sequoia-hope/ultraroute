@@ -167,6 +167,10 @@ pub const SOFT_NO_VIA: &str = "soft-novia";
 /// The zone of drawn copper: lines, shapes and text on a copper layer, which stay as drawn.
 pub const DRAWN: usize = usize::MAX;
 
+/// Tag bit in [`Board::mask_areas`] for a mask opening that bared no fixed copper when loaded:
+/// `ANY_ONE_NET | group` lets any one net enter that item's shapes, after which others keep clear.
+pub const ANY_ONE_NET: u32 = 1 << 31;
+
 /// An outer copper layer's thickness where the file gives none: KiCad's 35 um (1 oz).
 const OUTER_COPPER_M: f64 = 35e-6;
 
@@ -292,9 +296,13 @@ pub struct Board {
     /// The narrowest web of mask between two openings (`solder_mask_min_width`): two openings
     /// nearer than this run together, and bridge their copper if of two nets.
     pub mask_web: Nm,
-    /// Openings drawn in the solder mask: the shape, the copper layer it bares, and the one net
-    /// whose pads it bares, which alone may run there; 0 where it bares none or several.
+    /// Openings drawn in the solder mask: the shape, the copper layer it bares, and the net that
+    /// may run there (`ANY_ONE_NET | group` where it bared no fixed copper, so any single net may
+    /// claim it; 0 where it bared several nets or unnetted copper, so none may).
     pub mask_areas: Vec<(Shape, u64, u32)>,
+    /// Slice ranges in [`Board::mask_areas`] for each unclaimed mask item (`ANY_ONE_NET | group`),
+    /// grouping all polygons of one KiCad `BOARD_ITEM` so one net claims the whole item together.
+    pub mask_groups: Vec<std::ops::Range<usize>>,
     /// Pads' own clearances, or their footprints' (KiCad's local clearance), wider or narrower
     /// than their nets': one stands in for the net classes and custom rules (see
     /// [`Board::clearance_between`]).
@@ -341,6 +349,9 @@ pub struct Board {
     /// What reading the board found and could not take as given: the reader's own warnings
     /// (drawings it skips, values it assumed) and an outline that does not close.
     pub warnings: Vec<String>,
+    /// What shaped the board's copper and mask text: the text helper, or why boxes (see
+    /// `kicad_pcb::text`); `None` with no such text.
+    pub text_note: Option<String>,
     /// How far a through via runs from its top copper to its bottom, as KiCad's length rules
     /// count it: the board's thickness less one outer copper layer (kicad-cli 9.0.8, 2026-11-01:
     /// 1.565 mm on a 1.6 mm board of 2, 4 or 6 layers, 0.965 mm on a 1.0 mm one).
@@ -470,6 +481,7 @@ impl Board {
             via_openings: (0, 0),
             mask_web: nm(copper.solder_mask_min_width),
             mask_areas: Vec::new(),
+            mask_groups: Vec::new(),
             pad_clearances: HashMap::new(),
             pad_zone_connect: HashMap::new(),
             zones_without_pads: copper.zones.iter().enumerate().filter(|(_, z)| z.no_pads).map(|(i, _)| i).collect(),
@@ -486,6 +498,7 @@ impl Board {
             zone_areas: Vec::new(),
             pour_cost: 0.0,
             warnings: pcb.warnings.iter().chain(&copper.warnings).cloned().collect(),
+            text_note: copper.text_note.clone(),
             via_height: nm((pcb.thickness_m - OUTER_COPPER_M).max(0.0)),
             net_clearances,
             class_names,
@@ -605,7 +618,7 @@ impl Board {
             for side in [one("F.Cu"), one("B.Cu")] {
                 if openings & side != 0 && layers & side == 0 {
                     let lists_copper = pad.layers.iter().any(|l| l.ends_with(".Cu"));
-                    apertures.push((pad_shapes.iter().map(|s| grown(s, margin)).collect(), side, lists_copper.then_some(base.net)));
+                    apertures.push((pad_shapes.iter().map(|s| grown(s, margin)).collect(), side, (lists_copper || !plated).then_some(base.net)));
                 }
             }
             if unjoined != 0 {
@@ -693,6 +706,14 @@ impl Board {
         for zone in copper.zones.iter().filter(|z| !z.name.is_empty() && z.outline.len() >= 3) {
             board.areas.push((zone.name.clone(), Shape::Polygon(zone.outline.iter().copied().map(Point::from_m).collect()), mask(&zone.layers)));
         }
+        struct ZoneArea {
+            priority: u32,
+            net: u32,
+            layers: u64,
+            outline: Shape,
+            cutouts: Vec<Shape>,
+        }
+        let mut zone_areas: Vec<ZoneArea> = Vec::new();
         for (z, zone) in copper.zones.iter().enumerate() {
             // A soft via keepout forbids nothing; the router only avoids putting vias in it.
             if zone.name.to_ascii_lowercase().starts_with(SOFT_NO_VIA) {
@@ -731,6 +752,15 @@ impl Board {
                 });
             }
             let kept = blocks.iter().any(|b| b.zones.contains(&z));
+            if zone.net != 0 && zone.outline.len() >= 3 {
+                zone_areas.push(ZoneArea {
+                    priority: zone.priority,
+                    net: zone.net,
+                    layers: mask(&zone.layers),
+                    outline: Shape::Polygon(zone.outline.iter().copied().map(Point::from_m).collect()),
+                    cutouts: zone.cutouts.iter().filter(|c| c.len() >= 3).map(|c| Shape::Polygon(c.iter().copied().map(Point::from_m).collect())).collect(),
+                });
+            }
             // A zone saved unfilled has no copper to read. Kept, as a block's, its outline stands
             // for it, as it would for a plane's (`set_planes`); a pour refilled round the routes
             // needs none.
@@ -755,38 +785,6 @@ impl Board {
                     });
                 }
             }
-        }
-        let bare = |front: bool, back: bool| (if front { one("F.Cu") } else { 0 }) | (if back { one("B.Cu") } else { 0 });
-        board.via_openings = (bare(copper.vias_bare[0], copper.vias_bare[1]), nm(copper.pad_to_mask_clearance.max(0.0)));
-        for g in &copper.mask_graphics {
-            let layer = bare(g.layer == "F.Mask", g.layer == "B.Mask");
-            let shapes: Vec<Shape> = g.polygons.iter().map(|poly| Shape::Polygon(poly.iter().copied().map(Point::from_m).collect())).collect();
-            apertures.push((shapes, layer, None));
-        }
-        for (shapes, layer, net) in apertures {
-            if layer == 0 {
-                continue;
-            }
-            let l = layer.trailing_zeros() as usize;
-            // As KiCad judges an opening that belongs to no copper: by the nets of the pads it
-            // bares, over the whole of it (its outline's stroke is drawn in pieces), a pad being
-            // bared when its copper there touches the opening. One net may run there; with none
-            // or several, none may.
-            let net = net.unwrap_or_else(|| {
-                let mut nets: Vec<u32> = Vec::new();
-                for shape in &shapes {
-                    for id in board.near(l, shape.bbox()) {
-                        let Some(it) = board.item(id) else { continue };
-                        if matches!(it.kind, Kind::Pad { .. }) && it.on(l) && shape.gap_within(&it.shape, 1.0) == 0.0 {
-                            nets.push(it.net);
-                        }
-                    }
-                }
-                nets.sort_unstable();
-                nets.dedup();
-                if let [n] = nets[..] { n } else { 0 }
-            });
-            board.mask_areas.extend(shapes.into_iter().map(|shape| (shape, layer, net)));
         }
         // A net tie's groups: its footprint, and the nets each joins.
         let tie_nets = |fp: usize| -> Vec<(Vec<String>, Vec<u32>)> {
@@ -827,6 +825,117 @@ impl Board {
             .collect();
         for (id, fp, nets) in tie_pads {
             board.ties.insert(id, (fp, nets));
+        }
+        let bare = |front: bool, back: bool| (if front { one("F.Cu") } else { 0 }) | (if back { one("B.Cu") } else { 0 });
+        board.via_openings = (bare(copper.vias_bare[0], copper.vias_bare[1]), nm(copper.pad_to_mask_clearance.max(0.0)));
+        for g in &copper.mask_graphics {
+            let layer = bare(g.layer == "F.Mask", g.layer == "B.Mask");
+            let shapes: Vec<Shape> = g.polygons.iter().map(|poly| Shape::Polygon(poly.iter().copied().map(Point::from_m).collect())).collect();
+            apertures.push((shapes, layer, None));
+        }
+        let mask_margin = board.mask_margin();
+        let max_via_open = board.via_openings.1 + board.mask_web + mask_margin;
+        let search_reach = mask_margin.max(max_via_open);
+        for (shapes, layer, net) in apertures {
+            if layer == 0 || shapes.is_empty() {
+                continue;
+            }
+            let l = layer.trailing_zeros() as usize;
+            // As KiCad judges an opening that belongs to no copper: over the whole `BOARD_ITEM`,
+            // every bared piece of copper must share one net. Fixed copper (pads, locked tracks
+            // and vias, drawn copper outside net ties) decides first: one net > 0 admits that net,
+            // several or net 0 admits none. When none touches it, a copper zone or pour beneath it
+            // claims its net; otherwise any single net may enter. A pad's opening merely near it
+            // decides nothing: closing the opening for that would bury the pads of fine-pitch parts
+            // whose drawn openings sit within the mask web of each other (DSKY_alarm's IC3).
+            let net = net.unwrap_or_else(|| {
+                let mut nets: Vec<u32> = Vec::new();
+                for shape in &shapes {
+                    for id in board.near(l, shape.bbox().grow(search_reach)) {
+                        let Some(it) = board.item(id) else { continue };
+                        if !it.on(l) {
+                            continue;
+                        }
+                        match it.kind {
+                            Kind::Pad { .. } if shape.gap_within(&it.shape, mask_margin as f64) < mask_margin as f64 => nets.push(it.net),
+                            Kind::Pour { kept: true, .. }
+                                if !board.ties.contains_key(&id)
+                                    && shape.gap_within(&it.shape, mask_margin as f64) < mask_margin as f64 =>
+                            {
+                                nets.push(it.net);
+                            }
+                            Kind::Track | Kind::Via if it.locked => {
+                                let reach = mask_margin + board.via_opening_on(it, layer);
+                                if shape.gap_within(&it.shape, reach as f64) < reach as f64 {
+                                    nets.push(it.net);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                if nets.is_empty() {
+                    let pour_banned = |s: &Shape| -> bool {
+                        board.near(l, s.bbox()).into_iter().any(|kid| {
+                            let Some(kit) = board.item(kid) else { return false };
+                            let Kind::Keepout { forbids, .. } = &kit.kind else { return false };
+                            let in_hole = board.keepout_holes.get(&kid).is_some_and(|holes| holes.iter().any(|h| crate::check::within(h, s, 0)));
+                            kit.on(l) && forbids.copperpour && crate::check::within(&kit.shape, s, 0) && !in_hole
+                        })
+                    };
+                    for s in &shapes {
+                        if pour_banned(s) {
+                            continue;
+                        }
+                        let mut best: Option<u32> = None;
+                        for z in &zone_areas {
+                            if z.layers & layer != 0
+                                && s.gap_within(&z.outline, mask_margin as f64) < mask_margin as f64
+                                && !z.cutouts.iter().any(|c| crate::check::within(c, s, 0))
+                            {
+                                best = Some(best.map_or(z.priority, |b| b.max(z.priority)));
+                            }
+                        }
+                        if let Some(top) = best {
+                            for z in &zone_areas {
+                                if z.priority == top
+                                    && z.layers & layer != 0
+                                    && s.gap_within(&z.outline, mask_margin as f64) < mask_margin as f64
+                                    && !z.cutouts.iter().any(|c| crate::check::within(c, s, 0))
+                                {
+                                    nets.push(z.net);
+                                }
+                            }
+                        }
+                    }
+                    if nets.is_empty() {
+                        for shape in &shapes {
+                            for id in board.near(l, shape.bbox().grow(mask_margin)) {
+                                let Some(it) = board.item(id) else { continue };
+                                if matches!(it.kind, Kind::Pour { kept: false, .. })
+                                    && it.on(l)
+                                    && shape.gap_within(&it.shape, mask_margin as f64) < mask_margin as f64
+                                {
+                                    nets.push(it.net);
+                                }
+                            }
+                        }
+                    }
+                }
+                nets.sort_unstable();
+                nets.dedup();
+                match nets[..] {
+                    [] => {
+                        let g = board.mask_groups.len() as u32;
+                        let start = board.mask_areas.len();
+                        board.mask_groups.push(start..start + shapes.len());
+                        ANY_ONE_NET | g
+                    }
+                    [n] => n,
+                    _ => 0,
+                }
+            });
+            board.mask_areas.extend(shapes.into_iter().map(|shape| (shape, layer, net)));
         }
         board.limits = crate::check::Limits::of(&board);
         let keep_islands: std::collections::BTreeSet<usize> = copper.zones.iter().enumerate().filter(|(_, z)| z.keep_islands).map(|(k, _)| k).collect();

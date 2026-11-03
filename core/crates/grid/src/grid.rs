@@ -311,6 +311,7 @@ impl ObstacleMap {
         for id in moving {
             map.stamp_with_key(board, id, gkey.as_ref());
         }
+        map.stamp_unclaimed_masks(board, skip, &Deadline::default());
         map
     }
 
@@ -380,6 +381,7 @@ impl ObstacleMap {
                 map.stamp_with_key(board, id, gkey.as_ref());
             }
         }
+        map.stamp_unclaimed_masks(board, &|_| false, &Deadline::default());
         map
     }
 
@@ -443,6 +445,9 @@ impl ObstacleMap {
                 return None;
             }
             map.stamp_with_key(board, id, gkey.as_ref());
+        }
+        if !map.stamp_unclaimed_masks(board, skip, deadline) {
+            return None;
         }
         Some(map)
     }
@@ -574,26 +579,63 @@ impl ObstacleMap {
         })
     }
 
-    /// Openings drawn in the mask: only the net they bare may run there; none where they bare
-    /// none or several. False if `deadline` passes first: a board can draw thousands.
+    /// Openings drawn in the mask over fixed copper: only the net they bare may run there; none
+    /// where they bare several nets or unnetted copper. Those that bared none are
+    /// [`ObstacleMap::stamp_unclaimed_masks`]'. False if `deadline` passes first: a board can draw
+    /// thousands.
     fn stamp_mask_areas(&mut self, board: &Board, deadline: &Deadline) -> bool {
-        let cells = self.nx * self.ny;
-        let (track, via) = (self.profile.half_width + board.mask_margin() + self.reach(), self.profile.via_radius + board.mask_margin());
         let mut spans = Vec::new();
         for (k, (shape, layers, net)) in board.mask_areas.iter().enumerate() {
             if k % MASKS_PER_CHECK == MASKS_PER_CHECK - 1 && deadline.expired() {
                 return false;
             }
-            spans.clear();
-            self.cells_near_in(shape, track, |c| push_span(&mut spans, c));
-            self.apply_owner_spans(cells, *layers, *net, &spans);
-            spans.clear();
-            // A bare via's own opening keeps clear of the area too, by the mask's narrowest web.
-            let bare = if board.via_openings.0 & layers != 0 { board.via_openings.1 + board.mask_web } else { 0 };
-            self.cells_near_in(shape, via + bare, |c| push_span(&mut spans, c));
-            self.apply_via_spans(*net, &spans);
+            if *net < board::ANY_ONE_NET {
+                self.stamp_one_mask(board, shape, *layers, *net, &mut spans);
+            }
         }
         true
+    }
+
+    /// The openings that bared no fixed copper, each claimed for the one net whose copper is in
+    /// it now with the items `skip` names left out, or for none if two nets' are; free while none
+    /// is. Tracks and vias decide that, so it is stamped after them and never cached. False if
+    /// `deadline` passes first.
+    fn stamp_unclaimed_masks(&mut self, board: &Board, skip: &dyn Fn(ItemId) -> bool, deadline: &Deadline) -> bool {
+        if board.mask_groups.is_empty() {
+            return true;
+        }
+        let reach = (self.profile.half_width + self.reach()).max(self.profile.via_radius + board.via_openings.1 + board.mask_web) + board.mask_margin() + self.h;
+        let extent = board::BBox { min: Point::new(self.x0, self.y0), max: Point::new(self.x0 + self.nx as Nm * self.h, self.y0 + self.ny as Nm * self.h) }.grow(reach);
+        let mut spans = Vec::new();
+        for (g, range) in board.mask_groups.iter().enumerate() {
+            if g % MASKS_PER_CHECK == MASKS_PER_CHECK - 1 && deadline.expired() {
+                return false;
+            }
+            let areas = &board.mask_areas[range.clone()];
+            if !areas.iter().any(|(shape, ..)| shape.bbox().overlaps(extent)) {
+                continue;
+            }
+            if let Some(n) = board.mask_holder(board::ANY_ONE_NET | g as u32, !self.pours_block, skip) {
+                for (shape, layers, _) in areas {
+                    self.stamp_one_mask(board, shape, *layers, n, &mut spans);
+                }
+            }
+        }
+        true
+    }
+
+    /// One mask opening claimed for `net`, for tracks and for vias.
+    fn stamp_one_mask(&mut self, board: &Board, shape: &Shape, layers: u64, net: u32, spans: &mut Vec<(u32, u16)>) {
+        let cells = self.nx * self.ny;
+        let (track, via) = (self.profile.half_width + board.mask_margin() + self.reach(), self.profile.via_radius + board.mask_margin());
+        spans.clear();
+        self.cells_near_in(shape, track, |c| push_span(spans, c));
+        self.apply_owner_spans(cells, layers, net, spans);
+        spans.clear();
+        // A bare via's own opening keeps clear of the area too, by the mask's narrowest web.
+        let bare = if board.via_openings.0 & layers != 0 { board.via_openings.1 + board.mask_web } else { 0 };
+        self.cells_near_in(shape, via + bare, |c| push_span(spans, c));
+        self.apply_via_spans(net, spans);
     }
 
     /// Marks the cells where a via would reach into one of the board's via-avoid areas.
@@ -1581,6 +1623,7 @@ mod tests {
             for id in ids {
                 map.stamp(board, id);
             }
+            map.stamp_unclaimed_masks(board, &|_| false, &Deadline::default());
             map
         };
         let same = |a: &ObstacleMap, b: &ObstacleMap| a.owner == b.owner && a.via_owner == b.via_owner;
@@ -1610,6 +1653,59 @@ mod tests {
             });
             let cached = ObstacleMap::new(&board, at.profile.clone(), h, false);
             assert!(same(&cached, &direct(&board, &cached)) && !same(&cached, &at), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_mask_opening_any_net_may_take_follows_its_track_on_cached_maps() {
+        let (pcb, copper) = kicad_pcb::parse_board(
+            "(kicad_pcb (version 20240108) (general (thickness 1.6))
+             (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (38 \"B.Mask\" user) (39 \"F.Mask\" user) (44 \"Edge.Cuts\" user))
+             (net 0 \"\") (net 1 \"A\") (net 2 \"B\")
+             (footprint \"R\" (layer \"F.Cu\") (at 4 4) (property \"Reference\" \"R1\")
+               (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\") (net 1 \"A\"))
+               (pad \"2\" smd rect (at 2 0) (size 1 1) (layers \"F.Cu\") (net 2 \"B\")))
+             (gr_rect (start 0 0) (end 20 20) (layer \"Edge.Cuts\") (width 0.1))
+             (gr_rect (start 9 9) (end 11 11) (layer \"F.Mask\") (width 0) (fill solid)))",
+        )
+        .unwrap();
+        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+        assert!(board.mask_areas.iter().all(|(_, _, n)| *n >= board::ANY_ONE_NET), "the opening bares no fixed copper");
+        let track = board.insert(board::Item {
+            kind: Kind::Track,
+            net: 1,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(10_000_000, 5_000_000), b: Point::new(10_000_000, 10_000_000), r: 100_000 },
+            hole: None,
+            locked: false,
+            span: None,
+        });
+        let h = 50_000;
+        // The outline, every item in board order, then the openings left to any net.
+        let direct = |like: &ObstacleMap, skip: &dyn Fn(ItemId) -> bool| {
+            let mut map = ObstacleMap { owner: vec![FREE; like.owner.len()], via_owner: vec![FREE; like.via_owner.len()], ..like.clone() };
+            map.stamp_outline(&board);
+            map.stamp_mask_areas(&board, &Deadline::default());
+            let ids: Vec<ItemId> = board.items().map(|(id, _)| id).filter(|&id| !skip(id)).collect();
+            for id in ids {
+                map.stamp(&board, id);
+            }
+            map.stamp_unclaimed_masks(&board, skip, &Deadline::default());
+            map
+        };
+        let profile = Profile::for_net(&board, 2);
+        let in_opening = |m: &ObstacleMap| ((10_000_000 - m.y0) / h) as usize * m.nx + ((10_500_000 - m.x0) / h) as usize;
+        let bounds = board::BBox { min: Point::new(6_000_000, 6_000_000), max: Point::new(14_000_000, 14_000_000) };
+        // Twice over each way, so the second of each comes from the cache made by the other.
+        for skipped in [usize::MAX, track, usize::MAX, track] {
+            let skip = |id: ItemId| id == skipped;
+            let whole = ObstacleMap::without(&board, profile.clone(), h, false, &skip);
+            let window = ObstacleMap::window_without(&board, profile.clone(), h, bounds, false, &skip);
+            for (what, map) in [("whole", &whole), ("window", &window)] {
+                let want = direct(map, &skip);
+                assert!(map.owner == want.owner && map.via_owner == want.via_owner, "{what} map, skip {skipped}");
+                assert_eq!(map.blocked_at(2, in_opening(map)), skipped != track, "{what}: net A's track holds the opening against B, skip {skipped}");
+            }
         }
     }
 
@@ -1867,6 +1963,7 @@ mod tests {
                     map.stamp_uncached(board, id, it, None);
                 }
             }
+            map.stamp_unclaimed_masks(board, skip, &Deadline::default());
             map
         };
         for name in ["earring.kicad_pcb", "bluebuzz-rm2.kicad_pcb"] {

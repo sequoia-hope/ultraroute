@@ -15,11 +15,12 @@ benchmarks on (200 boards, 120 s each), 164 boards come out clean by KiCad's DRC
 Needs Rust (`core/rust-toolchain.toml` pins 1.95.0). From `core/`:
 
 ```sh
-cargo build --release -p ultraroute
+cargo build --release -p ultraroute -p kicad-text
 target/release/ultraroute route fixtures/earring.kicad_pcb -o /tmp/routed.kicad_pcb --timeout 120
 ```
 
-With no stage named it runs the default recipe, the benchmark's. The rules come from the
+With no stage named it runs the default recipe, the benchmark's. `kicad-text` (GPL, below) strokes
+copper and mask text as KiCad does; without it text is a box round it, which can cover pads. The rules come from the
 `.kicad_pro` and `.kicad_dru` beside the input; pours are left for KiCad to refill.
 `core/README.md` lists the crates, the stages in their order, and every flag, and shows how to
 judge the result with KiCad; `ultraroute route --help` prints the flags.
@@ -81,3 +82,9 @@ ultraroute is MIT-licensed; see [LICENSE](LICENSE). The core is our own code, wr
 file formats, so its WebAssembly build in the studio is MIT too. Code from GPL routers must stay
 out of `core/` and `studio/`: linking it in, natively or as WebAssembly, would make the studio a
 GPL work.
+
+One crate is the exception, and it is a program, not a library: `core/crates/kicad-text` carries
+KiCad's `newstroke` font and text layout, so it is GPL-3.0-or-later ([its LICENSE](core/crates/kicad-text/LICENSE)).
+The reader runs it as a separate process (`kicad_pcb::text`), sending the board's texts on its
+standard input and reading their strokes back; no MIT crate depends on it, which
+`core/crates/kicad-pcb/tests/gpl_boundary.rs` checks over the whole dependency graph.

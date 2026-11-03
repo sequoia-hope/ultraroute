@@ -52,10 +52,14 @@ pub struct Copper {
     /// that side): `[front, back]`.
     #[serde(default)]
     pub vias_bare: [bool; 2],
+    /// What shaped the text in `graphics` and `mask_graphics`, for the log: how many, and the
+    /// helper that stroked them or why they are boxes (see [`crate::text`]); `None` with no text.
+    #[serde(default)]
+    pub text_note: Option<String>,
     pub warnings: Vec<String>,
 }
 
-/// One drawn piece of copper; text as the box round it.
+/// One drawn piece of copper; text as its strokes, or the box round them (see [`crate::text`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CopperGraphic {
     pub layer: String,
@@ -265,6 +269,11 @@ impl Copper {
 }
 
 pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, KicadParse> {
+    read_copper_with(root, footprints, crate::text::shaper())
+}
+
+/// [`read_copper`], its text shaped by `shaper` rather than the environment's.
+pub fn read_copper_with(root: &Node, footprints: &[Footprint], shaper: crate::text::Shaper) -> Result<Copper, KicadParse> {
     let layers = root
         .find("layers")
         .map(|l| {
@@ -321,9 +330,13 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
             .and_then(|s| s.find("pad_to_mask_clearance"))
             .and_then(|c| c.number_arg(0, "pad_to_mask_clearance").ok())
             .map_or(0.0, |mm| mm * MM),
+        text_note: None,
         warnings: Vec::new(),
     };
     let mut copper_graphics = 0;
+    // Each text read: the helper's request, the footprint it is drawn in, and where its boxes went
+    // (in `mask_graphics` or `graphics`, by index), for the helper's strokes to replace.
+    let mut texts: Vec<(crate::text::Item, Option<usize>, bool, usize)> = Vec::new();
     // What the reader does not model, said so a designer knows the router judged without it:
     // copper drawn as a curve, a text box, a dimension or a table; KiCad 9 per-layer padstacks;
     // annular rings removed from unused layers (the router keeps every layer's ring).
@@ -394,8 +407,14 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
                 members: child.find("members").map(|m| m.args().iter().filter_map(Node::text).map(str::to_string).collect()).unwrap_or_default(),
             }),
             Some("gr_line" | "gr_arc" | "gr_circle" | "gr_rect" | "gr_poly" | "gr_text") => match graphic(child, &|p| p, 0.0) {
-                Ok(Some(g)) if g.layer.ends_with(".Mask") => copper.mask_graphics.push(g),
-                Ok(Some(g)) => copper.graphics.push(g),
+                Ok(Some((g, text))) => {
+                    let mask = g.layer.ends_with(".Mask");
+                    let list = if mask { &mut copper.mask_graphics } else { &mut copper.graphics };
+                    if let Some(t) = text {
+                        texts.push((t, None, mask, list.len()));
+                    }
+                    list.push(g);
+                }
                 Ok(None) => {}
                 Err(_) => copper_graphics += 1,
             },
@@ -414,8 +433,14 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
                     }
                     if matches!(g.head(), Some("fp_line" | "fp_arc" | "fp_circle" | "fp_rect" | "fp_poly" | "fp_text" | "property")) {
                         match graphic(g, &|p| fp.place(p), fp.rotation_deg) {
-                            Ok(Some(g)) if g.layer.ends_with(".Mask") => copper.mask_graphics.push(g),
-                            Ok(Some(g)) => copper.graphics.push(CopperGraphic { footprint: Some(footprint), ..g }),
+                            Ok(Some((g, text))) => {
+                                let mask = g.layer.ends_with(".Mask");
+                                let list = if mask { &mut copper.mask_graphics } else { &mut copper.graphics };
+                                if let Some(t) = text {
+                                    texts.push((t, Some(footprint), mask, list.len()));
+                                }
+                                list.push(if mask { g } else { CopperGraphic { footprint: Some(footprint), ..g } });
+                            }
                             Ok(None) => {}
                             Err(_) => copper_graphics += 1,
                         }
@@ -476,14 +501,57 @@ pub fn read_copper(root: &Node, footprints: &[Footprint]) -> Result<Copper, Kica
             "{copper_graphics} graphic item(s) on copper layers are not read as copper"
         ));
     }
+    stroke_texts(&mut copper, footprints, &texts, shaper);
     Ok(copper)
 }
 
-/// The convex hull of a footprint's courtyard drawing, placed on the board.
+/// The helper's strokes in place of the boxes of `texts`, all asked for at once; the boxes stay
+/// if there is no helper or it fails.
+fn stroke_texts(copper: &mut Copper, footprints: &[Footprint], texts: &[(crate::text::Item, Option<usize>, bool, usize)], shaper: crate::text::Shaper) {
+    if texts.is_empty() {
+        return;
+    }
+    let n = texts.len();
+    let (helper, timeout) = match shaper {
+        crate::text::Shaper::Helper(path, timeout) => (path, timeout),
+        crate::text::Shaper::Boxes(why) => {
+            copper.text_note = Some(format!("{n} text item(s) as boxes: {why}"));
+            return;
+        }
+    };
+    let items: Vec<crate::text::Item> = texts.iter().map(|t| t.0.clone()).collect();
+    let shapes = match crate::text::run(helper, &items, timeout) {
+        Ok(s) => s,
+        Err(e) => {
+            copper.text_note = Some(format!("{n} text item(s) as boxes: the helper failed: {e}"));
+            return;
+        }
+    };
+    let mut emptied = [Vec::new(), Vec::new()];
+    for ((_, fp, mask, at), polygons) in texts.iter().zip(shapes) {
+        let place = |p: [f64; 2]| fp.map_or(p, |f| footprints[f].place(p));
+        let list = if *mask { &mut copper.mask_graphics } else { &mut copper.graphics };
+        list[*at].polygons = polygons.into_iter().filter(|p| p.len() >= 3).map(|p| p.into_iter().map(place).collect()).collect();
+        if list[*at].polygons.is_empty() {
+            emptied[usize::from(*mask)].push(*at);
+        }
+    }
+    // A text of spaces strokes nothing, as KiCad draws nothing.
+    for (list, gone) in [&mut copper.graphics, &mut copper.mask_graphics].into_iter().zip(emptied) {
+        let mut k = 0;
+        list.retain(|_| {
+            k += 1;
+            !gone.contains(&(k - 1))
+        });
+    }
+    copper.text_note = Some(format!("{n} text item(s) stroked by {}", helper.display()));
+}
+
 /// A drawing or text on a copper or solder mask layer as polygons, `place` taking its points to the
 /// board, `rotation` the footprint's (0 on the board); `None` off copper or hidden. Text is the
-/// box its strokes stay within, a little generously, as the router needs no more than that.
-fn graphic(g: &Node, place: &dyn Fn([f64; 2]) -> [f64; 2], rotation: f64) -> Result<Option<CopperGraphic>, KicadParse> {
+/// box its strokes stay within, a little generously, with the helper's request for its strokes
+/// in the footprint's frame (see [`crate::text`]).
+fn graphic(g: &Node, place: &dyn Fn([f64; 2]) -> [f64; 2], rotation: f64) -> Result<Option<(CopperGraphic, Option<crate::text::Item>)>, KicadParse> {
     let Some(layer) = g.find("layer").and_then(|l| l.args().first()).and_then(Node::text).filter(|l| l.ends_with(".Cu") || *l == "F.Mask" || *l == "B.Mask") else {
         return Ok(None);
     };
@@ -498,6 +566,7 @@ fn graphic(g: &Node, place: &dyn Fn([f64; 2]) -> [f64; 2], rotation: f64) -> Res
     };
     let head = g.head().unwrap_or("");
     let kind = head.split('_').nth(1).unwrap_or(head);
+    let mut text = None;
     let local: Vec<Vec<[f64; 2]>> = match kind {
         "line" => stroke(&[point(g, "start")?, point(g, "end")?], false),
         "arc" => {
@@ -546,11 +615,14 @@ fn graphic(g: &Node, place: &dyn Fn([f64; 2]) -> [f64; 2], rotation: f64) -> Res
             if hidden(g) || effects.is_some_and(hidden) {
                 return Ok(None);
             }
-            let string = g.args().iter().filter_map(Node::text).rfind(|t| !matches!(*t, "reference" | "value" | "user" | "hide")).unwrap_or("");
+            // `(gr_text "T" ...)`, `(fp_text reference "T" ...)`, `(property "Reference" "T" ...)`.
+            let string = if head == "gr_text" { g.args().first() } else { g.args().get(1) }.and_then(Node::text).unwrap_or("");
             let font = effects.and_then(|e| e.find("font"));
             let size = font.and_then(|f| f.find("size")).map(|s| point_of(s, "size")).transpose()?.unwrap_or([1e-3, 1e-3]);
-            let thick = font.and_then(|f| f.find("thickness")).and_then(|t| t.number_arg(0, "thickness").ok()).map_or(size[0] * 0.15, |t| t * MM);
+            let thickness = font.and_then(|f| f.find("thickness")).and_then(|t| t.number_arg(0, "thickness").ok()).filter(|t| *t > 0.0);
+            let thick = thickness.map_or(size[0] * 0.15, |t| t * MM);
             let justify: Vec<&str> = effects.and_then(|e| e.find("justify")).map(|j| j.args().iter().filter_map(Node::text).collect()).unwrap_or_default();
+            let flag = |n: &Node, name: &str| n.args().iter().any(|a| a.text() == Some(name) || (a.head() == Some(name) && a.args().first().and_then(Node::text) != Some("no")));
             // The parser has turned the file's `\n` into a newline; KiCad sizes the text without a
             // trailing empty line.
             let lines = string.trim_end_matches('\n').split('\n').collect::<Vec<_>>();
@@ -562,6 +634,21 @@ fn graphic(g: &Node, place: &dyn Fn([f64; 2]) -> [f64; 2], rotation: f64) -> Res
             let anchor = point_of(at, "at")?;
             // The file holds a footprint text's angle on the board, as with pads.
             let angle = at.args().get(2).map(Node::number).transpose()?.unwrap_or(0.0) - rotation;
+            let pick = |options: [&'static str; 2]| options.into_iter().find(|o| justify.contains(o)).unwrap_or("center").to_string();
+            text = Some(crate::text::Item {
+                text: string.to_string(),
+                size: [size[1] / MM, size[0] / MM],
+                thickness,
+                at: [anchor[0] / MM, anchor[1] / MM],
+                angle,
+                h_align: pick(["left", "right"]),
+                v_align: pick(["top", "bottom"]),
+                mirror: justify.contains(&"mirror"),
+                bold: font.is_some_and(|f| flag(f, "bold")),
+                italic: font.is_some_and(|f| flag(f, "italic")),
+                knockout: justify.contains(&"knockout") || g.find("layer").is_some_and(|l| l.args().iter().any(|a| a.text() == Some("knockout"))),
+                line_spacing: font.and_then(|f| f.find("line_spacing")).and_then(|s| s.number_arg(0, "line_spacing").ok()).unwrap_or(1.0),
+            });
             let corners = [[x0, -h / 2.0], [x0 + w, -h / 2.0], [x0 + w, h / 2.0], [x0, h / 2.0]];
             vec![corners.iter().map(|&c| crate::model::place(anchor, angle, c)).collect()]
         }
@@ -572,7 +659,7 @@ fn graphic(g: &Node, place: &dyn Fn([f64; 2]) -> [f64; 2], rotation: f64) -> Res
         return Ok(None);
     }
     let net = g.find("net").and_then(|n| n.number_arg(0, "net").ok()).map_or(0, |n| n as u32);
-    Ok(Some(CopperGraphic { layer: layer.to_string(), net, polygons, footprint: None }))
+    Ok(Some((CopperGraphic { layer: layer.to_string(), net, polygons, footprint: None }, text)))
 }
 
 fn courtyard(fp_node: &Node, fp: &Footprint) -> Result<Option<Vec<[f64; 2]>>, KicadParse> {
@@ -1035,11 +1122,13 @@ fn uuid(n: &Node) -> String {
 mod tests {
     #[test]
     fn copper_text_of_several_lines_is_as_wide_as_its_longest() {
-        let (_, copper) = crate::parse_board(
+        let (_, copper) = crate::parse_board_with(
             "(kicad_pcb (version 20240108) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal) (2 \"B.Cu\" signal)) (net 0 \"\")
 	(gr_text \"Jan\\nMrázek\\n9-2016\" (at 180.25 123.5 0) (layer \"F.Cu\") (effects (font (size 1.8 1.8) (thickness 0.3)) (justify right))))",
+            crate::text::Shaper::Boxes("no helper in this test"),
         )
         .unwrap();
+        assert_eq!(copper.text_note.as_deref(), Some("1 text item(s) as boxes: no helper in this test"));
         let xs: Vec<f64> = copper.graphics.iter().flat_map(|g| g.polygons.iter().flatten().map(|p| p[0])).collect();
         let (left, right) = (xs.iter().copied().fold(f64::MAX, f64::min), xs.iter().copied().fold(f64::MIN, f64::max));
         // Six characters of 1.8 mm, right-justified at 180.25 mm: about 12 mm wide, not the 34 mm

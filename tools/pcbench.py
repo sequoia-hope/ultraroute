@@ -43,8 +43,9 @@ crash, which writes the input board back, a refusal or a hang), its file is not 
 board fails, and `compare` counts it apart and never as noise. Wirelength is the routed tracks' length and vias their count, as the
 baselines report them. Everything lives in ~/Software/ultraroute-lab/pcbench/: boards/ID/ holds
 board.kicad_pcb (+ .kicad_pro), bare.kicad_pcb and bare.json, runs/RUN/ID/ each run's output.
-runs/RUN/run.json records where the run came from (commit, binary and its sha256, kicad-cli,
-Python, host, workers) when it starts; resuming a run with another commit or binary is refused
+runs/RUN/run.json records where the run came from (commit, binary and its sha256, the kicad-text
+helper the router strokes text with and its sha256, kicad-cli, Python, host, workers) when it starts,
+and each board's result its `text` line (stroked by the helper, or boxes and why); resuming a run with another commit or binary is refused
 unless --resume-anyway is given. Each board's peak memory (`peak_mb`) comes from /usr/bin/time.
 """
 
@@ -274,6 +275,9 @@ def route_one(b, run_dir, recipe, timeout, seed, router=ROUTER, clock="cpu"):
         (d / "log.txt").write_text(r.stderr[-200_000:])
         res["code"] = r.returncode
         res["time_limited"], res["hard_deadline"] = deadlines(r.stderr)
+        # What shaped the board's copper and mask text: the kicad-text helper, or why boxes.
+        if m := re.search(r"^text: (.*)$", r.stderr, re.M):
+            res["text"] = m[1]
     except subprocess.TimeoutExpired:
         res["code"] = "hung"
     res["seconds"] = round(time.time() - started, 1)
@@ -622,11 +626,17 @@ def provenance(workers, router=ROUTER, commit=True):
         except OSError:
             return None
     binary = Path(router).resolve()
+    # The text helper the router would run (`ultraroute text-helper`, since feat/text-strokes);
+    # none if it would box the text or is older.
+    helper = out([str(binary), "text-helper"]) if binary.exists() else None
+    helper = Path(helper) if helper and Path(helper).is_file() else None
     return {
         "commit": out(["git", "-C", ROOT, "rev-parse", "--short", "HEAD"]) if commit else None,
         "dirty": bool(out(["git", "-C", ROOT, "status", "--porcelain", "core"])),
         "binary": str(binary),
         "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest() if binary.exists() else None,
+        "text_helper": str(helper) if helper else None,
+        "text_helper_sha256": hashlib.sha256(helper.read_bytes()).hexdigest() if helper else None,
         "kicad_cli_version": out(["kicad-cli", "--version"]),
         "python_version": platform.python_version(),
         "hostname": platform.node(),
