@@ -174,6 +174,39 @@ impl Board {
     pub fn mask_margin(&self) -> Nm {
         MASK_MARGIN + nm(self.rules.solder_mask_to_copper_clearance)
     }
+
+    /// For an unclaimed mask group (`code >= ANY_ONE_NET`), the net of any copper currently bared
+    /// in any of its shapes: `None` while empty, `Some(n)` while one net `n > 0` is there, `Some(0)`
+    /// if net 0 or two nets are there.
+    pub fn mask_holder(&self, code: u32, skip_pours: bool, ignore: &dyn Fn(ItemId) -> bool) -> Option<u32> {
+        let idx = (code & !crate::model::ANY_ONE_NET) as usize;
+        let range = self.mask_groups.get(idx)?.clone();
+        let mut found: Option<u32> = None;
+        for &(ref shape, layers, _) in &self.mask_areas[range] {
+            let l = layers.trailing_zeros() as usize;
+            let max_reach = self.mask_margin()
+                + if self.via_openings.0 & layers != 0 { self.via_openings.1 + self.mask_web } else { 0 };
+            for id in self.near(l, shape.bbox().grow(max_reach)) {
+                if ignore(id) {
+                    continue;
+                }
+                let Some(it) = self.item(id) else { continue };
+                if !it.is_copper() || !it.on(l) || (skip_pours && it.refilled()) {
+                    continue;
+                }
+                let margin = self.mask_margin() + self.via_opening_on(it, layers);
+                if it.shape.gap_within(shape, margin as f64) < margin as f64 {
+                    match found {
+                        None if it.net == 0 => return Some(0),
+                        None => found = Some(it.net),
+                        Some(n) if n == it.net => {}
+                        Some(_) => return Some(0),
+                    }
+                }
+            }
+        }
+        found
+    }
 }
 
 /// The gap copper of another net must keep on `layer` from `own` (item `id`) so as not to be
@@ -329,8 +362,15 @@ fn item_checks(
     if matches!(item.kind, Kind::Track | Kind::Via) {
         for (shape, layers, net) in &board.mask_areas {
             let margin = board.mask_margin() + board.via_opening_on(item, *layers);
-            if layers & item.layers != 0 && (*net != item.net || *net == 0) && item.shape.gap_within(shape, margin as f64) < margin as f64 {
-                found.push(Violation { rule: Rule::Keepout, a: id, b: None, layer: Some(layers.trailing_zeros() as usize), gap: 0.0, required: margin });
+            if layers & item.layers != 0 && item.shape.gap_within(shape, margin as f64) < margin as f64 {
+                let allowed = if *net >= crate::model::ANY_ONE_NET {
+                    board.mask_holder(*net, skip_pours, &|other| other == id)
+                } else {
+                    Some(*net)
+                };
+                if allowed.is_some_and(|n| n != item.net || n == 0) {
+                    found.push(Violation { rule: Rule::Keepout, a: id, b: None, layer: Some(layers.trailing_zeros() as usize), gap: 0.0, required: margin });
+                }
             }
         }
     }
