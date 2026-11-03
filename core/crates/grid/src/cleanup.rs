@@ -532,6 +532,9 @@ pub fn mend_grazes(board: &mut Board, laid: &mut Vec<ItemId>) -> usize {
 /// KiCad measures the sliver between them as a neck on every layer both have lands on (the
 /// earring's VLED_C vias 0.403 mm apart, 0.4 mm lands, 0.029 mm across). Each pair, the router's
 /// via first, once.
+/// How near two lands' rims must come to touch, in nm.
+const TOUCH: f64 = 1000.0;
+
 fn via_grazes(board: &Board, laid: &[ItemId]) -> Vec<(ItemId, ItemId)> {
     let mine: HashSet<ItemId> = laid.iter().copied().collect();
     let mut out = Vec::new();
@@ -554,7 +557,9 @@ fn via_grazes(board: &Board, laid: &[ItemId]) -> Vec<(ItemId, ItemId)> {
             // The chord where the two lands cross, as wide as the copper joining them is.
             let d = a.distance(*c);
             let (r1, r2) = (*r as f64, *r2 as f64);
-            if d >= r1 + r2 || d <= (r1 - r2).abs() {
+            // Lands that only touch count too: KiCad joins them through a point (esp32-iot-uno's
+            // IO15/CMD, two 1.1 mm vias 1.1 mm apart).
+            if d > r1 + r2 + TOUCH || d <= (r1 - r2).abs() {
                 continue;
             }
             let x = (d * d + r1 * r1 - r2 * r2) / (2.0 * d);
@@ -1752,6 +1757,16 @@ mod tests {
         // 0.25 mm from the centre of a 0.3 mm round pad, with a 0.4 mm land: a 0.31 mm chord.
         assert!(via_pad_grazes(&board, &[deep]).is_empty(), "a deep overlap is a joint");
         assert!(board.item(pad).is_some());
+    }
+
+    #[test]
+    fn two_vias_whose_lands_only_touch_at_a_point_are_a_graze() {
+        let mut board = empty_board();
+        let via = |board: &mut Board, x: Nm| board.insert(Item { kind: Kind::Via, net: 1, layers: 1, shape: Shape::Capsule { a: Point::new(x, 0), b: Point::new(x, 0), r: 550_000 }, hole: Some((Point::new(x, 0), 300_000)), locked: false, span: None });
+        let one = via(&mut board, 0);
+        let two = via(&mut board, 1_100_000);
+        let three = via(&mut board, 3_000_000);
+        assert_eq!(via_grazes(&board, &[one, two, three]), vec![(one, two)]);
     }
 
     #[test]
