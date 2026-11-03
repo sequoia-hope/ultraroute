@@ -303,6 +303,10 @@ impl ObstacleMap {
             if matches!(it.kind, Kind::Track | Kind::Via) { &mut moving } else { &mut fixed }.push(id);
         }
         map.stamp_fixed_cached(board, &fixed, &Deadline::default(), true);
+        // The fixed copper's part in the clear-under rules, which the cache does not keep.
+        for &id in &fixed {
+            map.stamp_under(board, id);
+        }
         let gkey = map.grid_stamp_key(board);
         for id in moving {
             map.stamp_with_key(board, id, gkey.as_ref());
@@ -1772,6 +1776,7 @@ mod tests {
             via_owner: Vec::new(),
             via_avoid: Vec::new(),
             regions: Vec::new(),
+            under: Vec::new(),
             spokes: None,
         };
         let mut seed: u64 = 0x1234_5678_9abc_def0;
@@ -1852,6 +1857,7 @@ mod tests {
                 via_owner: vec![FREE; nx * ny],
                 via_avoid: Vec::new(),
                 regions: Vec::new(),
+                under: Vec::new(),
                 spokes: None,
             };
             map.stamp_outline(board);

@@ -198,6 +198,24 @@ mod tests {
     }
 
     #[test]
+    fn a_window_walls_off_a_fixed_pads_antipad_as_the_whole_map_does() {
+        let mut b = board();
+        let c = mm(10.0, 10.0);
+        let pad = Kind::Pad { footprint: 0, number: "1".into(), plated: true };
+        b.insert(Item { kind: pad, net: 3, layers: 0b111, shape: Shape::Capsule { a: c, b: c, r: 300_000 }, hole: Some((c, 150_000)), locked: false, span: None });
+        let whole = ObstacleMap::new(&b, profile(&b), 50_000, false);
+        let bounds = board::BBox { min: mm(5.0, 5.0), max: mm(15.0, 15.0) };
+        // Twice: the second window's pads come from the fixed-copper cache.
+        for _ in 0..2 {
+            let win = ObstacleMap::window(&b, profile(&b), 50_000, bounds, false);
+            let usb = win.view(2);
+            let at = usb.cell_at(mm(10.0, 10.7)).map(|(i, j)| j * usb.nx + i).unwrap();
+            assert!(usb.blocked[at], "0.7 mm off: over the pad's antipad");
+            assert_eq!(win.under_window(0, 0, win.nx, win.ny)[0].tracks, whole.under_window(100, 100, win.nx, win.ny)[0].tracks);
+        }
+    }
+
+    #[test]
     fn a_board_without_the_rule_maps_as_before() {
         let mut b = board();
         let c = mm(10.0, 10.0);
