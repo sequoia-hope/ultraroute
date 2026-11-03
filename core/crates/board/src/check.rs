@@ -17,6 +17,9 @@ pub enum Rule {
     HoleClearance,
     HoleToHole,
     Keepout,
+    /// A hard rule of a planner's region (`Board::regions`) broken: a `never` net's track or via
+    /// in it, a `must` net's out of it.
+    Region,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -323,6 +326,13 @@ fn item_checks(
                 found.push(Violation { rule: Rule::Keepout, a: id, b: None, layer: Some(layers.trailing_zeros() as usize), gap: 0.0, required: margin });
             }
         }
+    }
+    // A planner's region whose hard rule the track or via breaks. The router's own checks of new
+    // copper keep to it, as its grids do, so that no pass that moves copper by geometry (pulling
+    // tight, tuning, mending) takes it where routing could not; the whole-board check leaves it
+    // out, as KiCad has no such rule and `--regions` reports it apart.
+    if everyone && matches!(item.kind, Kind::Track | Kind::Via) && crate::regions::broken_region(board, item).is_some() {
+        found.push(Violation { rule: Rule::Region, a: id, b: None, layer: None, gap: 0.0, required: 0 });
     }
     if item.is_copper() {
         for layer in (0..board.layers.len()).filter(|l| item.on(*l)) {
