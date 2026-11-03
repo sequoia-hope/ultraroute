@@ -532,6 +532,9 @@ pub fn mend_grazes(board: &mut Board, laid: &mut Vec<ItemId>) -> usize {
 /// KiCad measures the sliver between them as a neck on every layer both have lands on (the
 /// earring's VLED_C vias 0.403 mm apart, 0.4 mm lands, 0.029 mm across). Each pair, the router's
 /// via first, once.
+/// How near two lands' rims must come to touch, in nm.
+const TOUCH: f64 = 1000.0;
+
 fn via_grazes(board: &Board, laid: &[ItemId]) -> Vec<(ItemId, ItemId)> {
     let mine: HashSet<ItemId> = laid.iter().copied().collect();
     let mut out = Vec::new();
@@ -554,7 +557,9 @@ fn via_grazes(board: &Board, laid: &[ItemId]) -> Vec<(ItemId, ItemId)> {
             // The chord where the two lands cross, as wide as the copper joining them is.
             let d = a.distance(*c);
             let (r1, r2) = (*r as f64, *r2 as f64);
-            if d >= r1 + r2 || d <= (r1 - r2).abs() {
+            // Lands that only touch count too: KiCad joins them through a point (esp32-iot-uno's
+            // IO15/CMD, two 1.1 mm vias 1.1 mm apart).
+            if d > r1 + r2 + TOUCH || d <= (r1 - r2).abs() {
                 continue;
             }
             let x = (d * d + r1 * r1 - r2 * r2) / (2.0 * d);
@@ -605,6 +610,129 @@ pub fn mend_via_grazes(board: &mut Board, laid: &mut Vec<ItemId>) -> (usize, Vec
             for p in pieces {
                 board.discard(p);
             }
+        }
+    }
+    (mended, spans)
+}
+
+/// The router's vias whose land overlaps a pad of their net only past the pad's edge, the via's
+/// centre outside the pad, through a chord narrower than the net's narrowest joint or half the
+/// land: KiCad measures that chord as a neck (LoRaWAN_GPS's C15 pad 1, clipped at its corner by
+/// a 0.6 mm via, 0.056 mm across). Each via and pad once.
+fn via_pad_grazes(board: &Board, laid: &[ItemId]) -> Vec<(ItemId, ItemId)> {
+    let mut out = Vec::new();
+    for &id in laid {
+        let Some(v) = board.item(id) else { continue };
+        let (Kind::Via, Shape::Capsule { a: c, r, .. }) = (&v.kind, &v.shape) else { continue };
+        if v.net == 0 {
+            continue;
+        }
+        let mut seen = HashSet::new();
+        for l in (0..board.layers.len()).filter(|&l| v.on(l)) {
+            for other in board.near(l, v.shape.bbox().grow(*r)) {
+                let Some(o) = board.item(other) else { continue };
+                if !matches!(o.kind, Kind::Pad { .. }) || o.net != v.net || o.layers & v.layers == 0 || o.shape.contains(*c) || !seen.insert(other) {
+                    continue;
+                }
+                if bridged(board, l, id, v, other, o) {
+                    continue;
+                }
+                let Some((chord, _)) = land_chord(&o.shape, *c, *r as f64) else { continue };
+                let least = (board.min_joint_of(v.net) as f64).max(*r as f64);
+                if chord < least {
+                    out.push((id, other));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The narrowest chord a disc's rim (centre `c`, radius `r`) cuts across `shape`'s edge, in nm,
+/// and its middle: between the rim's two crossings of each stretch of rim inside it, or nothing
+/// at the point where a rim that never enters it touches it (sigfoxuino's +3.3V, a 0.889 mm via
+/// on U2 pad 8's corner, 0.0001 mm across). `None` when the rim stays clear of it.
+fn land_chord(shape: &Shape, c: Point, r: f64) -> Option<(f64, Point)> {
+    const N: usize = 360;
+    let rim: Vec<Point> = (0..N)
+        .map(|k| {
+            let t = k as f64 * std::f64::consts::TAU / N as f64;
+            Point::new(c.x + (r * t.cos()).round() as Nm, c.y + (r * t.sin()).round() as Nm)
+        })
+        .collect();
+    let inside: Vec<bool> = rim.iter().map(|&p| shape.contains(p)).collect();
+    let start = (0..N).find(|&k| !inside[k])?;
+    if !inside.contains(&true) {
+        let nearest = rim.iter().copied().min_by(|x, y| point_gap(shape, *x).total_cmp(&point_gap(shape, *y))).expect("rim");
+        return (point_gap(shape, nearest) <= TOUCH).then_some((0.0, nearest));
+    }
+    let mut best: Option<(f64, Point)> = None;
+    let mut run: Option<usize> = None;
+    for step in 1..=N {
+        let k = (start + step) % N;
+        match (inside[k], run) {
+            (true, None) => run = Some(k),
+            (false, Some(first)) => {
+                let last = (k + N - 1) % N;
+                let chord = rim[first].distance(rim[last]);
+                let middle = Point::new((rim[first].x + rim[last].x) / 2, (rim[first].y + rim[last].y) / 2);
+                if best.is_none_or(|(b, _)| chord < b) {
+                    best = Some((chord, middle));
+                }
+                run = None;
+            }
+            _ => {}
+        }
+    }
+    best
+}
+
+/// Mends each of [`via_pad_grazes`]: the via goes where its net stays as joined without it; else
+/// a track from its centre on into the pad, as wide as the land or, where that breaks a rule, the
+/// net's narrowest joint, on every layer both are on, where that breaks no rule. The spans of
+/// what went, and how many were mended.
+pub fn mend_via_pad_grazes(board: &mut Board, laid: &mut Vec<ItemId>) -> (usize, Vec<Span>) {
+    let (mut mended, mut spans) = (0, Vec::new());
+    for (id, pad) in via_pad_grazes(board, laid) {
+        let (Some(v), Some(p)) = (board.item(id).cloned(), board.item(pad).cloned()) else { continue };
+        // An earlier mend took the via, or bridged it already.
+        if !via_pad_grazes(board, &[id]).iter().any(|&(_, q)| q == pad) {
+            continue;
+        }
+        let before = board::net_connectivity(board, v.net, false).airlines.len();
+        let removed = board.remove(id).expect("listed above");
+        if board::net_connectivity(board, v.net, false).airlines.len() <= before {
+            spans.extend(removed.span);
+            laid.retain(|t| *t != id);
+            mended += 1;
+            continue;
+        }
+        board.restore(id, removed);
+        let Shape::Capsule { a: c, r, .. } = v.shape else { continue };
+        let Some((_, middle)) = land_chord(&p.shape, c, r as f64) else { continue };
+        let centre = p.shape.bbox();
+        let centre = Point::new((centre.min.x + centre.max.x) / 2, (centre.min.y + centre.max.y) / 2);
+        let least = (board.min_joint_of(v.net) + 1) / 2;
+        'widths: for w in [r, (r + least) / 2, least] {
+            // On through the sliver's middle, so even a piece narrower than the land covers it,
+            // until as deep in the pad as it is wide; else at the pad's centre.
+            let (dx, dy) = ((middle.x - c.x) as f64, (middle.y - c.y) as f64);
+            let along = |t: f64| Point::new(c.x + (dx * t).round() as Nm, c.y + (dy * t).round() as Nm);
+            let into = (1..=80).map(|k| along(k as f64 / 20.0)).find(|&q| p.shape.depth(q) >= w as f64).unwrap_or(centre);
+            let mut pieces = Vec::new();
+            for layer in (0..board.layers.len()).filter(|&l| v.on(l) && p.on(l)) {
+                let piece = board.insert(Item { kind: Kind::Track, net: v.net, layers: 1 << layer, shape: Shape::Capsule { a: c, b: into, r: w }, hole: None, locked: false, span: None });
+                pieces.push(piece);
+                if !check_item(board, piece).is_empty() {
+                    for p in pieces {
+                        board.discard(p);
+                    }
+                    continue 'widths;
+                }
+            }
+            laid.extend(pieces);
+            mended += 1;
+            break;
         }
     }
     (mended, spans)
@@ -1594,6 +1722,83 @@ mod tests {
         assert_eq!(mended, 1);
         assert!(board.item(spare).is_none() && board.item(keep).is_some() && board.item(pad).is_some());
         assert!(via_grazes(&board, &laid).is_empty());
+    }
+
+    #[test]
+    fn a_via_whose_land_only_clips_its_pads_corner_is_bridged_into_the_pad() {
+        // LoRaWAN_GPS's C15 pad 1: a 0.6 mm via clipping the corner of a 0.8 x 0.95 mm pad, a
+        // 0.056 mm sliver, the via needed for the track leaving it on the other side.
+        let mut board = empty_board();
+        let pad = board.insert(Item {
+            kind: Kind::Pad { footprint: 0, number: "1".into(), plated: false },
+            net: 1,
+            layers: 1,
+            shape: Shape::Polygon(vec![Point::new(-400_000, -475_000), Point::new(400_000, -475_000), Point::new(400_000, 475_000), Point::new(-400_000, 475_000)]),
+            hole: None,
+            locked: true,
+            span: None,
+        });
+        let at = Point::new(-575_000, 585_000);
+        let via = board.insert(Item { kind: Kind::Via, net: 1, layers: 1, shape: Shape::Capsule { a: at, b: at, r: 300_000 }, hole: Some((at, 150_000)), locked: false, span: None });
+        pad_at(&mut board, -3_000_000, 3_000_000);
+        let track = board.insert(seg(at, Point::new(-3_000_000, 3_000_000)));
+        let far = pad_at(&mut board, 3_000_000, 0);
+        let back = board.insert(seg(Point::new(400_000, 0), Point::new(3_000_000, 0)));
+        let mut laid = vec![via, track, back];
+        assert_eq!(via_pad_grazes(&board, &laid), vec![(via, pad)]);
+        let (mended, _) = mend_via_pad_grazes(&mut board, &mut laid);
+        assert_eq!(mended, 1);
+        assert!(board.item(via).is_some(), "the via joins the track to the pad");
+        assert!(via_pad_grazes(&board, &laid).is_empty(), "bridged, it is no longer a graze");
+        assert_eq!(mend_via_pad_grazes(&mut board, &mut laid).0, 0);
+        let piece = *laid.last().unwrap();
+        let Shape::Capsule { a, b, r } = board.item(piece).unwrap().shape.clone() else { panic!() };
+        assert_eq!((a, r), (at, 300_000));
+        assert!(board.item(pad).unwrap().shape.depth(b) >= 300_000.0, "{b:?}");
+        assert!(board.item(far).is_some());
+    }
+
+    #[test]
+    fn a_via_whose_land_only_touches_its_pads_corner_is_a_graze() {
+        let mut board = empty_board();
+        let pad = board.insert(Item {
+            kind: Kind::Pad { footprint: 0, number: "8".into(), plated: false },
+            net: 1,
+            layers: 1,
+            shape: Shape::Polygon(vec![Point::new(-400_000, -900_000), Point::new(400_000, -900_000), Point::new(400_000, 900_000), Point::new(-400_000, 900_000)]),
+            hole: None,
+            locked: true,
+            span: None,
+        });
+        // 0.4445 mm land, its centre on the corner's diagonal, the rim 0.1 um from the corner.
+        let off = ((444_500.0 + 0.1) / std::f64::consts::SQRT_2).round() as Nm;
+        let at = Point::new(400_000 + off, 900_000 + off);
+        let via = board.insert(Item { kind: Kind::Via, net: 1, layers: 1, shape: Shape::Capsule { a: at, b: at, r: 444_500 }, hole: Some((at, 317_500)), locked: false, span: None });
+        assert_eq!(via_pad_grazes(&board, &[via]), vec![(via, pad)]);
+    }
+
+    #[test]
+    fn a_via_centred_in_its_pad_or_clear_of_it_is_no_graze() {
+        let mut board = empty_board();
+        let pad = pad_at(&mut board, 0, 0);
+        let via = |board: &mut Board, x: Nm| board.insert(Item { kind: Kind::Via, net: 1, layers: 1, shape: Shape::Capsule { a: Point::new(x, 0), b: Point::new(x, 0), r: 200_000 }, hole: Some((Point::new(x, 0), 100_000)), locked: false, span: None });
+        let inside = via(&mut board, 100_000);
+        let clear = via(&mut board, 400_000);
+        let deep = via(&mut board, -250_000);
+        assert!(via_pad_grazes(&board, &[inside, clear]).is_empty());
+        // 0.25 mm from the centre of a 0.3 mm round pad, with a 0.4 mm land: a 0.31 mm chord.
+        assert!(via_pad_grazes(&board, &[deep]).is_empty(), "a deep overlap is a joint");
+        assert!(board.item(pad).is_some());
+    }
+
+    #[test]
+    fn two_vias_whose_lands_only_touch_at_a_point_are_a_graze() {
+        let mut board = empty_board();
+        let via = |board: &mut Board, x: Nm| board.insert(Item { kind: Kind::Via, net: 1, layers: 1, shape: Shape::Capsule { a: Point::new(x, 0), b: Point::new(x, 0), r: 550_000 }, hole: Some((Point::new(x, 0), 300_000)), locked: false, span: None });
+        let one = via(&mut board, 0);
+        let two = via(&mut board, 1_100_000);
+        let three = via(&mut board, 3_000_000);
+        assert_eq!(via_grazes(&board, &[one, two, three]), vec![(one, two)]);
     }
 
     #[test]
