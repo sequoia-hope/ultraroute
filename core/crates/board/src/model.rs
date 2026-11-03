@@ -552,7 +552,6 @@ impl Board {
         // Openings in the mask, each its shapes, the copper layer it bares, and the one net that
         // may run there if known yet; else the net of the pads it bares, found once they are in.
         let mut apertures: Vec<(Vec<Shape>, u64, Option<u32>)> = Vec::new();
-        let mut pad_masks: HashMap<ItemId, (u64, Nm)> = HashMap::new();
         let mut pad_items = Vec::new();
         for (k, pad) in copper.pads.iter().enumerate() {
             let model = &pcb.footprints[pad.footprint].pads[pad.pad];
@@ -651,11 +650,8 @@ impl Board {
             }
             let own = pad.clearance.map(nm).filter(|c| *c > 0);
             for id in ids {
-                if let Some(o) = opening {
-                    pad_masks.insert(id, o);
-                    if o.1 > 0 {
-                        board.mask_openings.insert(id, o);
-                    }
+                if let Some(o) = opening.filter(|o| o.1 > 0) {
+                    board.mask_openings.insert(id, o);
                 }
                 if let Some(c) = own {
                     board.pad_clearances.insert(id, c);
@@ -838,20 +834,20 @@ impl Board {
             apertures.push((shapes, layer, None));
         }
         let mask_margin = board.mask_margin();
-        let max_pad_open = pad_masks.values().map(|o| o.1).max().unwrap_or(0) + board.mask_web + crate::check::MASK_MARGIN;
         let max_via_open = board.via_openings.1 + board.mask_web + mask_margin;
-        let search_reach = mask_margin.max(max_pad_open).max(max_via_open);
+        let search_reach = mask_margin.max(max_via_open);
         for (shapes, layer, net) in apertures {
             if layer == 0 || shapes.is_empty() {
                 continue;
             }
             let l = layer.trailing_zeros() as usize;
             // As KiCad judges an opening that belongs to no copper: over the whole `BOARD_ITEM`,
-            // every bared piece of copper and every bridged pad opening must share one net. Fixed
-            // copper (pads, locked tracks and vias, drawn copper outside net ties) and pad mask
-            // openings within the mask web decide first: one net > 0 admits that net, several or
-            // net 0 admits none. When none touches it, a copper zone or pour beneath it claims its
-            // net; otherwise any single net may enter.
+            // every bared piece of copper must share one net. Fixed copper (pads, locked tracks
+            // and vias, drawn copper outside net ties) decides first: one net > 0 admits that net,
+            // several or net 0 admits none. When none touches it, a copper zone or pour beneath it
+            // claims its net; otherwise any single net may enter. A pad's opening merely near it
+            // decides nothing: closing the opening for that would bury the pads of fine-pitch parts
+            // whose drawn openings sit within the mask web of each other (DSKY_alarm's IC3).
             let net = net.unwrap_or_else(|| {
                 let mut nets: Vec<u32> = Vec::new();
                 for shape in &shapes {
@@ -861,18 +857,7 @@ impl Board {
                             continue;
                         }
                         match it.kind {
-                            Kind::Pad { .. } => {
-                                let bared = shape.gap_within(&it.shape, mask_margin as f64) < mask_margin as f64;
-                                let bridged = pad_masks.get(&id).is_some_and(|&(ol, by)| {
-                                    ol & layer != 0 && {
-                                        let reach = by + board.mask_web + crate::check::MASK_MARGIN;
-                                        shape.gap_within(&it.shape, reach as f64) < reach as f64
-                                    }
-                                });
-                                if bared || bridged {
-                                    nets.push(it.net);
-                                }
-                            }
+                            Kind::Pad { .. } if shape.gap_within(&it.shape, mask_margin as f64) < mask_margin as f64 => nets.push(it.net),
                             Kind::Pour { kept: true, .. }
                                 if !board.ties.contains_key(&id)
                                     && shape.gap_within(&it.shape, mask_margin as f64) < mask_margin as f64 =>

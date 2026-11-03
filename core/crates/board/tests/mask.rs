@@ -255,10 +255,10 @@ fn an_unattached_mask_opening_in_an_unfilled_zone_admits_only_the_zones_net() {
 }
 
 #[test]
-fn mask_frame_bridging_two_pad_openings_or_unnetted_copper_admits_no_net() {
+fn a_mask_drawing_on_a_pad_and_unnetted_copper_admits_no_net() {
     // Modelled on ottawa-badges-2016's JP11 solder jumper: two pads 0.2 mm apart with 0.15 mm
-    // mask expansion, an F.Mask stroke just outside their copper that bridges both pad openings,
-    // and a second F.Mask stroke touching pad 2 plus an unnetted F.Cu shorting bar.
+    // mask expansion, an F.Mask stroke just outside their copper, in their openings but baring
+    // nothing, and a second F.Mask stroke touching pad 2 plus an unnetted F.Cu shorting bar.
     let text = "(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))
          (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (38 \"B.Mask\" user) (39 \"F.Mask\" user) (44 \"Edge.Cuts\" user))
          (setup (pad_to_mask_clearance 0.15) (tenting none))
@@ -273,7 +273,7 @@ fn mask_frame_bridging_two_pad_openings_or_unnetted_copper_admits_no_net() {
     let (pcb, copper) = kicad_pcb::parse_board(text).unwrap();
     let mut b = Board::new(&pcb, &copper, no_clearance());
     assert_eq!(b.mask_areas.len(), 2);
-    assert_eq!(b.mask_areas[0].2, 0, "left mask stroke bridges pad 1 and pad 2 openings");
+    assert!(b.mask_areas[0].2 >= ANY_ONE_NET, "left mask stroke bares no copper");
     assert_eq!(b.mask_areas[1].2, 0, "lower mask stroke touches pad 2 and unnetted drawn copper");
     let v = via(&mut b, 2, 9.4125, 10.4875);
     assert!(check_item(&b, v).iter().any(|x| x.rule == Rule::Keepout), "bare via opening bridges into the jumper frame");
