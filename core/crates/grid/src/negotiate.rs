@@ -418,7 +418,8 @@ fn view_for_net<'a>(
     owned: &mut FxHashMap<String, Owned>,
     fallback: &'a mut RouteGrid,
 ) -> &'a RouteGrid {
-    if !map.regions.is_empty() || net == 0 {
+    // A flip swaps owned cells only; the region and clear-under marks differ by net too.
+    if !map.regions.is_empty() || !map.under.is_empty() || net == 0 {
         map.view_into(net, fallback);
         return fallback;
     }

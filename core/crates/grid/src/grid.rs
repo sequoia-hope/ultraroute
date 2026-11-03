@@ -544,16 +544,9 @@ impl ObstacleMap {
             (board.via_openings, board.mask_web, board.mask_margin()).hash(h);
             let masks = &board.mask_areas;
             masks.len().hash(h);
-            if masks.len() <= 64 {
-                for (s, l, n) in masks {
-                    (l, n).hash(h);
-                    hash_shape(s, h);
-                }
-            } else {
-                for (s, l, n) in masks[..16].iter().chain(&masks[masks.len() - 16..]) {
-                    (l, n).hash(h);
-                    hash_shape(s, h);
-                }
+            for (s, l, n) in masks {
+                (l, n).hash(h);
+                hash_shape(s, h);
             }
             fixed.len().hash(h);
             for &id in fixed {
