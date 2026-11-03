@@ -95,7 +95,7 @@ fn edge_polylines(shape: &kicad_pcb::OutlineShape, width: f64) -> Vec<Vec<[f64; 
 
 /// `shape` grown by `by` all round: a capsule's radius, or a polygon's convex hull with every
 /// corner rounded (a little outside the true offset, never inside it).
-fn grown(shape: &Shape, by: Nm) -> Shape {
+pub(crate) fn grown(shape: &Shape, by: Nm) -> Shape {
     match shape {
         Shape::Capsule { a, b, r } => Shape::Capsule { a: *a, b: *b, r: r + by },
         Shape::Polygon(p) if by <= 0 => Shape::Polygon(p.clone()),
@@ -331,6 +331,10 @@ pub struct Board {
     pub via_avoid_cost: u32,
     /// Routing regions a planner set, with rules for which nets may run where.
     pub regions: Vec<crate::regions::Region>,
+    /// Rules a planner set that keep other nets' antipads out from under some nets' tracks.
+    pub clear_under: Vec<crate::regions::ClearUnder>,
+    /// The copper zones, for what other nets' holes cut out of them.
+    pub zone_areas: Vec<crate::regions::ZoneArea>,
     /// What crossing another net's pour (one refilled round new copper, not a plane) costs, as a
     /// multiple of the length inside: crossing cuts the pour into pieces. 0 for nothing.
     pub pour_cost: f64,
@@ -474,6 +478,8 @@ impl Board {
             via_avoid: Vec::new(),
             via_avoid_cost: 3_000,
             regions: Vec::new(),
+            clear_under: Vec::new(),
+            zone_areas: Vec::new(),
             pour_cost: 0.0,
             warnings: pcb.warnings.iter().chain(&copper.warnings).cloned().collect(),
             via_height: nm((pcb.thickness_m - OUTER_COPPER_M).max(0.0)),
@@ -706,6 +712,17 @@ impl Board {
                     }
                 }
                 continue;
+            }
+            if zone.outline.len() >= 3 {
+                let poly = |p: &Vec<[f64; 2]>| Shape::Polygon(p.iter().copied().map(Point::from_m).collect());
+                board.zone_areas.push(crate::regions::ZoneArea {
+                    net: zone.net,
+                    layers: mask(&zone.layers),
+                    outline: poly(&zone.outline),
+                    cutouts: zone.cutouts.iter().filter(|c| c.len() >= 3).map(poly).collect(),
+                    clearance: nm(zone.clearance),
+                    min_thickness: nm(zone.min_thickness),
+                });
             }
             let kept = blocks.iter().any(|b| b.zones.contains(&z));
             // A zone saved unfilled has no copper to read. Kept, as a block's, its outline stands

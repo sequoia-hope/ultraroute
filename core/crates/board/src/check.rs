@@ -313,6 +313,13 @@ fn item_checks(
     if item.kind == Kind::Via && board.no_vias(item.net) {
         found.push(Violation { rule: Rule::Keepout, a: id, b: None, layer: None, gap: 0.0, required: 0 });
     }
+    // A planner's clear-under rule: a track of its nets over another net's antipad in a plane,
+    // or (checking one item) a via whose antipad comes under such a track.
+    if !board.clear_under.is_empty() {
+        for (k, other, layer, gap) in board.clear_under_breaks(id, everyone) {
+            found.push(Violation { rule: Rule::Keepout, a: id, b: Some(other), layer: Some(layer), gap, required: board.clear_under[k].margin });
+        }
+    }
     // A track or via of another net bared in an opening drawn in the mask would bridge there, and
     // so would a bare via whose own opening meets it, or comes closer than the mask's narrowest
     // web (a via beside an unplated hole's opening: digital_clock's Q17).
