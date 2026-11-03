@@ -503,7 +503,6 @@ impl Stage for Finishing {
             deadline: ctx.deadline(),
             pours_block: a.pours_block,
             log: ctx.log.clone(),
-            corridor: !a.rip_up,
             ..Default::default()
         };
         let watch = &mut *ctx.watch;
@@ -601,7 +600,6 @@ impl Stage for RipUp {
             deadline: ctx.deadline(),
             pours_block: a.pours_block,
             log: ctx.log.clone(),
-            corridor: true,
             ..Default::default()
         };
         let watch = &mut *ctx.watch;
@@ -854,6 +852,63 @@ impl Stage for Refinish {
             eprintln!("refinished {} more ({} on a finer grid), open {before} -> {}, {:.1} s", s.routed, s.fine, ctx.open().len(), ctx.elapsed());
         }
         json!({"routed": s.routed, "failed": s.failed, "fine": s.fine, "corridor": s.corridor})
+    }
+}
+
+/// What is still open at the very end, narrowed across the tight gaps its own width cannot pass
+/// (`grid::Options::corridor`): the last resort, after every stage that keeps the designer's
+/// widths, so a board they finish never sees a corridor. With rip-up, through the router's own
+/// copper (`grid::RipOptions::corridor`); without, around it.
+pub struct Corridors;
+
+impl Stage for Corridors {
+    fn name(&self) -> &'static str {
+        "corridors"
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let before = ctx.open().len();
+        if before == 0 {
+            return json!({"corridor": 0});
+        }
+        let a = ctx.args;
+        let (corridor, narrow, stretches) = if a.rip_up {
+            let options = grid::RipOptions {
+                cell: a.cell.unwrap_or(grid::RipOptions::default().cell),
+                via_cost: ctx.ledger.costs.rip,
+                deadline: ctx.deadline(),
+                pours_block: a.pours_block,
+                log: ctx.log.clone(),
+                corridor: true,
+                ..Default::default()
+            };
+            let watch = &mut *ctx.watch;
+            let r = grid::rip_up_watch(ctx.board, ctx.solver, &options, &mut ctx.ledger.laid, &mut |b, attempt| watch.rip(b, &attempt));
+            (r.corridor, r.narrowed, r.corridors)
+        } else {
+            let options = grid::Options {
+                cell: a.cell.unwrap_or(grid::Options::default().cell),
+                via_cost: ctx.ledger.costs.open,
+                net_via_cost: ctx.ledger.costs.open_limited.clone(),
+                seed: a.seed,
+                deadline: ctx.deadline(),
+                pours_block: a.pours_block,
+                log: ctx.log.clone(),
+                corridor: true,
+                ..Default::default()
+            };
+            let watch = &mut *ctx.watch;
+            let s = grid::route_open(ctx.board, ctx.solver, &options, &mut |b| watch.frame(b));
+            ctx.ledger.laid.extend(s.laid.iter().copied());
+            (s.corridor, s.narrowed, s.corridors)
+        };
+        narrowed(ctx, &narrow);
+        corridors(ctx, &stretches);
+        let after = ctx.open().len();
+        if after < before {
+            eprintln!("corridors: {corridor} connections narrowed across tight gaps, open {before} -> {after}, {:.1} s", ctx.elapsed());
+        }
+        json!({"corridor": corridor, "stretches": stretches.len(), "open_before": before, "open_after": after})
     }
 }
 

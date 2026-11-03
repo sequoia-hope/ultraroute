@@ -119,8 +119,8 @@ pub struct Options {
     pub fine: bool,
     /// A connection with no way at its class width may narrow to a legal thinner width across
     /// tight gaps only, returning to full width outside them ([`corridor_widths`]). Off unless
-    /// a stage asks: finishing with no rip-up after it, and rip-up's last round, which try what
-    /// nothing else could; every other caller routes as it did before corridors.
+    /// a stage asks: the last stage, for what nothing before it could join, and rip-up's
+    /// rerouting there; every other caller routes as it did before corridors.
     pub corridor: bool,
 }
 
@@ -430,7 +430,9 @@ pub(crate) fn corridor_widths(board: &Board, profile: &Profile, airline: &board:
 }
 
 /// Terminals for a corridor-necked try: full-width ones where full-free cells reach the end within
-/// the rules, plus narrow ones for ends boxed inside a tight gap.
+/// the rules, plus narrow ones for ends boxed inside a tight gap; for a pad no straight leg
+/// leaves at either width, bent ones ([`bent_terminals`]). Only a corridor try takes a bent leg,
+/// so no board a corridor does not join sees one.
 pub(crate) fn corridor_terminals(
     board: &mut Board,
     full_grid: &RouteGrid,
@@ -448,7 +450,11 @@ pub(crate) fn corridor_terminals(
             by_cell.insert(cell, leg);
         }
     }
-    for (cell, leg) in terminals(board, narrow_grid, id) {
+    let mut narrow = terminals(board, narrow_grid, id);
+    if narrow.is_empty() {
+        narrow = bent_terminals(board, narrow_grid, id);
+    }
+    for (cell, leg) in narrow {
         if leg.is_none() {
             by_cell.insert(cell, None);
         } else {
@@ -820,9 +826,7 @@ pub(crate) fn terminals(board: &mut Board, grid: &RouteGrid, id: ItemId) -> Vec<
             return by_cell.into_iter().collect();
         }
     }
-    // Last, and only where nothing above found a way out (so a board that never needs them
-    // routes as it did without them), a bent leg out of an SMD pad.
-    bent_terminals(board, grid, id)
+    Vec::new()
 }
 
 pub(crate) fn item_terminals(board: &mut Board, grid: &RouteGrid, id: ItemId, leg_half_width: Nm, leg_cells: Nm, tries: usize) -> Vec<Terminal> {
@@ -1460,7 +1464,7 @@ mod tests {
     fn bent_leg_escapes_off_grid_pad_between_tight_masks() {
         let (pcb, copper) = kicad_pcb::parse_board(
             "(kicad_pcb (version 20240101) (general (thickness 1.6))
-             (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal))
+             (layers (0 \"F.Cu\" signal))
              (setup (pad_to_mask_clearance 0.254))
              (net 0 \"\") (net 1 \"A\") (net 2 \"B\") (net 3 \"C\")
              (gr_rect (start 0 0) (end 12 14) (layer \"Edge.Cuts\") (width 0.1))
@@ -1478,12 +1482,25 @@ mod tests {
         rules.classes[0].track_width = 0.000376;
         rules.classes[0].clearance = 0.0002;
         let mut board = Board::new(&pcb, &copper, rules);
-        let stats = route_open(
-            &mut board,
-            &mut CpuSolver,
-            &Options { fine: false, corridor: false, ..Default::default() },
-            &mut |_| {},
-        );
+        // The SSOP's middle pin, 22.5 um off the cells' columns, leaves by legs straight down its
+        // own centre line before they step onto a free cell.
+        let pin = board.items().find(|(_, it)| it.net == 1 && matches!(it.kind, Kind::Pad { .. }) && it.shape.bbox().max.y < 6_000_000).map(|(id, _)| id).unwrap();
+        let item = board.item(pin).unwrap().clone();
+        let bb = item.shape.bbox();
+        let from = anchor(&item, Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2));
+        let map = ObstacleMap::new(&board, Profile::for_net(&board, 1), 50_000, false);
+        let grid = map.view(1);
+        let bent = bent_terminals(&mut board, &grid, pin);
+        assert!(!bent.is_empty());
+        for (cell, leg) in bent {
+            let leg = leg.expect("a bent terminal has a leg");
+            let elbow = leg.elbow.expect("a bent leg has an elbow");
+            assert!(!grid.blocked[cell]);
+            assert_eq!(leg.from, from);
+            assert!(elbow.x == from.x || elbow.y == from.y, "{elbow:?} off {from:?}'s axes");
+        }
+        // A corridor try, which alone takes bent legs, routes the board within the rules.
+        let stats = route_open(&mut board, &mut CpuSolver, &Options { fine: false, corridor: true, ..Default::default() }, &mut |_| {});
         assert_eq!(stats.routed, 1, "{stats:?}");
         assert!(connectivity_without_pours(&board).airlines.is_empty());
         for id in stats.laid {

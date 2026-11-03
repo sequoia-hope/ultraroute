@@ -1001,6 +1001,7 @@ pub const STAGES: &[Entry] = &[
     row(&stages::Vias, Clock::Timed, Budget::KeepBack(0.1), None),
     row(&stages::Cleaning, Clock::Always, Budget::Untimed, None),
     row(&stages::Refinish, Clock::Timed, Budget::Run, None),
+    row(&stages::Corridors, Clock::Timed, Budget::Run, None),
     row(&stages::LengthMatching, Clock::Timed, Budget::Run, None),
     row(&stages::Outcome, Clock::Untold, Budget::Untimed, None),
     row(&stages::Write, Clock::Untold, Budget::Untimed, None),

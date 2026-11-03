@@ -33,9 +33,10 @@ pub struct RipOptions {
     /// together, the connection's net with them; a change kept prunes closed nets' stubs.
     pub region_repair: bool,
     pub log: Option<Log>,
-    /// Once a round keeps nothing, one more tries the connections still open narrowed across
-    /// the tight gaps their own width cannot pass (`route::corridor_widths`), as nothing else
-    /// does; off, rip-up stops there.
+    /// Rip-up of the last resort, once every stage that keeps the nets' own widths is done: a
+    /// round of corridors only first, narrowing the connections still open across the tight
+    /// gaps their own width cannot pass (`route::corridor_widths`), and another whenever a
+    /// round keeps nothing; ordinary rounds after any kept. Off, every net keeps its width.
     pub corridor: bool,
 }
 
@@ -155,10 +156,10 @@ pub fn rip_up_watch(
     // The clusters and their pads, for ends at pads; made again after a kept attempt.
     let mut near: Option<(Connectivity, HashMap<usize, Vec<ItemId>>)> = None;
     let mut tried: HashSet<(ItemId, ItemId)> = HashSet::new();
-    // A round of corridors only, once a round keeps nothing: the connections it has tried since
-    // the last kept attempt, the nets laid by one (their ripped copper is rerouted with
-    // corridors too), and its maps, good until an attempt is kept.
-    let mut corridors = false;
+    // A round of corridors only, first and once a round keeps nothing: the connections it has
+    // tried since the last kept attempt, the nets laid by one (their ripped copper is rerouted
+    // with corridors too), and its maps, good until an attempt is kept.
+    let mut corridors = options.corridor;
     let mut cornered: HashSet<(ItemId, ItemId)> = HashSet::new();
     let mut corridor_nets: HashSet<u32> = HashSet::new();
     let mut corridor_maps: HashMap<String, ObstacleMap> = HashMap::new();
