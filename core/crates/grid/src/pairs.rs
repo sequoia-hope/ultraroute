@@ -882,6 +882,7 @@ fn coupled_grid(board: &Board, options: &PairOptions, pair: &Pair, profile: &Pro
         spokes: map.spokes.clone(),
     };
     map.apply_regions(pair.p, &mut grid);
+    map.apply_under(pair.p, &mut grid);
     // Enforce any region rules specific to the negative net without double-counting shared pour costs.
     let mut grid_n = RouteGrid {
         net: pair.n,
@@ -904,6 +905,7 @@ fn coupled_grid(board: &Board, options: &PairOptions, pair: &Pair, profile: &Pro
         spokes: map.spokes.clone(),
     };
     map.apply_regions(pair.n, &mut grid_n);
+    map.apply_under(pair.n, &mut grid_n);
     for (b, &bn) in grid.blocked.iter_mut().zip(&grid_n.blocked) {
         *b |= bn;
     }

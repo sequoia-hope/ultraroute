@@ -809,7 +809,7 @@ fn run_pass(
                 let w = weight_of(c.net);
                 let map = &maps[&c.class];
                 let patched = match &mut patch {
-                    Some(p) if p.class == c.class && p.weight == w && map.regions.is_empty() => {
+                    Some(p) if p.class == c.class && p.weight == w && map.regions.is_empty() && map.under.is_empty() => {
                         let owned = owned.entry(c.class.clone()).or_insert_with(|| Owned::of(map));
                         patch_grid(p, c.net, owned, map, &zones, &history, &via_history, present, via_scale, options.via_zones, grid_buf)
                     }

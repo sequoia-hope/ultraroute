@@ -222,6 +222,8 @@ pub struct ObstacleMap {
     pub(crate) regions: Vec<crate::regions::RegionRaster>,
     /// What the thermal spokes pads can spare charge on these cells, shared by the views.
     pub(crate) spokes: Option<std::sync::Arc<crate::spokes::SpokePrices>>,
+    /// The board's clear-under rules on these cells; empty without any.
+    pub(crate) under: Vec<crate::under::UnderRaster>,
 }
 
 
@@ -264,10 +266,13 @@ impl ObstacleMap {
             via_avoid: Vec::new(),
             regions: Vec::new(),
             spokes: None,
+            under: Vec::new(),
         };
         map.stamp_outline(board);
         map.stamp_via_avoid(board);
         map.regions = map.region_rasters(board);
+        // Before the copper, which marks it as it is stamped.
+        map.under = map.under_rasters(board);
         map.spokes = map.spoke_prices(board);
         map.stamp_mask_areas(board, &Deadline::default());
         let max_clr = (0..board.nets.len() as u32)
@@ -332,6 +337,7 @@ impl ObstacleMap {
             via_avoid: Vec::new(),
             regions: Vec::new(),
             spokes: None,
+            under: self.under_window(i0, j0, nx, ny),
         };
         map.regions = map.region_rasters(board);
         map.spokes = map.spoke_prices(board);
@@ -390,6 +396,7 @@ impl ObstacleMap {
             via_avoid: Vec::new(),
             regions: Vec::new(),
             spokes: None,
+            under: Vec::new(),
         };
         map.stamp_via_avoid(board);
         // What does not move while routing (outline, pads, pours, keepouts) is stamped once and
@@ -404,6 +411,11 @@ impl ObstacleMap {
             return None;
         }
         map.regions = map.region_rasters(board);
+        // The fixed copper's part in the clear-under rules, which the cache does not keep.
+        map.under = map.under_rasters(board);
+        for &id in &fixed {
+            map.stamp_under(board, id);
+        }
         map.spokes = map.spoke_prices(board);
         if !map.stamp_mask_areas(board, deadline) {
             return None;
@@ -825,6 +837,7 @@ impl ObstacleMap {
 
     /// Records what `id` claims.
     pub fn stamp(&mut self, board: &Board, id: ItemId) {
+        self.stamp_under(board, id);
         let Some(item) = board.item(id) else { return };
         let cells = self.nx * self.ny;
         let half_width = self.profile.half_width;
@@ -1033,6 +1046,7 @@ impl ObstacleMap {
         grid.directional = false;
         grid.spokes.clone_from(&self.spokes);
         self.apply_regions(net, grid);
+        self.apply_under(net, grid);
     }
 
     pub fn view(&self, net: u32) -> RouteGrid {
@@ -1058,6 +1072,7 @@ impl ObstacleMap {
             spokes: self.spokes.clone(),
         };
         self.apply_regions(net, &mut grid);
+        self.apply_under(net, &mut grid);
         grid
     }
 }
@@ -1168,6 +1183,7 @@ mod tests {
                 via_avoid: Vec::new(),
                 regions: Vec::new(),
                 spokes: None,
+                under: Vec::new(),
             };
             map.stamp_outline(board);
             map.stamp_mask_areas(board, &Deadline::default());
