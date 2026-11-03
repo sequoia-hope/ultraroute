@@ -1,7 +1,7 @@
-//! Length matching for differential pairs: each net's length along its copper from one end of
-//! the pair to the other, and bumps (a meander) put into the shorter net's tracks until the two
-//! differ by no more than a custom rule's `skew` maximum for the pair allows. A pair no rule
-//! limits is left as routed.
+//! Length matching for differential pairs: each net's whole length as KiCad's `skew` rule counts
+//! it, and bumps (a meander) put into the shorter net's way from one end of the pair to the other
+//! until the two differ by no more than a custom rule's `skew` maximum for the pair allows. A
+//! pair no rule limits is left as routed.
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};

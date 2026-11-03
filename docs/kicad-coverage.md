@@ -135,9 +135,12 @@ way Stage 9 did; steps 1-3 also add the `~/pcb` rule files above as parser tests
    `-`, `P` or `N` (capitals only), the partner is on the board, and `X` matches the base name
    before that letter, or it less one trailing `_` (`CLK` and `CLK_` take `CLK_P`; `/USB_D` takes
    `/USB_D+`, `/USB` does not). KiCad takes no `USB_DP`/`USB_DM` nor `clk_p`/`clk_n` as a pair,
-   which the router still couples. KiCad measures a `skew` rule's nets together, each against
-   the longest (each pair alone with `within_diff_pairs`), so a rule over several pairs also
-   wants them matched to each other, which the router does not do. Left: `diff_pair_uncoupled`; steering on boards with inner signal layers, where a via
+   which the router still couples; `TX_P0`/`TX_N0` and `CLKP`/`CLKN` are KiCad's pairs and not
+   the router's, so a rule over them is judged but never tuned to. KiCad measures a `skew` rule's
+   nets whole, stubs too, each against the longest of the rule's nets (each pair alone with
+   `within_diff_pairs`), and tuning measures the same; a rule over several pairs also wants them
+   matched to each other, which the router does not do. Nets under two different rules are never
+   measured against each other by KiCad; the router still holds the pair to the smaller. Left: `diff_pair_uncoupled`; steering on boards with inner signal layers, where a via
    counts or not by the layers its copper ends up on.
 6. **Pad geometry.** Done: clearance overrides judged as KiCad does; warnings for the rest. Left:
    padstacks per layer, `remove_unused_layers`, curves in custom pads and on copper.
