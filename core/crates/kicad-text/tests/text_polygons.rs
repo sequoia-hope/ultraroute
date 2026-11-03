@@ -102,7 +102,7 @@ fn copper_and_mask_text_polygons_match_kicad_stroke_outlines() {
 
     // Through the MIT reader, which runs this crate's program for the strokes.
     let helper = std::path::Path::new(env!("CARGO_BIN_EXE_kicad-text"));
-    let (pcb, copper) = kicad_pcb::parse_board_with(&pcb_text, kicad_pcb::text::Shaper::Helper(helper)).unwrap();
+    let (pcb, copper) = kicad_pcb::parse_board_with(&pcb_text, kicad_pcb::text::Shaper::Helper(helper, kicad_pcb::text::HELPER_TIMEOUT)).unwrap();
     assert!(copper.warnings.is_empty(), "{:?}", copper.warnings);
     assert_eq!(copper.text_note, Some(format!("8 text item(s) stroked by {}", helper.display())));
 

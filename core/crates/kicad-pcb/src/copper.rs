@@ -512,15 +512,15 @@ fn stroke_texts(copper: &mut Copper, footprints: &[Footprint], texts: &[(crate::
         return;
     }
     let n = texts.len();
-    let helper = match shaper {
-        crate::text::Shaper::Helper(path) => path,
+    let (helper, timeout) = match shaper {
+        crate::text::Shaper::Helper(path, timeout) => (path, timeout),
         crate::text::Shaper::Boxes(why) => {
             copper.text_note = Some(format!("{n} text item(s) as boxes: {why}"));
             return;
         }
     };
     let items: Vec<crate::text::Item> = texts.iter().map(|t| t.0.clone()).collect();
-    let shapes = match crate::text::run(helper, &items) {
+    let shapes = match crate::text::run(helper, &items, timeout) {
         Ok(s) => s,
         Err(e) => {
             copper.text_note = Some(format!("{n} text item(s) as boxes: the helper failed: {e}"));

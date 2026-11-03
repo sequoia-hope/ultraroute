@@ -24,7 +24,7 @@ fn main() {
     // The text helper a route would run, for a bench to record; failing if text would be boxes.
     if args.first().is_some_and(|a| a == "text-helper") {
         match kicad_pcb::text::shaper() {
-            kicad_pcb::text::Shaper::Helper(path) => println!("{}", path.display()),
+            kicad_pcb::text::Shaper::Helper(path, _) => println!("{}", path.display()),
             kicad_pcb::text::Shaper::Boxes(why) => {
                 eprintln!("text as boxes: {why}");
                 std::process::exit(1);

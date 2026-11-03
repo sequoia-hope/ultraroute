@@ -158,7 +158,7 @@ let options = grid::Options { log: Some(log.clone()), ..Default::default() };
 - `parse_board(&text) -> Result<(Pcb, Copper), KicadParse>`: the board and its copper.
   `parse_kicad_pcb` gives the `Pcb` alone. KiCad 6 and later. Copper and mask text is stroked by
   the `kicad-text` program (GPL, run as a process) when `text::shaper()` finds it, else boxed;
-  `parse_board_with(&text, Shaper::Boxes(".."))` or `Shaper::Helper(path)` chooses, and
+  `parse_board_with(&text, Shaper::Boxes(".."))` or `Shaper::Helper(path, timeout)` chooses, and
   `Copper::text_note` says which was used.
 - `Pcb`: `nets`, `footprints` (reference, value, `at`, rotation, pads), the outline primitives,
   thickness, `warnings`. `pcb.outline_loops()` chains the Edge.Cuts into loops.

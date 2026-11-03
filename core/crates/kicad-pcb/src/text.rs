@@ -6,9 +6,11 @@
 //! this MIT crate only runs: all of a board's texts go to it in one batch, one JSON item a line
 //! on its standard input, and come back as one line of polygons each on its standard output,
 //! millimetres, in the frame the anchor is given in. Without the program, or if it fails, each
-//! text is the box its strokes stay within, a little generously.
+//! text is the box its strokes stay within, a little generously. A helper that has not answered
+//! within [`HELPER_TIMEOUT`] has failed.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -16,6 +18,9 @@ use serde::{Deserialize, Serialize};
 pub const HELPER_VAR: &str = "ULTRAROUTE_TEXT_HELPER";
 /// The helper's program name, looked for next to the running program and on `PATH`.
 pub const HELPER_NAME: &str = "kicad-text";
+
+/// How long the helper may take over a board's texts: it needs milliseconds, even for thousands.
+pub const HELPER_TIMEOUT: Duration = Duration::from_secs(30);
 
 const MM: f64 = 1e-3;
 
@@ -42,8 +47,8 @@ pub struct Item {
 /// Where a board's text shapes come from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shaper<'a> {
-    /// The helper program at this path.
-    Helper(&'a Path),
+    /// The helper program at this path, given this long to answer.
+    Helper(&'a Path, Duration),
     /// Boxes, for this reason.
     Boxes(&'a str),
 }
@@ -54,7 +59,7 @@ pub enum Shaper<'a> {
 pub fn shaper() -> Shaper<'static> {
     static FOUND: std::sync::OnceLock<Result<PathBuf, String>> = std::sync::OnceLock::new();
     match FOUND.get_or_init(find) {
-        Ok(path) => Shaper::Helper(path),
+        Ok(path) => Shaper::Helper(path, HELPER_TIMEOUT),
         Err(why) => Shaper::Boxes(why),
     }
 }
@@ -83,11 +88,14 @@ fn find() -> Result<PathBuf, String> {
         .ok_or_else(|| format!("no {name} next to this program or on PATH, nor {HELPER_VAR}"))
 }
 
-/// The polygons of each of `items`, metres, from the helper at `helper`, all in one run.
+/// The polygons of each of `items`, metres, from the helper at `helper`, all in one run; an error
+/// if it fails or has not finished within `timeout`.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn run(helper: &Path, items: &[Item]) -> Result<Vec<Vec<Vec<[f64; 2]>>>, String> {
+pub fn run(helper: &Path, items: &[Item], timeout: Duration) -> Result<Vec<Vec<Vec<[f64; 2]>>>, String> {
     use std::io::{Read, Write};
     use std::process::{Command, Stdio};
+    use std::sync::mpsc::channel;
+    use std::time::Instant;
     let mut request = String::new();
     for item in items {
         request.push_str(&serde_json::to_string(item).map_err(|e| e.to_string())?);
@@ -99,24 +107,43 @@ pub fn run(helper: &Path, items: &[Item]) -> Result<Vec<Vec<Vec<[f64; 2]>>>, Str
         .stderr(Stdio::inherit())
         .spawn()
         .map_err(|e| format!("{}: {e}", helper.display()))?;
-    let mut stdin = child.stdin.take().expect("piped");
-    // Written from a thread, so a helper answering before it has read everything cannot fill
-    // its pipe and stall both.
-    let writer = std::thread::spawn(move || stdin.write_all(request.as_bytes()));
-    let mut reply = String::new();
-    let read = child.stdout.take().expect("piped").read_to_string(&mut reply);
-    let status = child.wait().map_err(|e| format!("{}: {e}", helper.display()))?;
-    let wrote = writer.join().map_err(|_| "the writer panicked".to_string())?;
+    let (mut stdin, mut stdout) = (child.stdin.take().expect("piped"), child.stdout.take().expect("piped"));
+    let deadline = Instant::now() + timeout;
+    // Threads, so a helper answering before it has read everything cannot stall both ends, and
+    // joined by nothing: a process the helper left behind can hold a pipe open after it is killed.
+    let (wrote_tx, wrote) = channel();
+    std::thread::spawn(move || wrote_tx.send(stdin.write_all(request.as_bytes()).map(|_| drop(stdin))));
+    let (read_tx, read) = channel();
+    std::thread::spawn(move || {
+        let mut reply = String::new();
+        let got = stdout.read_to_string(&mut reply);
+        read_tx.send(got.map(|_| reply))
+    });
+    let hung = |child: &mut std::process::Child| {
+        let _ = child.kill();
+        let _ = child.wait();
+        format!("{} did not finish within {} s", helper.display(), timeout.as_secs_f64())
+    };
+    let Ok(reply) = read.recv_timeout(deadline.saturating_duration_since(Instant::now())) else { return Err(hung(&mut child)) };
+    let status = loop {
+        match child.try_wait().map_err(|e| format!("{}: {e}", helper.display()))? {
+            Some(status) => break status,
+            None if Instant::now() >= deadline => return Err(hung(&mut child)),
+            None => std::thread::sleep(Duration::from_millis(1)),
+        }
+    };
     if !status.success() {
         return Err(format!("{} exited with {status}", helper.display()));
     }
+    // It has exited, so a write still going can only be to a process it left behind.
+    let Ok(wrote) = wrote.recv_timeout(deadline.saturating_duration_since(Instant::now())) else { return Err(hung(&mut child)) };
     wrote.map_err(|e| format!("{}: {e}", helper.display()))?;
-    read.map_err(|e| format!("{}: {e}", helper.display()))?;
+    let reply = reply.map_err(|e| format!("{}: {e}", helper.display()))?;
     parse_reply(&reply, items.len())
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn run(_helper: &Path, _items: &[Item]) -> Result<Vec<Vec<Vec<[f64; 2]>>>, String> {
+pub fn run(_helper: &Path, _items: &[Item], _timeout: Duration) -> Result<Vec<Vec<Vec<[f64; 2]>>>, String> {
     Err("no text helper in WASM".to_string())
 }
 
