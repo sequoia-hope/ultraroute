@@ -408,7 +408,6 @@ impl Stage for First {
             nets: Some(first.clone()),
             pours_block: a.pours_block,
             log: ctx.log.clone(),
-            corridor: !a.rip_up,
             ..Default::default()
         };
         let watch = &mut *ctx.watch;
@@ -512,6 +511,7 @@ impl Stage for Finishing {
         ctx.ledger.laid.extend(s.laid.iter().copied());
         ctx.failed("finishing", &s.failures);
         narrowed(ctx, &s.narrowed);
+        corridors(ctx, &s.corridors);
         if s.fine > 0 {
             eprintln!("finishing: {} connections laid on a finer grid round them", s.fine);
         }
@@ -527,6 +527,31 @@ fn narrowed(ctx: &mut StageCtx, runs: &[(ItemId, ItemId, Nm)]) {
         let net = ctx.board.item(from).map_or(0, |it| it.net);
         let name = ctx.board.net_name(net).to_string();
         let line = format!("{name} {} to {} runs {:.2} mm wide the whole way, its pins' width: no way at its own", grid::item_name(ctx.board, from), grid::item_name(ctx.board, to), width as f64 * 1e-6);
+        eprintln!("narrowed: {line}");
+        let refs = [from, to].iter().filter_map(|&id| match ctx.board.item(id).map(|it| &it.kind) {
+            Some(Kind::Pad { footprint, .. }) => Some(ctx.board.footprints[*footprint].reference.clone()),
+            _ => None,
+        }).collect();
+        ctx.stats.findings.push(Finding { severity: "warning", kind: "neck", message: line, refs, nets: vec![name], ends: None });
+    }
+}
+
+/// Each stretch a stage laid narrowed across a tight gap its net's own width cannot pass
+/// (`grid::Options::corridor`), said and made a finding: legal, but thinner than the designer
+/// asked for, so they can see where.
+fn corridors(ctx: &mut StageCtx, stretches: &[(ItemId, ItemId, Nm, Nm)]) {
+    for &(from, to, width, length) in stretches {
+        let net = ctx.board.item(from).map_or(0, |it| it.net);
+        let name = ctx.board.net_name(net).to_string();
+        let own = grid::Profile::for_net(ctx.board, net).half_width * 2;
+        let line = format!(
+            "{name} {} to {} narrows to {:.2} mm for {:.2} mm through a gap its {:.2} mm track cannot pass",
+            grid::item_name(ctx.board, from),
+            grid::item_name(ctx.board, to),
+            width as f64 * 1e-6,
+            length as f64 * 1e-6,
+            own as f64 * 1e-6
+        );
         eprintln!("narrowed: {line}");
         let refs = [from, to].iter().filter_map(|&id| match ctx.board.item(id).map(|it| &it.kind) {
             Some(Kind::Pad { footprint, .. }) => Some(ctx.board.footprints[*footprint].reference.clone()),
@@ -576,6 +601,7 @@ impl Stage for RipUp {
             deadline: ctx.deadline(),
             pours_block: a.pours_block,
             log: ctx.log.clone(),
+            corridor: true,
             ..Default::default()
         };
         let watch = &mut *ctx.watch;
@@ -591,6 +617,7 @@ impl Stage for RipUp {
             ctx.elapsed()
         );
         narrowed(ctx, &r.narrowed);
+        corridors(ctx, &r.corridors);
         json!({"tries": r.attempts, "kept": r.kept, "ripped": r.ripped, "no_path": r.no_path, "hard_conflict": r.hard_conflict, "no_better": r.no_better, "narrowed": r.narrowed.len(), "corridor": r.corridor})
     }
 }
@@ -822,6 +849,7 @@ impl Stage for Refinish {
         let s = grid::route_open(ctx.board, ctx.solver, &options, &mut |b| watch.frame(b));
         ctx.ledger.laid.extend(s.laid.iter().copied());
         narrowed(ctx, &s.narrowed);
+        corridors(ctx, &s.corridors);
         if s.routed > 0 {
             eprintln!("refinished {} more ({} on a finer grid), open {before} -> {}, {:.1} s", s.routed, s.fine, ctx.open().len(), ctx.elapsed());
         }

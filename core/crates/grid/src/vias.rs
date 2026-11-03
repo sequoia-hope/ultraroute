@@ -91,10 +91,9 @@ fn net_neighbours(board: &Board, id: ItemId, pours_block: bool) -> Vec<ItemId> {
     out
 }
 
-/// Walks an unbranched chain of soft tracks of one width out of `start_via` starting along
-/// `first_track`, stopping just before any pad, locked copper, branch junction, width change, or
-/// second via. Returns the tracks in the chain and, when the chain ended directly at another soft
-/// via, that via's id.
+/// Walks an unbranched chain of soft tracks out of `start_via` starting along `first_track`,
+/// stopping just before any pad, locked copper, branch junction, or second via. Returns the tracks
+/// in the chain and, when the chain ended directly at another soft via, that via's id.
 fn walk_chain(board: &Board, start_via: ItemId, first_track: ItemId, soft_set: &HashSet<ItemId>, pours_block: bool) -> (Vec<ItemId>, Option<ItemId>) {
     let mut chain = Vec::new();
     let mut prev = start_via;
@@ -102,10 +101,6 @@ fn walk_chain(board: &Board, start_via: ItemId, first_track: ItemId, soft_set: &
     let mut seen = HashSet::from([start_via]);
     while seen.insert(cur) {
         chain.push(cur);
-        let cur_r = board.item(cur).and_then(|it| match it.shape {
-            Shape::Capsule { r, .. } => Some(r),
-            _ => None,
-        });
         let others: Vec<ItemId> = net_neighbours(board, cur, pours_block).into_iter().filter(|&x| x != prev).collect();
         if others.len() != 1 {
             return (chain, None);
@@ -114,12 +109,12 @@ fn walk_chain(board: &Board, start_via: ItemId, first_track: ItemId, soft_set: &
         if !soft_set.contains(&next) {
             return (chain, None);
         }
-        match board.item(next).map(|it| (&it.kind, &it.shape)) {
-            Some((Kind::Track, Shape::Capsule { r, .. })) if Some(*r) == cur_r => {
+        match board.item(next).map(|it| &it.kind) {
+            Some(Kind::Track) => {
                 prev = cur;
                 cur = next;
             }
-            Some((Kind::Via, _)) => return (chain, Some(next)),
+            Some(Kind::Via) => return (chain, Some(next)),
             _ => return (chain, None),
         }
     }

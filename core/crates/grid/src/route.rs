@@ -118,7 +118,9 @@ pub struct Options {
     /// A connection with no way on the grid is tried once more on a finer one round it.
     pub fine: bool,
     /// A connection with no way at its class width may narrow to a legal thinner width across
-    /// tight gaps only, returning to full width outside them.
+    /// tight gaps only, returning to full width outside them ([`corridor_widths`]). Off unless
+    /// a stage asks: finishing with no rip-up after it, and rip-up's last round, which try what
+    /// nothing else could; every other caller routes as it did before corridors.
     pub corridor: bool,
 }
 
@@ -135,7 +137,7 @@ impl Default for Options {
             log: None,
             net_via_cost: HashMap::new(),
             fine: true,
-            corridor: true,
+            corridor: false,
         }
     }
 }
@@ -160,6 +162,8 @@ pub struct Stats {
     pub fine: usize,
     /// The connections laid narrowed only across tight gaps ([`corridor_widths`]).
     pub corridor: usize,
+    /// Each narrowed stretch of those, by the connection's two ends, with its width and length.
+    pub corridors: Vec<(ItemId, ItemId, Nm, Nm)>,
 }
 
 /// How a path reaches a terminal's copper when its cell's centre is not on it: from `from` on the
@@ -287,35 +291,41 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
             if tried.is_err() && options.corridor {
                 let cwin = corridor_window(&airline);
                 let cnodes = ((cwin.max.x - cwin.min.x) / fine.max(1)) as f64 * ((cwin.max.y - cwin.min.y) / fine.max(1)) as f64 * board.layers.len() as f64;
-                for hw in corridor_widths(board, &profile) {
+                for hw in corridor_widths(board, &profile, &airline) {
+                    // A map the deadline cuts short gives up the corridor, not the run: the
+                    // connection fails as any other, and the loop's own check stops it.
+                    if out_of_time() {
+                        break;
+                    }
+                    let mut narrow = profile.clone();
+                    (narrow.half_width, narrow.narrow_half_width) = (hw, profile.narrow_half_width.min(hw));
                     let key = format!("{}\u{0}c{hw}", profile.class);
                     if !maps.contains_key(&key) {
-                        let mut narrow = profile.clone();
-                        (narrow.half_width, narrow.narrow_half_width) = (hw, profile.narrow_half_width.min(hw));
-                        let Some(map) = ObstacleMap::new_by(board, narrow, options.cell, options.pours_block, &options.deadline) else { return stats };
+                        let Some(map) = ObstacleMap::new_by(board, narrow.clone(), options.cell, options.pours_block, &options.deadline) else { break };
                         maps.insert(key.clone(), map);
                     }
-                    let full_map = &maps[&profile.class];
-                    let narrow_map = &maps[&key];
-                    if let Ok(items) = attempt_corridor(board, solver, options, full_map, narrow_map, &mut grid, &mut full_grid, directional, &airline) {
+                    let (full_map, narrow_map) = (&maps[&profile.class], &maps[&key]);
+                    if let Ok((items, stretches)) = attempt_corridor(board, solver, options, full_map, narrow_map, &mut grid, &mut full_grid, directional, &airline) {
                         stats.corridor += 1;
+                        stats.corridors.extend(stretches.into_iter().map(|(w, l)| (airline.from_item, airline.to_item, 2 * w, l)));
                         tried = Ok(items);
                         break;
                     }
-                    if options.fine && fine >= FINE_CELL_FLOOR && cnodes <= FINE_NODES {
-                        let mut narrow = profile.clone();
-                        (narrow.half_width, narrow.narrow_half_width) = (hw, profile.narrow_half_width.min(hw));
-                        let fine_narrow = ObstacleMap::window(board, narrow, fine, cwin, options.pours_block);
-                        fine_narrow.view_into(airline.net, &mut grid);
-                        if !terminals(board, &grid, airline.from_item).is_empty() && !terminals(board, &grid, airline.to_item).is_empty() {
-                            let fine_full = ObstacleMap::window(board, profile.clone(), fine, cwin, options.pours_block);
-                            if let Ok(items) = attempt_corridor(board, solver, options, &fine_full, &fine_narrow, &mut grid, &mut full_grid, directional, &airline) {
-                                stats.corridor += 1;
-                                stats.fine += 1;
-                                tried = Ok(items);
-                                break;
-                            }
-                        }
+                    if !(options.fine && fine >= FINE_CELL_FLOOR && cnodes <= FINE_NODES) || out_of_time() {
+                        continue;
+                    }
+                    let fine_narrow = ObstacleMap::window(board, narrow, fine, cwin, options.pours_block);
+                    fine_narrow.view_into(airline.net, &mut grid);
+                    if terminals(board, &grid, airline.from_item).is_empty() || terminals(board, &grid, airline.to_item).is_empty() || out_of_time() {
+                        continue;
+                    }
+                    let fine_full = ObstacleMap::window(board, profile.clone(), fine, cwin, options.pours_block);
+                    if let Ok((items, stretches)) = attempt_corridor(board, solver, options, &fine_full, &fine_narrow, &mut grid, &mut full_grid, directional, &airline) {
+                        stats.corridor += 1;
+                        stats.fine += 1;
+                        stats.corridors.extend(stretches.into_iter().map(|(w, l)| (airline.from_item, airline.to_item, 2 * w, l)));
+                        tried = Ok(items);
+                        break;
                     }
                 }
             }
@@ -392,9 +402,22 @@ pub(crate) const NARROW_CELL_PENALTY: u32 = 60;
 const SANE_MIN_HALF_WIDTH: Nm = 25_000;
 const FALLBACK_MIN_HALF_WIDTH: Nm = 75_000;
 
-/// Legal narrower half-widths a connection of `profile` may squeeze through tight gaps at, widest
-/// first: the board's default signal width where narrower than `profile`, then the net's minimum.
-pub(crate) fn corridor_widths(board: &Board, profile: &Profile) -> Vec<Nm> {
+/// The longest a corridor's narrowed stretch may run, end to end: a gap between pins, a pin
+/// walled in by its neighbours, and out; not a thin track along a header row.
+pub(crate) const CORRIDOR_STRETCH: Nm = 5_000_000;
+
+/// A corridor's narrowed stretch: its half width and its length.
+pub(crate) type Stretch = (Nm, Nm);
+
+/// Legal narrower half-widths a connection of `profile` may squeeze through tight gaps at. A
+/// signal, which necks to its minimum near its pads already, goes to the net's minimum. A net
+/// that carries current (a class wider than the default) keeps its width as the router's rule
+/// has it ([`Profile::narrow_half_width`]), and narrows only as [`narrow_run`] allows it: for
+/// ends no further apart than [`NARROW_RUN_REACH`], never thinner than its pins.
+pub(crate) fn corridor_widths(board: &Board, profile: &Profile, airline: &board::Airline) -> Vec<Nm> {
+    if profile.narrow_half_width >= profile.half_width {
+        return narrow_run(board, profile, airline).into_iter().collect();
+    }
     let floor = if profile.min_half_width < SANE_MIN_HALF_WIDTH {
         FALLBACK_MIN_HALF_WIDTH.max(profile.min_half_width)
     } else {
@@ -403,15 +426,7 @@ pub(crate) fn corridor_widths(board: &Board, profile: &Profile) -> Vec<Nm> {
     if floor + 1_000 >= profile.half_width {
         return Vec::new();
     }
-    let default_hw = board::nm(board.rules.classes.iter().find(|c| c.name == "Default").map_or(0.0, |c| c.track_width)) / 2;
-    let mut out = Vec::with_capacity(2);
-    if default_hw > floor && default_hw + 1_000 < profile.half_width {
-        out.push(default_hw);
-    }
-    if out.last().is_none_or(|&prev| prev != floor) {
-        out.push(floor);
-    }
-    out
+    vec![floor]
 }
 
 /// Terminals for a corridor-necked try: full-width ones where full-free cells reach the end within
@@ -424,7 +439,11 @@ pub(crate) fn corridor_terminals(
     id: ItemId,
 ) -> Vec<Terminal> {
     let mut by_cell: BTreeMap<usize, Option<Leg>> = BTreeMap::new();
-    for (cell, leg) in terminals_within_rules(board, full_grid, id) {
+    let mut full = terminals_within_rules(board, full_grid, id);
+    if full.is_empty() {
+        full = bent_terminals(board, full_grid, id);
+    }
+    for (cell, leg) in full {
         if !narrow_grid.blocked[cell] && full_free(cell) {
             by_cell.insert(cell, leg);
         }
@@ -452,7 +471,7 @@ fn attempt_corridor(
     full_grid: &mut RouteGrid,
     directional: bool,
     airline: &board::Airline,
-) -> Result<Vec<ItemId>, Missed> {
+) -> Result<(Vec<ItemId>, Vec<Stretch>), Missed> {
     full_map.view_into(airline.net, full_grid);
     narrow_map.view_into(airline.net, grid);
     grid.directional = directional;
@@ -474,8 +493,54 @@ fn attempt_corridor(
     let via_cost = options.net_via_cost.get(&net).copied().unwrap_or(options.via_cost);
     let path = solver.route(grid, &source_cells, &target_cells, via_cost).ok_or(Missed::Path)?;
     let full_hw = full_map.profile.half_width;
-    let pieces = pieces_corridor(grid, full_hw, &full_free, &path, &sources, &targets).ok_or(Missed::Refused)?;
-    lay_pieces(board, grid, pieces).ok_or(Missed::Refused)
+    let mut pieces = pieces_corridor(grid, full_hw, &full_free, &path, &sources, &targets).ok_or(Missed::Refused)?;
+    narrow_clipped(board, &mut pieces, full_hw, grid.half_width, &|board: &Board, id| grid.violations(board, id).is_empty());
+    let stretches = stretches(&pieces, full_hw).ok_or(Missed::Refused)?;
+    Ok((lay_pieces(board, grid, pieces).ok_or(Missed::Refused)?, stretches))
+}
+
+/// Narrows back each widened track of a corridor that `fits` refuses at `full_hw`: a full-width
+/// step between two cells free at full width may still clip a corner beside them, and that step
+/// alone goes narrow rather than the whole corridor refused.
+pub(crate) fn narrow_clipped(board: &mut Board, pieces: &mut [Item], full_hw: Nm, narrow_hw: Nm, fits: &dyn Fn(&Board, ItemId) -> bool) {
+    if narrow_hw >= full_hw {
+        return;
+    }
+    for piece in pieces.iter_mut() {
+        if piece.kind != Kind::Track || !matches!(piece.shape, Shape::Capsule { r, .. } if r == full_hw) {
+            continue;
+        }
+        let id = board.insert(piece.clone());
+        let ok = fits(board, id);
+        board.discard(id);
+        if !ok {
+            if let Shape::Capsule { r, .. } = &mut piece.shape {
+                *r = narrow_hw;
+            }
+        }
+    }
+}
+
+/// A corridor's narrowed stretches, in order: each run of tracks narrower than `full_hw`, as its
+/// narrowest half width and its length; a via or a full-width track ends one. `None` when one is
+/// longer than [`CORRIDOR_STRETCH`].
+pub(crate) fn stretches(pieces: &[Item], full_hw: Nm) -> Option<Vec<Stretch>> {
+    let mut out: Vec<Stretch> = Vec::new();
+    let mut open = false;
+    for piece in pieces {
+        match (&piece.kind, &piece.shape) {
+            (Kind::Track, Shape::Capsule { a, b, r }) if *r < full_hw => {
+                let len = a.distance(*b).round() as Nm;
+                match out.last_mut() {
+                    Some(last) if open => *last = (last.0.min(*r), last.1 + len),
+                    _ => out.push((*r, len)),
+                }
+                open = true;
+            }
+            _ => open = false,
+        }
+    }
+    out.iter().all(|s| s.1 <= CORRIDOR_STRETCH).then_some(out)
 }
 
 /// One try at `airline` on `map`.
@@ -661,69 +726,79 @@ pub fn terminal_cells(board: &mut Board, grid: &RouteGrid, id: ItemId) -> Vec<us
     terminals(board, grid, id).into_iter().map(|t| t.0).collect()
 }
 
-/// Terminals of `id` within the net's own width rules: straight legs first, then axis-aligned
-/// L-shaped legs when an off-grid pad sits between tight neighbour pads or mask openings so only a
-/// leg down the pad's exact centre line clears them before stepping onto a cell centre.
+/// Merges terminals gathered from several items: a cell any of them holds without a leg keeps no
+/// leg, else the first leg found to it.
+fn merge_terminals(by_cell: &mut BTreeMap<usize, Option<Leg>>, found: Vec<Terminal>) {
+    for (cell, leg) in found {
+        match by_cell.get(&cell) {
+            Some(None) => {}
+            Some(Some(_)) if leg.is_none() => {
+                by_cell.insert(cell, None);
+            }
+            None => {
+                by_cell.insert(cell, leg);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Terminals of `id` within the net's own width rules, by straight legs: at full width, then
+/// further out, then necked as [`Profile::neck_into`] allows.
 fn terminals_within_rules(board: &mut Board, grid: &RouteGrid, id: ItemId) -> Vec<Terminal> {
     let cluster = local_cluster(board, id);
-    let gather = |board: &mut Board, hw: Nm, cells: Nm, tries: usize, bent: bool| -> Vec<Terminal> {
+    let gather = |board: &mut Board, hw: Nm, cells: Nm, tries: usize| -> Vec<Terminal> {
         let mut by_cell: BTreeMap<usize, Option<Leg>> = BTreeMap::new();
         for &member in &cluster {
-            let items = if bent {
-                item_bent_terminals(board, grid, member, hw, cells, tries)
-            } else {
-                item_terminals(board, grid, member, hw, cells, tries)
-            };
-            for (cell, leg) in items {
-                match by_cell.get(&cell) {
-                    Some(None) => {}
-                    Some(Some(_)) if leg.is_none() => {
-                        by_cell.insert(cell, None);
-                    }
-                    None => {
-                        by_cell.insert(cell, leg);
-                    }
-                    _ => {}
-                }
-            }
+            let found = item_terminals(board, grid, member, hw, cells, tries);
+            merge_terminals(&mut by_cell, found);
         }
         by_cell.into_iter().collect()
     };
-    let found = gather(board, grid.half_width, LEG_CELLS, LEG_CANDIDATES, false);
+    let found = gather(board, grid.half_width, LEG_CELLS, LEG_CANDIDATES);
     if !found.is_empty() {
         return found;
     }
     // A fine-pitch pad whose neighbours' mask openings, with the grid's margins, take every cell
     // round it may still have room for an exactly checked leg out past them.
-    let found = gather(board, grid.half_width, NECK_CELLS, 2 * LEG_CANDIDATES, false);
+    let found = gather(board, grid.half_width, NECK_CELLS, 2 * LEG_CANDIDATES);
     if !found.is_empty() {
         return found;
     }
     let profile = Profile::for_net(board, grid.net);
     let narrow = profile.neck_into(board.item(id));
     if narrow < grid.half_width {
-        let found = gather(board, narrow, NECK_CELLS, 2 * LEG_CANDIDATES, false);
-        if !found.is_empty() {
-            return found;
-        }
-    }
-    let found = gather(board, grid.half_width, NECK_CELLS, 2 * LEG_CANDIDATES, true);
-    if !found.is_empty() {
-        return found;
-    }
-    if narrow < grid.half_width {
-        let found = gather(board, narrow, NECK_CELLS, 2 * LEG_CANDIDATES, true);
-        if !found.is_empty() {
-            return found;
-        }
+        return gather(board, narrow, NECK_CELLS, 2 * LEG_CANDIDATES);
     }
     Vec::new()
 }
 
-/// Free cells on the item's local copper cluster, and free cells a short leg from its anchors
-/// reaches legally: how a path leaves a pad too small or too crowded to hold a free cell of its
-/// own, or picks up a pre-laid escape via. Where no full-width leg fits, a leg necked down to the
-/// narrowest track the net may have may reach further, as a designer would leave a fine-pitch pad.
+/// Terminals of an SMD pad by bent legs, for a pad no straight leg leaves: an off-grid pin of a
+/// fine-pitch part whose neighbours' mask openings leave a few microns either side (0.635 mm
+/// SSOP pads, 4 um), where every leg slanting to a cell centre clips one, but a leg straight
+/// down the pin's own centre line clears them before it steps onto the grid. Only a pad with no
+/// hole: a through-hole pin's neighbours are far enough apart for straight legs. At full width,
+/// then necked as [`Profile::neck_into`] allows.
+fn bent_terminals(board: &mut Board, grid: &RouteGrid, id: ItemId) -> Vec<Terminal> {
+    if !board.item(id).is_some_and(|it| matches!(it.kind, Kind::Pad { .. }) && it.hole.is_none()) {
+        return Vec::new();
+    }
+    let found = item_bent_terminals(board, grid, id, grid.half_width, NECK_CELLS, 2 * LEG_CANDIDATES);
+    if !found.is_empty() {
+        return found;
+    }
+    let narrow = Profile::for_net(board, grid.net).neck_into(board.item(id));
+    if narrow < grid.half_width {
+        return item_bent_terminals(board, grid, id, narrow, NECK_CELLS, 2 * LEG_CANDIDATES);
+    }
+    Vec::new()
+}
+
+/// Free cells on the item's local copper cluster, and free cells a short straight leg from its
+/// anchors reaches legally: how a path leaves a pad too small or too crowded to hold a free cell
+/// of its own, or picks up a pre-laid escape via. Where no full-width leg fits, a leg necked down
+/// to the narrowest track the net may have may reach further, as a designer would leave a
+/// fine-pitch pad.
 pub(crate) fn terminals(board: &mut Board, grid: &RouteGrid, id: ItemId) -> Vec<Terminal> {
     let found = terminals_within_rules(board, grid, id);
     if !found.is_empty() {
@@ -738,18 +813,16 @@ pub(crate) fn terminals(board: &mut Board, grid: &RouteGrid, id: ItemId) -> Vec<
     for hw in profile.forced_necks(board.item(id)).into_iter().filter(|&hw| hw < grid.half_width) {
         let mut by_cell: BTreeMap<usize, Option<Leg>> = BTreeMap::new();
         for &member in &cluster {
-            for (cell, leg) in item_terminals(board, grid, member, hw, reach, 2 * LEG_CANDIDATES) {
-                let at = by_cell.entry(cell).or_insert(leg);
-                if leg.is_none() {
-                    *at = None;
-                }
-            }
+            let found = item_terminals(board, grid, member, hw, reach, 2 * LEG_CANDIDATES);
+            merge_terminals(&mut by_cell, found);
         }
         if !by_cell.is_empty() {
             return by_cell.into_iter().collect();
         }
     }
-    Vec::new()
+    // Last, and only where nothing above found a way out (so a board that never needs them
+    // routes as it did without them), a bent leg out of an SMD pad.
+    bent_terminals(board, grid, id)
 }
 
 pub(crate) fn item_terminals(board: &mut Board, grid: &RouteGrid, id: ItemId, leg_half_width: Nm, leg_cells: Nm, tries: usize) -> Vec<Terminal> {
@@ -1245,8 +1318,10 @@ mod tests {
         }
     }
 
-    #[test]
-    fn corridor_narrows_only_through_pin_gap_and_widens_outside() {
+    /// Net A's two pads 12 mm apart either side of a wall of unnetted locked copper with an 0.80
+    /// mm gap at y = 7.0: a 0.50 mm track and 2 * 0.25 mm clearance (1.00 mm) cannot pass, the
+    /// 0.20 mm minimum track (0.70 mm) can. With `power`, A is of a class wider than the default.
+    fn gap_board(power: bool, pad_r: f64) -> Board {
         let (pcb, copper) = kicad_pcb::parse_board(
             "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal))
              (net 0 \"\") (net 1 \"A\") (net 2 \"B\")
@@ -1257,8 +1332,15 @@ mod tests {
         rules.min_track_width = 0.0002;
         rules.min_clearance = 0.00025;
         rules.min_copper_edge_clearance = 0.0003;
-        rules.classes[0].track_width = 0.0005;
+        rules.classes[0].track_width = if power { 0.0003 } else { 0.0005 };
         rules.classes[0].clearance = 0.00025;
+        if power {
+            let mut class = rules.classes[0].clone();
+            class.name = "Power".into();
+            class.track_width = 0.0005;
+            rules.classes.push(class);
+            rules.assignments.push(("A".into(), "Power".into()));
+        }
         let mut board = Board::new(&pcb, &copper, rules);
         let mm = |v: f64| (v * 1e6) as Nm;
         for x in [2.0, 14.0] {
@@ -1266,14 +1348,12 @@ mod tests {
                 kind: Kind::Pad { footprint: 0, number: "1".into(), plated: false },
                 net: 1,
                 layers: 1,
-                shape: Shape::Capsule { a: Point::new(mm(x), mm(7.0)), b: Point::new(mm(x), mm(7.0)), r: mm(0.4) },
+                shape: Shape::Capsule { a: Point::new(mm(x), mm(7.0)), b: Point::new(mm(x), mm(7.0)), r: mm(pad_r) },
                 hole: None,
                 locked: true,
                 span: None,
             });
         }
-        // Unnetted locked copper leaves an 0.80 mm gap at y = 7.0: 0.50 mm track + 2 * 0.25 mm
-        // clearance (1.00 mm) cannot pass, while 0.20 mm min track + 2 * 0.25 mm (0.70 mm) fits.
         for (y0, y1) in [(0.4, 6.2), (7.8, 13.6)] {
             board.insert(Item {
                 kind: Kind::Track,
@@ -1285,11 +1365,28 @@ mod tests {
                 span: None,
             });
         }
+        board
+    }
+
+    #[test]
+    fn corridor_narrows_only_through_pin_gap_and_widens_outside() {
+        let mm = |v: f64| (v * 1e6) as Nm;
+        // Off, as every caller but the stages that ask has it, the gap stays shut.
+        let mut board = gap_board(false, 0.4);
         let stats = route_open(&mut board, &mut CpuSolver, &Options::default(), &mut |_| {});
+        assert_eq!((stats.routed, stats.corridor), (0, 0), "{stats:?}");
+        let mut board = gap_board(false, 0.4);
+        let stats = route_open(&mut board, &mut CpuSolver, &Options { corridor: true, ..Default::default() }, &mut |_| {});
         assert_eq!(stats.routed, 1, "{stats:?}");
         assert_eq!(stats.corridor, 1, "{stats:?}");
         assert!(connectivity_without_pours(&board).airlines.is_empty());
         assert!(crate::necks::necks(&board, &stats.laid).is_empty());
+        // Every narrowed stretch is told, at the minimum track and no longer than the cap.
+        assert!(!stats.corridors.is_empty(), "{stats:?}");
+        for &(_, _, width, length) in &stats.corridors {
+            assert_eq!(width, mm(0.2));
+            assert!(length > 0 && length <= CORRIDOR_STRETCH, "{length}");
+        }
         let mut saw_narrow = false;
         let mut saw_full = false;
         for &id in &stats.laid {
@@ -1304,6 +1401,59 @@ mod tests {
             }
         }
         assert!(saw_narrow && saw_full, "expected narrow in gap and full width outside: {:?}", stats.laid);
+    }
+
+    #[test]
+    fn corridor_keeps_a_current_net_to_its_pins_and_short_runs() {
+        let mm = |v: f64| (v * 1e6) as Nm;
+        let airline = |board: &Board| connectivity_without_pours(board).airlines.into_iter().next().unwrap();
+        // A signal narrows to its minimum.
+        let board = gap_board(false, 0.4);
+        assert_eq!(corridor_widths(&board, &Profile::for_net(&board, 1), &airline(&board)), vec![mm(0.1)]);
+        // A net of a class wider than the default, 12 mm between its pins, keeps its width: the
+        // gap stays shut to it even with corridors on.
+        let mut board = gap_board(true, 0.15);
+        let profile = Profile::for_net(&board, 1);
+        assert_eq!(profile.half_width, mm(0.25));
+        assert!(corridor_widths(&board, &profile, &airline(&board)).is_empty());
+        let stats = route_open(&mut board, &mut CpuSolver, &Options { corridor: true, ..Default::default() }, &mut |_| {});
+        assert_eq!((stats.routed, stats.corridor), (0, 0), "{stats:?}");
+        // Its pins 3 mm apart, it may narrow to their width and no thinner.
+        let mut short = airline(&board);
+        short.to = Point::new(short.from.x + mm(3.0), short.from.y);
+        assert_eq!(corridor_widths(&board, &profile, &short), vec![mm(0.15)]);
+        // Pins as wide as its track leave it nothing to narrow to.
+        let board = gap_board(true, 0.3);
+        let mut short = airline(&board);
+        short.to = Point::new(short.from.x + mm(3.0), short.from.y);
+        assert!(corridor_widths(&board, &Profile::for_net(&board, 1), &short).is_empty());
+    }
+
+    /// A solver that stops the run at its first search, as a deadline passing then would.
+    struct Stopping(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+    impl FieldSolver for Stopping {
+        fn solve(&mut self, grid: &RouteGrid, sources: &[usize], via_cost: u32) -> Vec<u32> {
+            CpuSolver.solve(grid, sources, via_cost)
+        }
+
+        fn route(&mut self, grid: &RouteGrid, sources: &[usize], targets: &[usize], via_cost: u32) -> Option<GridPath> {
+            self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+            CpuSolver.route(grid, sources, targets, via_cost)
+        }
+    }
+
+    #[test]
+    fn corridor_cut_short_by_the_deadline_counts_the_connection_failed() {
+        // The deadline passes before the corridor's map is built: the corridor is given up, and
+        // the connection is counted failed as any other, not dropped from the stats unsaid.
+        let mut board = gap_board(false, 0.4);
+        let deadline = crate::clock::Deadline::default();
+        let mut solver = Stopping(deadline.cancel.clone());
+        let stats = route_open(&mut board, &mut solver, &Options { corridor: true, deadline, ..Default::default() }, &mut |_| {});
+        assert_eq!((stats.routed, stats.corridor, stats.failed), (0, 0, 1), "{stats:?}");
+        assert_eq!(stats.failures.len(), 1, "{stats:?}");
+        assert!(stats.laid.is_empty());
     }
 
     #[test]

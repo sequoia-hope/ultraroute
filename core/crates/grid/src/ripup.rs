@@ -7,14 +7,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use board::{check_item, connectivity, connectivity_without_pours, Airline, Board, Connectivity, Item, ItemId, Nm, Point};
+use board::{check_item, connectivity, connectivity_without_pours, Airline, BBox, Board, Connectivity, Item, ItemId, Nm, Point};
 
-use crate::grid::{ObstacleMap, Profile};
+use crate::grid::{ObstacleMap, Profile, RouteGrid};
 use crate::report::{tell, Focus, Log};
 use crate::route::{
-    cluster_pads, corridor_terminals, corridor_widths, corridor_window, ends_with_pads, pieces,
-    pieces_corridor, route_open, terminals, FieldSolver, Options, FINE_CELL_FLOOR, FINE_NODES,
-    NARROW_CELL_PENALTY,
+    cluster_pads, corridor_terminals, corridor_widths, corridor_window, ends_with_pads, narrow_clipped, pieces, pieces_corridor, route_open,
+    stretches, terminals, FieldSolver, Options, Stats, Stretch, CORRIDOR_STRETCH, FINE_CELL_FLOOR, FINE_NODES, NARROW_CELL_PENALTY,
 };
 
 #[derive(Debug, Clone)]
@@ -34,6 +33,10 @@ pub struct RipOptions {
     /// together, the connection's net with them; a change kept prunes closed nets' stubs.
     pub region_repair: bool,
     pub log: Option<Log>,
+    /// Once a round keeps nothing, one more tries the connections still open narrowed across
+    /// the tight gaps their own width cannot pass (`route::corridor_widths`), as nothing else
+    /// does; off, rip-up stops there.
+    pub corridor: bool,
 }
 
 impl Default for RipOptions {
@@ -47,6 +50,7 @@ impl Default for RipOptions {
             pours_block: false,
             region_repair: false,
             log: None,
+            corridor: false,
         }
     }
 }
@@ -62,12 +66,17 @@ pub struct RipStats {
     pub no_path: usize,
     pub hard_conflict: usize,
     pub no_better: usize,
-    /// Attempts kept that run narrowed to their pins the whole way (`route::narrow_run`), by
-    /// their two ends, with the width.
+    /// Connections laid narrowed to their pins the whole way (`route::narrow_run`), by their
+    /// two ends, with the width: by the attempts kept, and by the rerouting after them.
     pub narrowed: Vec<(ItemId, ItemId, Nm)>,
-    /// Attempts kept that narrowed only across tight gaps (`route::corridor_widths`).
+    /// Connections laid narrowed only across tight gaps (`RipOptions::corridor`), and each such
+    /// stretch, by the connection's two ends, with its width and length.
     pub corridor: usize,
+    pub corridors: Vec<(ItemId, ItemId, Nm, Nm)>,
 }
+
+/// At most so many connections a corridor round tries: each may build a fine map round itself.
+const CORRIDOR_TRIES: usize = 32;
 
 fn joined(board: &Board, pours_block: bool) -> Connectivity {
     if pours_block { connectivity(board) } else { connectivity_without_pours(board) }
@@ -131,7 +140,6 @@ pub fn rip_up_watch(
         deadline: options.deadline.clone(),
         spokes: None,
     };
-    let mut full_grid = grid.clone();
     // Plane nets' connections are the planes' to make (`join_planes`), not rip-up's.
     let plane_nets: HashSet<u32> = if options.region_repair && !options.pours_block && board.planes != 0 {
         board.items().filter(|(_, it)| board.is_plane(it) && it.net != 0).map(|(_, it)| it.net).collect()
@@ -147,25 +155,27 @@ pub fn rip_up_watch(
     // The clusters and their pads, for ends at pads; made again after a kept attempt.
     let mut near: Option<(Connectivity, HashMap<usize, Vec<ItemId>>)> = None;
     let mut tried: HashSet<(ItemId, ItemId)> = HashSet::new();
-    let mut corridor_tried: HashSet<(ItemId, ItemId)> = HashSet::new();
+    // A round of corridors only, once a round keeps nothing: the connections it has tried since
+    // the last kept attempt, the nets laid by one (their ripped copper is rerouted with
+    // corridors too), and its maps, good until an attempt is kept.
+    let mut corridors = false;
+    let mut cornered: HashSet<(ItemId, ItemId)> = HashSet::new();
     let mut corridor_nets: HashSet<u32> = HashSet::new();
-    let mut corridor_rescue = false;
+    let mut corridor_maps: HashMap<String, ObstacleMap> = HashMap::new();
+    let mut full_grid = grid.clone();
     loop {
         let mut open = joined(board, options.pours_block).airlines;
         open.retain(|a| !plane_nets.contains(&a.net));
         open.sort_by(|a, b| a.from.distance(a.to).total_cmp(&b.from.distance(b.to)));
-        if corridor_rescue {
-            open.retain(|a| !corridor_tried.contains(&(a.from_item, a.to_item)));
-        }
         open.retain(|a| !tried.contains(&(a.from_item, a.to_item)));
+        if corridors {
+            open.retain(|a| !cornered.contains(&(a.from_item, a.to_item)));
+        }
         if open.is_empty() || out_of_time() {
-            if corridor_rescue || out_of_time() {
-                break;
-            }
-            // Wait until the end of the round check if open became empty only because tried held them.
             break;
         }
         let kept_before = stats.kept;
+        let mut corridor_tries = 0;
         for airline in open {
             if out_of_time() {
                 break;
@@ -175,10 +185,16 @@ pub fn rip_up_watch(
                 continue;
             }
             let base = Profile::for_net(board, airline.net);
-            let corr_widths = corridor_widths(board, &base);
-            if corridor_rescue && corr_widths.is_empty() {
-                corridor_tried.insert((airline.from_item, airline.to_item));
-                continue;
+            let corridor_hws = if corridors { corridor_widths(board, &base, &airline) } else { Vec::new() };
+            if corridors {
+                if corridor_hws.is_empty() {
+                    continue;
+                }
+                if corridor_tries == CORRIDOR_TRIES {
+                    break;
+                }
+                corridor_tries += 1;
+                cornered.insert((airline.from_item, airline.to_item));
             }
             stats.attempts += 1;
             let score_before = score(board);
@@ -192,256 +208,100 @@ pub fn rip_up_watch(
             );
             // Locked copper stays, even the router's own: a caller holds still what it must keep.
             let soft_set: HashSet<ItemId> = soft.iter().copied().filter(|id| board.item(*id).is_some_and(|it| !it.locked)).collect();
-            enum Candidate {
-                Whole { profile: Profile, key: String, narrowed: bool },
-                Corridor { profile: Profile, key: String },
-                CorridorFine { profile: Profile, cell: Nm, window: board::BBox },
-            }
-            // The net's own width, then, for a short current net that finds no way at it, its
-            // pins' width the whole way (`route::narrow_run`), then legal corridor widths that
-            // narrow only through tight gaps and return to full width outside them.
-            let mut candidates = Vec::new();
-            if !corridor_rescue {
-                candidates.push(Candidate::Whole { profile: base.clone(), key: base.class.clone(), narrowed: false });
+            // A corridor round's try (`try_corridor`), or the net's own width and the narrow run.
+            let found = if corridors {
+                let ctx = CorridorTry { options, plane_nets: &plane_nets, soft_set: &soft_set, base: &base, airline: &airline };
+                try_corridor(board, solver, &ctx, &corridor_hws, &mut corridor_maps, &mut grid, &mut full_grid, &mut near)
+                    .map(|(path, new, stretches)| (path, new, None, Some(stretches)))
+            } else {
+                // The net's own width, then, for a short current net that finds no way at it, its
+                // pins' width the whole way (`route::narrow_run`), each on maps of its own.
+                let mut widths = vec![(base.clone(), base.class.clone())];
                 if let Some(hw) = crate::route::narrow_run(board, &base, &airline) {
                     let mut narrow = base.clone();
                     (narrow.half_width, narrow.narrow_half_width) = (hw, hw);
-                    candidates.push(Candidate::Whole { profile: narrow, key: format!("{}\u{0}{hw}", base.class), narrowed: true });
+                    widths.push((narrow, format!("{}\u{0}{hw}", base.class)));
                 }
-            }
-            let fine = options.cell / 2;
-            let cwin = corridor_window(&airline);
-            let cnodes = ((cwin.max.x - cwin.min.x) / fine.max(1)) as f64 * ((cwin.max.y - cwin.min.y) / fine.max(1)) as f64 * board.layers.len() as f64;
-            for hw in corr_widths {
-                let mut narrow = base.clone();
-                (narrow.half_width, narrow.narrow_half_width) = (hw, base.narrow_half_width.min(hw));
-                candidates.push(Candidate::Corridor { profile: narrow.clone(), key: format!("{}\u{0}c{hw}", base.class) });
-                if fine >= FINE_CELL_FLOOR && cnodes <= FINE_NODES {
-                    candidates.push(Candidate::CorridorFine { profile: narrow, cell: fine, window: cwin });
-                }
-            }
-            let plane_soft: HashSet<ItemId> = if plane_nets.is_empty() {
-                HashSet::new()
-            } else {
-                soft_set.iter().copied().filter(|&id| board.item(id).is_some_and(|it| plane_nets.contains(&it.net))).collect()
-            };
-            let plane_cost = (options.rip_cost / 40).max(5);
-            let price = |soft_b: bool, plane_b: bool| if soft_b { options.rip_cost } else if plane_b { plane_cost } else { 0 };
-            let mut found = None;
-            for cand in candidates {
-                if out_of_time() {
-                    break;
-                }
-                match cand {
-                    Candidate::Whole { profile, key, narrowed } => {
-                        // The narrow run's maps cover its neighbourhood only, made for this try alone.
-                        let window = narrowed.then(|| crate::route::narrow_window(&airline));
-                        let made = |b: &Board, skip: &dyn Fn(ItemId) -> bool| match window {
-                            Some(w) => ObstacleMap::window_without(b, profile.clone(), options.cell, w, options.pours_block, skip),
-                            None => ObstacleMap::without(b, profile.clone(), options.cell, options.pours_block, skip),
-                        };
-                        let (hard_own, soft_own, plane_own);
-                        let hard_map: &ObstacleMap = if window.is_some() {
-                            hard_own = made(board, &|id| soft_set.contains(&id));
-                            &hard_own
-                        } else {
-                            hard.entry(key.clone()).or_insert_with(|| made(board, &|id| soft_set.contains(&id)))
-                        };
-                        hard_map.view_into(airline.net, &mut grid);
-                        let soft_map: &ObstacleMap = if window.is_some() {
-                            soft_own = made(board, &|id| !soft_set.contains(&id) || plane_soft.contains(&id));
-                            &soft_own
-                        } else {
-                            soft_maps.entry(key.clone()).or_insert_with(|| made(board, &|id| !soft_set.contains(&id) || plane_soft.contains(&id)))
-                        };
-                        // A plane net's soft copper is mostly vias joining pads to the planes, which
-                        // `join_planes` puts back elsewhere: cheap to rip.
-                        let plane_map: Option<&ObstacleMap> = if plane_nets.is_empty() {
-                            None
-                        } else if window.is_some() {
-                            plane_own = made(board, &|id| !plane_soft.contains(&id));
-                            Some(&plane_own)
-                        } else {
-                            Some(&*plane_maps.entry(key.clone()).or_insert_with(|| made(board, &|id| !plane_soft.contains(&id))))
-                        };
-                        grid.penalty.clear();
-                        let nodes = grid.blocked.len();
-                        let net = airline.net;
-                        grid.penalty.extend((0..nodes).map(|n| price(soft_map.blocked_at(net, n), plane_map.is_some_and(|m| m.blocked_at(net, n)))));
-                        if options.region_repair {
-                            // A via is priced where it would rip, as a track is.
-                            grid.via_penalty.resize(grid.cell_count(), 0);
-                            for (c, p) in grid.via_penalty.iter_mut().enumerate() {
-                                *p += price(soft_map.via_blocked_at(net, c), plane_map.is_some_and(|m| m.via_blocked_at(net, c)));
-                            }
-                        }
-                        let (sources, targets) = if options.region_repair {
-                            let (conn, pads) = near.get_or_insert_with(|| {
-                                let conn = joined(board, options.pours_block);
-                                let pads = cluster_pads(board, &conn);
-                                (conn, pads)
-                            });
-                            let mut end = |id: ItemId| {
-                                let pads = conn.cluster.get(&id).and_then(|k| pads.get(k)).map_or(&[][..], Vec::as_slice);
-                                ends_with_pads(board, &grid, id, pads, &terminals)
-                            };
-                            (end(airline.from_item), end(airline.to_item))
-                        } else {
-                            (terminals(board, &grid, airline.from_item), terminals(board, &grid, airline.to_item))
-                        };
-                        if sources.is_empty() || targets.is_empty() {
-                            continue;
-                        }
-                        let source_cells: Vec<usize> = sources.iter().map(|t| t.0).collect();
-                        let target_cells: Vec<usize> = targets.iter().map(|t| t.0).collect();
-                        if let Some(path) = solver.route(&grid, &source_cells, &target_cells, options.via_cost) {
-                            if let Some(new) = pieces(&grid, &path, &sources, &targets) {
-                                let path_pts = path.iter().map(|&(l, i, j)| (grid.layers[l], grid.centre(i, j))).collect();
-                                found = Some((path_pts, new, narrowed.then_some(2 * grid.half_width), false));
-                                break;
-                            }
+                let mut found = None;
+                for (profile, key) in widths {
+                    // The narrow run's maps cover its neighbourhood only, made for this try alone.
+                    let window = (profile.half_width < base.half_width).then(|| crate::route::narrow_window(&airline));
+                    let plane = |id: ItemId| board.item(id).is_some_and(|it| plane_nets.contains(&it.net));
+                    let made = |skip: &dyn Fn(ItemId) -> bool| match window {
+                        Some(b) => ObstacleMap::window_without(board, profile.clone(), options.cell, b, options.pours_block, skip),
+                        None => ObstacleMap::without(board, profile.clone(), options.cell, options.pours_block, skip),
+                    };
+                    let (hard_own, soft_own, plane_own);
+                    let hard_map: &ObstacleMap = if window.is_some() {
+                        hard_own = made(&|id| soft_set.contains(&id));
+                        &hard_own
+                    } else {
+                        hard.entry(key.clone()).or_insert_with(|| made(&|id| soft_set.contains(&id)))
+                    };
+                    hard_map.view_into(airline.net, &mut grid);
+                    let soft_map: &ObstacleMap = if window.is_some() {
+                        soft_own = made(&|id| !soft_set.contains(&id) || plane(id));
+                        &soft_own
+                    } else {
+                        soft_maps.entry(key.clone()).or_insert_with(|| made(&|id| !soft_set.contains(&id) || plane(id)))
+                    };
+                    // A plane net's soft copper is mostly vias joining pads to the planes, which
+                    // `join_planes` puts back elsewhere: cheap to rip.
+                    let plane_map: Option<&ObstacleMap> = if plane_nets.is_empty() {
+                        None
+                    } else if window.is_some() {
+                        plane_own = made(&|id| !soft_set.contains(&id) || !plane(id));
+                        Some(&plane_own)
+                    } else {
+                        Some(&*plane_maps.entry(key.clone()).or_insert_with(|| made(&|id| !soft_set.contains(&id) || !plane(id))))
+                    };
+                    let plane_cost = (options.rip_cost / 40).max(5);
+                    let price = |soft: bool, plane: bool| if soft { options.rip_cost } else if plane { plane_cost } else { 0 };
+                    grid.penalty.clear();
+                    let nodes = grid.blocked.len();
+                    let net = airline.net;
+                    grid.penalty.extend((0..nodes).map(|n| price(soft_map.blocked_at(net, n), plane_map.is_some_and(|m| m.blocked_at(net, n)))));
+                    if options.region_repair {
+                        // A via is priced where it would rip, as a track is.
+                        grid.via_penalty.resize(grid.cell_count(), 0);
+                        for (c, p) in grid.via_penalty.iter_mut().enumerate() {
+                            *p += price(soft_map.via_blocked_at(net, c), plane_map.is_some_and(|m| m.via_blocked_at(net, c)));
                         }
                     }
-                    Candidate::Corridor { profile, key } => {
-                        corridor_tried.insert((airline.from_item, airline.to_item));
-                        for (prof, k) in [(&base, &base.class), (&profile, &key)] {
-                            hard.entry(k.clone()).or_insert_with(|| {
-                                ObstacleMap::without(board, prof.clone(), options.cell, options.pours_block, &|id| soft_set.contains(&id))
-                            });
-                            soft_maps.entry(k.clone()).or_insert_with(|| {
-                                ObstacleMap::without(board, prof.clone(), options.cell, options.pours_block, &|id| !soft_set.contains(&id) || plane_soft.contains(&id))
-                            });
-                            if !plane_nets.is_empty() {
-                                plane_maps.entry(k.clone()).or_insert_with(|| {
-                                    ObstacleMap::without(board, prof.clone(), options.cell, options.pours_block, &|id| !plane_soft.contains(&id))
-                                });
-                            }
-                        }
-                        let full_hard = &hard[&base.class];
-                        let full_soft = &soft_maps[&base.class];
-                        let full_plane = (!plane_nets.is_empty()).then(|| &plane_maps[&base.class]);
-                        let hard_map = &hard[&key];
-                        let soft_map = &soft_maps[&key];
-                        let plane_map = (!plane_nets.is_empty()).then(|| &plane_maps[&key]);
-                        full_hard.view_into(airline.net, &mut full_grid);
-                        hard_map.view_into(airline.net, &mut grid);
-                        let net = airline.net;
-                        let full_free = |n: usize| {
-                            !full_grid.blocked[n] && !full_soft.blocked_at(net, n) && !full_plane.is_some_and(|m| m.blocked_at(net, n))
-                        };
-                        grid.penalty.clear();
-                        let nodes = grid.blocked.len();
-                        grid.penalty.extend((0..nodes).map(|n| {
-                            price(soft_map.blocked_at(net, n), plane_map.is_some_and(|m| m.blocked_at(net, n)))
-                                + if full_free(n) { 0 } else { NARROW_CELL_PENALTY }
-                        }));
-                        if options.region_repair {
-                            grid.via_penalty.resize(grid.cell_count(), 0);
-                            for (c, p) in grid.via_penalty.iter_mut().enumerate() {
-                                *p += price(soft_map.via_blocked_at(net, c), plane_map.is_some_and(|m| m.via_blocked_at(net, c)));
-                            }
-                        }
-                        let (sources, targets) = if options.region_repair {
-                            let (conn, pads) = near.get_or_insert_with(|| {
-                                let conn = joined(board, options.pours_block);
-                                let pads = cluster_pads(board, &conn);
-                                (conn, pads)
-                            });
-                            let ends_fn = |b: &mut Board, g: &crate::grid::RouteGrid, item: ItemId| {
-                                corridor_terminals(b, &full_grid, g, &full_free, item)
-                            };
-                            let mut end = |id: ItemId| {
-                                let pads = conn.cluster.get(&id).and_then(|k| pads.get(k)).map_or(&[][..], Vec::as_slice);
-                                ends_with_pads(board, &grid, id, pads, &ends_fn)
-                            };
-                            (end(airline.from_item), end(airline.to_item))
-                        } else {
-                            (
-                                corridor_terminals(board, &full_grid, &grid, &full_free, airline.from_item),
-                                corridor_terminals(board, &full_grid, &grid, &full_free, airline.to_item),
-                            )
-                        };
-                        if sources.is_empty() || targets.is_empty() {
-                            continue;
-                        }
-                        let source_cells: Vec<usize> = sources.iter().map(|t| t.0).collect();
-                        let target_cells: Vec<usize> = targets.iter().map(|t| t.0).collect();
-                        if let Some(path) = solver.route(&grid, &source_cells, &target_cells, options.via_cost) {
-                            if let Some(new) = pieces_corridor(&grid, base.half_width, &full_free, &path, &sources, &targets) {
-                                let path_pts = path.iter().map(|&(l, i, j)| (grid.layers[l], grid.centre(i, j))).collect();
-                                found = Some((path_pts, new, None, true));
-                                break;
-                            }
-                        }
-                    }
-                    Candidate::CorridorFine { profile, cell, window } => {
-                        corridor_tried.insert((airline.from_item, airline.to_item));
-                        let hard_map = ObstacleMap::window_without(board, profile.clone(), cell, window, options.pours_block, &|id| soft_set.contains(&id));
-                        hard_map.view_into(airline.net, &mut grid);
-                        if !options.region_repair
-                            && (terminals(board, &grid, airline.from_item).is_empty() || terminals(board, &grid, airline.to_item).is_empty())
-                        {
-                            continue;
-                        }
-                        let soft_map = ObstacleMap::window_without(board, profile, cell, window, options.pours_block, &|id| !soft_set.contains(&id) || plane_soft.contains(&id));
-                        let plane_map = (!plane_nets.is_empty()).then(|| {
-                            ObstacleMap::window_without(board, base.clone(), cell, window, options.pours_block, &|id| !plane_soft.contains(&id))
+                    let (sources, targets) = if options.region_repair {
+                        let (conn, pads) = near.get_or_insert_with(|| {
+                            let conn = joined(board, options.pours_block);
+                            let pads = cluster_pads(board, &conn);
+                            (conn, pads)
                         });
-                        let full_hard = ObstacleMap::window_without(board, base.clone(), cell, window, options.pours_block, &|id| soft_set.contains(&id));
-                        let full_soft = ObstacleMap::window_without(board, base.clone(), cell, window, options.pours_block, &|id| !soft_set.contains(&id) || plane_soft.contains(&id));
-                        full_hard.view_into(airline.net, &mut full_grid);
-                        let net = airline.net;
-                        let full_free = |n: usize| {
-                            !full_grid.blocked[n] && !full_soft.blocked_at(net, n) && !plane_map.as_ref().is_some_and(|m| m.blocked_at(net, n))
+                        let mut end = |id: ItemId| {
+                            let pads = conn.cluster.get(&id).and_then(|k| pads.get(k)).map_or(&[][..], Vec::as_slice);
+                            ends_with_pads(board, &grid, id, pads, &terminals)
                         };
-                        grid.penalty.clear();
-                        let nodes = grid.blocked.len();
-                        grid.penalty.extend((0..nodes).map(|n| {
-                            price(soft_map.blocked_at(net, n), plane_map.as_ref().is_some_and(|m| m.blocked_at(net, n)))
-                                + if full_free(n) { 0 } else { NARROW_CELL_PENALTY }
-                        }));
-                        if options.region_repair {
-                            grid.via_penalty.resize(grid.cell_count(), 0);
-                            for (c, p) in grid.via_penalty.iter_mut().enumerate() {
-                                *p += price(soft_map.via_blocked_at(net, c), plane_map.as_ref().is_some_and(|m| m.via_blocked_at(net, c)));
-                            }
-                        }
-                        let (sources, targets) = if options.region_repair {
-                            let (conn, pads) = near.get_or_insert_with(|| {
-                                let conn = joined(board, options.pours_block);
-                                let pads = cluster_pads(board, &conn);
-                                (conn, pads)
-                            });
-                            let ends_fn = |b: &mut Board, g: &crate::grid::RouteGrid, item: ItemId| {
-                                corridor_terminals(b, &full_grid, g, &full_free, item)
-                            };
-                            let mut end = |id: ItemId| {
-                                let pads = conn.cluster.get(&id).and_then(|k| pads.get(k)).map_or(&[][..], Vec::as_slice);
-                                ends_with_pads(board, &grid, id, pads, &ends_fn)
-                            };
-                            (end(airline.from_item), end(airline.to_item))
-                        } else {
-                            (
-                                corridor_terminals(board, &full_grid, &grid, &full_free, airline.from_item),
-                                corridor_terminals(board, &full_grid, &grid, &full_free, airline.to_item),
-                            )
-                        };
-                        if sources.is_empty() || targets.is_empty() {
-                            continue;
-                        }
-                        let source_cells: Vec<usize> = sources.iter().map(|t| t.0).collect();
-                        let target_cells: Vec<usize> = targets.iter().map(|t| t.0).collect();
-                        if let Some(path) = solver.route(&grid, &source_cells, &target_cells, options.via_cost) {
-                            if let Some(new) = pieces_corridor(&grid, base.half_width, &full_free, &path, &sources, &targets) {
-                                let path_pts = path.iter().map(|&(l, i, j)| (grid.layers[l], grid.centre(i, j))).collect();
-                                found = Some((path_pts, new, None, true));
-                                break;
-                            }
-                        }
+                        (end(airline.from_item), end(airline.to_item))
+                    } else {
+                        (terminals(board, &grid, airline.from_item), terminals(board, &grid, airline.to_item))
+                    };
+                    if sources.is_empty() || targets.is_empty() {
+                        continue;
+                    }
+                    let source_cells: Vec<usize> = sources.iter().map(|t| t.0).collect();
+                    let target_cells: Vec<usize> = targets.iter().map(|t| t.0).collect();
+                    if let Some(path) = solver.route(&grid, &source_cells, &target_cells, options.via_cost) {
+                        found = Some((path, sources, targets, profile.half_width < base.half_width));
+                        break;
                     }
                 }
-            }
-            let Some((path_pts, new, narrowed_width, is_corridor)) = found else {
+                match found {
+                    None => None,
+                    Some((path, sources, targets, narrowed)) => {
+                        let path_pts: Vec<(usize, Point)> = path.iter().map(|&(l, i, j)| (grid.layers[l], grid.centre(i, j))).collect();
+                        let Some(new) = pieces(&grid, &path, &sources, &targets) else { continue };
+                        Some((path_pts, new, narrowed.then_some(2 * grid.half_width), None))
+                    }
+                }
+            };
+            let Some((path_pts, new, narrowed, stretches)) = found else {
                 stats.no_path += 1;
                 tell(&options.log, "ripping up", || format!("{net_name}: no way through, even ripping"), None);
                 watch(board, RipAttempt { airline: &airline, path: Vec::new(), ripped: Vec::new(), laid: Vec::new(), open_before: before, open_after: before, outcome: "no path" });
@@ -486,7 +346,6 @@ pub fn rip_up_watch(
             }
             let ripped = ripped_items.len();
             soft.extend(laid.iter().copied());
-            let reroute_corridor = ripped_items.iter().any(|it| corridor_nets.contains(&it.net));
             let reroute = Options {
                 seed: 0,
                 cell: options.cell,
@@ -498,20 +357,21 @@ pub fn rip_up_watch(
                 log: options.log.clone(),
                 net_via_cost: Default::default(),
                 fine: true,
-                corridor: reroute_corridor,
+                corridor: false,
             };
-            let mut extra_corridor = 0;
-            let mut extra_narrowed = Vec::new();
-            let mut again = if is_corridor && ripped == 0 {
-                Vec::new()
-            } else {
+            // The nets a corridor ripped, and ripped nets laid through a corridor before, may take
+            // one again, they alone: the others reroute as with no corridor anywhere.
+            let renarrow: HashSet<u32> =
+                ripped_items.iter().map(|it| it.net).filter(|n| *n != 0 && (stretches.is_some() || corridor_nets.contains(n))).collect();
+            let mut rerouted = Stats::default();
+            // A corridor that ripped nothing left nothing to reroute.
+            let quiet = stretches.is_some() && ripped == 0;
+            if !quiet {
                 tell(&options.log, "ripping up", || format!("{net_name}: ripped {ripped} pieces, rerouting them"), None);
-                let r = route_open(board, solver, &reroute, &mut |_| {});
-                extra_corridor += r.corridor;
-                extra_narrowed.extend(r.narrowed);
-                r.laid
-            };
-            if !plane_nets.is_empty() && !(is_corridor && ripped == 0) {
+                reroute_into(board, solver, &reroute, &renarrow, &mut rerouted);
+            }
+            let mut again = std::mem::take(&mut rerouted.laid);
+            if !plane_nets.is_empty() && !quiet {
                 again.extend(crate::planes::join_planes(board, &None, &options.deadline, None).laid);
             }
             let mut score_after = score(board);
@@ -524,8 +384,7 @@ pub fn rip_up_watch(
                 }
                 laid.clear();
                 again.clear();
-                extra_corridor = 0;
-                extra_narrowed.clear();
+                rerouted = Stats::default();
                 soft.retain(|id| board.item(*id).is_some());
                 let mut nets = ripped_nets;
                 nets.insert(airline.net);
@@ -547,10 +406,8 @@ pub fn rip_up_watch(
                     &mut |_, _| {},
                 );
                 again.extend(negotiated.laid);
-                let r = route_open(board, solver, &reroute, &mut |_| {});
-                extra_corridor += r.corridor;
-                extra_narrowed.extend(r.narrowed);
-                again.extend(r.laid);
+                reroute_into(board, solver, &reroute, &renarrow, &mut rerouted);
+                again.append(&mut rerouted.laid);
                 if !plane_nets.is_empty() {
                     again.extend(crate::planes::join_planes(board, &None, &options.deadline, None).laid);
                 }
@@ -568,18 +425,22 @@ pub fn rip_up_watch(
                 }
                 stats.kept += 1;
                 stats.ripped += ripped;
-                if let Some(w) = narrowed_width {
+                if let Some(w) = narrowed {
                     stats.narrowed.push((airline.from_item, airline.to_item, w));
                 }
-                stats.narrowed.extend(extra_narrowed);
-                if is_corridor {
+                stats.narrowed.append(&mut rerouted.narrowed);
+                if let Some(stretches) = stretches {
                     stats.corridor += 1;
+                    stats.corridors.extend(stretches.into_iter().map(|(w, l)| (airline.from_item, airline.to_item, 2 * w, l)));
                     corridor_nets.insert(airline.net);
                 }
-                stats.corridor += extra_corridor;
-                corridor_tried.clear();
+                stats.corridor += rerouted.corridor;
+                corridor_nets.extend(rerouted.corridors.iter().filter_map(|c| board.item(c.0).map(|it| it.net)));
+                stats.corridors.append(&mut rerouted.corridors);
                 soft_maps.clear();
                 plane_maps.clear();
+                corridor_maps.clear();
+                cornered.clear();
                 tell(&options.log, "ripping up", || format!("{net_name}: kept, {after} connections open"), None);
                 watch(board, RipAttempt { airline: &airline, path: path_pts, ripped: ripped_items, laid: all_laid, open_before: before, open_after: after, outcome: "kept" });
             } else {
@@ -591,19 +452,191 @@ pub fn rip_up_watch(
             }
         }
         if stats.kept == kept_before {
-            if !corridor_rescue && !out_of_time() {
-                corridor_rescue = true;
+            if options.corridor && !corridors && !out_of_time() {
+                corridors = true;
                 tried.clear();
                 continue;
             }
             break;
         }
-        corridor_rescue = false;
+        corridors = false;
         // What was ripped and rerouted may have opened room for connections tried before.
         tried.clear();
     }
     soft.retain(|id| board.item(*id).is_some());
     stats
+}
+
+/// Reroutes what an attempt ripped, as `reroute` says, into `into`; then the nets of `renarrow`
+/// still open, which were laid through a corridor before, with corridors and alone: every
+/// other net reroutes as it would with no corridor anywhere.
+fn reroute_into(board: &mut Board, solver: &mut dyn FieldSolver, reroute: &Options, renarrow: &HashSet<u32>, into: &mut Stats) {
+    let mut add = |s: Stats| {
+        into.laid.extend(s.laid);
+        into.narrowed.extend(s.narrowed);
+        into.corridor += s.corridor;
+        into.corridors.extend(s.corridors);
+    };
+    add(route_open(board, solver, reroute, &mut |_| {}));
+    if renarrow.is_empty() || reroute.deadline.expired() {
+        return;
+    }
+    let corridor = Options { nets: Some(renarrow.clone()), corridor: true, ..reroute.clone() };
+    add(route_open(board, solver, &corridor, &mut |_| {}));
+}
+
+/// A corridor try's find: its way, its pieces, and their narrowed stretches.
+type Corridor = (Vec<(usize, Point)>, Vec<Item>, Vec<Stretch>);
+
+/// One map a corridor try needs: its key, what it leaves out, and the widths it is made for.
+type Build<'a> = (&'a String, &'a dyn Fn(ItemId) -> bool, &'a Profile);
+
+/// What a corridor try reads of its attempt.
+struct CorridorTry<'a> {
+    options: &'a RipOptions,
+    plane_nets: &'a HashSet<u32>,
+    soft_set: &'a HashSet<ItemId>,
+    base: &'a Profile,
+    airline: &'a Airline,
+}
+
+/// The maps a corridor try of `ctx` routes on at one width: copper that may not be ripped, soft
+/// copper, and plane nets' soft copper at the narrow half width `hw` (priced as a whole-width
+/// try prices them), and all copper at the net's own width, for where the track may widen
+/// again. On the board's own grid `cached` keeps them for the round, the full-width one for
+/// every width; a finer `window`'s serve one try, and a window whose ends have no way out of
+/// its narrow map builds no more. `None` then, or when the deadline passes first.
+fn corridor_maps<'m>(
+    board: &mut Board,
+    ctx: &CorridorTry,
+    hw: Nm,
+    window: Option<(Nm, BBox)>,
+    cached: &'m mut HashMap<String, ObstacleMap>,
+) -> Option<[&'m ObstacleMap; 4]> {
+    let options = ctx.options;
+    let mut narrow = ctx.base.clone();
+    (narrow.half_width, narrow.narrow_half_width) = (hw, ctx.base.narrow_half_width.min(hw));
+    let plane_soft: HashSet<ItemId> =
+        ctx.soft_set.iter().copied().filter(|&id| board.item(id).is_some_and(|it| ctx.plane_nets.contains(&it.net))).collect();
+    let hard = |id: ItemId| ctx.soft_set.contains(&id);
+    let soft = |id: ItemId| !ctx.soft_set.contains(&id) || plane_soft.contains(&id);
+    let plane = |id: ItemId| !plane_soft.contains(&id);
+    let all = |_: ItemId| false;
+    if window.is_some() {
+        cached.retain(|k, _| !k.starts_with("window"));
+    }
+    let (at, full) = match window {
+        Some(_) => ("window".to_string(), "window\u{0}all".to_string()),
+        None => (format!("{}\u{0}c{hw}", ctx.base.class), format!("{}\u{0}all", ctx.base.class)),
+    };
+    let (hard_key, soft_key) = (format!("{at}\u{0}hard"), format!("{at}\u{0}soft"));
+    // With no plane nets the plane map would be empty: the soft one stands in, priced at nothing.
+    let plane_key = if ctx.plane_nets.is_empty() { soft_key.clone() } else { format!("{at}\u{0}plane") };
+    let builds: [Build; 4] =
+        [(&hard_key, &hard, &narrow), (&soft_key, &soft, &narrow), (&plane_key, &plane, &narrow), (&full, &all, ctx.base)];
+    for (k, (key, skip, profile)) in builds.into_iter().enumerate() {
+        if cached.contains_key(key) {
+            continue;
+        }
+        if options.deadline.expired() {
+            return None;
+        }
+        let map = match window {
+            Some((cell, bounds)) => ObstacleMap::window_without(board, profile.clone(), cell, bounds, options.pours_block, skip),
+            None => ObstacleMap::without_by(board, profile.clone(), options.cell, options.pours_block, skip, &options.deadline)?,
+        };
+        cached.insert(key.clone(), map);
+        if k == 0 && window.is_some() {
+            let grid = cached[key].view(ctx.airline.net);
+            if terminals(board, &grid, ctx.airline.from_item).is_empty() || terminals(board, &grid, ctx.airline.to_item).is_empty() {
+                return None;
+            }
+        }
+    }
+    Some([&cached[&hard_key], &cached[&soft_key], &cached[&plane_key], &cached[&full]])
+}
+
+/// One corridor try at `ctx`'s connection, widest corridor width first, each on the board's own
+/// grid and then on a finer one round the connection: a route narrowed only where the net's own
+/// width finds no room, priced through soft copper as any attempt is. The way, its pieces, and
+/// their narrowed stretches; `None` when no corridor goes, or the deadline passes first.
+#[allow(clippy::too_many_arguments)]
+fn try_corridor(
+    board: &mut Board,
+    solver: &mut dyn FieldSolver,
+    ctx: &CorridorTry,
+    widths: &[Nm],
+    cached: &mut HashMap<String, ObstacleMap>,
+    grid: &mut RouteGrid,
+    full_grid: &mut RouteGrid,
+    near: &mut Option<(Connectivity, HashMap<usize, Vec<ItemId>>)>,
+) -> Option<Corridor> {
+    let (options, airline) = (ctx.options, ctx.airline);
+    let fine = options.cell / 2;
+    let cwin = corridor_window(airline);
+    let cnodes = ((cwin.max.x - cwin.min.x) / fine.max(1)) as f64 * ((cwin.max.y - cwin.min.y) / fine.max(1)) as f64 * board.layers.len() as f64;
+    let plane_cost = (options.rip_cost / 40).max(5);
+    let price = |soft: bool, plane: bool| if soft { options.rip_cost } else if plane { plane_cost } else { 0 };
+    let net = airline.net;
+    let planes = !ctx.plane_nets.is_empty();
+    for &hw in widths {
+        let mut windows = vec![None];
+        if fine >= FINE_CELL_FLOOR && cnodes <= FINE_NODES {
+            windows.push(Some((fine, cwin)));
+        }
+        for window in windows {
+            if options.deadline.expired() {
+                return None;
+            }
+            let Some([hard, soft, plane, all]) = corridor_maps(board, ctx, hw, window, cached) else { continue };
+            hard.view_into(net, grid);
+            all.view_into(net, full_grid);
+            let full_free = |n: usize| !full_grid.blocked[n];
+            grid.penalty.clear();
+            let nodes = grid.blocked.len();
+            grid.penalty.extend((0..nodes).map(|n| {
+                price(soft.blocked_at(net, n), planes && plane.blocked_at(net, n)) + if full_free(n) { 0 } else { NARROW_CELL_PENALTY }
+            }));
+            if options.region_repair {
+                grid.via_penalty.resize(grid.cell_count(), 0);
+                for (c, p) in grid.via_penalty.iter_mut().enumerate() {
+                    *p += price(soft.via_blocked_at(net, c), planes && plane.via_blocked_at(net, c));
+                }
+            }
+            let ends = |b: &mut Board, g: &RouteGrid, item: ItemId| corridor_terminals(b, full_grid, g, &full_free, item);
+            let (sources, targets) = if options.region_repair {
+                let (conn, pads) = near.get_or_insert_with(|| {
+                    let conn = joined(board, options.pours_block);
+                    let pads = cluster_pads(board, &conn);
+                    (conn, pads)
+                });
+                let mut end = |id: ItemId| {
+                    let pads = conn.cluster.get(&id).and_then(|k| pads.get(k)).map_or(&[][..], Vec::as_slice);
+                    ends_with_pads(board, grid, id, pads, &ends)
+                };
+                (end(airline.from_item), end(airline.to_item))
+            } else {
+                (ends(board, grid, airline.from_item), ends(board, grid, airline.to_item))
+            };
+            if sources.is_empty() || targets.is_empty() {
+                continue;
+            }
+            let source_cells: Vec<usize> = sources.iter().map(|t| t.0).collect();
+            let target_cells: Vec<usize> = targets.iter().map(|t| t.0).collect();
+            let Some(path) = solver.route(grid, &source_cells, &target_cells, options.via_cost) else { continue };
+            let Some(mut new) = pieces_corridor(grid, ctx.base.half_width, &full_free, &path, &sources, &targets) else { continue };
+            narrow_clipped(board, &mut new, ctx.base.half_width, hw, &|b: &Board, id| check_item(b, id).is_empty());
+            let Some(narrowed) = stretches(&new, ctx.base.half_width) else {
+                let name = board.net_name(net).to_string();
+                let long = CORRIDOR_STRETCH as f64 * 1e-6;
+                tell(&options.log, "ripping up", || format!("{name}: a corridor {:.2} mm wide narrows for over {long:.1} mm, refused", 2.0 * hw as f64 * 1e-6), None);
+                continue;
+            };
+            let path_pts = path.iter().map(|&(l, i, j)| (grid.layers[l], grid.centre(i, j))).collect();
+            return Some((path_pts, new, narrowed));
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -728,9 +761,15 @@ mod tests {
             locked: false,
             span: None,
         })];
-        let stats = rip_up(&mut board, &mut crate::route::CpuSolver, &RipOptions::default(), &mut soft, &mut |_| {});
+        // Off, rip-up finds no way, as before corridors.
+        let (mut plain, mut plain_soft) = (board.clone(), soft.clone());
+        let stats = rip_up(&mut plain, &mut crate::route::CpuSolver, &RipOptions::default(), &mut plain_soft, &mut |_| {});
+        assert_eq!((stats.kept, stats.corridor), (0, 0), "{stats:?}");
+        let options = RipOptions { corridor: true, ..Default::default() };
+        let stats = rip_up(&mut board, &mut crate::route::CpuSolver, &options, &mut soft, &mut |_| {});
         assert_eq!(stats.kept, 1, "{stats:?}");
         assert_eq!(stats.corridor, 1, "{stats:?}");
+        assert!(!stats.corridors.is_empty(), "{stats:?}");
         assert!(connectivity_without_pours(&board).airlines.is_empty());
         for &id in &soft {
             assert!(check_item(&board, id).is_empty(), "{:?}", board.item(id));
