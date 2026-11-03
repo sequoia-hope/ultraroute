@@ -1,0 +1,726 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ultraroute Failure Gallery</title>
+<style>
+:root {
+  --bg: #f6f6f3;
+  --panel: #ffffff;
+  --subtle: #efefea;
+  --ink: #1b1d20;
+  --muted: #646970;
+  --line: #dcdcd4;
+  --accent: #2563eb;
+  --good: #15803d;
+  --bad: #dc2626;
+  --warn: #b45309;
+  --cause-bg: #eef2ff;
+  --cause-ink: #3730a3;
+  --cause-line: #c7d2fe;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111318;
+    --panel: #191d24;
+    --subtle: #11151c;
+    --ink: #e8eaed;
+    --muted: #949ba6;
+    --line: #2b313c;
+    --accent: #60a5fa;
+    --good: #4ade80;
+    --bad: #f87171;
+    --warn: #fbbf24;
+    --cause-bg: #1e293b;
+    --cause-ink: #93c5fd;
+    --cause-line: #334155;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+header h1 { font-size: 17px; margin: 0; }
+.muted { color: var(--muted); }
+.navlinks { margin-left: auto; display: flex; gap: 14px; font-size: 13px; }
+.navlinks a { color: var(--accent); text-decoration: none; }
+.navlinks a:hover { text-decoration: underline; }
+main { max-width: 1560px; margin: 0 auto; padding: 16px 18px 64px; }
+
+.summary-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.stat {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+.stat .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+.stat .v { font-size: 19px; font-weight: 650; font-variant-numeric: tabular-nums; }
+
+.cause-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.cause-chip {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.cause-chip:hover { border-color: var(--accent); }
+.cause-chip.active {
+  background: var(--accent);
+  color: #ffffff;
+  border-color: var(--accent);
+}
+.cause-chip .cnt {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.82;
+  font-size: 11px;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+}
+.controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+input[type="search"], input[type="text"], select, button.btn {
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--subtle);
+  color: var(--ink);
+}
+button.btn { cursor: pointer; background: var(--panel); }
+button.btn:hover { border-color: var(--accent); }
+
+.board-list { display: flex; flex-direction: column; gap: 16px; }
+.board-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px;
+}
+.board-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 12px;
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.board-head h2 {
+  font-size: 16px;
+  margin: 0;
+  word-break: break-all;
+}
+.pill {
+  display: inline-block;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+.pill.fail { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, var(--line)); }
+.pill.nontl { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, var(--line)); }
+.pill.tl { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, var(--line)); }
+.pill.cause {
+  background: var(--cause-bg);
+  color: var(--cause-ink);
+  border-color: var(--cause-line);
+}
+.pill.disagree {
+  color: var(--bad);
+  border-color: var(--bad);
+}
+
+.board-body {
+  display: grid;
+  grid-template-columns: 290px 1fr;
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 920px) {
+  .board-body { grid-template-columns: 1fr; }
+}
+.overview-box {
+  background: var(--subtle);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px;
+}
+.overview-box img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 5px;
+  cursor: zoom-in;
+  background: #0c0f16;
+}
+.overview-cap {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-top: 5px;
+  display: flex;
+  justify-content: space-between;
+}
+
+.crops-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 10px;
+}
+.crop-card {
+  background: var(--subtle);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.crop-card img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 5px;
+  cursor: zoom-in;
+  background: #0c0f16;
+}
+.crop-title {
+  font-size: 12.5px;
+  font-weight: 650;
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+}
+.crop-reason {
+  font-size: 11.5px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.crop-note {
+  font-size: 12px;
+  line-height: 1.4;
+}
+.more-row { margin-top: 8px; }
+
+/* Full-size modal with per-layer split */
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 10, 15, 0.88);
+  z-index: 100;
+  display: none;
+  flex-direction: column;
+  padding: 14px;
+}
+.modal.open { display: flex; }
+.modal-bar {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 14px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.modal-bar .title { font-weight: 700; font-size: 14px; }
+.modal-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+.modal-scroll {
+  flex: 1;
+  overflow: auto;
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+.modal-scroll.side { grid-template-columns: 1fr 1fr; }
+.modal-scroll.stack { grid-template-columns: 1fr; max-width: 1440px; margin: 0 auto; width: 100%; }
+@media (max-width: 1100px) {
+  .modal-scroll.side { grid-template-columns: 1fr; }
+}
+.modal-pane {
+  background: #0c0f16;
+  border: 1px solid #2b313c;
+  border-radius: 8px;
+  padding: 8px;
+}
+.modal-pane h4 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: #cbd5e1;
+  display: flex;
+  justify-content: space-between;
+}
+.modal-pane h4 a { color: #60a5fa; text-decoration: none; font-weight: 500; }
+.modal-pane img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 4px;
+}
+.empty { padding: 36px 0; text-align: center; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Ultraroute Failure Gallery</h1>
+  <span class="muted" id="run-Sub">Loading...</span>
+  <div class="navlinks">
+    <a href="index.html">Experiments</a>
+    <a href="features.html">Feature films</a>
+    <a href="fanout.html">Fan-out</a>
+  </div>
+</header>
+
+<main>
+  <div class="summary-strip" id="summary"></div>
+  <div class="cause-bar" id="cause-bar"></div>
+
+  <div class="controls">
+    <label>Run
+      <input type="text" id="f-run" value="s1-padvia3" style="width:130px">
+    </label>
+    <label>Clock
+      <select id="f-tl">
+        <option value="all">All failed boards</option>
+        <option value="nontl">Not time-limited (algorithm gaps)</option>
+        <option value="tl">Time-limited</option>
+      </select>
+    </label>
+    <label>Cause
+      <select id="f-cause">
+        <option value="">Every cause</option>
+      </select>
+    </label>
+    <label>Open count
+      <select id="f-open">
+        <option value="">Any number open</option>
+        <option value="1">1 open</option>
+        <option value="2-3">2 to 3 open</option>
+        <option value="4-10">4 to 10 open</option>
+        <option value="11-50">11 to 50 open</option>
+        <option value="51+">51+ open</option>
+      </select>
+    </label>
+    <label>Router report
+      <select id="f-reason">
+        <option value="">Any stage / reason</option>
+        <option value="no terminal">no terminal (start or end)</option>
+        <option value="no path">no path</option>
+        <option value="mismatch">router/KiCad mismatch</option>
+        <option value="disagrees">picture disagrees with report</option>
+      </select>
+    </label>
+    <label>Sort
+      <select id="f-sort">
+        <option value="nontl-first">Not time-limited first, then open asc</option>
+        <option value="open-asc">Open connections (fewest first)</option>
+        <option value="open-desc">Open connections (most first)</option>
+        <option value="time-asc">Runtime (fastest first)</option>
+        <option value="id">Board ID (A to Z)</option>
+      </select>
+    </label>
+    <input type="search" id="f-q" placeholder="Filter board, net, pad, note..." style="min-width:210px;flex:1">
+    <span class="muted" id="match-count"></span>
+  </div>
+
+  <div class="board-list" id="boards"></div>
+</main>
+
+<div class="modal" id="modal" role="dialog" aria-modal="true">
+  <div class="modal-bar">
+    <div id="m-info"></div>
+    <div class="modal-actions">
+      <button class="btn" id="m-layout" title="Switch side-by-side or stacked">Layout: Side-by-side</button>
+      <button class="btn" id="m-prev" title="Previous (Left arrow)">Prev</button>
+      <button class="btn" id="m-next" title="Next (Right arrow)">Next</button>
+      <button class="btn" id="m-close" title="Close (Escape)">Close</button>
+    </div>
+  </div>
+  <div class="modal-scroll side" id="m-body"></div>
+</div>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+const INITIAL_CROPS_SHOWN = 8;
+let indexData = null;
+let currentRun = "s1-padvia3";
+let expandedBoards = new Set();
+let modalItems = [];
+let modalPos = -1;
+let modalLayout = "side";
+
+function imgUrl(boardId, file) {
+  return `failures/${encodeURIComponent(currentRun)}/${encodeURIComponent(boardId)}/${encodeURIComponent(file)}`;
+}
+
+function readParams() {
+  const p = new URLSearchParams(location.search);
+  if (p.get("run")) currentRun = p.get("run");
+  $("#f-run").value = currentRun;
+  if (p.get("tl")) $("#f-tl").value = p.get("tl");
+  if (p.get("cause")) $("#f-cause").value = p.get("cause");
+  if (p.get("open")) $("#f-open").value = p.get("open");
+  if (p.get("q")) $("#f-q").value = p.get("q");
+}
+
+async function loadRun(runName) {
+  currentRun = runName.trim() || "s1-padvia3";
+  $("#boards").innerHTML = '<p class="empty">Loading index.json...</p>';
+  try {
+    const res = await fetch(`failures/${encodeURIComponent(currentRun)}/index.json?t=${Date.now()}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    indexData = await res.json();
+  } catch (err) {
+    $("#boards").innerHTML = `<p class="empty">Could not load <code>failures/${esc(currentRun)}/index.json</code> (${esc(err.message)}).</p>`;
+    return;
+  }
+  renderHeader();
+  populateCauseFilter();
+  renderBoards();
+}
+
+function renderHeader() {
+  const d = indexData;
+  const cleanCount = d.total_boards_in_run ? (d.total_boards_in_run - d.failed_boards) : null;
+  $("#run-Sub").textContent =
+    `Run ${d.run} · commit ${d.commit || "?"} · seed ${d.seed ?? "?"} · timeout ${d.timeout ?? "?"} s` +
+    (cleanCount != null ? ` · ${cleanCount}/${d.total_boards_in_run} clean` : "");
+
+  const nontlOpen = (d.boards || []).filter((b) => !b.is_time_limited).reduce((s, b) => s + (b.unconnected || 0), 0);
+  const disagreed = (d.boards || []).reduce((s, b) => s + (b.items || []).filter((i) => i.disagrees).length, 0);
+  const mismatches = (d.boards || []).reduce((s, b) => s + (b.items || []).filter((i) => i.mismatch).length, 0);
+
+  $("#summary").innerHTML = [
+    ["Failed boards", d.failed_boards],
+    ["Not time-limited", `${d.non_time_limited_boards} (${nontlOpen} open)`],
+    ["Time-limited", d.time_limited_boards],
+    ["Total open items (DRC)", d.total_open_items],
+    ["Cause classes", (d.cause_summary || []).length],
+    ["Router/DRC mismatches", mismatches],
+    ["Report disagreements", disagreed],
+  ].map(([k, v]) => `<div class="stat"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join("");
+}
+
+function populateCauseFilter() {
+  const sel = $("#f-cause");
+  const prev = sel.value;
+  const summary = indexData.cause_summary || [];
+  sel.innerHTML = `<option value="">Every cause</option>` +
+    summary.map((c) => `<option value="${esc(c.cause)}">${esc(c.cause)} (${c.connections} open, ${c.boards} boards)</option>`).join("") +
+    `<option value="__unlabelled__">Unlabelled (time-limited)</option>`;
+  if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
+  renderCauseChips();
+}
+
+function renderCauseChips() {
+  const active = $("#f-cause").value;
+  const summary = indexData.cause_summary || [];
+  if (!summary.length) {
+    $("#cause-bar").innerHTML = "";
+    return;
+  }
+  $("#cause-bar").innerHTML =
+    `<button class="cause-chip ${active === "" ? "active" : ""}" data-cause="">All causes</button>` +
+    summary.map((c) => `
+      <button class="cause-chip ${active === c.cause ? "active" : ""}" data-cause="${esc(c.cause)}">
+        <span>${esc(c.cause)}</span>
+        <span class="cnt">${c.connections} on ${c.boards}b</span>
+      </button>
+    `).join("");
+  $("#cause-bar").querySelectorAll(".cause-chip").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      $("#f-cause").value = btn.dataset.cause;
+      renderCauseChips();
+      renderBoards();
+    });
+  });
+}
+
+function itemMatches(it, causeVal, reasonVal, qRe) {
+  if (causeVal === "__unlabelled__" && it.cause) return false;
+  if (causeVal && causeVal !== "__unlabelled__" && it.cause !== causeVal) return false;
+  if (reasonVal === "no terminal" && !(it.raw_reason || it.reason || "").includes("no terminal")) return false;
+  if (reasonVal === "no path" && (it.raw_reason || "") !== "no path") return false;
+  if (reasonVal === "mismatch" && !it.mismatch) return false;
+  if (reasonVal === "disagrees" && !it.disagrees) return false;
+  if (qRe) {
+    const hay = `${it.net} ${it.end_a} ${it.end_b} ${it.report_display || ""} ${it.cause || ""} ${it.note || ""} ${it.disagree_note || ""}`;
+    if (!qRe.test(hay)) return false;
+  }
+  return true;
+}
+
+function openBucketMatches(n, bucket) {
+  if (!bucket) return true;
+  if (bucket === "1") return n === 1;
+  if (bucket === "2-3") return n >= 2 && n <= 3;
+  if (bucket === "4-10") return n >= 4 && n <= 10;
+  if (bucket === "11-50") return n >= 11 && n <= 50;
+  if (bucket === "51+") return n >= 51;
+  return true;
+}
+
+function renderBoards() {
+  if (!indexData) return;
+  const tlVal = $("#f-tl").value;
+  const causeVal = $("#f-cause").value;
+  const openVal = $("#f-open").value;
+  const reasonVal = $("#f-reason").value;
+  const sortVal = $("#f-sort").value;
+  const qRaw = $("#f-q").value.trim();
+  let qRe = null;
+  if (qRaw) {
+    try { qRe = new RegExp(qRaw, "i"); } catch { qRe = new RegExp(qRaw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"); }
+  }
+
+  const itemFilterActive = Boolean(causeVal || reasonVal);
+  const matchedBoards = [];
+  let shownItemsTotal = 0;
+
+  for (const b of indexData.boards || []) {
+    if (tlVal === "nontl" && b.is_time_limited) continue;
+    if (tlVal === "tl" && !b.is_time_limited) continue;
+    if (!openBucketMatches(b.drc_unconnected ?? b.unconnected, openVal)) continue;
+
+    const boardHay = `${b.id} ${(b.causes || []).join(" ")} ${b.board_note || ""} ${(b.time_limited || []).join(" ")}`;
+    const boardSelfMatchesQ = qRe ? qRe.test(boardHay) : true;
+
+    let items = b.items || [];
+    if (itemFilterActive || (qRe && !boardSelfMatchesQ)) {
+      items = items.filter((it) => itemMatches(it, causeVal, reasonVal, boardSelfMatchesQ ? null : qRe));
+      if (!items.length) continue;
+    }
+    shownItemsTotal += items.length;
+    matchedBoards.push({ board: b, items });
+  }
+
+  matchedBoards.sort((x, y) => {
+    const a = x.board, b = y.board;
+    if (sortVal === "nontl-first") {
+      if (a.is_time_limited !== b.is_time_limited) return a.is_time_limited ? 1 : -1;
+      return (a.unconnected - b.unconnected) || a.id.localeCompare(b.id);
+    }
+    if (sortVal === "open-asc") return (a.unconnected - b.unconnected) || a.id.localeCompare(b.id);
+    if (sortVal === "open-desc") return (b.unconnected - a.unconnected) || a.id.localeCompare(b.id);
+    if (sortVal === "time-asc") return ((a.seconds ?? 9999) - (b.seconds ?? 9999)) || a.id.localeCompare(b.id);
+    return a.id.localeCompare(b.id);
+  });
+
+  $("#match-count").textContent = `${matchedBoards.length} boards · ${shownItemsTotal} open crops`;
+
+  // Rebuild flat modal navigation list.
+  modalItems = [];
+  const html = matchedBoards.map(({ board: b, items }) => {
+    const isExp = expandedBoards.has(b.id);
+    const visItems = isExp ? items : items.slice(0, INITIAL_CROPS_SHOWN);
+    const hiddenCount = items.length - visItems.length;
+
+    const tlBadge = b.is_time_limited
+      ? `<span class="pill tl">time-limited: ${esc((b.time_limited || []).join(", ") || "hard limit")}</span>`
+      : `<span class="pill nontl">finished early (${esc(b.seconds)} s)</span>`;
+
+    const errEntries = Object.entries(b.new_errors || {});
+    const errBadge = errEntries.length
+      ? `<span class="pill fail">new errors: ${esc(errEntries.map(([k, v]) => `${k} x${v}`).join(", "))}</span>`
+      : "";
+
+    const openText = (b.router_open != null && b.router_open !== b.unconnected)
+      ? `${b.unconnected} DRC open (router: ${b.router_open})`
+      : `${b.unconnected} open`;
+
+    const causeBadges = (b.causes || []).map((c) => `<span class="pill cause">${esc(c)}</span>`).join("");
+
+    const cropsHtml = visItems.map((it) => {
+      const mIdx = modalItems.length;
+      modalItems.push({ board: b, item: it });
+      return `
+        <div class="crop-card">
+          <img src="${imgUrl(b.id, it.crop_png)}" loading="lazy" decoding="async"
+               alt="${esc(b.id)} open ${it.index + 1}" data-midx="${mIdx}">
+          <div class="crop-title">
+            <span>#${it.index + 1} · ${esc(it.net)}</span>
+            <span class="muted">${esc(it.end_a)} &lt;-&gt; ${esc(it.end_b)} (${it.dist_mm} mm)</span>
+          </div>
+          <div class="crop-reason">${esc(it.report_display || "")}</div>
+          <div>
+            ${it.cause ? `<span class="pill cause">${esc(it.cause)}</span>` : ""}
+            ${it.disagrees ? `<span class="pill disagree" title="${esc(it.disagree_note || "")}">report != picture</span>` : ""}
+          </div>
+          ${it.note ? `<div class="crop-note">${esc(it.note)}</div>` : ""}
+          ${it.disagrees && it.disagree_note ? `<div class="crop-note" style="color:var(--bad)">Disagreement: ${esc(it.disagree_note)}</div>` : ""}
+        </div>`;
+    }).join("");
+
+    const ovMIdx = modalItems.length;
+    modalItems.push({ board: b, item: null });
+
+    return `
+      <article class="board-card" id="b-${esc(b.id)}">
+        <div class="board-head">
+          <h2>${esc(b.id)}</h2>
+          <span class="pill fail">FAIL: ${esc(openText)}</span>
+          <span class="pill">${b.layers}L (${esc((b.layer_names || []).join(", "))})</span>
+          <span class="pill">${esc(b.seconds ?? "?")} s</span>
+          ${tlBadge}
+          ${errBadge}
+          ${causeBadges}
+        </div>
+        ${b.board_note ? `<p style="margin:0 0 10px;font-size:13px">${esc(b.board_note)}</p>` : ""}
+        <div class="board-body">
+          <div class="overview-box">
+            <img src="${imgUrl(b.id, b.overview_png)}" loading="lazy" decoding="async"
+                 alt="${esc(b.id)} overview" data-midx="${ovMIdx}">
+            <div class="overview-cap">
+              <span>Whole-board overview</span>
+              <span>${b.vias != null ? `${b.vias} vias` : ""} ${b.wirelength != null ? `· ${b.wirelength} mm` : ""}</span>
+            </div>
+          </div>
+          <div>
+            <div class="crops-grid">${cropsHtml}</div>
+            ${hiddenCount > 0 ? `<div class="more-row"><button class="btn exp-btn" data-bid="${esc(b.id)}">Show all ${items.length} crops (+${hiddenCount} more)</button></div>` : ""}
+          </div>
+        </div>
+      </article>`;
+  }).join("");
+
+  $("#boards").innerHTML = html || '<p class="empty">No boards match the current filters.</p>';
+
+  $("#boards").querySelectorAll("img[data-midx]").forEach((img) => {
+    img.addEventListener("click", () => openModal(Number(img.dataset.midx)));
+  });
+  $("#boards").querySelectorAll(".exp-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      expandedBoards.add(btn.dataset.bid);
+      renderBoards();
+    });
+  });
+}
+
+function openModal(idx) {
+  if (idx < 0 || idx >= modalItems.length) return;
+  modalPos = idx;
+  const { board: b, item: it } = modalItems[idx];
+  const body = $("#m-body");
+  body.className = `modal-scroll ${it && it.split_png ? modalLayout : "stack"}`;
+
+  if (!it) {
+    $("#m-info").innerHTML = `<span class="title">${esc(b.id)}</span> <span class="muted">· Whole-board overview (${b.unconnected} open, ${b.layers} layers, ${b.seconds} s)</span>`;
+    body.innerHTML = `
+      <div class="modal-pane">
+        <h4><span>Whole-board overview</span><a href="${imgUrl(b.id, b.overview_svg)}" target="_blank">Open SVG</a></h4>
+        <img src="${imgUrl(b.id, b.overview_png)}" alt="${esc(b.id)} overview">
+      </div>`;
+  } else {
+    $("#m-info").innerHTML = `
+      <div>
+        <span class="title">${esc(b.id)} · #${it.index + 1}/${b.unconnected} · Net ${esc(it.net)}</span>
+        <span class="muted"> · ${esc(it.end_a)} &lt;-&gt; ${esc(it.end_b)} (${it.dist_mm} mm) · ${esc(it.report_display || "")}</span>
+        ${it.cause ? ` <span class="pill cause">${esc(it.cause)}</span>` : ""}
+      </div>
+      ${it.note ? `<div style="font-size:12.5px;margin-top:3px">${esc(it.note)}${it.disagrees && it.disagree_note ? ` <span style="color:var(--bad)">[Report disagreement: ${esc(it.disagree_note)}]</span>` : ""}</div>` : ""}
+    `;
+    body.innerHTML = `
+      <div class="modal-pane">
+        <h4><span>Composite crop (with title block &amp; zoom insets)</span><a href="${imgUrl(b.id, it.crop_svg)}" target="_blank">Open SVG</a></h4>
+        <img src="${imgUrl(b.id, it.crop_png)}" alt="${esc(b.id)} crop">
+      </div>
+      ${it.split_png ? `
+      <div class="modal-pane">
+        <h4><span>Per-layer split (${b.layers} copper layers)</span><a href="${imgUrl(b.id, it.split_svg)}" target="_blank">Open SVG</a></h4>
+        <img src="${imgUrl(b.id, it.split_png)}" alt="${esc(b.id)} split">
+      </div>` : ""}
+    `;
+  }
+  $("#modal").classList.add("open");
+}
+
+function closeModal() {
+  $("#modal").classList.remove("open");
+}
+
+$("#m-close").addEventListener("click", closeModal);
+$("#m-prev").addEventListener("click", () => openModal((modalPos - 1 + modalItems.length) % modalItems.length));
+$("#m-next").addEventListener("click", () => openModal((modalPos + 1) % modalItems.length));
+$("#m-layout").addEventListener("click", () => {
+  modalLayout = modalLayout === "side" ? "stack" : "side";
+  $("#m-layout").textContent = `Layout: ${modalLayout === "side" ? "Side-by-side" : "Stacked"}`;
+  if ($("#modal").classList.contains("open")) openModal(modalPos);
+});
+$("#modal").addEventListener("click", (e) => {
+  if (e.target.id === "modal") closeModal();
+});
+document.addEventListener("keydown", (e) => {
+  if (!$("#modal").classList.contains("open")) return;
+  if (e.key === "Escape") closeModal();
+  if (e.key === "ArrowLeft") openModal((modalPos - 1 + modalItems.length) % modalItems.length);
+  if (e.key === "ArrowRight") openModal((modalPos + 1) % modalItems.length);
+});
+
+for (const id of ["f-tl", "f-cause", "f-open", "f-reason", "f-sort"]) {
+  $("#" + id).addEventListener("change", () => {
+    renderCauseChips();
+    renderBoards();
+  });
+}
+$("#f-q").addEventListener("input", renderBoards);
+$("#f-run").addEventListener("change", () => loadRun($("#f-run").value));
+
+readParams();
+loadRun(currentRun);
+</script>
+</body>
+</html>

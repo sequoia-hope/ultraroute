@@ -140,3 +140,27 @@ On the 429 boards that had new errors in base-1 (run valid-2, before the last th
 78 -> 27, hole clearance 55 -> 17, mask bridges 285 -> 55. Of 150 boards clean in base-1, 5 now
 leave a connection or two open (valid-3): mostly boards whose 0.2 mm pad mask expansion the old
 routes happened to miss, now a constraint.
+
+## Looking at failures
+
+`tools/failview.py` draws what blocks each open connection on a failed board, or across a whole
+run, as SVG and PNG crops plus a whole-board overview:
+
+    python3 tools/failview.py ~/Software/ultraroute-lab/pcbench/runs/RUN/ID \
+      --report OUT.report.json -o OUT_DIR
+    ~/.claude/bin/reserve -c 10 -l failview -- python3 tools/failview.py \
+      ~/Software/ultraroute-lab/pcbench/runs/RUN --reports-dir REPORTS_DIR \
+      --causes CAUSES.json -o ~/Software/ultraroute-lab/failures/RUN
+
+Given a single board directory under `runs/RUN/ID`, it reads `out.filled.kicad_pcb` (or
+`out.kicad_pcb`), `out.drc.json`, `result.json`, and the matching `.kicad_pro` and `.kicad_dru`
+from `boards/ID` (`--board` overrides it). For each `unconnected_items` entry in `out.drc.json`,
+it writes `open_NNN.{svg,png}` (the corridor between the two ends, with 2.4 mm zoom insets at End A
+and End B when the span exceeds 11 mm), `open_NNN_split.{svg,png}` when copper layers overlap in
+the crop, `overview.{svg,png}` with every open airwire, and `board.json`. `--report` adds the
+stage and reason from `ultraroute route --report`.
+
+Given `runs/RUN`, it renders every failed board in parallel (`--workers`, `--only`,
+`--skip-existing`) and writes `index.json` for `lab/failures.html` (served from
+`~/Software/ultraroute-lab/failures.html` with `?run=RUN`). `--causes` merges per-connection cause
+labels and notes into `board.json` and `index.json`.
