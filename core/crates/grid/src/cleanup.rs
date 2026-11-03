@@ -661,7 +661,7 @@ fn land_chord(shape: &Shape, c: Point, r: f64) -> Option<(f64, Point)> {
         })
         .collect();
     let inside: Vec<bool> = rim.iter().map(|&p| shape.contains(p)).collect();
-    let Some(start) = (0..N).find(|&k| !inside[k]) else { return None };
+    let start = (0..N).find(|&k| !inside[k])?;
     if !inside.contains(&true) {
         let nearest = rim.iter().copied().min_by(|x, y| point_gap(shape, *x).total_cmp(&point_gap(shape, *y))).expect("rim");
         return (point_gap(shape, nearest) <= TOUCH).then_some((0.0, nearest));
