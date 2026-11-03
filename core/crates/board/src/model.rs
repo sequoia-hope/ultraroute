@@ -349,6 +349,9 @@ pub struct Board {
     /// What reading the board found and could not take as given: the reader's own warnings
     /// (drawings it skips, values it assumed) and an outline that does not close.
     pub warnings: Vec<String>,
+    /// What shaped the board's copper and mask text: the text helper, or why boxes (see
+    /// `kicad_pcb::text`); `None` with no such text.
+    pub text_note: Option<String>,
     /// How far a through via runs from its top copper to its bottom, as KiCad's length rules
     /// count it: the board's thickness less one outer copper layer (kicad-cli 9.0.8, 2026-11-01:
     /// 1.565 mm on a 1.6 mm board of 2, 4 or 6 layers, 0.965 mm on a 1.0 mm one).
@@ -495,6 +498,7 @@ impl Board {
             zone_areas: Vec::new(),
             pour_cost: 0.0,
             warnings: pcb.warnings.iter().chain(&copper.warnings).cloned().collect(),
+            text_note: copper.text_note.clone(),
             via_height: nm((pcb.thickness_m - OUTER_COPPER_M).max(0.0)),
             net_clearances,
             class_names,
