@@ -649,8 +649,9 @@ fn via_pad_grazes(board: &Board, laid: &[ItemId]) -> Vec<(ItemId, ItemId)> {
 }
 
 /// The narrowest chord a disc's rim (centre `c`, radius `r`) cuts across `shape`'s edge, in nm,
-/// and its middle: between the rim's two crossings of each stretch of rim inside it. `None` when
-/// the rim never enters it.
+/// and its middle: between the rim's two crossings of each stretch of rim inside it, or nothing
+/// at the point where a rim that never enters it touches it (sigfoxuino's +3.3V, a 0.889 mm via
+/// on U2 pad 8's corner, 0.0001 mm across). `None` when the rim stays clear of it.
 fn land_chord(shape: &Shape, c: Point, r: f64) -> Option<(f64, Point)> {
     const N: usize = 360;
     let rim: Vec<Point> = (0..N)
@@ -661,6 +662,10 @@ fn land_chord(shape: &Shape, c: Point, r: f64) -> Option<(f64, Point)> {
         .collect();
     let inside: Vec<bool> = rim.iter().map(|&p| shape.contains(p)).collect();
     let Some(start) = (0..N).find(|&k| !inside[k]) else { return None };
+    if !inside.contains(&true) {
+        let nearest = rim.iter().copied().min_by(|x, y| point_gap(shape, *x).total_cmp(&point_gap(shape, *y))).expect("rim");
+        return (point_gap(shape, nearest) <= TOUCH).then_some((0.0, nearest));
+    }
     let mut best: Option<(f64, Point)> = None;
     let mut run: Option<usize> = None;
     for step in 1..=N {
@@ -1751,6 +1756,25 @@ mod tests {
         assert_eq!((a, r), (at, 300_000));
         assert!(board.item(pad).unwrap().shape.depth(b) >= 300_000.0, "{b:?}");
         assert!(board.item(far).is_some());
+    }
+
+    #[test]
+    fn a_via_whose_land_only_touches_its_pads_corner_is_a_graze() {
+        let mut board = empty_board();
+        let pad = board.insert(Item {
+            kind: Kind::Pad { footprint: 0, number: "8".into(), plated: false },
+            net: 1,
+            layers: 1,
+            shape: Shape::Polygon(vec![Point::new(-400_000, -900_000), Point::new(400_000, -900_000), Point::new(400_000, 900_000), Point::new(-400_000, 900_000)]),
+            hole: None,
+            locked: true,
+            span: None,
+        });
+        // 0.4445 mm land, its centre on the corner's diagonal, the rim 0.1 um from the corner.
+        let off = ((444_500.0 + 0.1) / std::f64::consts::SQRT_2).round() as Nm;
+        let at = Point::new(400_000 + off, 900_000 + off);
+        let via = board.insert(Item { kind: Kind::Via, net: 1, layers: 1, shape: Shape::Capsule { a: at, b: at, r: 444_500 }, hole: Some((at, 317_500)), locked: false, span: None });
+        assert_eq!(via_pad_grazes(&board, &[via]), vec![(via, pad)]);
     }
 
     #[test]
