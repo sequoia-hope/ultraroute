@@ -12,6 +12,7 @@ It reads and writes `.kicad_pcb` boards directly.
 | `topo` | Topological routing: a Delaunay triangulation of the copper per layer, a search for a channel wide enough, and the taut rubber band through it. An experiment: the command does not link it; it is built and tested with the workspace. |
 | `ultraroute` | The command, and the same pipeline as a library (`parse`, `route`, `run_with_solver`). |
 | `web` | `ultraroute` compiled to WebAssembly for the studio's router in the browser tab. |
+| `kicad-text` | GPL-3.0-or-later, the one crate that is not MIT: KiCad's `newstroke` font and text layout as a program, `kicad-text`, which strokes copper and mask text for the reader over a pipe (one JSON item a line in, its polygons a line out). The reader finds it by `ULTRAROUTE_TEXT_HELPER`, next to `ultraroute`, or on `PATH`, and boxes text without it; no MIT crate may depend on it (`kicad-pcb/tests/gpl_boundary.rs`). |
 | `lab-films` | `feature_film`: records one stage of a run as a film for `lab/features.html`. |
 
 `docs/library.md` explains the crates for a program of your own.
@@ -21,7 +22,7 @@ It reads and writes `.kicad_pcb` boards directly.
 Needs Rust; `rust-toolchain.toml` pins 1.95.0, which `rustup` installs on first use. From `core/`:
 
 ```sh
-cargo build --release -p ultraroute
+cargo build --release -p ultraroute -p kicad-text
 mkdir -p /tmp/earring
 target/release/ultraroute route fixtures/earring.kicad_pcb -o /tmp/earring/routed.kicad_pcb --timeout 120
 ```

@@ -511,6 +511,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kicad-text"
+version = "0.1.0"
+dependencies = [
+ "kicad-pcb",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lab-films"
 version = "0.1.0"
 dependencies = [
