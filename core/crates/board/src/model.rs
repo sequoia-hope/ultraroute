@@ -369,6 +369,10 @@ pub struct Board {
     bboxes: Vec<BBox>,
     /// Item ids per (layer, cell); holes are filed under the layer count.
     cells: HashMap<(usize, Nm, Nm), Vec<ItemId>>,
+    /// Items on no copper layer with no hole, which `cells` has no slot for.
+    unslotted: Vec<ItemId>,
+    /// Thermal spoke items whose pad has at least one spoke to spare, in ascending id order.
+    spare_spokes: Vec<ItemId>,
 }
 
 #[derive(Debug)]
@@ -495,6 +499,8 @@ impl Board {
             shape_bboxes: Vec::new(),
             bboxes: Vec::new(),
             cells: HashMap::new(),
+            unslotted: Vec::new(),
+            spare_spokes: Vec::new(),
         };
         board.names_nets = crate::custom::names_nets(&board.custom);
         board.via_free = (0..board.nets.len() as u32).map(|n| board.net_maximum("via_count", n).is_some_and(|(_, max)| max < 1.0 - 1e-9)).collect();
@@ -940,9 +946,19 @@ impl Board {
             Some((c, r)) => sb.union(BBox::of([c]).grow(r)),
             None => sb,
         };
-        for slot in self.slots(&item) {
-            for (x, y) in Board::cells_of(b) {
-                self.cells.entry((slot, x, y)).or_default().push(id);
+        let slots = self.slots(&item);
+        if slots.is_empty() {
+            self.unslotted.push(id);
+        } else {
+            for slot in slots {
+                for (x, y) in Board::cells_of(b) {
+                    self.cells.entry((slot, x, y)).or_default().push(id);
+                }
+            }
+        }
+        if matches!(item.kind, Kind::Spoke { spare, .. } if spare > 0) {
+            if let Err(pos) = self.spare_spokes.binary_search(&id) {
+                self.spare_spokes.insert(pos, id);
             }
         }
         self.items.push(Some(item));
@@ -972,9 +988,21 @@ impl Board {
             Some((c, r)) => sb.union(BBox::of([c]).grow(r)),
             None => sb,
         };
-        for slot in self.slots(&item) {
-            for (x, y) in Board::cells_of(b) {
-                self.cells.entry((slot, x, y)).or_default().push(id);
+        let slots = self.slots(&item);
+        if slots.is_empty() {
+            if let Err(pos) = self.unslotted.binary_search(&id) {
+                self.unslotted.insert(pos, id);
+            }
+        } else {
+            for slot in slots {
+                for (x, y) in Board::cells_of(b) {
+                    self.cells.entry((slot, x, y)).or_default().push(id);
+                }
+            }
+        }
+        if matches!(item.kind, Kind::Spoke { spare, .. } if spare > 0) {
+            if let Err(pos) = self.spare_spokes.binary_search(&id) {
+                self.spare_spokes.insert(pos, id);
             }
         }
         if id >= self.items.len() {
@@ -990,11 +1018,21 @@ impl Board {
     pub fn remove(&mut self, id: ItemId) -> Option<Item> {
         let item = self.items.get_mut(id)?.take()?;
         let b = self.bboxes[id];
-        for slot in self.slots(&item) {
-            for (x, y) in Board::cells_of(b) {
-                if let Some(ids) = self.cells.get_mut(&(slot, x, y)) {
-                    ids.retain(|i| *i != id);
+        let slots = self.slots(&item);
+        if slots.is_empty() {
+            self.unslotted.retain(|i| *i != id);
+        } else {
+            for slot in slots {
+                for (x, y) in Board::cells_of(b) {
+                    if let Some(ids) = self.cells.get_mut(&(slot, x, y)) {
+                        ids.retain(|i| *i != id);
+                    }
                 }
+            }
+        }
+        if matches!(item.kind, Kind::Spoke { spare, .. } if spare > 0) {
+            if let Ok(pos) = self.spare_spokes.binary_search(&id) {
+                self.spare_spokes.remove(pos);
             }
         }
         Some(item)
@@ -1026,6 +1064,49 @@ impl Board {
         out.sort_unstable();
         out.dedup();
         out
+    }
+
+    /// Every item whose shape's bounding box overlaps `b`, in ascending id order, found through
+    /// the spatial cells rather than walking every item on the board.
+    pub fn overlapping(&self, b: BBox) -> Vec<ItemId> {
+        let mut out: Vec<ItemId> = Vec::new();
+        for slot in 0..=self.layers.len() {
+            for (x, y) in Board::cells_of(b) {
+                if let Some(ids) = self.cells.get(&(slot, x, y)) {
+                    for &id in ids {
+                        if self.items.get(id).is_some_and(Option::is_some) && self.shape_bboxes[id].overlaps(b) {
+                            out.push(id);
+                        }
+                    }
+                }
+            }
+        }
+        for &id in &self.unslotted {
+            if self.items.get(id).is_some_and(Option::is_some) && self.shape_bboxes[id].overlaps(b) {
+                out.push(id);
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// Thermal spoke items whose pad has at least one spoke to spare, in ascending id order.
+    pub fn spare_spokes(&self) -> &[ItemId] {
+        &self.spare_spokes
+    }
+
+    /// Largest class clearance of any net on the board, or `None` when the board has no nets.
+    pub fn max_net_clearance(&self) -> Option<Nm> {
+        if self.nets.is_empty() {
+            return None;
+        }
+        let max_known = self.net_clearances.iter().copied().max();
+        if self.net_clearances.len() < self.nets.len() {
+            Some(max_known.map_or(self.min_clearance_nm, |m| m.max(self.min_clearance_nm)))
+        } else {
+            max_known
+        }
     }
 
     /// Moves a footprint's pads and rule areas by `by`. Unlocked tracks and vias that touched its
@@ -1297,4 +1378,62 @@ pub fn arc_chords(s: [f64; 2], m: [f64; 2], e: [f64; 2], half_width: f64) -> (Ve
         })
         .collect();
     (points, sag)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn overlapping_matches_linear_bbox_scan_across_mutations() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/earring.kicad_pcb");
+        let mut board = Board::load(&path).unwrap().0;
+        let linear = |b: &Board, q: BBox| -> Vec<ItemId> {
+            b.items().filter_map(|(id, _)| b.bbox(id).filter(|bb| bb.overlaps(q)).map(|_| id)).collect()
+        };
+        // Include an unslotted item (layers == 0, hole == None) and a via with a wide drill.
+        let unslotted = board.insert(Item {
+            kind: Kind::Keepout { forbids: Keepout { tracks: true, ..Keepout::default() }, footprint: None },
+            net: 0,
+            layers: 0,
+            shape: Shape::Capsule { a: Point::new(5_000_000, 5_000_000), b: Point::new(8_000_000, 7_000_000), r: 200_000 },
+            hole: None,
+            locked: false,
+            span: None,
+        });
+        let via = board.insert(Item {
+            kind: Kind::Via,
+            net: 1,
+            layers: 3,
+            shape: Shape::Capsule { a: Point::new(6_500_000, 6_000_000), b: Point::new(6_500_000, 6_000_000), r: 150_000 },
+            hole: Some((Point::new(6_500_000, 6_000_000), 300_000)),
+            locked: false,
+            span: None,
+        });
+        let extent = BBox::of(board.items().flat_map(|(_, it)| {
+            let b = it.shape.bbox();
+            [b.min, b.max]
+        }));
+        let check_all = |b: &Board| {
+            for ix in -1..=4 {
+                for iy in -1..=4 {
+                    let x0 = extent.min.x + ix * (extent.max.x - extent.min.x) / 3;
+                    let y0 = extent.min.y + iy * (extent.max.y - extent.min.y) / 3;
+                    let q = BBox { min: Point::new(x0, y0), max: Point::new(x0 + 3_500_000, y0 + 2_700_000) };
+                    assert_eq!(b.overlapping(q), linear(b, q), "window ({ix}, {iy})");
+                }
+            }
+        };
+        check_all(&board);
+        let removed_u = board.remove(unslotted).unwrap();
+        let removed_v = board.remove(via).unwrap();
+        check_all(&board);
+        board.restore(unslotted, removed_u);
+        board.restore(via, removed_v);
+        check_all(&board);
+        board.discard(via);
+        board.discard(unslotted);
+        check_all(&board);
+    }
 }
