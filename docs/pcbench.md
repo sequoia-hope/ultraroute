@@ -29,6 +29,36 @@ A two-board check of the command line (2026-10-30, loaf, the Stage 11 build):
     [2/2] 1Bitsy_1bitsy: ok open 0 new {} 14.3 s
     2 of 2 succeeded
 
+## Tiers: a ladder of runs, so the full corpus is routed only before a merge
+
+`pcbench.py tiers RUN ...` sorts the boards by their history over a list of full runs (same seed
+and recipe, oldest first) into `tools/pcbench_tiers.json`; `run --tier NAME` and `ab --tier NAME`
+route one tier. Made on 2026-11-02 from the sixteen seed-1 full runs since s1-main-0b0f336:
+
+| tier | boards | core-hours | what it holds | what it tells |
+|---|---|---|---|---|
+| smoke | 48 | 0.1 | 40 always clean in under 10 s with no deadline touching them, spread across layer counts, zones and size; the 8 quickest failures the clock never stopped | crashes, gross losses; any difference at all is the change's (`--exact` holds) |
+| focus | 74 | 1.1 | never clean: 58 the router gave up on with time to spare (algorithm gaps), 16 the clock stopped within 3 open | where a change should win |
+| guard | 240 | 1.7 | 200 of the 818 always clean untouched by a deadline, 40 of the 102 clean but touched by one or over 60 s | where a change loses boards |
+| noisy | 70 | 2.3 | clean in some runs, not others; nearly all at the time limit | the clock, mostly; left to the full corpus |
+| gate | 314 | 2.9 | focus + guard | the run before a full one |
+| all | 1182 | 12.2 | | before a merge to main |
+
+The ladder: smoke after every change (`ab`, about a minute on 12 cores), focus while working on a
+failure class, gate before claiming a gain (about 25 minutes of `ab` on sequoia-server's 15
+cores), the full corpus once before merging. Remake the tiers after a merge moves many boards
+between classes.
+
+    ULTRAROUTE_BIN=core/target/release/ultraroute ~/.claude/bin/reserve -c 12 -l "pcbench ab smoke" -- \
+      python3 tools/pcbench.py ab smoke-main smoke-mine --base-bin ~/Software/ultraroute-lab/bin/ultraroute-MAIN --tier smoke --seed 1
+
+`ab BASE NEW --base-bin BIN` routes the same boards with `BIN` (run BASE) and this checkout's
+router (run NEW, `ULTRAROUTE_BIN`) in one pool, each board's two routes started together, then
+runs `compare BASE NEW`. Two runs started side by side with half the workers each are not equal:
+on sequoia-server the side with 8 workers ran about 1.6x slower than the side with 7 and lost
+about 7 time-limited boards for it. Both binaries the same on smoke (2026-11-02): 40 of 48 clean
+on each side, 0 of 48 boards differ.
+
 ## Comparing runs
 
     python3 tools/pcbench.py compare A B [C ...] [--noise N|auto] [--noise-from A B] [--json OUT]
