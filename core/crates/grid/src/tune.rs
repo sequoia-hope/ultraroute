@@ -11,9 +11,8 @@ use board::{check_item, joined, region_price, Board, Item, ItemId, Kind, Nm, Poi
 use crate::clock::Deadline;
 use crate::pairs::{pin_pairs, Pair};
 
-/// How far within its skew limit a pair is tuned (half the limit, under twice this): the router
-/// measures each net from end to end along its tracks by the shortest way, KiCad the whole net,
-/// with each via's height where the board counts it, and the two may differ by a little.
+/// How far within its skew limit a pair is tuned (half the limit, under twice this), for what
+/// changes the lengths after: `--arcs` rounds each net's corners, shortening it by its own amount.
 pub const TOLERANCE: f64 = 100_000.0;
 /// Straight track kept before the first bump and after the last, at the least: a bump also keeps
 /// its own width from either end of the track it goes into, so it never jogs where the track
@@ -53,6 +52,12 @@ pub struct PairSkew {
 /// measures two nets that different rules hold against each other.
 pub fn skew_limit(board: &Board, pair: &Pair) -> Option<(String, f64)> {
     [pair.p, pair.n].into_iter().filter_map(|net| board.net_maximum("skew", net)).map(|(rule, max)| (rule, max * 1e9)).min_by(|a, b| a.1.total_cmp(&b.1))
+}
+
+/// The pair's two lengths as KiCad's `skew` rule measures them, in nanometres: each net whole
+/// ([`Board::net_length`]), its stubs and the vias KiCad counts too, not end to end.
+pub fn pair_totals(board: &Board, pair: &Pair) -> (f64, f64) {
+    (board.net_length(pair.p) * 1e6, board.net_length(pair.n) * 1e6)
 }
 
 /// The two ends a pair's lengths are measured between: the pin pairs farthest apart.
@@ -280,8 +285,10 @@ pub fn match_lengths(board: &mut Board, pairs: &[Pair], soft: &mut Vec<ItemId>, 
 pub fn match_lengths_watch(board: &mut Board, pairs: &[Pair], soft: &mut Vec<ItemId>, deadline: &Deadline, watch: &mut dyn FnMut(&Board, &TuneBump)) -> TuneStats {
     let mut stats = TuneStats::default();
     for pair in pairs {
-        let Some(((lp, tp), (ln, tn))) = pair_lengths(board, pair) else { continue };
+        // The bumps go on the shorter net's way from end to end, but the skew is KiCad's.
+        let Some(((_, tp), (_, tn))) = pair_lengths(board, pair) else { continue };
         stats.pairs += 1;
+        let (lp, ln) = pair_totals(board, pair);
         let before = (lp - ln).abs();
         let name = format!("{}/{}", board.net_name(pair.p), board.net_name(pair.n));
         let Some((rule, limit)) = skew_limit(board, pair) else {
@@ -298,7 +305,10 @@ pub fn match_lengths_watch(board: &mut Board, pairs: &[Pair], soft: &mut Vec<Ite
         let within = |board: &Board| max_length.is_none_or(|max| board.net_length(short) <= max + 1e-6);
         let room = |board: &Board| max_length.map_or(f64::INFINITY, |max| (max - board.net_length(short)).max(0.0) * 1e6);
         let mut tracks: Vec<ItemId> = tracks.into_iter().filter(|id| soft.contains(id)).collect();
-        let skew = |board: &Board| pair_lengths(board, pair).map(|((lp, _), (ln, _))| (lp - ln).abs());
+        let skew = |board: &Board| {
+            let (lp, ln) = pair_totals(board, pair);
+            (lp - ln).abs()
+        };
         let mut now = before;
         while now > aim && !deadline.expired() {
             // Enough to bring the skew to the aim; at most what leaves it no further past.
@@ -312,9 +322,9 @@ pub fn match_lengths_watch(board: &mut Board, pairs: &[Pair], soft: &mut Vec<Ite
                 (beside(board, *id, other, pair.pitch()), Reverse(l as Nm))
             });
             let Some((_, (old, item), laid, leads)) = add_bump(board, &tracks, want, most) else { break };
-            // Measured again, as a bump off the measured way, or one that moves it, adds nothing.
+            // Measured again: a bump that overshoots is kept only if it leaves the pair closer.
             match skew(board) {
-                Some(next) if next < now && within(board) => {
+                next if next < now && within(board) => {
                     watch(board, &TuneBump { pair, net: short, before: now, after: next, replaced: &item, laid: &laid });
                     now = next;
                 }
@@ -333,7 +343,7 @@ pub fn match_lengths_watch(board: &mut Board, pairs: &[Pair], soft: &mut Vec<Ite
             tracks.extend(leads);
             soft.extend(laid);
         }
-        let after = skew(board).unwrap_or(before);
+        let after = skew(board);
         stats.skews.push(PairSkew { pair: name, before: before * 1e-6, after: after * 1e-6, limit: Some((rule, limit * 1e-6)) });
     }
     stats
@@ -416,6 +426,17 @@ mod tests {
         let (board, soft, pair) = dogleg(&TIGHT.replace("0.1mm", "0.8mm"));
         let (_, _, after) = tuned_to(board, soft, pair);
         assert!((0.6..=0.7 + 1e-6).contains(&after), "{after}");
+    }
+
+    /// Skew is KiCad's, of the nets whole: a 1 mm stub off P leaves it 0.2 mm short of N, not
+    /// 1.2 mm as from end to end, within a 0.8 mm limit, and nothing is bumped.
+    #[test]
+    fn the_skew_counts_each_net_whole() {
+        let (mut board, mut soft, pair) = dogleg(&TIGHT.replace("0.1mm", "0.8mm"));
+        let stub = Item { kind: Kind::Track, net: 1, layers: 1, shape: Shape::Capsule { a: Point::new(2_000_000, 0), b: Point::new(2_000_000, -1_000_000), r: 75_000 }, hole: None, locked: false, span: None };
+        soft.push(board.insert(stub));
+        let t = match_lengths(&mut board, std::slice::from_ref(&pair), &mut soft, &Default::default());
+        assert!((t.skews[0].before - 0.2).abs() < 1e-6 && t.bumps == 0, "{t:?}");
     }
 
     /// A pair no rule limits, with no rules or a rule for another pair, is measured and left as

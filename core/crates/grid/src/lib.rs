@@ -46,7 +46,7 @@ pub use negotiate::{price_into, route_negotiated, route_negotiated_rounds, via_p
 pub use ripup::{rip_up, rip_up_watch, RipAttempt, RipOptions, RipStats};
 pub use route::{arc_edits, edits, keep_orphans, route_open, terminal_cells, CpuSolver, FieldSolver, Options, PricedJob, RoundPrices, Stats};
 pub use search::via_cost_mm;
-pub use tune::{match_lengths, match_lengths_watch, pair_lengths, skew_limit, PairSkew, TuneBump, TuneStats};
+pub use tune::{match_lengths, match_lengths_watch, pair_lengths, pair_totals, skew_limit, PairSkew, TuneBump, TuneStats};
 pub use clock::Deadline;
 pub use memory::{memory_estimate, MemoryEstimate};
 pub use vias::{reduce_vias, reduce_vias_all, ViaOptions, ViaStats};
