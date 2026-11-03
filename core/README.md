@@ -77,7 +77,7 @@ A stage runs only when its flag or the board asks for it.
 | `pairs` | `--diff-pairs` | until a quarter of `--timeout` has gone |
 | `pair-escapes` | `--prefanout`, after `pairs` | 15% of what is left |
 | `routing` | always; holds the next six | |
-| `first` | `--regions` gives nets a length limit | a quarter of what is left of the routing time |
+| `first` | `--regions` gives nets a length limit or a `clear_under` rule | a quarter of what is left of the routing time |
 | `negotiation` | `--negotiate` | half of `--timeout`; after `first`, half of what is left of the routing time |
 | `finishing` | always: one connection at a time | the routing time |
 | `prune-escapes` | there are escapes | no limit |
@@ -145,7 +145,7 @@ lengths, the deadline, and, of kind `rule`, every project or custom rule left ou
 | `--planes LAYER,...` | layers given whole to a plane: no tracks on them, vias through them |
 | `--auto-planes` | take inner layers one net's pour all but fills as planes |
 | `--plane-via-reach MM` | every surface pad of a plane's net gets a via of its own within MM, edge to edge, laid before routing as the router's own copper (a signal that needs the room may rip it; it is laid again after routing where it still fits); a pad left without is reported (a `plane-via` finding) |
-| `--regions FILE` | a planner's routing regions and length limits (circuit-composer's `routing.json`) |
+| `--regions FILE` | a planner's routing regions, length limits and clear-under rules (circuit-composer's `routing.json`; see below) |
 | `--rip-region X,Y,R` | rip every unlocked track and via in this disc (mm, KiCad's frame) first; repeatable |
 | `--lock REF,...` | parts that may not move |
 | `--place REF=X,Y` | put a part at X,Y mm before routing; Y points up (KiCad's y negated); repeatable |
@@ -166,3 +166,21 @@ lengths, the deadline, and, of kind `rule`, every project or custom rule left ou
 | `-h`, `--help` | print the flags |
 
 A test (`tests/cli.rs`) checks that this table names every flag in `ultraroute::USAGE`.
+
+`--regions` reads `routing.json` version 1 (format in `crates/ultraroute/src/regions.rs`, more in
+`docs/library.md`): `regions` (polygons with `never`, `must`, `avoid` and `prefer` rules for
+nets' tracks or vias), `max_lengths` (checked and reported), and `clear_under`:
+
+```json
+"clear_under": [{"nets": ["/USB_DP", "/USB_DM"], "classes": ["USB"], "layers": ["F.Cu"],
+                 "planes": ["In1.Cu"], "margin_mm": 0.0}]
+```
+
+No via or plated hole of a net outside the rule may have its antipad (the hole it cuts in a zone
+of another net on a `planes` layer: its copper there grown by the zone's clearance to it, the
+zone's own or the nets', the wider, as KiCad's refill cuts it) within `margin_mm` (default 0) of
+the rule's nets' tracks on `layers`, the tracks' full width. It holds both ways: the nets' tracks
+keep off antipads already there, and later vias keep their antipads out from under the tracks.
+The nets route first (the `first` stage). A hole of the zone's own net cuts nothing; nor does any
+where no zone of another net is. Breaks left at the end are reported as `regions: clear under ...`
+lines, and nets the board does not have as the other rules' are.
