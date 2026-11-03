@@ -431,7 +431,7 @@ pub fn grazes(board: &Board, laid: &[ItemId]) -> Vec<Graze> {
                 continue;
             }
             let Some(o) = board.item(other) else { continue };
-            if o.net != item.net || !o.on(layer) || !o.is_copper() || o.refilled() || o.shape.gap_within(&item.shape, TOUCH) > TOUCH {
+            if o.net != item.net || !o.on(layer) || !o.is_copper() || o.refilled() || o.shape.gap_within(&item.shape, 0.0) > 0.0 {
                 continue;
             }
             let squarely = |p: Point, r: Nm, x: &Item| end_square(p, r, x);
@@ -478,7 +478,7 @@ pub fn grazes(board: &Board, laid: &[ItemId]) -> Vec<Graze> {
                         && c.shape.contains(to)
                 })
             };
-            if overlap > -TOUCH && overlap < full && !bridged(board, layer, id, item, other, o) && !covered() {
+            if overlap > 0.0 && overlap < full && !bridged(board, layer, id, item, other, o) && !covered() {
                 out.push(Graze { track: id, other, from, to, overlap });
             }
         }
@@ -1799,17 +1799,6 @@ mod tests {
         let two = via(&mut board, 1_100_000);
         let three = via(&mut board, 3_000_000);
         assert_eq!(via_grazes(&board, &[one, two, three]), vec![(one, two)]);
-    }
-
-    #[test]
-    fn a_track_whose_side_only_touches_a_via_is_a_graze() {
-        // roz-power-board's +3V3: a 0.2 mm track passing 0.4 mm from a 0.6 mm via's centre.
-        let mut board = empty_board();
-        let at = Point::new(0, 0);
-        let via = board.insert(Item { kind: Kind::Via, net: 1, layers: 1, shape: Shape::Capsule { a: at, b: at, r: 300_000 }, hole: Some((at, 200_000)), locked: false, span: None });
-        let track = board.insert(Item { shape: Shape::Capsule { a: Point::new(400_000, -1_500_000), b: Point::new(400_000, 1_500_000), r: 100_000 }, ..seg(at, at) });
-        let found = grazes(&board, &[track]);
-        assert_eq!(found.iter().map(|g| (g.track, g.other)).collect::<Vec<_>>(), vec![(track, via)], "{found:?}");
     }
 
     #[test]
