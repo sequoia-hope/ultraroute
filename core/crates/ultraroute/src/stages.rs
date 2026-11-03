@@ -408,6 +408,7 @@ impl Stage for First {
             nets: Some(first.clone()),
             pours_block: a.pours_block,
             log: ctx.log.clone(),
+            corridor: !a.rip_up,
             ..Default::default()
         };
         let watch = &mut *ctx.watch;
@@ -503,6 +504,7 @@ impl Stage for Finishing {
             deadline: ctx.deadline(),
             pours_block: a.pours_block,
             log: ctx.log.clone(),
+            corridor: !a.rip_up,
             ..Default::default()
         };
         let watch = &mut *ctx.watch;
@@ -513,7 +515,7 @@ impl Stage for Finishing {
         if s.fine > 0 {
             eprintln!("finishing: {} connections laid on a finer grid round them", s.fine);
         }
-        let detail = json!({"routed": s.routed, "failed": s.failed, "no_terminal": s.no_terminal, "no_path": s.no_path, "refused": s.refused, "vias": s.vias, "narrowed": s.narrowed.len(), "fine": s.fine});
+        let detail = json!({"routed": s.routed, "failed": s.failed, "no_terminal": s.no_terminal, "no_path": s.no_path, "refused": s.refused, "vias": s.vias, "narrowed": s.narrowed.len(), "fine": s.fine, "corridor": s.corridor});
         ctx.ledger.routed = s;
         detail
     }
@@ -589,7 +591,7 @@ impl Stage for RipUp {
             ctx.elapsed()
         );
         narrowed(ctx, &r.narrowed);
-        json!({"tries": r.attempts, "kept": r.kept, "ripped": r.ripped, "no_path": r.no_path, "hard_conflict": r.hard_conflict, "no_better": r.no_better, "narrowed": r.narrowed.len()})
+        json!({"tries": r.attempts, "kept": r.kept, "ripped": r.ripped, "no_path": r.no_path, "hard_conflict": r.hard_conflict, "no_better": r.no_better, "narrowed": r.narrowed.len(), "corridor": r.corridor})
     }
 }
 
@@ -823,7 +825,7 @@ impl Stage for Refinish {
         if s.routed > 0 {
             eprintln!("refinished {} more ({} on a finer grid), open {before} -> {}, {:.1} s", s.routed, s.fine, ctx.open().len(), ctx.elapsed());
         }
-        json!({"routed": s.routed, "failed": s.failed, "fine": s.fine})
+        json!({"routed": s.routed, "failed": s.failed, "fine": s.fine, "corridor": s.corridor})
     }
 }
 
