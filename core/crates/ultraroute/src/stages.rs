@@ -941,6 +941,13 @@ impl Stage for Write {
         if vias > 0 {
             eprintln!("mended {vias} pairs of vias whose lands only touched");
         }
+        // A via whose land only clips a pad of its net: it goes if not needed, else a piece on
+        // into the pad.
+        let (clipped, spans) = grid::mend_via_pad_grazes(board, &mut laid);
+        ledger.removed.extend(spans);
+        if clipped > 0 {
+            eprintln!("mended {clipped} vias whose lands only clipped a pad of their net");
+        }
         // Copper of a net that only grazes other copper of it: a piece across, at full width.
         let bridged = grid::mend_grazes(board, &mut laid);
         if bridged > 0 {
