@@ -5,7 +5,7 @@
 //! outside it. Costs go in `RouteGrid::region_cost` (tracks) and `via_penalty` (vias), which
 //! the CPU searches add to every step; the GPU and the browser's worker pool do not see them yet.
 
-use board::{Board, RegionKind};
+use board::{point_segment, Board, Nm, RegionKind, Shape};
 
 use crate::grid::{ObstacleMap, RouteGrid};
 use crate::search::STRAIGHT;
@@ -37,13 +37,11 @@ impl ObstacleMap {
                 let reach = if rule.vias { self.profile.via_radius } else { self.profile.half_width + self.reach() };
                 let mut near = Vec::new();
                 self.cells_near(&region.shape, reach, &mut |c| near.push(c as u32));
+                // Only `must` keeps to the cells inside.
                 let mut inside = Vec::new();
-                self.cells_near(&region.shape, 0, &mut |c| {
-                    let (i, j) = (c % self.nx, c / self.nx);
-                    if region.shape.depth(self.centre(i, j)) >= reach as f64 {
-                        inside.push(c as u32);
-                    }
-                });
+                if rule.kind == RegionKind::Must {
+                    self.cells_deep(&region.shape, reach, &mut |c| inside.push(c as u32));
+                }
                 let cost = match rule.kind {
                     RegionKind::Avoid(w) | RegionKind::Prefer(w) if rule.vias => (w * 1e6 / self.h as f64 * STRAIGHT as f64).round() as u32,
                     RegionKind::Avoid(w) | RegionKind::Prefer(w) => (w * STRAIGHT as f64).round() as u32,
@@ -65,6 +63,64 @@ impl ObstacleMap {
             }
         }
         out
+    }
+
+    /// Calls `f` for every cell whose centre lies inside `shape` at least `depth` from its edge
+    /// (`Shape::depth`), in the order `cells_near` gives the inside. Asking `depth` of every
+    /// cell measures it to every edge, cells times edges: a ground fill's outline of 700 edges
+    /// over a board took minutes. So the cells within `depth` of each edge are struck out from
+    /// the inside instead, each edge visiting only its own band, measured as `depth` measures.
+    pub(crate) fn cells_deep(&self, shape: &Shape, depth: Nm, f: &mut dyn FnMut(usize)) {
+        let Shape::Polygon(poly) = shape else {
+            self.cells_near(shape, 0, &mut |c| {
+                if shape.depth(self.centre(c % self.nx, c / self.nx)) >= depth as f64 {
+                    f(c)
+                }
+            });
+            return;
+        };
+        let mut inside = Vec::new();
+        self.cells_near(shape, 0, &mut |c| inside.push(c));
+        if inside.is_empty() {
+            return;
+        }
+        let mut shallow = vec![false; self.nx * self.ny];
+        let d = depth as f64;
+        let cols = |lo: f64, hi: f64| {
+            let a = ((lo - self.x0 as f64) / self.h as f64 - 0.5).floor().max(0.0) as usize;
+            let b = (((hi - self.x0 as f64) / self.h as f64 - 0.5).ceil().max(0.0) as usize).min(self.nx - 1);
+            a..=b
+        };
+        for k in 0..poly.len() {
+            let (p, q) = (poly[k], poly[(k + 1) % poly.len()]);
+            let (lo, hi) = (p.y.min(q.y) as f64 - d, p.y.max(q.y) as f64 + d);
+            let j0 = ((lo - self.y0 as f64) / self.h as f64 - 0.5).floor().max(0.0) as usize;
+            let j1 = (((hi - self.y0 as f64) / self.h as f64 - 0.5).ceil().max(0.0) as usize).min(self.ny - 1);
+            let (dx, dy) = ((q.x - p.x) as f64, (q.y - p.y) as f64);
+            for j in j0..=j1 {
+                let y = self.centre(0, j).y as f64;
+                // The edge's x over the rows within `depth`, widened by `depth` and a little more.
+                let (x0, x1) = if dy.abs() > 1.0 {
+                    let t0 = ((y - d - p.y as f64) / dy).clamp(0.0, 1.0);
+                    let t1 = ((y + d - p.y as f64) / dy).clamp(0.0, 1.0);
+                    let (a, b) = (p.x as f64 + t0 * dx, p.x as f64 + t1 * dx);
+                    (a.min(b), a.max(b))
+                } else {
+                    ((p.x.min(q.x)) as f64, (p.x.max(q.x)) as f64)
+                };
+                for i in cols(x0 - d - 2.0, x1 + d + 2.0) {
+                    let c = j * self.nx + i;
+                    if !shallow[c] && point_segment(self.centre(i, j), p, q) < d {
+                        shallow[c] = true;
+                    }
+                }
+            }
+        }
+        for c in inside {
+            if !shallow[c] {
+                f(c);
+            }
+        }
     }
 
     /// Applies the region rules that hold for `net` to its view.
@@ -188,5 +244,56 @@ mod tests {
         assert!(!bnet.blocked[bnet.index(1, corner.0, corner.1)], "B.Cu is not the region's layer");
         let at = |g: &RouteGrid, (i, j): (usize, usize)| g.via_penalty_at(j * g.nx + i);
         assert!(at(&a, centre) > 0 && at(&a, corner) == 0, "every net's vias pay inside");
+    }
+
+    /// The polygons the rasters are checked on, in millimetres: a square, a concave comb, a
+    /// fractured ring (a hole joined to the outside by a slit, as KiCad's fills are), a slanted
+    /// thin sliver, and a ragged 700-vertex blob like a ground fill's outline, part off the board.
+    fn polygons() -> Vec<Shape> {
+        let mm = |pts: &[(f64, f64)]| Shape::Polygon(pts.iter().map(|&(x, y)| Point::new((x * 1e6) as i64, (y * 1e6) as i64)).collect());
+        let mut blob = Vec::new();
+        for k in 0..700 {
+            let t = k as f64 / 700.0 * std::f64::consts::TAU;
+            let r = 7.0 + 1.3 * (7.0 * t).sin() + 0.4 * (53.0 * t).cos() + 0.15 * ((k * 7919) % 13) as f64 / 13.0;
+            blob.push((11.0 + r * t.cos(), 10.0 + r * t.sin()));
+        }
+        vec![
+            mm(&[(8.0, 8.0), (12.0, 8.0), (12.0, 12.0), (8.0, 12.0)]),
+            mm(&[(2.0, 2.0), (18.0, 2.0), (18.0, 9.0), (15.0, 9.0), (15.0, 4.0), (12.0, 4.0), (12.0, 9.0), (9.0, 9.0), (9.0, 4.3), (6.0, 4.3), (6.0, 9.0), (2.0, 9.0)]),
+            mm(&[(3.0, 11.0), (17.0, 11.0), (17.0, 19.0), (3.0, 19.0), (3.0, 15.0), (7.0, 15.0), (7.0, 17.0), (13.0, 17.0), (13.0, 13.0), (7.0, 13.0), (7.0, 15.0), (3.0, 15.0)]),
+            mm(&[(1.0, 1.0), (19.3, 17.1), (18.9, 17.6), (1.0, 1.8)]),
+            mm(&blob),
+        ]
+    }
+
+    /// `cells_deep` is `Shape::depth` asked of every cell inside, cell for cell, on maps whose
+    /// cells do not line up with the millimetre, and on a window.
+    #[test]
+    fn deep_cells_are_those_whose_depth_reaches() {
+        let b = board();
+        let window = board::BBox { min: Point::new(4_300_000, 3_100_000), max: Point::new(13_700_000, 15_900_000) };
+        let maps = [
+            ObstacleMap::new(&b, Profile::for_net(&b, 1), 97_000, false),
+            ObstacleMap::new(&b, Profile::for_net(&b, 1), 35_000, false),
+            ObstacleMap::window(&b, Profile::for_net(&b, 1), 41_000, window, false),
+        ];
+        let mut cases = 0;
+        for map in &maps {
+            for shape in polygons() {
+                for depth in [1, 35_000, 130_000, 260_001, 1_000_000] {
+                    let mut old = Vec::new();
+                    map.cells_near(&shape, 0, &mut |c| {
+                        if shape.depth(map.centre(c % map.nx, c / map.nx)) >= depth as f64 {
+                            old.push(c);
+                        }
+                    });
+                    let mut new = Vec::new();
+                    map.cells_deep(&shape, depth, &mut |c| new.push(c));
+                    assert_eq!(old, new, "cell {} depth {depth}", map.h);
+                    cases += !old.is_empty() as usize;
+                }
+            }
+        }
+        assert!(cases >= 40, "{cases}");
     }
 }

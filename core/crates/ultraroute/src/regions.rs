@@ -27,10 +27,6 @@ use std::collections::{BTreeSet, HashSet};
 use board::{Board, ClearUnder, Kind, Point, Region, RegionKind, RegionRule, Shape};
 use serde_json::Value;
 
-/// How far copper may reach over a region's edge and still count as outside it, as KiCad's
-/// geometry allows, in nanometres.
-const TOLERANCE: f64 = 500.0;
-
 /// A net's length limit.
 pub struct MaxLength {
     pub nets: Vec<u32>,
@@ -147,8 +143,9 @@ pub fn load(path: &str, board: &mut Board) -> Result<Vec<MaxLength>, String> {
 }
 
 /// What breaks the regions' hard rules or the length limits, one line each, naming the region
-/// or net: routed copper (`laid`) of a `never` net inside its region, or of a `must` net outside.
-/// Each line comes with the names of the nets it is about.
+/// or net: routed copper (`laid`) of a `never` net inside its region, or of a `must` net outside,
+/// as `Region::breaks` says, the same test the router's checker refuses new copper by. Each line
+/// comes with the names of the nets it is about.
 pub fn report(board: &Board, lengths: &[MaxLength], laid: &[board::ItemId]) -> Vec<(String, Vec<String>)> {
     let mut out = Vec::new();
     for region in &board.regions {
@@ -156,26 +153,7 @@ pub fn report(board: &Board, lengths: &[MaxLength], laid: &[board::ItemId]) -> V
             let mut broken = 0;
             let mut nets: BTreeSet<u32> = BTreeSet::new();
             for it in laid.iter().filter_map(|id| board.item(*id)) {
-                let vias_rule = it.kind == Kind::Via;
-                if vias_rule != rule.vias || !rule.holds_for(it.net) || it.layers & region.layers == 0 {
-                    continue;
-                }
-                // Copper reaches into the region when its centre line comes nearer than its
-                // radius, by more than KiCad's half micron: touching the edge is outside.
-                let touches = match &it.shape {
-                    Shape::Capsule { a, b, r } => Shape::Capsule { a: *a, b: *b, r: 0 }.gap_within(&region.shape, *r as f64) + TOLERANCE < *r as f64,
-                    Shape::Polygon(_) => it.shape.gap_within(&region.shape, 0.0) == 0.0,
-                };
-                let inside = match &it.shape {
-                    Shape::Capsule { a, b, r } => region.shape.depth(*a) + TOLERANCE >= *r as f64 && region.shape.depth(*b) + TOLERANCE >= *r as f64,
-                    Shape::Polygon(_) => false,
-                };
-                let breaks = match rule.kind {
-                    RegionKind::Never => touches,
-                    RegionKind::Must => !inside,
-                    _ => false,
-                };
-                if breaks {
+                if region.breaks(rule, it) {
                     broken += 1;
                     nets.insert(it.net);
                 }

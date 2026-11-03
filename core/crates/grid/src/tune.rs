@@ -5,7 +5,7 @@
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
 
-use board::{check_item, joined, Board, Item, ItemId, Kind, Nm, Point, Shape};
+use board::{check_item, joined, region_price, Board, Item, ItemId, Kind, Nm, Point, Shape};
 
 use crate::clock::Deadline;
 use crate::pairs::{pin_pairs, Pair};
@@ -151,7 +151,31 @@ fn own_room(board: &Board, piece: ItemId, chain: &[ItemId], ends: [Point; 2]) ->
 /// may take a bump of their own; its sides and top may not.
 type Bumped = (f64, (ItemId, Item), Vec<ItemId>, Vec<ItemId>);
 
+/// The pieces of `line` laid as copies of `item`, while each is clean: what the checker allows,
+/// the regions' hard rules among it (`never` net in, `must` net out). Their price under the
+/// regions' soft rules too, if all five lay: the sum of each side's and the top's length times
+/// what it pays (the leads lie along the track they replace, and pay what it paid).
+fn lay_bump(board: &mut Board, item: &Item, r: Nm, line: &[Point; 6]) -> (Vec<ItemId>, Option<f64>) {
+    let mut laid = Vec::new();
+    let mut price = 0.0;
+    for (k, p) in line.windows(2).enumerate() {
+        let piece = Item { shape: Shape::Capsule { a: p[0], b: p[1], r }, span: None, ..item.clone() };
+        if (1..4).contains(&k) {
+            price += region_price(board, &piece) * p[0].distance(p[1]);
+        }
+        let nid = board.insert(piece);
+        laid.push(nid);
+        if !check_item(board, nid).is_empty() {
+            return (laid, None);
+        }
+    }
+    (laid, Some(price))
+}
+
 fn add_bump(board: &mut Board, tracks: &[ItemId], want: f64) -> Option<Bumped> {
+    // A bump the regions' soft rules price is kept only when no free one lays anywhere: the
+    // cheapest per length added (its price, height, track, place and side).
+    let mut priced: Option<(f64, f64, ItemId, f64, f64)> = None;
     for h in HEIGHTS {
         for &id in tracks {
             let Some(item) = board.item(id).cloned() else { continue };
@@ -173,21 +197,16 @@ fn add_bump(board: &mut Board, tracks: &[ItemId], want: f64) -> Option<Bumped> {
                 let at = lead + room * (k as f64 + 0.5) / PLACES as f64;
                 for sign in [1.0, -1.0] {
                     let line = bump(a, b, at, w, h, sign);
-                    let mut laid = Vec::new();
-                    let mut clean = true;
-                    for p in line.windows(2) {
-                        let nid = board.insert(Item { shape: Shape::Capsule { a: p[0], b: p[1], r }, span: None, ..item.clone() });
-                        laid.push(nid);
-                        if !check_item(board, nid).is_empty() {
-                            clean = false;
-                            break;
-                        }
-                    }
+                    let (laid, price) = lay_bump(board, &item, r, &line);
                     // The sides and top keep clear of the rest of their own net's copper.
-                    clean = clean && laid.len() == 5 && laid[1..4].iter().all(|&nid| own_room(board, nid, &laid, [a, b]));
-                    if clean {
-                        let leads = vec![laid[0], laid[4]];
-                        return Some((2.0 * h, (id, removed), laid, leads));
+                    let clean = price.is_some() && laid.len() == 5 && laid[1..4].iter().all(|&nid| own_room(board, nid, &laid, [a, b]));
+                    match price {
+                        Some(p) if clean && p == 0.0 => {
+                            let leads = vec![laid[0], laid[4]];
+                            return Some((2.0 * h, (id, removed), laid, leads));
+                        }
+                        Some(p) if clean && priced.is_none_or(|q| p / h < q.0 / q.1) => priced = Some((p, h, id, at, sign)),
+                        _ => {}
                     }
                     for nid in laid.into_iter().rev() {
                         board.discard(nid);
@@ -197,7 +216,13 @@ fn add_bump(board: &mut Board, tracks: &[ItemId], want: f64) -> Option<Bumped> {
             board.restore(id, removed);
         }
     }
-    None
+    // None free: the cheapest priced one, laid again.
+    let (_, h, id, at, sign) = priced?;
+    let removed = board.remove(id)?;
+    let Shape::Capsule { a, b, r } = removed.shape else { unreachable!("a bumped track is a capsule") };
+    let (laid, _) = lay_bump(board, &removed, r, &bump(a, b, at, 6.0 * r as f64, h, sign));
+    let leads = vec![laid[0], laid[4]];
+    Some((2.0 * h, (id, removed), laid, leads))
 }
 
 /// One bump `match_lengths_watch` kept: the pair, the net bumped, the skew before and after it
@@ -287,8 +312,9 @@ mod tests {
         assert!(line[2].y > 0, "left of travel along +x is +y");
     }
 
-    #[test]
-    fn bumps_bring_the_shorter_net_up_to_the_longer() {
+    /// A pair on F.Cu from x 0 to 10 mm: P straight along y 0, N 0.4 mm above it with a 1.2 mm
+    /// dogleg. The board, the router's tracks and the pair.
+    fn dogleg() -> (Board, Vec<ItemId>, Pair) {
         let (pcb, copper) = kicad_pcb::parse_board(
             "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal)) (net 0 \"\") (net 1 \"D_P\") (net 2 \"D_N\"))",
         )
@@ -305,14 +331,64 @@ mod tests {
         for (a, b) in [((0, 400_000), (4_000_000, 400_000)), ((4_000_000, 400_000), (4_000_000, 1_000_000)), ((4_000_000, 1_000_000), (6_000_000, 1_000_000)), ((6_000_000, 1_000_000), (6_000_000, 400_000)), ((6_000_000, 400_000), (10_000_000, 400_000))] {
             soft.push(board.insert(track(2, Point::new(a.0, a.1), Point::new(b.0, b.1))));
         }
-        let pair = Pair { p: 1, n: 2, width: 150_000, gap: 250_000 };
+        (board, soft, Pair { p: 1, n: 2, width: 150_000, gap: 250_000 })
+    }
+
+    /// Tunes the pair, checks it is matched, connected and clean, and gives the tracks.
+    fn tuned(mut board: Board, mut soft: Vec<ItemId>, pair: Pair) -> (Board, Vec<ItemId>) {
         let t = match_lengths(&mut board, std::slice::from_ref(&pair), &mut soft, &Default::default());
         let (before, after) = (t.skews[0].1, t.skews[0].2);
         assert!((before - 1.2).abs() < 1e-6, "{t:?}");
         assert!(after <= TOLERANCE * 1e-6, "{t:?}");
+        assert!(t.bumps > 0, "{t:?}");
         assert!(board::connectivity(&board).airlines.is_empty());
         for id in &soft {
             assert!(check_item(&board, *id).is_empty());
+        }
+        (board, soft)
+    }
+
+    #[test]
+    fn bumps_bring_the_shorter_net_up_to_the_longer() {
+        let (board, soft, pair) = dogleg();
+        tuned(board, soft, pair);
+    }
+
+    fn rect(x0: Nm, y0: Nm, x1: Nm, y1: Nm) -> Shape {
+        Shape::Polygon(vec![Point::new(x0, y0), Point::new(x1, y0), Point::new(x1, y1), Point::new(x0, y1)])
+    }
+
+    fn region(shape: Shape, kind: board::RegionKind) -> board::Region {
+        board::Region { name: "r".into(), shape, layers: 1, rules: vec![board::RegionRule { nets: Some([1].into()), kind, vias: false }] }
+    }
+
+    /// P's bumps go below it, away from N: a region over the left half of that side, `never`
+    /// for P, sends them to the right half; with `avoid` they go there too, as they can.
+    #[test]
+    fn bumps_keep_out_of_never_and_avoid_regions() {
+        for kind in [board::RegionKind::Never, board::RegionKind::Avoid(1.0)] {
+            let (mut board, soft, pair) = dogleg();
+            board.regions = vec![region(rect(-1_000_000, -3_000_000, 5_000_000, -100_000), kind)];
+            let (board, soft) = tuned(board, soft, pair);
+            let r = &board.regions[0];
+            for id in &soft {
+                let it = board.item(*id).unwrap();
+                assert!(it.net != 1 || !r.touches(&it.shape), "{kind:?}: {it:?}");
+            }
+        }
+    }
+
+    /// A `must` region round P's line, 0.5 mm either side, holds every bump within it: only the
+    /// low ones fit.
+    #[test]
+    fn bumps_stay_within_must_regions() {
+        let (mut board, soft, pair) = dogleg();
+        board.regions = vec![region(rect(-1_000_000, -500_000, 11_000_000, 500_000), board::RegionKind::Must)];
+        let (board, soft) = tuned(board, soft, pair);
+        let r = &board.regions[0];
+        for id in &soft {
+            let it = board.item(*id).unwrap();
+            assert!(it.net != 1 || !r.breaks(&r.rules[0], it), "{it:?}");
         }
     }
 }
