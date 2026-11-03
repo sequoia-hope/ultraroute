@@ -431,7 +431,7 @@ pub fn grazes(board: &Board, laid: &[ItemId]) -> Vec<Graze> {
                 continue;
             }
             let Some(o) = board.item(other) else { continue };
-            if o.net != item.net || !o.on(layer) || !o.is_copper() || o.refilled() || o.shape.gap_within(&item.shape, 0.0) > 0.0 {
+            if o.net != item.net || !o.on(layer) || !o.is_copper() || o.refilled() || o.shape.gap_within(&item.shape, TOUCH) > TOUCH {
                 continue;
             }
             let squarely = |p: Point, r: Nm, x: &Item| end_square(p, r, x);
@@ -478,7 +478,7 @@ pub fn grazes(board: &Board, laid: &[ItemId]) -> Vec<Graze> {
                         && c.shape.contains(to)
                 })
             };
-            if overlap > 0.0 && overlap < full && !bridged(board, layer, id, item, other, o) && !covered() {
+            if overlap > -TOUCH && overlap < full && !bridged(board, layer, id, item, other, o) && !covered() {
                 out.push(Graze { track: id, other, from, to, overlap });
             }
         }
@@ -637,7 +637,7 @@ fn via_pad_grazes(board: &Board, laid: &[ItemId]) -> Vec<(ItemId, ItemId)> {
                 if bridged(board, l, id, v, other, o) {
                     continue;
                 }
-                let Some(chord) = land_chord(&o.shape, *c, *r as f64) else { continue };
+                let Some((chord, _)) = land_chord(&o.shape, *c, *r as f64) else { continue };
                 let least = (board.min_joint_of(v.net) as f64).max(*r as f64);
                 if chord < least {
                     out.push((id, other));
@@ -648,10 +648,10 @@ fn via_pad_grazes(board: &Board, laid: &[ItemId]) -> Vec<(ItemId, ItemId)> {
     out
 }
 
-/// The narrowest chord a disc's rim (centre `c`, radius `r`) cuts across `shape`'s edge, in nm:
-/// between the rim's two crossings of each stretch of rim inside it. `None` when the rim never
-/// enters it.
-fn land_chord(shape: &Shape, c: Point, r: f64) -> Option<f64> {
+/// The narrowest chord a disc's rim (centre `c`, radius `r`) cuts across `shape`'s edge, in nm,
+/// and its middle: between the rim's two crossings of each stretch of rim inside it. `None` when
+/// the rim never enters it.
+fn land_chord(shape: &Shape, c: Point, r: f64) -> Option<(f64, Point)> {
     const N: usize = 360;
     let rim: Vec<Point> = (0..N)
         .map(|k| {
@@ -661,7 +661,7 @@ fn land_chord(shape: &Shape, c: Point, r: f64) -> Option<f64> {
         .collect();
     let inside: Vec<bool> = rim.iter().map(|&p| shape.contains(p)).collect();
     let Some(start) = (0..N).find(|&k| !inside[k]) else { return None };
-    let mut best: Option<f64> = None;
+    let mut best: Option<(f64, Point)> = None;
     let mut run: Option<usize> = None;
     for step in 1..=N {
         let k = (start + step) % N;
@@ -670,7 +670,10 @@ fn land_chord(shape: &Shape, c: Point, r: f64) -> Option<f64> {
             (false, Some(first)) => {
                 let last = (k + N - 1) % N;
                 let chord = rim[first].distance(rim[last]);
-                best = Some(best.map_or(chord, |b: f64| b.min(chord)));
+                let middle = Point::new((rim[first].x + rim[last].x) / 2, (rim[first].y + rim[last].y) / 2);
+                if best.is_none_or(|(b, _)| chord < b) {
+                    best = Some((chord, middle));
+                }
                 run = None;
             }
             _ => {}
@@ -701,11 +704,16 @@ pub fn mend_via_pad_grazes(board: &mut Board, laid: &mut Vec<ItemId>) -> (usize,
         }
         board.restore(id, removed);
         let Shape::Capsule { a: c, r, .. } = v.shape else { continue };
+        let Some((_, middle)) = land_chord(&p.shape, c, r as f64) else { continue };
         let centre = p.shape.bbox();
         let centre = Point::new((centre.min.x + centre.max.x) / 2, (centre.min.y + centre.max.y) / 2);
         let least = (board.min_joint_of(v.net) + 1) / 2;
-        'widths: for w in [r, least] {
-            let into = (1..=40).map(|k| Point::new(c.x + (centre.x - c.x) * k / 40, c.y + (centre.y - c.y) * k / 40)).find(|&q| p.shape.depth(q) >= w as f64).unwrap_or(centre);
+        'widths: for w in [r, (r + least) / 2, least] {
+            // On through the sliver's middle, so even a piece narrower than the land covers it,
+            // until as deep in the pad as it is wide; else at the pad's centre.
+            let (dx, dy) = ((middle.x - c.x) as f64, (middle.y - c.y) as f64);
+            let along = |t: f64| Point::new(c.x + (dx * t).round() as Nm, c.y + (dy * t).round() as Nm);
+            let into = (1..=80).map(|k| along(k as f64 / 20.0)).find(|&q| p.shape.depth(q) >= w as f64).unwrap_or(centre);
             let mut pieces = Vec::new();
             for layer in (0..board.layers.len()).filter(|&l| v.on(l) && p.on(l)) {
                 let piece = board.insert(Item { kind: Kind::Track, net: v.net, layers: 1 << layer, shape: Shape::Capsule { a: c, b: into, r: w }, hole: None, locked: false, span: None });
@@ -1767,6 +1775,17 @@ mod tests {
         let two = via(&mut board, 1_100_000);
         let three = via(&mut board, 3_000_000);
         assert_eq!(via_grazes(&board, &[one, two, three]), vec![(one, two)]);
+    }
+
+    #[test]
+    fn a_track_whose_side_only_touches_a_via_is_a_graze() {
+        // roz-power-board's +3V3: a 0.2 mm track passing 0.4 mm from a 0.6 mm via's centre.
+        let mut board = empty_board();
+        let at = Point::new(0, 0);
+        let via = board.insert(Item { kind: Kind::Via, net: 1, layers: 1, shape: Shape::Capsule { a: at, b: at, r: 300_000 }, hole: Some((at, 200_000)), locked: false, span: None });
+        let track = board.insert(Item { shape: Shape::Capsule { a: Point::new(400_000, -1_500_000), b: Point::new(400_000, 1_500_000), r: 100_000 }, ..seg(at, at) });
+        let found = grazes(&board, &[track]);
+        assert_eq!(found.iter().map(|g| (g.track, g.other)).collect::<Vec<_>>(), vec![(track, via)], "{found:?}");
     }
 
     #[test]
