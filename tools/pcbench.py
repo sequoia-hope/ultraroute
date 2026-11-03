@@ -599,6 +599,16 @@ def run(a):
     print(f"{ok.get(a.run, 0)} of {len(ids)} succeeded")
 
 
+def text_helper(binary):
+    """The text helper `binary` would run (`ultraroute text-helper`, since feat/text-strokes);
+    None if it would box the text or is older."""
+    try:
+        helper = subprocess.run([str(binary), "text-helper"], capture_output=True, text=True).stdout.strip()
+    except OSError:
+        return None
+    return Path(helper) if helper and Path(helper).is_file() else None
+
+
 def ab(a):
     """Routes the same boards with two routers in one pool, each board's two routes side by side,
     then compares them. Two runs started at once each with half the workers are not equal: on
@@ -609,6 +619,10 @@ def ab(a):
     base = Path(a.base_bin).resolve()
     if not base.exists():
         sys.exit(f"no router at {base}")
+    # A build with `-p ultraroute` alone boxes its text, which reads as a routing change.
+    for name, router in ((a.base, base), (a.new, ROUTER)):
+        if not text_helper(router):
+            print(f"WARNING: {name} boxes copper and mask text: no kicad-text helper beside {router} (cargo build --release -p ultraroute -p kicad-text)", file=sys.stderr)
     runs = [(a.base, *start(a.base, ids, a, base, workers, commit=False), base), (a.new, *start(a.new, ids, a, ROUTER, workers), ROUTER)]
     # Interleaved so each board's two routes start together.
     ok = route_all([(name, d, info, router, b) for b in ids for name, d, info, router in runs], a, workers)
@@ -626,10 +640,7 @@ def provenance(workers, router=ROUTER, commit=True):
         except OSError:
             return None
     binary = Path(router).resolve()
-    # The text helper the router would run (`ultraroute text-helper`, since feat/text-strokes);
-    # none if it would box the text or is older.
-    helper = out([str(binary), "text-helper"]) if binary.exists() else None
-    helper = Path(helper) if helper and Path(helper).is_file() else None
+    helper = text_helper(binary)
     return {
         "commit": out(["git", "-C", ROOT, "rev-parse", "--short", "HEAD"]) if commit else None,
         "dirty": bool(out(["git", "-C", ROOT, "status", "--porcelain", "core"])),
