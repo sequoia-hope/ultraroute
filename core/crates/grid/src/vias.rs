@@ -138,7 +138,7 @@ fn track_mm(item: &Item) -> f64 {
 /// (so fine-pitch pads keep necked-down escape legs) and adding nearby tracks and pads of the same
 /// cluster so a single-layer detour can meet existing copper of its net anywhere inside the window.
 fn cluster_terminals(board: &mut Board, grid: &RouteGrid, clusters: &HashMap<ItemId, usize>, root: ItemId, win_bounds: BBox) -> Vec<Terminal> {
-    let mut by_cell: BTreeMap<usize, Option<(Point, Nm)>> = BTreeMap::new();
+    let mut by_cell: BTreeMap<usize, Option<crate::route::Leg>> = BTreeMap::new();
     for (cell, leg) in terminals(board, grid, root) {
         match by_cell.get(&cell) {
             Some(None) => {}

@@ -1957,18 +1957,31 @@ fn leg_cells(grid: &RouteGrid, path: &GridPath, sources: &[Terminal], targets: &
         }
     };
     for (end, leg) in [(first, leg_of(sources, first)), (last, leg_of(targets, last))] {
-        let Some((anchor, hw)) = leg else { continue };
-        if hw < half_width {
+        let Some(leg) = leg else { continue };
+        if leg.half_width < half_width {
             continue;
         }
         let to = grid.centre(end.1, end.2);
-        let steps = ((anchor.distance(to) / (grid.h as f64 * 0.5)).ceil() as usize).max(1);
-        for s in 0..steps {
-            let t = s as f64 / steps as f64;
-            let p = Point::new(anchor.x + ((to.x - anchor.x) as f64 * t).round() as Nm, anchor.y + ((to.y - anchor.y) as f64 * t).round() as Nm);
-            if let Some((i, j)) = grid.cell_at(p) {
-                if !own.contains(&(end.0 * cells + j * grid.nx + i)) && (end.0, i, j) != end {
-                    out.push((end.0, i, j));
+        let segs: [(Point, Point); 2];
+        let seg_slice: &[(Point, Point)] = match leg.elbow {
+            Some(e) => {
+                segs = [(leg.from, e), (e, to)];
+                &segs
+            }
+            None => {
+                segs = [(leg.from, to), (to, to)];
+                &segs[..1]
+            }
+        };
+        for &(a, b) in seg_slice {
+            let steps = ((a.distance(b) / (grid.h as f64 * 0.5)).ceil() as usize).max(1);
+            for s in 0..steps {
+                let t = s as f64 / steps as f64;
+                let p = Point::new(a.x + ((b.x - a.x) as f64 * t).round() as Nm, a.y + ((b.y - a.y) as f64 * t).round() as Nm);
+                if let Some((i, j)) = grid.cell_at(p) {
+                    if !own.contains(&(end.0 * cells + j * grid.nx + i)) && (end.0, i, j) != end {
+                        out.push((end.0, i, j));
+                    }
                 }
             }
         }

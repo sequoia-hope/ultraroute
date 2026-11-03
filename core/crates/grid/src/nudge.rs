@@ -240,7 +240,8 @@ fn try_step(
         directional: false,
         log: None,
         net_via_cost: Default::default(),
-                fine: true,
+        fine: true,
+        corridor: false,
     };
     let again = route_open(board, solver, &reroute, &mut |_| {});
     let after = open_count(board, options.pours_block);

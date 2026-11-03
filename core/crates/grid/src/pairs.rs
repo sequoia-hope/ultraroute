@@ -11,7 +11,7 @@ use board::{nm, BBox, Board, Item, ItemId, Kind, Nm, Point, Shape};
 
 use crate::grid::{ObstacleMap, Profile, RouteGrid, ViaSpec, FREE, SEVERAL};
 use crate::report::{tell, Focus, Log};
-use crate::route::{local_cluster, pieces, track, Terminal};
+use crate::route::{local_cluster, pieces, track, Leg, Terminal};
 use crate::search::{route_astar, GridPath, STRAIGHT};
 
 /// Pads of a pair farther apart than this are not taken as one end of it.
@@ -2031,7 +2031,7 @@ fn point_terminals(board: &mut Board, grid: &RouteGrid, net: u32, pt: Point, boa
                 let ok = legal_pair_item(board, id, pours_block);
                 board.discard(id);
                 if ok {
-                    out.push((idx, Some((pt, grid.half_width))));
+                    out.push((idx, Some(Leg { from: pt, elbow: None, half_width: grid.half_width })));
                 }
             }
         }
@@ -2088,7 +2088,7 @@ fn pad_only_terminals(board: &mut Board, grid: &RouteGrid, id: ItemId, pours_blo
                         let ok = legal_pair_item(board, tid, pours_block);
                         board.discard(tid);
                         if ok {
-                            out.push((idx, Some((from, hw))));
+                            out.push((idx, Some(Leg { from, elbow: None, half_width: hw })));
                         }
                     }
                 }

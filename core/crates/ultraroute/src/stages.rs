@@ -510,10 +510,11 @@ impl Stage for Finishing {
         ctx.ledger.laid.extend(s.laid.iter().copied());
         ctx.failed("finishing", &s.failures);
         narrowed(ctx, &s.narrowed);
+        corridors(ctx, &s.corridors);
         if s.fine > 0 {
             eprintln!("finishing: {} connections laid on a finer grid round them", s.fine);
         }
-        let detail = json!({"routed": s.routed, "failed": s.failed, "no_terminal": s.no_terminal, "no_path": s.no_path, "refused": s.refused, "vias": s.vias, "narrowed": s.narrowed.len(), "fine": s.fine});
+        let detail = json!({"routed": s.routed, "failed": s.failed, "no_terminal": s.no_terminal, "no_path": s.no_path, "refused": s.refused, "vias": s.vias, "narrowed": s.narrowed.len(), "fine": s.fine, "corridor": s.corridor});
         ctx.ledger.routed = s;
         detail
     }
@@ -525,6 +526,31 @@ fn narrowed(ctx: &mut StageCtx, runs: &[(ItemId, ItemId, Nm)]) {
         let net = ctx.board.item(from).map_or(0, |it| it.net);
         let name = ctx.board.net_name(net).to_string();
         let line = format!("{name} {} to {} runs {:.2} mm wide the whole way, its pins' width: no way at its own", grid::item_name(ctx.board, from), grid::item_name(ctx.board, to), width as f64 * 1e-6);
+        eprintln!("narrowed: {line}");
+        let refs = [from, to].iter().filter_map(|&id| match ctx.board.item(id).map(|it| &it.kind) {
+            Some(Kind::Pad { footprint, .. }) => Some(ctx.board.footprints[*footprint].reference.clone()),
+            _ => None,
+        }).collect();
+        ctx.stats.findings.push(Finding { severity: "warning", kind: "neck", message: line, refs, nets: vec![name], ends: None });
+    }
+}
+
+/// Each stretch a stage laid narrowed across a tight gap its net's own width cannot pass
+/// (`grid::Options::corridor`), said and made a finding: legal, but thinner than the designer
+/// asked for, so they can see where.
+fn corridors(ctx: &mut StageCtx, stretches: &[(ItemId, ItemId, Nm, Nm)]) {
+    for &(from, to, width, length) in stretches {
+        let net = ctx.board.item(from).map_or(0, |it| it.net);
+        let name = ctx.board.net_name(net).to_string();
+        let own = grid::Profile::for_net(ctx.board, net).half_width * 2;
+        let line = format!(
+            "{name} {} to {} narrows to {:.2} mm for {:.2} mm through a gap its {:.2} mm track cannot pass",
+            grid::item_name(ctx.board, from),
+            grid::item_name(ctx.board, to),
+            width as f64 * 1e-6,
+            length as f64 * 1e-6,
+            own as f64 * 1e-6
+        );
         eprintln!("narrowed: {line}");
         let refs = [from, to].iter().filter_map(|&id| match ctx.board.item(id).map(|it| &it.kind) {
             Some(Kind::Pad { footprint, .. }) => Some(ctx.board.footprints[*footprint].reference.clone()),
@@ -589,7 +615,8 @@ impl Stage for RipUp {
             ctx.elapsed()
         );
         narrowed(ctx, &r.narrowed);
-        json!({"tries": r.attempts, "kept": r.kept, "ripped": r.ripped, "no_path": r.no_path, "hard_conflict": r.hard_conflict, "no_better": r.no_better, "narrowed": r.narrowed.len()})
+        corridors(ctx, &r.corridors);
+        json!({"tries": r.attempts, "kept": r.kept, "ripped": r.ripped, "no_path": r.no_path, "hard_conflict": r.hard_conflict, "no_better": r.no_better, "narrowed": r.narrowed.len(), "corridor": r.corridor})
     }
 }
 
@@ -820,10 +847,68 @@ impl Stage for Refinish {
         let s = grid::route_open(ctx.board, ctx.solver, &options, &mut |b| watch.frame(b));
         ctx.ledger.laid.extend(s.laid.iter().copied());
         narrowed(ctx, &s.narrowed);
+        corridors(ctx, &s.corridors);
         if s.routed > 0 {
             eprintln!("refinished {} more ({} on a finer grid), open {before} -> {}, {:.1} s", s.routed, s.fine, ctx.open().len(), ctx.elapsed());
         }
-        json!({"routed": s.routed, "failed": s.failed, "fine": s.fine})
+        json!({"routed": s.routed, "failed": s.failed, "fine": s.fine, "corridor": s.corridor})
+    }
+}
+
+/// What is still open at the very end, narrowed across the tight gaps its own width cannot pass
+/// (`grid::Options::corridor`): the last resort, after every stage that keeps the designer's
+/// widths, so a board they finish never sees a corridor. With rip-up, through the router's own
+/// copper (`grid::RipOptions::corridor`); without, around it.
+pub struct Corridors;
+
+impl Stage for Corridors {
+    fn name(&self) -> &'static str {
+        "corridors"
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let before = ctx.open().len();
+        if before == 0 {
+            return json!({"corridor": 0});
+        }
+        let a = ctx.args;
+        let (corridor, narrow, stretches) = if a.rip_up {
+            let options = grid::RipOptions {
+                cell: a.cell.unwrap_or(grid::RipOptions::default().cell),
+                via_cost: ctx.ledger.costs.rip,
+                deadline: ctx.deadline(),
+                pours_block: a.pours_block,
+                log: ctx.log.clone(),
+                corridor: true,
+                ..Default::default()
+            };
+            let watch = &mut *ctx.watch;
+            let r = grid::rip_up_watch(ctx.board, ctx.solver, &options, &mut ctx.ledger.laid, &mut |b, attempt| watch.rip(b, &attempt));
+            (r.corridor, r.narrowed, r.corridors)
+        } else {
+            let options = grid::Options {
+                cell: a.cell.unwrap_or(grid::Options::default().cell),
+                via_cost: ctx.ledger.costs.open,
+                net_via_cost: ctx.ledger.costs.open_limited.clone(),
+                seed: a.seed,
+                deadline: ctx.deadline(),
+                pours_block: a.pours_block,
+                log: ctx.log.clone(),
+                corridor: true,
+                ..Default::default()
+            };
+            let watch = &mut *ctx.watch;
+            let s = grid::route_open(ctx.board, ctx.solver, &options, &mut |b| watch.frame(b));
+            ctx.ledger.laid.extend(s.laid.iter().copied());
+            (s.corridor, s.narrowed, s.corridors)
+        };
+        narrowed(ctx, &narrow);
+        corridors(ctx, &stretches);
+        let after = ctx.open().len();
+        if after < before {
+            eprintln!("corridors: {corridor} connections narrowed across tight gaps, open {before} -> {after}, {:.1} s", ctx.elapsed());
+        }
+        json!({"corridor": corridor, "stretches": stretches.len(), "open_before": before, "open_after": after})
     }
 }
 
