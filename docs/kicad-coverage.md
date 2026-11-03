@@ -129,7 +129,15 @@ way Stage 9 did; steps 1-3 also add the `~/pcb` rule files above as parser tests
    pair's vias priced the same, and gets no escape vias; length matching lengthens no net past
    its maximum, nor does the via pass; a maximum shorter than the pads lie apart is warned of at
    loading; a net allowed no vias gets none. easy2350 routes all its seeds within its length
-   rules. Left: `diff_pair_uncoupled`; steering on boards with inner signal layers, where a via
+   rules. Skew (2026-11-03): length matching tunes only the pairs a `skew` rule limits, until
+   they are a tolerance within it, and leaves the rest as routed. `A.inDiffPair('X')` is KiCad
+   9.0.8's, probed with kicad-cli: past trailing digits and underscores the name ends in `+`,
+   `-`, `P` or `N` (capitals only), the partner is on the board, and `X` matches the base name
+   before that letter, or it less one trailing `_` (`CLK` and `CLK_` take `CLK_P`; `/USB_D` takes
+   `/USB_D+`, `/USB` does not). KiCad takes no `USB_DP`/`USB_DM` nor `clk_p`/`clk_n` as a pair,
+   which the router still couples. KiCad measures a `skew` rule's nets together, each against
+   the longest (each pair alone with `within_diff_pairs`), so a rule over several pairs also
+   wants them matched to each other, which the router does not do. Left: `diff_pair_uncoupled`; steering on boards with inner signal layers, where a via
    counts or not by the layers its copper ends up on.
 6. **Pad geometry.** Done: clearance overrides judged as KiCad does; warnings for the rest. Left:
    padstacks per layer, `remove_unused_layers`, curves in custom pads and on copper.

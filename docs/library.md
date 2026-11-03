@@ -295,7 +295,9 @@ These run before routing in the command, so their copper is in place first.
   &PairOptions { cell, pours_block, deadline, log }, watch) -> PairStats` lays their coupled
   runs; keep that `laid` out of `soft` until the end so nothing rips a pair apart.
   `shares_layer(&board, &pair)` says whether a pair's ends share a layer. After routing,
-  `match_lengths(board, &pairs, soft, &deadline) -> TuneStats` adds bumps to the shorter net;
+  `match_lengths(board, &pairs, soft, &deadline) -> TuneStats` adds bumps to the shorter net of
+  each pair a custom `skew` rule limits (`skew_limit`), until it is a tolerance within it, and
+  leaves the rest as routed (`TuneStats::skews` lists every pair, its `limit` `None` if untuned);
   `pair_lengths` measures.
 
 ### tidying
@@ -524,7 +526,7 @@ its share of `--timeout`. A command line naming no stage gets `ultraroute::RECIP
 9. **`vias`** (the router laid copper): `reduce_vias`, then `pull_tight` again when it dropped any.
 10. **`cleaning`** (always, whatever the time): pair copper joins `laid`; `drop_duplicates`;
     `prune_dangling`.
-11. **`length matching`** (`--diff-pairs`): `match_lengths`.
+11. **`length matching`** (`--diff-pairs`): `match_lengths`, for the pairs a `skew` rule limits.
 12. **`result`** (always): the open count, and with `--blame` what blocks each open connection.
 13. **`write`** (always): `split_at_joins`, the regions' and necks' reports, moved parts'
     `(at ...)`, `edits`, `apply`.

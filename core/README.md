@@ -117,7 +117,7 @@ lengths, the deadline, and, of kind `rule`, every project or custom rule left ou
 | `--prefanout-mode stub\|dogbone\|grid\|inner\|same` | how the escapes are laid; default `inner` (a fine-grid route across layers). `same` first tries an escape without a via for a pad whose net meets no other layer; measured as no better than the default (`docs/pcbench.md`), kept as an option |
 | `--prefanout-order round\|inner\|trapped` | the order a part's pads claim escapes; default `inner` |
 | `--prefanout-ring MM` | how far past the part's pads the escapes end (0.2 to 5 mm; default 1.1) |
-| `--diff-pairs` | route differential pairs coupled, before the rest, and match their lengths at the end |
+| `--diff-pairs` | route differential pairs coupled, before the rest, and at the end bring each pair a custom `skew` rule limits within it (a pair no rule limits is left as routed) |
 | `--negotiate` | negotiated congestion: every connection routed at once, round after round, until none share |
 | `--negotiate-rounds N` | most rounds (default 30) |
 | `--negotiate-patience N` | rounds without fewer collisions before it stops (default 4) |

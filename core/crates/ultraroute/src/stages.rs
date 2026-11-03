@@ -912,7 +912,8 @@ impl Stage for Corridors {
     }
 }
 
-/// Last, once the copper is settled: the shorter net of each pair is given bumps.
+/// Last, once the copper is settled: the shorter net of each pair a custom `skew` rule limits is
+/// given bumps until the pair is within it. A pair with no such rule is left as routed.
 pub struct LengthMatching;
 
 impl Stage for LengthMatching {
@@ -929,12 +930,21 @@ impl Stage for LengthMatching {
         let deadline = ctx.deadline();
         let watch = &mut *ctx.watch;
         let t = grid::match_lengths_watch(ctx.board, &pairs, &mut ctx.ledger.laid, &deadline, &mut |b, bump| watch.bump(b, bump));
-        for (pair, before, after) in &t.skews {
-            ctx.say("pairs", format!("{pair}: {before:.2} mm apart in length, {after:.2} mm after tuning"));
-            eprintln!("tune: {pair} skew {before:.2} -> {after:.2} mm");
+        for grid::PairSkew { pair, before, after, limit } in &t.skews {
+            match limit {
+                Some((rule, max)) => {
+                    ctx.say("pairs", format!("{pair}: {before:.2} mm apart in length, {after:.2} mm after tuning to rule \"{rule}\"'s {max:.2} mm skew"));
+                    eprintln!("tune: {pair} skew {before:.2} -> {after:.2} mm (rule \"{rule}\" max {max:.2} mm)");
+                }
+                None => {
+                    ctx.say("pairs", format!("{pair}: {before:.2} mm apart in length, not tuned: no rule limits its skew"));
+                    eprintln!("tune: {pair} skew {before:.2} mm, not tuned: no skew rule");
+                }
+            }
         }
         ctx.watch.step(ctx.board);
-        json!({"pairs": t.pairs, "bumps": t.bumps, "skews": t.skews.iter().map(|(p, b, a)| json!({"pair": p, "before_mm": b, "after_mm": a})).collect::<Vec<_>>()})
+        let skews: Vec<Value> = t.skews.iter().map(|s| json!({"pair": s.pair, "before_mm": s.before, "after_mm": s.after, "rule": s.limit.as_ref().map(|l| &l.0), "max_mm": s.limit.as_ref().map(|l| l.1)})).collect();
+        json!({"pairs": t.pairs, "untuned": t.untuned(), "bumps": t.bumps, "skews": skews})
     }
 }
 
