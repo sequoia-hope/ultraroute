@@ -266,6 +266,8 @@ impl Block {
                 blocks.push(Block { name: group.name.clone(), footprints, zones });
             }
         }
+        // By what is in them: groups go by uuid, which says nothing.
+        blocks.sort_by(|a, b| (&a.name, &a.footprints, &a.zones).cmp(&(&b.name, &b.footprints, &b.zones)));
         blocks
     }
 }
@@ -273,8 +275,11 @@ impl Block {
 #[derive(Debug, Clone)]
 pub struct Board {
     pub layers: Vec<String>,
-    /// Net names by net number; 0 is the unconnected net.
+    /// Net names by net number, in order of name (see [`kicad_pcb::canon`]); 0 is the unconnected
+    /// net.
     pub nets: Vec<String>,
+    /// Each net's number in the board file, for the writer.
+    file_nets: Vec<u32>,
     pub footprints: Vec<FootprintInfo>,
     pub blocks: Vec<Block>,
     pub outline: Vec<Vec<Point>>,
@@ -455,6 +460,7 @@ impl Board {
         let mut board = Board {
             layers: layers.clone(),
             nets,
+            file_nets: pcb.file_nets.clone(),
             footprints: pcb
                 .footprints
                 .iter()
@@ -1283,6 +1289,12 @@ impl Board {
                 }
             }
         }
+    }
+
+    /// A net's number in the board file, which the writer writes. A number the file did not give
+    /// stands for itself.
+    pub fn file_net(&self, net: u32) -> u32 {
+        self.file_nets.get(net as usize).copied().unwrap_or(net)
     }
 
     pub fn net_name(&self, net: u32) -> &str {

@@ -2439,7 +2439,7 @@ mod tests {
     fn synthetic_board(layers_sexpr: &str, rules_json: &str) -> Board {
         let text = format!(
             "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers {layers_sexpr} (44 \"Edge.Cuts\" user)) \
-             (net 0 \"\") (net 1 \"USB_DP\") (net 2 \"USB_DM\") (net 3 \"BLOCKER\") (net 4 \"SIG\") \
+             (net 0 \"\") (net 1 \"USB_DM\") (net 2 \"USB_DP\") (net 3 \"V_BLOCKER\") (net 4 \"W_SIG\") \
              (gr_rect (start 0 0) (end 30 20) (layer \"Edge.Cuts\") (width 0.1)))"
         );
         let (pcb, copper) = kicad_pcb::parse_board(&text).unwrap();

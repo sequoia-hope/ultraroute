@@ -225,7 +225,7 @@ mod tests {
         let (pcb, copper) = kicad_pcb::parse_board(
             r#"(kicad_pcb (version 20240101) (general (thickness 1.6))
             (layers (0 "F.Cu" signal) (1 "In1.Cu" signal) (31 "B.Cu" signal))
-            (net 0 "") (net 1 "/GND") (net 2 "/USB_DP") (net 3 "/SIG")
+            (net 0 "") (net 1 "/GND") (net 2 "/USB_DP") (net 3 "/XSIG")
             (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts") (width 0.1))
             (zone (net 1) (net_name "/GND") (layer "In1.Cu") (uuid "z") (connect_pads (clearance 0.3))
               (min_thickness 0.2) (polygon (pts (xy 0 0) (xy 20 0) (xy 20 20) (xy 0 20)))))"#,
@@ -245,7 +245,7 @@ mod tests {
         b.insert(Item { kind: Kind::Via, net: 3, layers: 0b111, shape: Shape::Capsule { a: c, b: c, r: 300_000 }, hole: Some((c, 150_000)), locked: false, span: None });
         let lines = report(&b, &[], &[]);
         assert_eq!(lines.len(), 1, "{lines:?}");
-        assert_eq!(lines[0].0, "clear under /USB_DP: 1 tracks over antipads of /SIG on In1.Cu, the first at (10.000, 10.700)");
+        assert_eq!(lines[0].0, "clear under /USB_DP: 1 tracks over antipads of /XSIG on In1.Cu, the first at (10.000, 10.700)");
         assert_eq!(lines[0].1, vec!["/USB_DP".to_string()]);
     }
 }

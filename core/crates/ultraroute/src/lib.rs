@@ -1583,7 +1583,8 @@ mod tests {
         };
         let (sig, gnd, back) = (board.insert(track(2, 1)), board.insert(track(1, 1)), board.insert(track(2, 2)));
         let gone = stale_fills(&board, &[sig], text, false);
-        assert_eq!(gone, vec![copper.zones[0].fill_spans[0]], "only the fill the other net's track crosses goes");
+        let near = copper.zones.iter().find(|z| z.name == "gnd").unwrap();
+        assert_eq!(gone, vec![near.fill_spans[0]], "only the fill the other net's track crosses goes");
         assert!(text[gone[0].start..gone[0].end].starts_with("(filled_polygon"));
         assert!(stale_fills(&board, &[gnd, back], text, false).is_empty(), "its own net, or another layer, cuts nothing");
         assert_eq!(stale_fills(&board, &[], text, true).len(), 2, "a moved part leaves every fill stale");

@@ -204,6 +204,7 @@ pub fn read(root: &Node) -> Result<Pcb, KicadParse> {
         title_block,
         copper_layers,
         nets,
+        file_nets: Vec::new(),
         outline,
         margin,
         footprints,
