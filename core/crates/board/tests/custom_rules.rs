@@ -171,6 +171,21 @@ fn a_nets_length_and_vias_over_a_rules_maximum_are_reported() {
 }
 
 #[test]
+fn a_skew_rule_by_diff_pair_sets_its_maximum_and_is_said_as_tuned() {
+    let text = "(kicad_pcb (version 20240108) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal))
+         (net 0 \"\") (net 1 \"/USB_D+\") (net 2 \"/USB_D-\") (net 3 \"CLK_P\") (net 4 \"CLK_N\") (net 5 \"X_DP\") (net 6 \"X_DM\"))";
+    let (pcb, copper) = kicad_pcb::parse_board(text).unwrap();
+    let mut rules = kicad_pcb::Rules::parse(RULES).unwrap();
+    rules.apply_custom("(version 1)\n(rule \"usb\" (condition \"A.inDiffPair('/USB_D')\") (constraint skew (max 0.1mm) (within_diff_pairs)))\n(rule \"any\" (condition \"A.inDiffPair('C*')\") (constraint skew (max 1mm)))", "test.kicad_dru");
+    let b = Board::new(&pcb, &copper, rules);
+    let max = |net| b.net_maximum("skew", net).map(|(rule, _)| rule);
+    assert_eq!((max(1).as_deref(), max(2).as_deref()), (Some("usb"), Some("usb")));
+    assert_eq!((max(3).as_deref(), max(4).as_deref()), (Some("any"), Some("any")));
+    assert_eq!((max(5), max(6)), (None, None), "X_DP's partner would be X_DN, which is not on the board");
+    assert!(b.rules.warnings.iter().any(|w| w.contains("\"usb\": skew tuned")), "{:?}", b.rules.warnings);
+}
+
+#[test]
 fn a_net_a_rule_allows_no_vias_gets_none() {
     let mut b = board("", "(version 1)\n(rule \"crystal\" (condition \"A.NetName == 'B'\") (constraint via_count (max 0)))");
     assert!(b.no_vias(2) && !b.no_vias(1));

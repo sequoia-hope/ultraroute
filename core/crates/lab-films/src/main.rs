@@ -342,7 +342,13 @@ impl StageFilm<'_> {
             ),
             _ => {
                 let skews = detail["skews"].as_array().cloned().unwrap_or_default();
-                let said: Vec<String> = skews.iter().map(|k| format!("{} {:.2} -> {:.2} mm", k["pair"].as_str().unwrap_or(""), k["before_mm"].as_f64().unwrap_or(0.0), k["after_mm"].as_f64().unwrap_or(0.0))).collect();
+                let said: Vec<String> = skews
+                    .iter()
+                    .map(|k| match k["max_mm"].as_f64() {
+                        Some(_) => format!("{} {:.2} -> {:.2} mm", k["pair"].as_str().unwrap_or(""), k["before_mm"].as_f64().unwrap_or(0.0), k["after_mm"].as_f64().unwrap_or(0.0)),
+                        None => format!("{} {:.2} mm, no skew rule", k["pair"].as_str().unwrap_or(""), k["before_mm"].as_f64().unwrap_or(0.0)),
+                    })
+                    .collect();
                 let mut stats: Vec<(String, Value)> = skews.iter().map(|k| (k["pair"].as_str().unwrap_or("").to_string(), json!(format!("{:.2} mm", k["after_mm"].as_f64().unwrap_or(0.0))))).collect();
                 stats.extend([("bumps".to_string(), d("bumps")), ("open".to_string(), json!(open_end))]);
                 (format!("Tuned with {} bumps: {}; {open0} -> {open_end} open", d("bumps"), said.join(", ")), FrameOverlays { ripped: gone, laid: came, stats, ..Default::default() })
