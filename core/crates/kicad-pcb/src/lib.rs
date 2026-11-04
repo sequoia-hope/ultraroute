@@ -2,13 +2,15 @@
 //!
 //! ```text
 //! text ──sexpr::parse──▶ Node ──read::read──▶ Pcb ──outline::chain──▶ OutlineLoops
-//!                             ──copper::read_copper──▶ Copper
+//!                             ──copper::read_copper──▶ Copper ──canon::canonical──▶ same, ordered
 //! ```
 //!
 //! What comes out is a neutral record in metres (Y down, as the file is)
 //! plus the board outline chained into one outer loop and its cutouts.
 //! Everything the reader does not understand is counted into one warning;
 //! everything that would make the board silently wrong is a typed error.
+//! `canon::canonical` then orders it all by what it is, so a board reads the same whatever order
+//! its file has.
 //! `write::apply` puts edits back into the text and keeps every other byte.
 //! `place::apply` moves, turns and flips footprints to the other side as pcbnew 9 does, byte
 //! for byte, and also keeps every byte it does not move.
@@ -16,6 +18,7 @@
 //! No workspace dependency: the reader began as waffle-iron's (same
 //! author), and the router's `board` crate builds its model from this one.
 
+pub mod canon;
 pub mod copper;
 pub mod dru;
 pub mod model;
@@ -62,7 +65,8 @@ pub fn parse_kicad_pcb(text: &str) -> Result<Pcb, KicadParse> {
     read::read(&root)
 }
 
-/// The board and the copper a router works with, from one parse.
+/// The board and the copper a router works with, from one parse, in an order of what they are
+/// and not of the file's (see [`canon`]): a board reads the same however its file orders it.
 pub fn parse_board(text: &str) -> Result<(Pcb, Copper), KicadParse> {
     parse_board_with(text, text::shaper())
 }
@@ -71,12 +75,20 @@ pub fn parse_board(text: &str) -> Result<(Pcb, Copper), KicadParse> {
 pub fn parse_board_with(text: &str, shaper: text::Shaper) -> Result<(Pcb, Copper), KicadParse> {
     let mut root = sexpr::parse(text)?;
     sexpr::number_nets(&mut root);
-    let pcb = read::read(&root)?;
-    let copper = copper::read_copper_with(&root, &pcb.footprints, shaper)?;
+    let mut pcb = read::read(&root)?;
+    let mut copper = copper::read_copper_with(&root, &pcb.footprints, shaper)?;
+    // Last, as text is stroked by the file's footprint indices.
+    canon::canonical(&mut pcb, &mut copper);
     Ok((pcb, copper))
 }
 
 impl Pcb {
+    /// A net's number in the file, where [`parse_board`] numbered it by name: what the writer
+    /// wants. A number it did not give stands for itself.
+    pub fn file_net(&self, net: u32) -> u32 {
+        self.file_nets.get(net as usize).copied().unwrap_or(net)
+    }
+
     /// The Edge.Cuts primitives chained into the board loop and its
     /// cutouts.
     pub fn outline_loops(&self) -> Result<OutlineLoops, OutlineError> {

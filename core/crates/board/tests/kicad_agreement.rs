@@ -11,7 +11,9 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 fn verdict(text: &str, project: &str) -> (usize, usize) {
-    let (pcb, copper) = parse_board(text).unwrap();
+    let (pcb, mut copper) = parse_board(text).unwrap();
+    // KiCad judged every second and fortieth track as the file has them.
+    copper.tracks.sort_by_key(|t| t.span.start);
     let rules = Rules::read(&fixture(project)).unwrap();
     let b = Board::new(&pcb, &copper, rules);
     let clearance = check(&b).iter().filter(|v| v.rule == Rule::Clearance).count();
@@ -19,13 +21,15 @@ fn verdict(text: &str, project: &str) -> (usize, usize) {
 }
 
 fn variants(text: &str) -> [(&'static str, String); 4] {
-    let (_, copper) = parse_board(text).unwrap();
+    let (pcb, mut copper) = parse_board(text).unwrap();
+    // KiCad judged every second and fortieth track as the file has them.
+    copper.tracks.sort_by_key(|t| t.span.start);
     let shifted = |t: &Track| NewTrack {
         start: [t.start[0] + 0.1e-3, t.start[1]],
         end: [t.end[0] + 0.1e-3, t.end[1]],
         width: t.width,
         layer: t.layer.clone(),
-        net: t.net,
+        net: pcb.file_net(t.net),
         locked: false,
     };
     [

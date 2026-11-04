@@ -134,18 +134,18 @@ fn key(start: [f64; 2], end: [f64; 2], width: f64, layer: &str, net: u32) -> Str
 /// in the file moves.
 #[test]
 fn copper_written_back_reads_the_same() {
-    let (_, copper, text) = board("bluebuzz-rm2.kicad_pcb");
+    let (pcb, copper, text) = board("bluebuzz-rm2.kicad_pcb");
     let edit = Edit {
         remove: copper.tracks.iter().map(|t| t.span).chain(copper.vias.iter().map(|v| v.span)).collect(),
         tracks: copper
             .tracks
             .iter()
-            .map(|t| NewTrack { start: t.start, end: t.end, width: t.width, layer: t.layer.clone(), net: t.net, locked: false })
+            .map(|t| NewTrack { start: t.start, end: t.end, width: t.width, layer: t.layer.clone(), net: pcb.file_net(t.net), locked: false })
             .collect(),
         vias: copper
             .vias
             .iter()
-            .map(|v| NewVia { at: v.at, size: v.size, drill: v.drill, layers: v.layers.clone(), net: v.net, locked: false })
+            .map(|v| NewVia { at: v.at, size: v.size, drill: v.drill, layers: v.layers.clone(), net: pcb.file_net(v.net), locked: false })
             .collect(),
         arcs: Vec::new(),
         replace: Vec::new(),
