@@ -171,6 +171,21 @@ fn a_nets_length_and_vias_over_a_rules_maximum_are_reported() {
 }
 
 #[test]
+fn a_skew_rule_by_diff_pair_sets_its_maximum_and_is_said_as_tuned() {
+    let text = "(kicad_pcb (version 20240108) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal))
+         (net 0 \"\") (net 1 \"/USB_D+\") (net 2 \"/USB_D-\") (net 3 \"CLK_P\") (net 4 \"CLK_N\") (net 5 \"X_DP\") (net 6 \"X_DM\"))";
+    let (pcb, copper) = kicad_pcb::parse_board(text).unwrap();
+    let mut rules = kicad_pcb::Rules::parse(RULES).unwrap();
+    rules.apply_custom("(version 1)\n(rule \"usb\" (condition \"A.inDiffPair('/USB_D')\") (constraint skew (max 0.1mm) (within_diff_pairs)))\n(rule \"any\" (condition \"A.inDiffPair('C*')\") (constraint skew (max 1mm)))", "test.kicad_dru");
+    let b = Board::new(&pcb, &copper, rules);
+    let max = |net| b.net_maximum("skew", net).map(|(rule, _)| rule);
+    assert_eq!((max(1).as_deref(), max(2).as_deref()), (Some("usb"), Some("usb")));
+    assert_eq!((max(3).as_deref(), max(4).as_deref()), (Some("any"), Some("any")));
+    assert_eq!((max(5), max(6)), (None, None), "X_DP's partner would be X_DN, which is not on the board");
+    assert!(b.rules.warnings.iter().any(|w| w.contains("\"usb\": skew tuned")), "{:?}", b.rules.warnings);
+}
+
+#[test]
 fn a_net_a_rule_allows_no_vias_gets_none() {
     let mut b = board("", "(version 1)\n(rule \"crystal\" (condition \"A.NetName == 'B'\") (constraint via_count (max 0)))");
     assert!(b.no_vias(2) && !b.no_vias(1));
@@ -219,6 +234,10 @@ fn a_joint_is_held_to_the_widest_of_track_width_minimum_connection_and_connectio
     rules.min_connection = 0.05e-3;
     let (pcb, copper) = kicad_pcb::parse_board("(kicad_pcb (version 20240108) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal)) (net 0 \"\") (net 1 \"A\"))").unwrap();
     assert_eq!(Board::new(&pcb, &copper, rules).min_joint_of(1), nm(0.1e-3), "never under the narrowest track");
+    // earring: a board-wide connection width rule under a net's own track width rule.
+    let b = board("", "(version 1)\n(rule \"power\" (condition \"A.NetName == 'A'\") (constraint track_width (min 0.2mm)))\n(rule \"joints\" (constraint connection_width (min 0.09mm)))");
+    assert_eq!(b.min_joint_of(1), nm(0.2e-3), "never under the net's own track width rule");
+    assert_eq!(b.min_joint_of(2), nm(0.09e-3));
 }
 
 #[test]
@@ -273,4 +292,29 @@ fn a_physical_hole_clearance_allows_no_slack() {
     };
     assert_eq!(short(10.5498), 1, "0.2 um short is short");
     assert_eq!(short(10.5501), 0);
+}
+
+#[test]
+fn a_copper_zone_a_rule_keeps_other_nets_off_is_laid() {
+    // easy2350's way of protecting its 1V1 strips: a rule disallowing other nets' tracks and
+    // vias in the named copper zone (`A.intersectsArea`), and a pad of B so another net exists.
+    let body = "(footprint \"R\" (layer \"F.Cu\") (at 25 25) (property \"Reference\" \"R1\") (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\") (net 2 \"B\")))
+                (zone (net 1) (net_name \"A\") (layer \"B.Cu\") (name \"strip A\") (hatch edge 0.5) (connect_pads (clearance 0.2)) (min_thickness 0.25)
+                  (fill yes (thermal_gap 0.5) (thermal_bridge_width 0.5) (island_removal_mode 1))
+                  (polygon (pts (xy 10 20) (xy 15 20) (xy 15 20.6) (xy 10 20.6)))
+                  (filled_polygon (layer \"B.Cu\") (pts (xy 10 20) (xy 15 20) (xy 15 20.6) (xy 10 20.6))))";
+    let strip = |b: &Board| b.items().find(|(_, it)| matches!(it.kind, Kind::Pour { .. })).map(|(id, _)| id).unwrap();
+    let open = board(body, "");
+    assert!(!open.is_laid(strip(&open)), "no rule: a pour");
+    let rule = "(version 1)\n(rule \"keep strip A\" (condition \"A.intersectsArea('strip A') && A.NetName != 'A'\") (constraint disallow track via))";
+    let kept = board(body, rule);
+    assert!(kept.is_laid(strip(&kept)) && kept.must_join(strip(&kept)));
+    // A via of A in it is part of that copper; one of B, or one of A outside it, is not.
+    let via = |net, x: f64| Item { kind: Kind::Via, net, layers: u64::MAX >> (64 - kept.layers.len()), shape: Shape::Capsule { a: Point::new(nm(x * 1e-3), nm(20.3e-3)), b: Point::new(nm(x * 1e-3), nm(20.3e-3)), r: nm(0.3e-3) }, hole: Some((Point::new(nm(x * 1e-3), nm(20.3e-3)), nm(0.15e-3))), locked: false, span: None };
+    assert!(kept.in_laid_copper(&via(1, 12.0)));
+    assert!(!kept.in_laid_copper(&via(2, 12.0)) && !kept.in_laid_copper(&via(1, 18.0)) && !open.in_laid_copper(&via(1, 12.0)));
+    // A rule that lets B's vias in protects nothing: a via of B would cut the fill.
+    let tracks_only = "(version 1)\n(rule \"keep strip A\" (condition \"A.intersectsArea('strip A') && A.NetName != 'A'\") (constraint disallow track))";
+    let half = board(body, tracks_only);
+    assert!(!half.is_laid(strip(&half)));
 }

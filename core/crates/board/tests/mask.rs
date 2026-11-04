@@ -199,3 +199,82 @@ fn a_bare_vias_opening_keeps_clear_of_an_unplated_holes() {
     let v = via(&mut far, 3.1);
     assert!(check_item(&far, v).is_empty(), "{:?}", check_item(&far, v));
 }
+
+#[test]
+fn an_unattached_mask_opening_admits_any_one_net_and_keeps_a_second_out() {
+    // A bare F.Mask stroke far from every pad: the first net's tracks may run through it, while a
+    // second net's track in the same opening is refused as a solder mask bridge.
+    let drawn = "(gr_line (start 3 10) (end 7 10) (layer \"F.Mask\") (stroke (width 0.6) (type solid)))";
+    let mut b = plain("(pad_to_mask_clearance 0)", drawn);
+    assert_eq!(b.mask_areas.len(), 1);
+    assert!(b.mask_areas[0].2 >= ANY_ONE_NET, "unclaimed at load: {}", b.mask_areas[0].2);
+    let a1 = track_at(&mut b, 1, 4.0, 1);
+    let a2 = track_at(&mut b, 1, 6.0, 1);
+    assert!(check_item(&b, a1).is_empty(), "one net may enter");
+    assert!(check_item(&b, a2).is_empty(), "more copper of that same net may enter too");
+    let other = track_at(&mut b, 2, 5.0, 1);
+    assert!(check_item(&b, other).iter().any(|v| v.rule == Rule::Keepout), "a second net would bridge in the opening");
+    assert!(check_item(&b, a1).iter().any(|v| v.rule == Rule::Keepout), "both nets see the conflict");
+    b.remove(a1);
+    b.remove(a2);
+    assert!(check_item(&b, other).is_empty(), "with net A gone, net B alone may claim it");
+}
+
+#[test]
+fn the_shapes_of_one_unattached_mask_drawing_share_one_net_claim() {
+    // KiCad's DRC checks a drawing on F.Mask as one BOARD_ITEM even where its pieces do not touch,
+    // as a frame's two sides or a text's glyphs; two drawings are two items.
+    let frame = "(gr_rect (start 3 8) (end 7 12) (layer \"F.Mask\") (stroke (width 0.3) (type solid)) (fill none))";
+    let mut b = plain("(pad_to_mask_clearance 0)", frame);
+    assert_eq!(b.mask_areas.len(), 4, "the frame's four sides");
+    assert!(b.mask_areas.iter().all(|a| a.2 == b.mask_areas[0].2 && a.2 >= ANY_ONE_NET), "one group");
+    let a = track_at(&mut b, 1, 3.0, 1);
+    assert!(check_item(&b, a).is_empty());
+    let other = track_at(&mut b, 2, 7.0, 1);
+    assert!(check_item(&b, other).iter().any(|v| v.rule == Rule::Keepout), "a second net on the far side bridges the one opening");
+    let lines = "(gr_line (start 3 8) (end 3 12) (layer \"F.Mask\") (stroke (width 0.3) (type solid)))
+         (gr_line (start 7 8) (end 7 12) (layer \"F.Mask\") (stroke (width 0.3) (type solid)))";
+    let mut b = plain("(pad_to_mask_clearance 0)", lines);
+    assert_ne!(b.mask_areas[0].2, b.mask_areas[1].2, "two groups");
+    let a = track_at(&mut b, 1, 3.0, 1);
+    let other = track_at(&mut b, 2, 7.0, 1);
+    assert!(check_item(&b, a).is_empty() && check_item(&b, other).is_empty(), "each net has an opening of its own");
+}
+
+#[test]
+fn an_unattached_mask_opening_in_an_unfilled_zone_admits_only_the_zones_net() {
+    let drawn = "(gr_rect (start 3 9) (end 6 11) (layer \"F.Mask\") (fill solid) (width 0))
+         (zone (net 1) (net_name \"A\") (layer \"F.Cu\") (hatch edge 0.5)
+           (polygon (pts (xy 1 1) (xy 8 1) (xy 8 19) (xy 1 19))))";
+    let mut b = plain("(pad_to_mask_clearance 0)", drawn);
+    assert_eq!(b.mask_areas[0].2, 1, "refilling the zone will bare net A in the opening");
+    let own = track_at(&mut b, 1, 4.5, 1);
+    assert!(check_item(&b, own).is_empty());
+    let other = track_at(&mut b, 2, 4.5, 1);
+    assert!(check_item(&b, other).iter().any(|v| v.rule == Rule::Keepout));
+}
+
+#[test]
+fn a_mask_drawing_on_a_pad_and_unnetted_copper_admits_no_net() {
+    // Modelled on ottawa-badges-2016's JP11 solder jumper: two pads 0.2 mm apart with 0.15 mm
+    // mask expansion, an F.Mask stroke just outside their copper, in their openings but baring
+    // nothing, and a second F.Mask stroke touching pad 2 plus an unnetted F.Cu shorting bar.
+    let text = "(kicad_pcb (version 20240108) (generator \"pcbnew\") (general (thickness 1.6))
+         (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal) (38 \"B.Mask\" user) (39 \"F.Mask\" user) (44 \"Edge.Cuts\" user))
+         (setup (pad_to_mask_clearance 0.15) (tenting none))
+         (net 0 \"\") (net 1 \"A\") (net 2 \"B\")
+         (footprint \"JP\" (layer \"F.Cu\") (uuid \"0b10c000-0000-4000-8000-0000000000b1\") (at 10 10) (property \"Reference\" \"JP11\")
+           (pad \"1\" smd rect (at 0 -0.4) (size 0.8 0.6) (layers \"F.Cu\" \"F.Mask\") (net 1 \"A\"))
+           (pad \"2\" smd rect (at 0 0.4) (size 0.8 0.6) (layers \"F.Cu\" \"F.Mask\") (net 2 \"B\"))
+           (fp_line (start 0 -0.3) (end 0 0.3) (layer \"F.Cu\") (stroke (width 0.15) (type solid)))
+           (fp_line (start -0.508 -0.2) (end -0.508 0.2) (layer \"F.Mask\") (stroke (width 0.15) (type solid)))
+           (fp_line (start -0.508 0.177) (end 0.508 0.177) (layer \"F.Mask\") (stroke (width 0.15) (type solid))))
+         (gr_rect (start 0 0) (end 20 20) (layer \"Edge.Cuts\") (width 0.1)))";
+    let (pcb, copper) = kicad_pcb::parse_board(text).unwrap();
+    let mut b = Board::new(&pcb, &copper, no_clearance());
+    assert_eq!(b.mask_areas.len(), 2);
+    assert!(b.mask_areas[0].2 >= ANY_ONE_NET, "left mask stroke bares no copper");
+    assert_eq!(b.mask_areas[1].2, 0, "lower mask stroke touches pad 2 and unnetted drawn copper");
+    let v = via(&mut b, 2, 9.4125, 10.4875);
+    assert!(check_item(&b, v).iter().any(|x| x.rule == Rule::Keepout), "bare via opening bridges into the jumper frame");
+}

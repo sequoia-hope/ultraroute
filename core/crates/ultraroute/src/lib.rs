@@ -39,9 +39,11 @@ pub use stats::{Finding, RunStats, StageStats};
 pub use watch::{Cleaned, Flow, StageEvent, Unwatched, Watch};
 
 pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--plane-via-reach MM] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--negotiate-jacobi] [--negotiate-reroute-all] [--diff-pairs] [--prefanout] [--prefanout-mode stub|dogbone|grid|inner|same] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--negotiate] [--rip-up] [--nudge] [--tighten] [--arcs MM] [--via-cost MM[,OPEN_MM]] [--gpu] \
-[--timeout SECONDS] [--cell MM] [--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--uuid-seed N] [--adopt] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
+[--timeout SECONDS] [--cpu-clock] [--cell MM] [--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--uuid-seed N] [--adopt] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
 [--recipe default|bench|minimal] [--live PATH|-] [--live-fps N] [--live-step MS] [--blame] [--stats|--report FILE] [-h|--help]
---place takes millimetres with y pointing up: give KiCad's y negated (KiCad y 127.5 is -127.5).";
+--place takes millimetres with y pointing up: give KiCad's y negated (KiCad y 127.5 is -127.5).
+Copper and mask text is stroked by the kicad-text program ($ULTRAROUTE_TEXT_HELPER, else next to this one, else on PATH; none: boxes);
+ultraroute text-helper prints the one a route would run.";
 
 pub struct Args {
     pub input: String,
@@ -83,6 +85,8 @@ pub struct Args {
     pub gpu: bool,
     pub pours_block: bool,
     pub timeout: Option<f64>,
+    /// `--timeout` counts the process's CPU seconds, not the wall's (`grid::clock::use_cpu_time`).
+    pub cpu_clock: bool,
     pub place: Vec<(String, f64, f64)>,
     pub live: Option<String>,
     pub fps: f64,
@@ -214,6 +218,7 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
         gpu: false,
         pours_block: false,
         timeout: None,
+        cpu_clock: false,
         place: Vec::new(),
         live: None,
         fps: 30.0,
@@ -338,6 +343,7 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
                 a.cell = Some((mm * 1e6).round() as Nm);
             }
             "--timeout" => a.timeout = Some(value()?.parse().map_err(|e| format!("--timeout: {e}"))?),
+            "--cpu-clock" => a.cpu_clock = true,
             "--live" => a.live = Some(value()?),
             "--live-fps" => a.fps = value()?.parse().map_err(|e| format!("--live-fps: {e}"))?,
             "--live-step" => a.live_step = value()?.parse().map_err(|e| format!("--live-step: {e}"))?,
@@ -1128,6 +1134,7 @@ pub const STAGES: &[Entry] = &[
     row(&stages::Vias, Clock::Timed, Budget::KeepBack(0.1), None),
     row(&stages::Cleaning, Clock::Always, Budget::Untimed, None),
     row(&stages::Refinish, Clock::Timed, Budget::Run, None),
+    row(&stages::Corridors, Clock::Timed, Budget::Run, None),
     row(&stages::LengthMatching, Clock::Timed, Budget::Run, None),
     row(&stages::Outcome, Clock::Untold, Budget::Untimed, None),
     row(&stages::Write, Clock::Untold, Budget::Untimed, None),
@@ -1158,7 +1165,7 @@ fn run_deadline(started: Instant, timeout: Option<f64>, cancel: Arc<AtomicBool>)
 /// `deadline` ending `seconds` before it would, or itself when it has no end.
 fn sooner(deadline: &grid::Deadline, seconds: f64) -> grid::Deadline {
     match deadline.at {
-        Some(at) => deadline.until_at(at.checked_sub(Duration::from_secs_f64(seconds.max(0.0))).unwrap_or_else(Instant::now)),
+        Some(at) => deadline.until_at(at.checked_sub(Duration::from_secs_f64(seconds.max(0.0))).unwrap_or_else(grid::clock::now)),
         None => deadline.clone(),
     }
 }
@@ -1343,7 +1350,11 @@ pub fn route(
     if a.no_route {
         return unrouted(a, board, text, ledger, &live, stats, begun);
     }
-    let started = Instant::now();
+    if a.cpu_clock {
+        grid::clock::use_cpu_time();
+    }
+    // On the deadlines' clock, which `--cpu-clock` makes the CPU's.
+    let started = grid::clock::now();
     // One deadline for the whole run: every stage's is a share of it, none past its hard end.
     let run = run_deadline(started, a.timeout, cancel.clone());
     // Routing, and the stages that rescue what it left open, stop in time for the via pass.
@@ -1444,7 +1455,12 @@ fn prepare(a: &Args, board: &mut Board, ledger: &mut Ledger) {
         ledger.removed.extend(ripped.iter().filter_map(|it| it.span));
     }
     if a.strip || a.strip_all {
-        let loose: Vec<ItemId> = board.items().filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via) && (a.strip_all || !it.locked)).map(|(id, _)| id).collect();
+        // A via in laid copper of its net is part of that copper: --strip keeps it.
+        let loose: Vec<ItemId> = board
+            .items()
+            .filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via) && (a.strip_all || (!it.locked && !board.in_laid_copper(it))))
+            .map(|(id, _)| id)
+            .collect();
         for id in loose {
             if let Some(it) = board.remove(id) {
                 ledger.removed.extend(it.span);
@@ -1509,7 +1525,7 @@ fn unrouted(a: &Args, mut board: Board, text: &str, mut ledger: Ledger, live: &A
 /// The run's end: what the clock cut short said, the last frame sent, the summary made.
 #[allow(clippy::too_many_arguments)]
 fn finish(a: &Args, board: &Board, ledger: &mut Ledger, live: &Arc<Mutex<Option<Live>>>, mut stats: RunStats, timeline: &Timeline, (begun, started): (Instant, Instant), cancel: &AtomicBool) -> Routed {
-    let over = a.timeout.map_or(0.0, |t| started.elapsed().as_secs_f64() - t);
+    let over = a.timeout.map_or(0.0, |t| grid::clock::since(started).as_secs_f64() - t);
     stats.deadline = stats::DeadlineStats {
         limited: timeline.limited.iter().map(|s| s.to_string()).collect(),
         hard_passed_in: timeline.overran_in.map(String::from),
@@ -1532,7 +1548,7 @@ fn finish(a: &Args, board: &Board, ledger: &mut Ledger, live: &Arc<Mutex<Option<
         l.fills(&routed, &board.rules);
         let stopped = if cancel.load(Ordering::Relaxed) {
             Some("Cancelled")
-        } else if a.timeout.is_some_and(|t| started.elapsed().as_secs_f64() >= t) {
+        } else if a.timeout.is_some_and(|t| grid::clock::since(started).as_secs_f64() >= t) {
             Some("Deadline")
         } else {
             None
@@ -1597,7 +1613,7 @@ fn run_log(a: &Args, live: &Arc<Mutex<Option<Live>>>, started: Instant, extra: O
     (streaming || verbose || extra.is_some()).then(|| {
         grid::Log(Arc::new(move |act| {
             if verbose {
-                eprintln!("  [{:8.3} s] {}: {}", started.elapsed().as_secs_f64(), act.phase, act.text);
+                eprintln!("  [{:8.3} s] {}: {}", grid::clock::since(started).as_secs_f64(), act.phase, act.text);
             }
             if let Some(grid::Log(extra)) = &extra {
                 extra(act.clone());

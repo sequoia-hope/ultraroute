@@ -390,6 +390,7 @@ version = "0.1.0"
 dependencies = [
  "board",
  "kicad-pcb",
+ "libc",
  "morph",
  "pollster",
  "web-time",
@@ -507,6 +508,15 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "kicad-text"
+version = "0.1.0"
+dependencies = [
+ "kicad-pcb",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

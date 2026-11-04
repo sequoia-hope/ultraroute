@@ -156,7 +156,10 @@ let options = grid::Options { log: Some(log.clone()), ..Default::default() };
 ## kicad-pcb: reading and writing files
 
 - `parse_board(&text) -> Result<(Pcb, Copper), KicadParse>`: the board and its copper.
-  `parse_kicad_pcb` gives the `Pcb` alone. KiCad 6 and later.
+  `parse_kicad_pcb` gives the `Pcb` alone. KiCad 6 and later. Copper and mask text is stroked by
+  the `kicad-text` program (GPL, run as a process) when `text::shaper()` finds it, else boxed;
+  `parse_board_with(&text, Shaper::Boxes(".."))` or `Shaper::Helper(path, timeout)` chooses, and
+  `Copper::text_note` says which was used.
 - `Pcb`: `nets`, `footprints` (reference, value, `at`, rotation, pads), the outline primitives,
   thickness, `warnings`. `pcb.outline_loops()` chains the Edge.Cuts into loops.
 - `Copper`: `layers`, `tracks`, `arcs`, `vias`, `zones`, `pads`, `groups`, courtyards, mask
@@ -295,7 +298,9 @@ These run before routing in the command, so their copper is in place first.
   &PairOptions { cell, pours_block, deadline, log }, watch) -> PairStats` lays their coupled
   runs; keep that `laid` out of `soft` until the end so nothing rips a pair apart.
   `shares_layer(&board, &pair)` says whether a pair's ends share a layer. After routing,
-  `match_lengths(board, &pairs, soft, &deadline) -> TuneStats` adds bumps to the shorter net;
+  `match_lengths(board, &pairs, soft, &deadline) -> TuneStats` adds bumps to the shorter net of
+  each pair a custom `skew` rule limits (`skew_limit`), until it is a tolerance within it, and
+  leaves the rest as routed (`TuneStats::skews` lists every pair, its `limit` `None` if untuned);
   `pair_lengths` measures.
 
 ### tidying
@@ -513,8 +518,8 @@ its share of `--timeout`. A command line naming no stage gets `ultraroute::RECIP
 3. **`planes`** (a layer is a plane): `join_planes`.
 4. **`pairs`** (`--diff-pairs`): `route_pairs`, its copper locked and held apart until cleaning;
    then **`pair-escapes`** (`--prefanout`): pads of pairs left open at fine-pitch parts escaped.
-5. **`routing`**, which holds the next six: **`first`** (nets `--regions` gives a length limit,
-   by `route_open`), **`negotiation`** (`--negotiate`: `route_negotiated`), **`finishing`**
+5. **`routing`**, which holds the next six: **`first`** (nets `--regions` gives a length limit
+   or a `clear_under` rule, by `route_open`), **`negotiation`** (`--negotiate`: `route_negotiated`), **`finishing`**
    (`route_open`, always), **`prune-escapes`** (`prune_closed_escapes`), **`rip-up`**
    (`--rip-up`: `rip_up`), **`merge-escapes`** (the escapes join `laid`).
 6. **`shove`** (`--shove`, `--shove-plough`): `shove_escape` passes; if pair copper walls a
@@ -524,7 +529,7 @@ its share of `--timeout`. A command line naming no stage gets `ultraroute::RECIP
 9. **`vias`** (the router laid copper): `reduce_vias`, then `pull_tight` again when it dropped any.
 10. **`cleaning`** (always, whatever the time): pair copper joins `laid`; `drop_duplicates`;
     `prune_dangling`.
-11. **`length matching`** (`--diff-pairs`): `match_lengths`.
+11. **`length matching`** (`--diff-pairs`): `match_lengths`, for the pairs a `skew` rule limits.
 12. **`result`** (always): the open count, and with `--blame` what blocks each open connection.
 13. **`write`** (always): `split_at_joins`, the regions' and necks' reports, moved parts'
     `(at ...)`, `edits`, `apply`.
@@ -602,4 +607,18 @@ view gets the rules that hold for it: hard rules as blocked cells, costs in
 every step (the studio's worker pool in the browser does not see the costs yet). `max_lengths` entries
 (`{"nets": [...], "max_length_mm": N}`) are checked and reported at the end, with copper that
 breaks a region's hard rule, by region name; they are not yet routed to.
+
+`clear_under` entries (`{"nets": [...], "classes": [...], "layers": ["F.Cu"], "planes":
+["In1.Cu"], "margin_mm": 0}`) keep a ground-referenced net over whole plane: no via or plated
+hole of a net outside the rule may cut its antipad (its copper on the plane grown by the zone's
+clearance to it, the zone's own or the nets', the wider, as KiCad's refill cuts it, plus the
+refill's 5 um arc error) within `margin_mm` of the nets' tracks on `layers`, the tracks' full
+width (and at least the zone's minimum width, so the refill keeps the plane under them). A hole
+of the zone's own net cuts nothing, and where no zone of another net lies there is no antipad.
+The board keeps them as `board::ClearUnder`, the zones as `board::ZoneArea`; the checker holds
+the rule both ways (a track over an antipad, a via whose antipad comes under a track), so every
+stage that places copper keeps it, and each obstacle map follows the copper as it is stamped
+(`grid::under`): another net's hole walls the rule's nets' tracks off its antipad, and a rule's
+net's track walls other nets' vias off. The rule's nets route in `first`, so their tracks are
+down before most vias. Breaks left at the end are reported as `regions: clear under NETS: ...`.
 

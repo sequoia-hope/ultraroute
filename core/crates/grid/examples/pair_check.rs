@@ -1,6 +1,7 @@
 //! How well a routed board's differential pairs are coupled: per pair, how much of each net's
 //! track runs beside the other's at the pair's pitch (within 10%), on the same layer, the two
-//! nets' track lengths and vias, and the skew end to end as the length matching measures it.
+//! nets' track lengths and vias, and the skew: of the nets' tracks in all, near what KiCad's rule
+//! and the length matching measure, and end to end.
 //! `cargo run --release -p grid --example pair_check -- B.kicad_pcb`
 
 use std::path::Path;

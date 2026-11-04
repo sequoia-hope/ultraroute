@@ -65,18 +65,29 @@ def main():
         # Acute angles where tracks of the net meet end to end, away from pads.
         ends = defaultdict(list)
         for t in ts:
-            s, e = t.GetStart(), t.GetEnd()
+            s, e, w = t.GetStart(), t.GetEnd(), t.GetWidth()
             if s == e:
                 continue
-            ends[(s.x, s.y)].append((e.x - s.x, e.y - s.y))
-            ends[(e.x, e.y)].append((s.x - e.x, s.y - e.y))
+            ends[(s.x, s.y)].append((e.x - s.x, e.y - s.y, w))
+            ends[(e.x, e.y)].append((s.x - e.x, s.y - e.y, w))
         for (x, y), dirs in ends.items():
             if len(dirs) < 2 or any(poly.Contains(pcbnew.VECTOR2I(x, y)) for poly in pads[key]):
                 continue
-            angles = sorted(math.atan2(d[1], d[0]) for d in dirs)
-            least = min((angles[(i + 1) % len(angles)] - angles[i]) % (2 * math.pi) for i in range(len(angles))) * 180 / math.pi
-            if least < 89.5:
-                acute.append((net, b.GetLayerName(layer), (round(x / MM, 4), round(y / MM, 4)), round(least, 1)))
+            # An acute corner traps acid only where a wedge opens: the two tracks' inside edges
+            # part at w / (2 sin(angle / 2)) from the corner, so a track shorter than that (a short
+            # bridge, two tracks lying along each other) leaves none.
+            arms = sorted((math.atan2(d[1], d[0]), math.hypot(d[0], d[1]), d[2]) for d in dirs)
+            least = None
+            for i in range(len(arms)):
+                (a1, l1, w1), (a2, l2, w2) = arms[i], arms[(i + 1) % len(arms)]
+                angle = (a2 - a1) % (2 * math.pi)
+                if angle >= math.radians(89.5):
+                    continue
+                part = max(w1, w2) / (2 * math.sin(max(angle, 1e-9) / 2))
+                if min(l1, l2) > part:
+                    least = angle if least is None else min(least, angle)
+            if least is not None:
+                acute.append((net, b.GetLayerName(layer), (round(x / MM, 4), round(y / MM, 4)), round(math.degrees(least), 1)))
         # Slots: what closing the net's copper by the clearance fills, bordered by a track.
         whole = copper[key].CloneDropTriangulation()
         whole.Simplify()

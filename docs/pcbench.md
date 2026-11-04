@@ -17,10 +17,18 @@ checkout that holds it, and point `ULTRAROUTE_BIN` at another build when needed.
 (about 16 minutes on 16 workers). Leave it out to route all 1,182 boards; `--only ID,ID` routes
 the boards named (the directory names under `boards/`). Each board gets `--strip-all`, the
 recipe (`--recipe default` unless `--recipe "..."` is given), `--seed`, `--uuid-seed`,
-`--threads 1` and `--timeout` (120 s by default), under an 8 GB memory cap; the run takes as
+`--threads 1`, `--timeout` (120 s by default) and `--cpu-clock`, under an 8 GB memory cap; the run takes as
 many workers as `reserve` booked (`RESERVED_CORES`, 4 without it). Boards and runs live in
 `~/Software/ultraroute-lab/pcbench/` (`ULTRAROUTE_LAB` moves it). Conversion gives each repeated
 uuid a fresh one (KiCad 5 numbers footprints 0, 1, ...).
+
+**The clock.** Since 2026-11-03 `--timeout` counts the router's CPU seconds (`--cpu-clock`; with
+`--threads 1` that is one core's), so a board routes as far on a loaded machine as on an idle one.
+On the wall clock the verdicts followed the load: 12 of 34 time-limited near misses of
+s1-padvia3 (sequoia-server, 15 routes at once) routed clean at 120 s on an idle loaf. Each
+result records `cpu_seconds` beside `seconds` (wall), and run.json `clock`. `--wall-clock` times
+a run the old way, and is needed for a binary built before `--cpu-clock`; `compare` says when two
+runs' clocks differ, and their verdicts are then not comparable on time-limited boards.
 
 A two-board check of the command line (2026-10-30, loaf, the Stage 11 build):
 
@@ -28,6 +36,36 @@ A two-board check of the command line (2026-10-30, loaf, the Stage 11 build):
     [1/2] 1-Wire-Wing-pcb_1-Wire_Wing: ok open 0 new {} 1.5 s
     [2/2] 1Bitsy_1bitsy: ok open 0 new {} 14.3 s
     2 of 2 succeeded
+
+## Tiers: a ladder of runs, so the full corpus is routed only before a merge
+
+`pcbench.py tiers RUN ...` sorts the boards by their history over a list of full runs (same seed
+and recipe, oldest first) into `tools/pcbench_tiers.json`; `run --tier NAME` and `ab --tier NAME`
+route one tier. Made on 2026-11-02 from the sixteen seed-1 full runs since s1-main-0b0f336:
+
+| tier | boards | core-hours | what it holds | what it tells |
+|---|---|---|---|---|
+| smoke | 48 | 0.1 | 40 always clean in under 10 s with no deadline touching them, spread across layer counts, zones and size; the 8 quickest failures the clock never stopped | crashes, gross losses; any difference at all is the change's (`--exact` holds) |
+| focus | 74 | 1.1 | never clean: 58 the router gave up on with time to spare (algorithm gaps), 16 the clock stopped within 3 open | where a change should win |
+| guard | 240 | 1.7 | 200 of the 818 always clean untouched by a deadline, 40 of the 102 clean but touched by one or over 60 s | where a change loses boards |
+| noisy | 70 | 2.3 | clean in some runs, not others; nearly all at the time limit | the clock, mostly; left to the full corpus |
+| gate | 314 | 2.9 | focus + guard | the run before a full one |
+| all | 1182 | 12.2 | | before a merge to main |
+
+The ladder: smoke after every change (`ab`, about a minute on 12 cores), focus while working on a
+failure class, gate before claiming a gain (about 25 minutes of `ab` on sequoia-server's 15
+cores), the full corpus once before merging. Remake the tiers after a merge moves many boards
+between classes.
+
+    ULTRAROUTE_BIN=core/target/release/ultraroute ~/.claude/bin/reserve -c 12 -l "pcbench ab smoke" -- \
+      python3 tools/pcbench.py ab smoke-main smoke-mine --base-bin ~/Software/ultraroute-lab/bin/ultraroute-MAIN --tier smoke --seed 1
+
+`ab BASE NEW --base-bin BIN` routes the same boards with `BIN` (run BASE) and this checkout's
+router (run NEW, `ULTRAROUTE_BIN`) in one pool, each board's two routes started together, then
+runs `compare BASE NEW`. Two runs started side by side with half the workers each are not equal:
+on sequoia-server the side with 8 workers ran about 1.6x slower than the side with 7 and lost
+about 7 time-limited boards for it. Both binaries the same on smoke (2026-11-02): 40 of 48 clean
+on each side, 0 of 48 boards differ.
 
 ## Comparing runs
 
@@ -110,3 +148,27 @@ On the 429 boards that had new errors in base-1 (run valid-2, before the last th
 78 -> 27, hole clearance 55 -> 17, mask bridges 285 -> 55. Of 150 boards clean in base-1, 5 now
 leave a connection or two open (valid-3): mostly boards whose 0.2 mm pad mask expansion the old
 routes happened to miss, now a constraint.
+
+## Looking at failures
+
+`tools/failview.py` draws what blocks each open connection on a failed board, or across a whole
+run, as SVG and PNG crops plus a whole-board overview:
+
+    python3 tools/failview.py ~/Software/ultraroute-lab/pcbench/runs/RUN/ID \
+      --report OUT.report.json -o OUT_DIR
+    ~/.claude/bin/reserve -c 10 -l failview -- python3 tools/failview.py \
+      ~/Software/ultraroute-lab/pcbench/runs/RUN --reports-dir REPORTS_DIR \
+      --causes CAUSES.json -o ~/Software/ultraroute-lab/failures/RUN
+
+Given a single board directory under `runs/RUN/ID`, it reads `out.filled.kicad_pcb` (or
+`out.kicad_pcb`), `out.drc.json`, `result.json`, and the matching `.kicad_pro` and `.kicad_dru`
+from `boards/ID` (`--board` overrides it). For each `unconnected_items` entry in `out.drc.json`,
+it writes `open_NNN.{svg,png}` (the corridor between the two ends, with 2.4 mm zoom insets at End A
+and End B when the span exceeds 11 mm), `open_NNN_split.{svg,png}` when copper layers overlap in
+the crop, `overview.{svg,png}` with every open airwire, and `board.json`. `--report` adds the
+stage and reason from `ultraroute route --report`.
+
+Given `runs/RUN`, it renders every failed board in parallel (`--workers`, `--only`,
+`--skip-existing`) and writes `index.json` for `lab/failures.html` (served from
+`~/Software/ultraroute-lab/failures.html` with `?run=RUN`). `--causes` merges per-connection cause
+labels and notes into `board.json` and `index.json`.

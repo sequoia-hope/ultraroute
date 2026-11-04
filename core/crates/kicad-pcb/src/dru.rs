@@ -333,6 +333,8 @@ impl Constraint {
                         _ => c.max = Some(v),
                     }
                 }
+                // KiCad 9's `skew` option: each pair's nets measured against each other alone.
+                (Some(w @ "within_diff_pairs"), _) => c.words.push(w.to_string()),
                 (None, Node::Atom(t, _)) | (None, Node::Str(t, _)) => match t.parse::<f64>() {
                     Ok(v) if c.words.is_empty() => c.min = Some(v),
                     _ => c.words.push(t.clone()),
@@ -757,6 +759,9 @@ mod tests {
         assert_eq!(set.rules[4].constraints[0].min, Some(1.0));
         let counted = RuleSet::parse("(rule \"v\" (constraint via_count (max 3)))").unwrap();
         assert_eq!(counted.rules[0].constraints[0].max, Some(3.0));
+        let paired = RuleSet::parse("(rule \"s\" (constraint skew (max 0.1mm) (within_diff_pairs)))").unwrap();
+        assert!((paired.rules[0].constraints[0].max.unwrap() - 0.1e-3).abs() < 1e-12);
+        assert_eq!(paired.rules[0].constraints[0].words, ["within_diff_pairs"]);
     }
 
     #[test]

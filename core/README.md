@@ -12,6 +12,7 @@ It reads and writes `.kicad_pcb` boards directly.
 | `topo` | Topological routing: a Delaunay triangulation of the copper per layer, a search for a channel wide enough, and the taut rubber band through it. An experiment: the command does not link it; it is built and tested with the workspace. |
 | `ultraroute` | The command, and the same pipeline as a library (`parse`, `route`, `run_with_solver`). |
 | `web` | `ultraroute` compiled to WebAssembly for the studio's router in the browser tab. |
+| `kicad-text` | GPL-3.0-or-later, the one crate that is not MIT: KiCad's `newstroke` font and text layout as a program, `kicad-text`, which strokes copper and mask text for the reader over a pipe (one JSON item a line in, its polygons a line out). The reader finds it by `ULTRAROUTE_TEXT_HELPER`, next to `ultraroute`, or on `PATH`, and boxes text without it; no MIT crate may depend on it (`kicad-pcb/tests/gpl_boundary.rs`). |
 | `lab-films` | `feature_film`: records one stage of a run as a film for `lab/features.html`. |
 
 `docs/library.md` explains the crates for a program of your own.
@@ -21,7 +22,7 @@ It reads and writes `.kicad_pcb` boards directly.
 Needs Rust; `rust-toolchain.toml` pins 1.95.0, which `rustup` installs on first use. From `core/`:
 
 ```sh
-cargo build --release -p ultraroute
+cargo build --release -p ultraroute -p kicad-text
 mkdir -p /tmp/earring
 target/release/ultraroute route fixtures/earring.kicad_pcb -o /tmp/earring/routed.kicad_pcb --timeout 120
 ```
@@ -77,7 +78,7 @@ A stage runs only when its flag or the board asks for it.
 | `pairs` | `--diff-pairs` | until a quarter of `--timeout` has gone |
 | `pair-escapes` | `--prefanout`, after `pairs` | 15% of what is left |
 | `routing` | always; holds the next six | |
-| `first` | `--regions` gives nets a length limit | a quarter of what is left of the routing time |
+| `first` | `--regions` gives nets a length limit or a `clear_under` rule | a quarter of what is left of the routing time |
 | `negotiation` | `--negotiate` | half of `--timeout`; after `first`, half of what is left of the routing time |
 | `finishing` | always: one connection at a time | the routing time |
 | `prune-escapes` | there are escapes | no limit |
@@ -117,7 +118,7 @@ lengths, the deadline, and, of kind `rule`, every project or custom rule left ou
 | `--prefanout-mode stub\|dogbone\|grid\|inner\|same` | how the escapes are laid; default `inner` (a fine-grid route across layers). `same` first tries an escape without a via for a pad whose net meets no other layer; measured as no better than the default (`docs/pcbench.md`), kept as an option |
 | `--prefanout-order round\|inner\|trapped` | the order a part's pads claim escapes; default `inner` |
 | `--prefanout-ring MM` | how far past the part's pads the escapes end (0.2 to 5 mm; default 1.1) |
-| `--diff-pairs` | route differential pairs coupled, before the rest, and match their lengths at the end |
+| `--diff-pairs` | route differential pairs coupled, before the rest, and at the end bring each pair a custom `skew` rule limits within it (a pair no rule limits is left as routed) |
 | `--negotiate` | negotiated congestion: every connection routed at once, round after round, until none share |
 | `--negotiate-rounds N` | most rounds (default 30) |
 | `--negotiate-patience N` | rounds without fewer collisions before it stops (default 4) |
@@ -145,12 +146,13 @@ lengths, the deadline, and, of kind `rule`, every project or custom rule left ou
 | `--planes LAYER,...` | layers given whole to a plane: no tracks on them, vias through them |
 | `--auto-planes` | take inner layers one net's pour all but fills as planes |
 | `--plane-via-reach MM` | every surface pad of a plane's net gets a via of its own within MM, edge to edge, laid before routing as the router's own copper (a signal that needs the room may rip it; it is laid again after routing where it still fits); a pad left without is reported (a `plane-via` finding) |
-| `--regions FILE` | a planner's routing regions and length limits (circuit-composer's `routing.json`) |
+| `--regions FILE` | a planner's routing regions, length limits and clear-under rules (circuit-composer's `routing.json`; see below) |
 | `--rip-region X,Y,R` | rip every unlocked track and via in this disc (mm, KiCad's frame) first; repeatable |
 | `--lock REF,...` | parts that may not move |
 | `--place REF=X,Y` | put a part at X,Y mm before routing; Y points up (KiCad's y negated); repeatable |
 | `--cell MM` | the grid cell for every stage (0.005 to 1; default 0.05) |
 | `--timeout SECONDS` | the run's time; the board routed so far is written when it runs out |
+| `--cpu-clock` | `--timeout` and every stage's share count the process's CPU seconds (all threads together), not the wall's, so a loaded machine gets as far as an idle one; the benchmark runs with it |
 | `--seed N` | reorders connections of nearly equal length, for a search over runs (default 0) |
 | `--uuid-seed N` | draw the new copper's uuids from this seed, so the output is the same every time |
 | `--threads N` | threads for pre-fanout and Jacobi negotiation (default half the machine's) |
@@ -166,3 +168,21 @@ lengths, the deadline, and, of kind `rule`, every project or custom rule left ou
 | `-h`, `--help` | print the flags |
 
 A test (`tests/cli.rs`) checks that this table names every flag in `ultraroute::USAGE`.
+
+`--regions` reads `routing.json` version 1 (format in `crates/ultraroute/src/regions.rs`, more in
+`docs/library.md`): `regions` (polygons with `never`, `must`, `avoid` and `prefer` rules for
+nets' tracks or vias), `max_lengths` (checked and reported), and `clear_under`:
+
+```json
+"clear_under": [{"nets": ["/USB_DP", "/USB_DM"], "classes": ["USB"], "layers": ["F.Cu"],
+                 "planes": ["In1.Cu"], "margin_mm": 0.0}]
+```
+
+No via or plated hole of a net outside the rule may have its antipad (the hole it cuts in a zone
+of another net on a `planes` layer: its copper there grown by the zone's clearance to it, the
+zone's own or the nets', the wider, as KiCad's refill cuts it) within `margin_mm` (default 0) of
+the rule's nets' tracks on `layers`, the tracks' full width. It holds both ways: the nets' tracks
+keep off antipads already there, and later vias keep their antipads out from under the tracks.
+The nets route first (the `first` stage). A hole of the zone's own net cuts nothing; nor does any
+where no zone of another net is. Breaks left at the end are reported as `regions: clear under ...`
+lines, and nets the board does not have as the other rules' are.

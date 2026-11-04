@@ -113,9 +113,13 @@ impl Board {
 
     /// How narrow `net`'s copper may be where its tracks join: its narrowest track
     /// ([`Board::min_track_width_of`]), or the board's minimum connection width or a custom
-    /// rule's `connection_width` for the net where that is wider.
+    /// rule's `connection_width` for the net where that is wider. Never under its narrowest track:
+    /// a rule matching the net replaces the board's connection width, not its track width, and
+    /// the joint is laid as a track (earring's VBUS, 0.2 mm wide by its class's rule, mended into
+    /// J1 at the 0.09 mm a board-wide connection width rule allows).
     pub fn min_joint_of(&self, net: u32) -> Nm {
-        let floor = self.min_track_width_of(net).max(nm(self.rules.min_connection));
+        let track = self.min_track_width_of(net);
+        let floor = track.max(nm(self.rules.min_connection));
         if !self.custom.has("connection_width") {
             return floor;
         }
@@ -124,6 +128,7 @@ impl Board {
             .map(|l| self.rule_min("connection_width", &Thing::New { board: self, via: false, net: Some(net), class, width: 0, drill: 0, layer: Some(l), area: Area::Unknown }, None, l, floor))
             .max()
             .unwrap_or(floor)
+            .max(track)
     }
 
     /// The nets whose copper breaks a custom rule's `length` or `via_count` maximum, one line
@@ -154,8 +159,8 @@ impl Board {
         out
     }
 
-    /// The `max` a custom rule surely sets for `kind` (`length`, metres; `via_count`) on `net`'s
-    /// copper, with the rule's name.
+    /// The `max` a custom rule surely sets for `kind` (`length` and `skew`, metres; `via_count`)
+    /// on `net`'s copper, with the rule's name.
     pub fn net_maximum(&self, kind: &str, net: u32) -> Option<(String, f64)> {
         if net == 0 || !self.custom.has(kind) {
             return None;
@@ -263,7 +268,11 @@ impl Board {
         let mut out: Vec<String> = set.errors.iter().map(|e| format!("{source}: {e}; not applied")).collect();
         for rule in &set.rules {
             let kinds: Vec<&str> = rule.constraints.iter().map(|c| c.kind.as_str()).filter(|k| !APPLIED.contains(k) && !ELSEWHERE.contains(k)).collect();
+            let (tuned, kinds): (Vec<&str>, Vec<&str>) = kinds.into_iter().partition(|k| *k == "skew");
             let (reported, dropped): (Vec<&str>, Vec<&str>) = kinds.into_iter().partition(|k| REPORTED.contains(k));
+            if !tuned.is_empty() {
+                out.push(format!("{source}: custom rule \"{}\": skew tuned to within each differential pair (--diff-pairs), not across pairs", rule.name));
+            }
             if !dropped.is_empty() {
                 out.push(format!("{source}: custom rule \"{}\": {} not applied", rule.name, dropped.join(", ")));
             }
@@ -279,6 +288,32 @@ pub(crate) fn names_nets(set: &RuleSet) -> bool {
     use kicad_pcb::dru::Expr;
     let names = |e: &Expr| matches!(e, Expr::Prop(_, p) if p == "netname") || matches!(e, Expr::Call(_, f, _) if f == "indiffpair" || f == "fromto");
     set.rules.iter().filter_map(|r| r.condition.as_ref()).any(|c| c.any(&names))
+}
+
+/// KiCad's differential-pair reading of a net name (`DRC_ENGINE::MatchDpSuffix`, KiCad 9.0.8):
+/// past any trailing digits and underscores, a `+`, `-`, `P` or `N` (capitals only). Gives the
+/// base name before it and the partner's name, the sign swapped: `CLK_P1` is `CLK_` and `CLK_N1`.
+/// `USB_DM` is no pair's.
+fn dp_base(name: &str) -> Option<(&str, String)> {
+    let (i, c) = name.char_indices().rev().find(|(_, c)| !c.is_ascii_digit() && *c != '_')?;
+    let other = match c {
+        '+' => '-',
+        '-' => '+',
+        'P' => 'N',
+        'N' => 'P',
+        _ => return None,
+    };
+    let base = &name[..i];
+    Some((base, format!("{base}{other}{}", &name[i + 1..])))
+}
+
+/// `inDiffPair(pattern)` as KiCad 9.0.8 has it: the net is one of a pair on the board (its
+/// partner's name there too), and the pair's base name, or that less one trailing underscore,
+/// matches `pattern` by KiCad's wildcard, case and all: `CLK` and `CLK_` take `CLK_P`, `/USB_D`
+/// takes `/USB_D+` but `/USB` does not.
+fn in_diff_pair(board: &Board, name: &str, pattern: &str) -> bool {
+    let Some((base, partner)) = dp_base(name) else { return false };
+    board.nets.contains(&partner) && (wildcard(pattern, base, false) || base.strip_suffix('_').is_some_and(|b| wildcard(pattern, b, false)))
 }
 
 fn strictest(r: &Resolved, implicit: Nm) -> Nm {
@@ -384,6 +419,7 @@ impl Object for Thing<'_> {
             }),
             "existsonlayer" => self.layer_names().map_or(Value::Unknown, |ls| Value::Bool(ls.iter().any(|l| wildcard(arg, l, true)))),
             "hasnetclass" => self.class().map_or(Value::Unknown, |c| Value::Bool(c == arg || c.split(',').any(|n| n == arg))),
+            "indiffpair" => self.net().map_or(Value::Unknown, |net| Value::Bool(in_diff_pair(board, board.net_name(net), arg))),
             "intersectsarea" | "insidearea" | "enclosedbyarea" => self.in_area(board, name, arg),
             "memberoffootprint" => match self {
                 Thing::Item(_, _, Item { kind: Kind::Pad { footprint, .. }, .. }) => Value::Bool(wildcard(arg, &board.footprints[*footprint].reference, true)),
@@ -475,5 +511,43 @@ impl Thing<'_> {
             },
             _ => Value::Unknown,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pairs_base_name_is_kicads() {
+        assert_eq!(dp_base("CLK_P"), Some(("CLK_", "CLK_N".into())));
+        assert_eq!(dp_base("/USB_D-"), Some(("/USB_D", "/USB_D+".into())));
+        assert_eq!(dp_base("TX_N0"), Some(("TX_", "TX_P0".into())));
+        assert_eq!(dp_base("LVDS+_1"), Some(("LVDS", "LVDS-_1".into())));
+        assert_eq!(dp_base("USB_DM"), None);
+        assert_eq!(dp_base("clk_p"), None);
+        assert_eq!(dp_base("P_CLK"), None);
+        assert_eq!(dp_base("12_"), None);
+    }
+
+    fn board_of(nets: &[&str]) -> Board {
+        let decl: String = nets.iter().enumerate().map(|(i, n)| format!("(net {} \"{n}\")", i + 1)).collect();
+        let (pcb, copper) = kicad_pcb::parse_board(&format!("(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal)) (net 0 \"\") {decl})")).unwrap();
+        Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap())
+    }
+
+    /// What kicad-cli 9.0.8 matched on the same names (ultraroute-lab/probes/skew/probe.py).
+    #[test]
+    fn in_diff_pair_takes_a_pairs_nets_by_base_name() {
+        let b = board_of(&["/USB_D+", "/USB_D-", "CLK_P", "CLK_N", "USB_DP", "USB_DM", "clk_p", "clk_n", "A__P", "A__N", "LONE_P"]);
+        let holds = |net: &str, pattern: &str| in_diff_pair(&b, net, pattern);
+        assert!(holds("/USB_D+", "/USB_D") && holds("/USB_D-", "/USB_D") && holds("/USB_D-", "*USB_D") && holds("/USB_D+", "/USB*"));
+        assert!(!holds("/USB_D+", "USB_D") && !holds("/USB_D+", "/USB"), "the whole base name, its slash too");
+        assert!(!holds("/USB_D+", "/usb_d"), "case counts");
+        assert!(holds("CLK_P", "CLK") && holds("CLK_N", "CLK_") && holds("CLK_N", "CLK*"));
+        assert!(!holds("USB_DP", "*") && !holds("USB_DM", "*"), "M is no sign to KiCad");
+        assert!(!holds("clk_p", "*"), "nor a small p");
+        assert!(holds("A__P", "A_") && !holds("A__P", "A"), "one underscore dropped, no more");
+        assert!(!holds("LONE_P", "*"), "no partner on the board");
     }
 }

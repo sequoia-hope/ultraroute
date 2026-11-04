@@ -4,10 +4,17 @@ baselines (FreeRouting, PcbRouter, RL-MCTS; PCBench/Baselines/Results_all.csv).
 
     pcbench.py prepare [--only ID,...]       convert each board to KiCad 9 once, strip it bare,
                                              and record KiCad's verdict on the bare board
-    pcbench.py run RUN [--recipe "..."] [--timeout S] [--only ID,...] [--sample N] [--seed N] [--no-board-timeouts]
+    pcbench.py run RUN [--recipe "..."] [--timeout S] [--only ID,...] [--sample N] [--seed N] [--no-board-timeouts] [--wall-clock]
                                              route every prepared board (wrap in reserve: it
                                              runs $RESERVED_CORES routes at once); the boards in
                                              tools/pcbench_timeouts.json get their own time
+    pcbench.py ab BASE NEW --base-bin BIN [--tier T] [run's options]
+                                             route the same boards with BIN and this router in
+                                             one pool, each board's two routes together, then
+                                             compare them
+    pcbench.py tiers RUN [RUN ...]           sort the boards into tiers (smoke, focus, guard,
+                                             noisy, gate) by their history in these full runs;
+                                             `run --tier T` routes one (docs/pcbench.md)
     pcbench.py report RUN [RUN ...]          success, wirelength and vias against the baselines
     pcbench.py rescore RUN [RUN ...]         judge saved reports again (after the rules change)
     pcbench.py rejudge RUN [RUN ...]         ask KiCad again of saved boards and the bare ones,
@@ -36,8 +43,9 @@ crash, which writes the input board back, a refusal or a hang), its file is not 
 board fails, and `compare` counts it apart and never as noise. Wirelength is the routed tracks' length and vias their count, as the
 baselines report them. Everything lives in ~/Software/ultraroute-lab/pcbench/: boards/ID/ holds
 board.kicad_pcb (+ .kicad_pro), bare.kicad_pcb and bare.json, runs/RUN/ID/ each run's output.
-runs/RUN/run.json records where the run came from (commit, binary and its sha256, kicad-cli,
-Python, host, workers) when it starts; resuming a run with another commit or binary is refused
+runs/RUN/run.json records where the run came from (commit, binary and its sha256, the kicad-text
+helper the router strokes text with and its sha256, kicad-cli, Python, host, workers) when it starts,
+and each board's result its `text` line (stroked by the helper, or boxes and why); resuming a run with another commit or binary is refused
 unless --resume-anyway is given. Each board's peak memory (`peak_mb`) comes from /usr/bin/time.
 """
 
@@ -250,7 +258,7 @@ def lengths(pcb):
     return total, len(re.findall(r"^\s*\(via\b", text, re.M))
 
 
-def route_one(b, run_dir, recipe, timeout, seed):
+def route_one(b, run_dir, recipe, timeout, seed, router=ROUTER, clock="cpu"):
     d = run_dir / b
     if (d / "result.json").exists():
         return json.loads((d / "result.json").read_text())
@@ -259,19 +267,26 @@ def route_one(b, run_dir, recipe, timeout, seed):
     out = d / "out.kicad_pcb"
     res = {"id": b}
     timing = d / "time.txt"
-    args = ["/usr/bin/time", "-f", "%e %M", "-o", str(timing), str(ROUTER), "route", str(src / "board.kicad_pcb"), "-o", str(out), "--strip-all", *recipe.split(), "--seed", str(seed), "--uuid-seed", str(seed), "--threads", "1", "--timeout", str(timeout)]
+    # /usr/bin/time's user and system seconds are the CPU time `--cpu-clock` counts the timeout in.
+    args = ["/usr/bin/time", "-f", "%e %U %S %M", "-o", str(timing), str(router), "route", str(src / "board.kicad_pcb"), "-o", str(out), "--strip-all", *recipe.split(), "--seed", str(seed), "--uuid-seed", str(seed), "--threads", "1", "--timeout", str(timeout), *(["--cpu-clock"] if clock == "cpu" else [])]
     started = time.time()
     try:
         r = subprocess.run(CAP + args, capture_output=True, text=True, timeout=timeout * 3 + 300)
         (d / "log.txt").write_text(r.stderr[-200_000:])
         res["code"] = r.returncode
         res["time_limited"], res["hard_deadline"] = deadlines(r.stderr)
+        # What shaped the board's copper and mask text: the kicad-text helper, or why boxes.
+        if m := re.search(r"^text: (.*)$", r.stderr, re.M):
+            res["text"] = m[1]
     except subprocess.TimeoutExpired:
         res["code"] = "hung"
     res["seconds"] = round(time.time() - started, 1)
     try:
         # /usr/bin/time's last line; a router killed by a signal gets a "Command terminated" line first.
-        res["peak_mb"] = round(int(timing.read_text().split()[-1]) / 1024)
+        times = timing.read_text().split()
+        res["peak_mb"] = round(int(times[-1]) / 1024)
+        if len(times) >= 4:
+            res["cpu_seconds"] = round(float(times[-3]) + float(times[-2]), 1)
     except (OSError, ValueError, IndexError):
         pass
     # A router that failed wrote the input board, the designer's copper and all, or nothing: what
@@ -418,56 +433,221 @@ def board_timeouts(a):
     return {b: max(float(t), a.timeout) for b, t in json.loads(BOARD_TIMEOUTS.read_text())["timeouts"].items()}
 
 
-def run(a):
+# Boards grouped by what a run of them tells, so most changes need not route all 1182
+# (`tiers` writes it from past runs; `run --tier` and `ab --tier` read it).
+TIERS = Path(__file__).with_name("pcbench_tiers.json")
+
+
+def features(b):
+    """What a board is made of, for spreading a tier across kinds of board: copper layers,
+    whether it has zones, and its size in pads."""
+    t = (HOME / "boards" / b / "board.kicad_pcb").read_text()
+    m = re.search(r"\(layers\s*(.*?)\n\s*\)\n", t, re.S)
+    cu = len(re.findall(r'\(\d+\s+"[^"]*\.Cu"\s+(?:signal|power|mixed|jumper)', m.group(1))) if m else 0
+    pads = len(re.findall(r"\(pad\s", t))
+    return {"cu": min(cu, 4), "zones": "(zone" in t, "pads": 0 if pads < 100 else 1 if pads < 400 else 2}
+
+
+def spread(ids, n, rng):
+    """n of the boards, taken in turn from each kind of board (`features`), so a small tier still
+    holds four-layer boards, boards with zones and big boards."""
+    kinds = {}
+    for b in sorted(ids):
+        kinds.setdefault(tuple(features(b).values()), []).append(b)
+    for k in kinds.values():
+        rng.shuffle(k)
+    out = []
+    while len(out) < min(n, len(ids)):
+        for k in sorted(kinds):
+            if kinds[k] and len(out) < n:
+                out.append(kinds[k].pop())
+    return sorted(out)
+
+
+def tiers(a):
+    """Sorts the boards by their history over the given runs (same seed and recipe, newest last)
+    and writes the tiers:
+
+    smoke  boards clean in every run in under SMOKE_S s with no deadline touching them, spread
+           across kinds of board, and a few quick failures; a minute or two. Any difference on
+           them is the change's, not the clock's (`compare --exact` holds there).
+    focus  boards never clean: those the clock did not stop in the newest run (the router gave
+           up with time to spare: algorithm gaps) and those it did that were within NEAR open.
+           Where a change should win.
+    guard  where a change loses boards: a spread sample of the boards always clean with no
+           deadline touching them (they route the same every time, so any loss there is the
+           change's) and a spread sample of those clean but touched by a deadline or slower than
+           SLOW_S s (the first to lose when a change slows the router).
+    noisy  boards clean in some runs and not others, nearly all at the time limit: they mostly
+           measure the clock, so only the full corpus routes them.
+    gate   focus and guard: the run to make before a change goes to the full corpus.
+    """
+    hist = {}
+    for name in a.runs:
+        for b, r in load(name)[0].items():
+            hist.setdefault(b, []).append(r)
+    ids = sorted(b for b, rs in hist.items() if len(rs) == len(a.runs))
+    rng = random.Random(a.seed)
+    secs = {b: sorted(r["seconds"] for r in hist[b])[len(hist[b]) // 2] for b in ids}
+    always = [b for b in ids if all(r.get("success") for r in hist[b])]
+    never = [b for b in ids if not any(r.get("success") for r in hist[b])]
+    flaky = [b for b in ids if b not in always and b not in never]
+    touched = lambda b: any(r.get("time_limited") or r.get("hard_deadline") for r in hist[b])
+    last = {b: hist[b][-1] for b in ids}
+    quick = [b for b in always if secs[b] < a.smoke_s and not touched(b)]
+    quick_fail = sorted((b for b in never if not touched(b) and secs[b] < a.smoke_s * 2), key=lambda b: (last[b].get("unconnected") or 99, secs[b]))
+    smoke = spread(quick, a.smoke, rng) + quick_fail[: a.smoke // 5]
+    gaps = [b for b in never if not last[b].get("time_limited")]
+    near = [b for b in never if last[b].get("time_limited") and (last[b].get("unconnected") or 99) <= a.near]
+    marginal = [b for b in always if touched(b) or secs[b] > a.slow_s]
+    steady = [b for b in always if b not in marginal]
+    picked = spread(marginal, a.marginal, rng)
+    guard = sorted(spread(steady, a.steady, rng) + picked)
+    why = lambda bs: f"{len(bs)} boards, about {sum(secs[b] for b in bs) / 3600:.1f} core-hours"
+    made = {
+        "smoke": {"boards": sorted(smoke), "why": f"clean in every run under {a.smoke_s:g} s untouched by a deadline, spread by kind; and the {len(smoke) - len(spread(quick, a.smoke, random.Random(a.seed)))} quickest failures the clock never stopped"},
+        "focus": {"boards": sorted(gaps + near), "why": f"never clean: {len(gaps)} the clock did not stop (algorithm gaps), {len(near)} it did within {a.near} open"},
+        "guard": {"boards": guard, "why": f"{len(guard) - len(picked)} of the {len(steady)} always clean untouched by a deadline, {len(picked)} of the {len(marginal)} clean but touched by one or over {a.slow_s:g} s"},
+        "noisy": {"boards": sorted(flaky), "why": "clean in some runs, not in others"},
+        "gate": ["focus", "guard"],
+    }
+    TIERS.write_text(json.dumps({"made": time.strftime("%Y-%m-%d"), "from": a.runs, "tiers": made}, indent=1) + "\n")
+    for name, t in made.items():
+        bs = t["boards"] if isinstance(t, dict) else sorted({b for p in t for b in made[p]["boards"]})
+        print(f"{name:6} {why(bs)}" + (f": {t['why']}" if isinstance(t, dict) else f": {' + '.join(t)}"))
+    print(f"all    {why(ids)}; history: {len(always)} always clean, {len(never)} never, {len(flaky)} sometimes")
+
+
+def tier_ids(name):
+    """The boards of a tier in tools/pcbench_tiers.json (`tiers` writes it); a tier made of
+    others ("gate": ["focus", "guard"]) is their union."""
+    tiers = json.loads(TIERS.read_text())["tiers"]
+    if name not in tiers:
+        sys.exit(f"no tier {name} in {TIERS}: {', '.join(tiers)}")
+    t = tiers[name]
+    return sorted({b for part in t for b in tier_ids(part)}) if isinstance(t, list) and all(p in tiers for p in t) else t["boards"]
+
+
+def chosen(a):
+    """The prepared boards a run routes: --only, --tier and --sample narrow them."""
     ids = [b for b in board_ids(a.only) if "error" not in json.loads((HOME / "boards" / b / "bare.json").read_text())] if (HOME / "boards").exists() else []
+    if a.tier:
+        wanted = set(tier_ids(a.tier))
+        ids = [b for b in ids if b in wanted]
     if a.sample:
         random.Random(a.sample_seed).shuffle(ids)
         ids = sorted(ids[: a.sample])
-    run_dir = HOME / "runs" / a.run
+    return ids
+
+
+# What `--timeout` counts. The CPU's (the router's `--cpu-clock`) unless `--wall-clock`: on the wall
+# clock a board's verdict depended on the machine's load (12 of 34 near misses failed on
+# sequoia-server running 15 routes and routed clean on an idle loaf, 2026-11-02).
+def clock_of(a, router):
+    if a.wall_clock:
+        return "wall"
+    try:
+        usage = subprocess.run([str(router), "route", "--help"], capture_output=True, text=True, timeout=30)
+    except OSError as e:
+        sys.exit(f"{router}: {e}")
+    if "--cpu-clock" not in usage.stdout + usage.stderr:
+        sys.exit(f"{router} has no --cpu-clock (built before it): pass --wall-clock to time it on the wall clock")
+    return "cpu"
+
+
+def start(name, ids, a, router, workers, commit=True):
+    """A run's directory and its run.json, written when it starts and checked when it resumes."""
+    run_dir = HOME / "runs" / name
     run_dir.mkdir(parents=True, exist_ok=True)
     meta = run_dir / "run.json"
-    workers = int(os.environ.get("RESERVED_CORES", "4"))
-    now = provenance(workers)
+    now = provenance(workers, router, commit)
     own = {b: t for b, t in board_timeouts(a).items() if b in ids}
-    info = {"recipe": a.recipe, "timeout": a.timeout, "board_timeouts": own, "seed": a.seed, "boards": ids, **now, "started": time.strftime("%Y-%m-%dT%H:%M:%S"), "notes": [a.note] if a.note else []}
+    info = {"recipe": a.recipe, "timeout": a.timeout, "clock": clock_of(a, router), "board_timeouts": own, "seed": a.seed, "boards": ids, "tier": a.tier, **now, "started": time.strftime("%Y-%m-%dT%H:%M:%S"), "notes": [a.note] if a.note else []}
     if meta.exists():
         info = json.loads(meta.read_text())
         differ = {k: (info.get(k), now[k]) for k in ("commit", "binary_sha256") if info.get(k) != now[k]}
         if differ:
             for k, (was, new) in differ.items():
-                print(f"{a.run} was started with {k} {was}, now {new}", file=sys.stderr)
+                print(f"{name} was started with {k} {was}, now {new}", file=sys.stderr)
             if not a.resume_anyway:
-                sys.exit(f"refusing to resume {a.run} with another router; pass --resume-anyway to mix them")
+                sys.exit(f"refusing to resume {name} with another router; pass --resume-anyway to mix them")
             info.setdefault("resumed", []).append({**now, "at": time.strftime("%Y-%m-%dT%H:%M:%S")})
             meta.write_text(json.dumps(info, indent=1))
     else:
         meta.write_text(json.dumps(info, indent=1))
-    ok = 0
+    return run_dir, info
+
+
+def route_all(jobs, a, workers):
+    """Routes (run name, run dir, run.json, router, board) jobs, `workers` at once, and prints each verdict."""
+    ok = {}
     with concurrent.futures.ThreadPoolExecutor(workers) as pool:
-        own = info.get("board_timeouts", {})
-        futures = [pool.submit(route_one, b, run_dir, a.recipe, own.get(b, a.timeout), a.seed) for b in ids]
+        futures = {pool.submit(route_one, b, run_dir, a.recipe, info.get("board_timeouts", {}).get(b, a.timeout), a.seed, router, info.get("clock", "wall")): name for name, run_dir, info, router, b in jobs}
         for k, f in enumerate(concurrent.futures.as_completed(futures), 1):
-            r = f.result()
-            ok += bool(r.get("success"))
+            r, name = f.result(), futures[f]
+            ok[name] = ok.get(name, 0) + bool(r.get("success"))
             verdict = "ok" if r.get("success") else "REFEREE FAILED" if "referee_error" in r else f"ROUTER FAILED (code {r.get('code')})" if router_failed(r) else "FAIL"
-            print(f"[{k}/{len(ids)}] {r['id']}: {verdict} open {r.get('unconnected')} new {r.get('new_errors')} {r['seconds']} s", flush=True)
-    print(f"{ok} of {len(ids)} succeeded")
+            print(f"[{k}/{len(jobs)}] {name} {r['id']}: {verdict} open {r.get('unconnected')} new {r.get('new_errors')} {r['seconds']} s", flush=True)
+    return ok
 
 
-def provenance(workers):
-    """What a run is made with: the commit, the router binary and its hash, the referee's version,
-    Python, the host and the number of routes at once."""
+def run(a):
+    ids = chosen(a)
+    workers = int(os.environ.get("RESERVED_CORES", "4"))
+    run_dir, info = start(a.run, ids, a, ROUTER, workers)
+    ok = route_all([(a.run, run_dir, info, ROUTER, b) for b in ids], a, workers)
+    print(f"{ok.get(a.run, 0)} of {len(ids)} succeeded")
+
+
+def text_helper(binary):
+    """The text helper `binary` would run (`ultraroute text-helper`, since feat/text-strokes);
+    None if it would box the text or is older."""
+    try:
+        helper = subprocess.run([str(binary), "text-helper"], capture_output=True, text=True).stdout.strip()
+    except OSError:
+        return None
+    return Path(helper) if helper and Path(helper).is_file() else None
+
+
+def ab(a):
+    """Routes the same boards with two routers in one pool, each board's two routes side by side,
+    then compares them. Two runs started at once each with half the workers are not equal: on
+    sequoia-server the side with 8 workers ran about 1.6x slower than the side with 7, which cost
+    it about 7 time-limited boards. Here both see the same load at the same moment."""
+    ids = chosen(a)
+    workers = int(os.environ.get("RESERVED_CORES", "4"))
+    base = Path(a.base_bin).resolve()
+    if not base.exists():
+        sys.exit(f"no router at {base}")
+    # A build with `-p ultraroute` alone boxes its text, which reads as a routing change.
+    for name, router in ((a.base, base), (a.new, ROUTER)):
+        if not text_helper(router):
+            print(f"WARNING: {name} boxes copper and mask text: no kicad-text helper beside {router} (cargo build --release -p ultraroute -p kicad-text)", file=sys.stderr)
+    runs = [(a.base, *start(a.base, ids, a, base, workers, commit=False), base), (a.new, *start(a.new, ids, a, ROUTER, workers), ROUTER)]
+    # Interleaved so each board's two routes start together.
+    ok = route_all([(name, d, info, router, b) for b in ids for name, d, info, router in runs], a, workers)
+    print(" ".join(f"{name}: {ok.get(name, 0)} of {len(ids)} succeeded" for name, *_ in runs))
+    a.runs, a.noise_from, a.json, a.exact = [a.base, a.new], None, None, False
+    compare(a)
+
+
+def provenance(workers, router=ROUTER, commit=True):
+    """What a run is made with: the commit (unless the router is not this checkout's build), the
+    router binary and its hash, the referee's version, Python, the host and the number of routes at once."""
     def out(cmd):
         try:
             return subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
         except OSError:
             return None
-    binary = ROUTER.resolve()
+    binary = Path(router).resolve()
+    helper = text_helper(binary)
     return {
-        "commit": out(["git", "-C", ROOT, "rev-parse", "--short", "HEAD"]),
+        "commit": out(["git", "-C", ROOT, "rev-parse", "--short", "HEAD"]) if commit else None,
         "dirty": bool(out(["git", "-C", ROOT, "status", "--porcelain", "core"])),
         "binary": str(binary),
         "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest() if binary.exists() else None,
+        "text_helper": str(helper) if helper else None,
+        "text_helper_sha256": hashlib.sha256(helper.read_bytes()).hexdigest() if helper else None,
         "kicad_cli_version": out(["kicad-cli", "--version"]),
         "python_version": platform.python_version(),
         "hostname": platform.node(),
@@ -538,7 +718,11 @@ def compare(a):
         wl = [sum(rs[i].get("wirelength") or 0 for i in both) for rs in (base, new)]
         print(f"   on the {len(both)} boards clean in both: vias {vias[0]} -> {vias[1]}, wirelength {wl[0]:.0f} -> {wl[1]:.0f} mm")
         limit = lambda m, i: m.get("board_timeouts", {}).get(i, m.get("timeout", 120)) - 10
-        print(f"   at the time limit (>= timeout - 10 s): {sum(base[i]['seconds'] >= limit(base_meta, i) for i in common)} -> {sum(new[i]['seconds'] >= limit(meta, i) for i in common)}")
+        # On the clock the run's timeout counted: a run on the CPU's is at its limit by CPU seconds.
+        spent = lambda m, r: r.get("cpu_seconds", r["seconds"]) if m.get("clock") == "cpu" else r["seconds"]
+        print(f"   at the time limit (>= timeout - 10 s): {sum(spent(base_meta, base[i]) >= limit(base_meta, i) for i in common)} -> {sum(spent(meta, new[i]) >= limit(meta, i) for i in common)}")
+        if base_meta.get("clock", "wall") != meta.get("clock", "wall"):
+            print(f"   clocks differ: {base_meta.get('clock', 'wall')} -> {meta.get('clock', 'wall')}")
         if (base_meta.get("board_timeouts") or {}) != (meta.get("board_timeouts") or {}):
             print(f"   board timeouts differ: {len(base_meta.get('board_timeouts') or {})} -> {len(meta.get('board_timeouts') or {})} boards given their own")
         refs = [[i for i in common if "referee_error" in rs[i]] for rs in (base, new)]
@@ -649,12 +833,39 @@ def main():
     s.add_argument("--recipe", default=RECIPE)
     s.add_argument("--timeout", type=float, default=120)
     s.add_argument("--no-board-timeouts", action="store_true", help="every board at --timeout, none at its own from pcbench_timeouts.json")
+    s.add_argument("--wall-clock", action="store_true", help="--timeout in wall seconds, as runs before 2026-11-03 were (default: the router's CPU seconds)")
     s.add_argument("--seed", type=int, default=0)
     s.add_argument("--only")
     s.add_argument("--sample", type=int, help="route this many boards, drawn at random")
     s.add_argument("--sample-seed", type=int, default=1)
     s.add_argument("--resume-anyway", action="store_true", help="resume a run started with another commit or binary")
     s.add_argument("--note", help="a note for run.json")
+    s.add_argument("--tier", help="only the boards of this tier (tools/pcbench_tiers.json)")
+    s = sub.add_parser("ab", help="route with two routers side by side, then compare")
+    s.add_argument("base", help="the run of --base-bin's routes")
+    s.add_argument("new", help="the run of this checkout's router (ULTRAROUTE_BIN)")
+    s.add_argument("--base-bin", required=True, help="the reference router binary")
+    s.add_argument("--wall-clock", action="store_true", help="--timeout in wall seconds (default: CPU seconds; both routers need --cpu-clock)")
+    s.add_argument("--recipe", default=RECIPE)
+    s.add_argument("--timeout", type=float, default=120)
+    s.add_argument("--no-board-timeouts", action="store_true")
+    s.add_argument("--seed", type=int, default=0)
+    s.add_argument("--only")
+    s.add_argument("--tier")
+    s.add_argument("--sample", type=int)
+    s.add_argument("--sample-seed", type=int, default=1)
+    s.add_argument("--resume-anyway", action="store_true")
+    s.add_argument("--note")
+    s.add_argument("--noise", default="0", help="boards the new run may lose and still pass")
+    s = sub.add_parser("tiers", help="sort the boards into tiers by their history in these runs")
+    s.add_argument("runs", nargs="+", help="full runs, same seed and recipe, oldest first")
+    s.add_argument("--smoke", type=int, default=40, help="steady boards in smoke (and a fifth as many failures)")
+    s.add_argument("--smoke-s", type=float, default=10)
+    s.add_argument("--near", type=int, default=3, help="open connections a time-limited failure may have to be in focus")
+    s.add_argument("--slow-s", type=float, default=60)
+    s.add_argument("--steady", type=int, default=200, help="steady boards sampled into guard")
+    s.add_argument("--marginal", type=int, default=40, help="clean boards a deadline touched sampled into guard")
+    s.add_argument("--seed", type=int, default=1)
     s = sub.add_parser("report")
     s.add_argument("runs", nargs="+")
     s = sub.add_parser("rescore")
@@ -673,7 +884,7 @@ def main():
     a = p.parse_args()
     if a.cmd == "compare" and len(a.runs) < 2:
         p.error("compare needs at least two runs")
-    {"prepare": prepare, "run": run, "report": report, "rescore": rescore, "rejudge": rejudge, "compare": compare, "note": note}[a.cmd](a)
+    {"prepare": prepare, "run": run, "ab": ab, "tiers": tiers, "report": report, "rescore": rescore, "rejudge": rejudge, "compare": compare, "note": note}[a.cmd](a)
 
 
 if __name__ == "__main__":

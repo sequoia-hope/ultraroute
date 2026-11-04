@@ -4,6 +4,8 @@
 //! for KiCad to refill. With `--live -` the board streams to standard output as the studio's
 //! newline-delimited JSON frames, and a line `stop` on standard input stops the run. With
 //! `--blame`, every connection still open at the end is listed with what stands in its way.
+//! Copper and mask text is stroked by the `kicad-text` program when it is found, else boxed
+//! (`kicad_pcb::text`); `ultraroute text-helper` prints the program a route would run.
 
 use std::collections::HashSet;
 use std::io::Write;
@@ -30,6 +32,17 @@ fn main() {
         println!("{USAGE}");
         return;
     }
+    // The text helper a route would run, for a bench to record; failing if text would be boxes.
+    if args.first().is_some_and(|a| a == "text-helper") {
+        match kicad_pcb::text::shaper() {
+            kicad_pcb::text::Shaper::Helper(path, _) => println!("{}", path.display()),
+            kicad_pcb::text::Shaper::Boxes(why) => {
+                eprintln!("text as boxes: {why}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     let mut a = match parse(&args) {
         Ok(a) => a,
         Err(e) => {
@@ -46,6 +59,9 @@ fn main() {
     };
     for w in board.rules.warnings.iter().chain(&board.warnings) {
         eprintln!("warning: {w}");
+    }
+    if let Some(note) = &board.text_note {
+        eprintln!("text: {note}");
     }
     // Sized before anything is allocated: a board too large for the machine is fitted or refused,
     // and a refused one leaves the input as the output, as a crash does.

@@ -95,7 +95,7 @@ fn edge_polylines(shape: &kicad_pcb::OutlineShape, width: f64) -> Vec<Vec<[f64; 
 
 /// `shape` grown by `by` all round: a capsule's radius, or a polygon's convex hull with every
 /// corner rounded (a little outside the true offset, never inside it).
-fn grown(shape: &Shape, by: Nm) -> Shape {
+pub(crate) fn grown(shape: &Shape, by: Nm) -> Shape {
     match shape {
         Shape::Capsule { a, b, r } => Shape::Capsule { a: *a, b: *b, r: r + by },
         Shape::Polygon(p) if by <= 0 => Shape::Polygon(p.clone()),
@@ -166,6 +166,10 @@ pub const SOFT_NO_VIA: &str = "soft-novia";
 
 /// The zone of drawn copper: lines, shapes and text on a copper layer, which stay as drawn.
 pub const DRAWN: usize = usize::MAX;
+
+/// Tag bit in [`Board::mask_areas`] for a mask opening that bared no fixed copper when loaded:
+/// `ANY_ONE_NET | group` lets any one net enter that item's shapes, after which others keep clear.
+pub const ANY_ONE_NET: u32 = 1 << 31;
 
 /// An outer copper layer's thickness where the file gives none: KiCad's 35 um (1 oz).
 const OUTER_COPPER_M: f64 = 35e-6;
@@ -266,11 +270,6 @@ impl Block {
     }
 }
 
-/// The widest island of a zone that keeps its islands taken for copper laid as a track: 2 mm,
-/// over easy2350's 0.6 mm 1V1 spokes and under any plane (comms' and servodrive's ground planes,
-/// which keep their islands too, must stay poured round the routes).
-pub const LAID_WIDTH: Nm = 2_000_000;
-
 #[derive(Debug, Clone)]
 pub struct Board {
     pub layers: Vec<String>,
@@ -297,9 +296,13 @@ pub struct Board {
     /// The narrowest web of mask between two openings (`solder_mask_min_width`): two openings
     /// nearer than this run together, and bridge their copper if of two nets.
     pub mask_web: Nm,
-    /// Openings drawn in the solder mask: the shape, the copper layer it bares, and the one net
-    /// whose pads it bares, which alone may run there; 0 where it bares none or several.
+    /// Openings drawn in the solder mask: the shape, the copper layer it bares, and the net that
+    /// may run there (`ANY_ONE_NET | group` where it bared no fixed copper, so any single net may
+    /// claim it; 0 where it bared several nets or unnetted copper, so none may).
     pub mask_areas: Vec<(Shape, u64, u32)>,
+    /// Slice ranges in [`Board::mask_areas`] for each unclaimed mask item (`ANY_ONE_NET | group`),
+    /// grouping all polygons of one KiCad `BOARD_ITEM` so one net claims the whole item together.
+    pub mask_groups: Vec<std::ops::Range<usize>>,
     /// Pads' own clearances, or their footprints' (KiCad's local clearance), wider or narrower
     /// than their nets': one stands in for the net classes and custom rules (see
     /// [`Board::clearance_between`]).
@@ -320,10 +323,14 @@ pub struct Board {
     /// Zones of a net saved with no fill (KiCad not having filled them): their zone, net, layers
     /// and outline, to stand in for their copper where it must be there, on a plane.
     pub unfilled: Vec<(usize, u32, u64, Shape)>,
-    /// Islands of zones that keep every island of their fill (`island_removal_mode 1`), each no
-    /// wider than [`LAID_WIDTH`]: copper laid as a track is, kept as it stands, and each must join
-    /// its net, or KiCad reports it isolated.
+    /// Pieces of zone fill the board's own rules keep every other net off: rule areas that forbid
+    /// tracks and vias, or custom rules that disallow them there for every net but the zone's.
+    /// Nothing can cut such copper on a refill, so it is kept as laid: it joins the pads and vias
+    /// it touches, and other nets steer clear of it.
     pub laid_islands: std::collections::BTreeSet<ItemId>,
+    /// Those of [`Board::laid_islands`] whose zone keeps every island of its fill
+    /// (`island_removal_mode 1`): each must join its net, or KiCad reports it isolated.
+    pub join_islands: std::collections::BTreeSet<ItemId>,
     /// Areas where a via costs the router dearly but is allowed, on every layer: rule areas
     /// whose name starts `soft-novia`, and boxes given on the command line. Room kept for silk.
     pub via_avoid: Vec<Shape>,
@@ -332,12 +339,19 @@ pub struct Board {
     pub via_avoid_cost: u32,
     /// Routing regions a planner set, with rules for which nets may run where.
     pub regions: Vec<crate::regions::Region>,
+    /// Rules a planner set that keep other nets' antipads out from under some nets' tracks.
+    pub clear_under: Vec<crate::regions::ClearUnder>,
+    /// The copper zones, for what other nets' holes cut out of them.
+    pub zone_areas: Vec<crate::regions::ZoneArea>,
     /// What crossing another net's pour (one refilled round new copper, not a plane) costs, as a
     /// multiple of the length inside: crossing cuts the pour into pieces. 0 for nothing.
     pub pour_cost: f64,
     /// What reading the board found and could not take as given: the reader's own warnings
     /// (drawings it skips, values it assumed) and an outline that does not close.
     pub warnings: Vec<String>,
+    /// What shaped the board's copper and mask text: the text helper, or why boxes (see
+    /// `kicad_pcb::text`); `None` with no such text.
+    pub text_note: Option<String>,
     /// How far a through via runs from its top copper to its bottom, as KiCad's length rules
     /// count it: the board's thickness less one outer copper layer (kicad-cli 9.0.8, 2026-11-01:
     /// 1.565 mm on a 1.6 mm board of 2, 4 or 6 layers, 0.965 mm on a 1.0 mm one).
@@ -366,6 +380,10 @@ pub struct Board {
     bboxes: Vec<BBox>,
     /// Item ids per (layer, cell); holes are filed under the layer count.
     cells: HashMap<(usize, Nm, Nm), Vec<ItemId>>,
+    /// Items on no copper layer with no hole, which `cells` has no slot for.
+    unslotted: Vec<ItemId>,
+    /// Thermal spoke items whose pad has at least one spoke to spare, in ascending id order.
+    spare_spokes: Vec<ItemId>,
 }
 
 #[derive(Debug)]
@@ -463,6 +481,7 @@ impl Board {
             via_openings: (0, 0),
             mask_web: nm(copper.solder_mask_min_width),
             mask_areas: Vec::new(),
+            mask_groups: Vec::new(),
             pad_clearances: HashMap::new(),
             pad_zone_connect: HashMap::new(),
             zones_without_pads: copper.zones.iter().enumerate().filter(|(_, z)| z.no_pads).map(|(i, _)| i).collect(),
@@ -471,11 +490,15 @@ impl Board {
             keepout_holes: HashMap::new(),
             unfilled: Vec::new(),
             laid_islands: Default::default(),
+            join_islands: Default::default(),
             via_avoid: Vec::new(),
             via_avoid_cost: 3_000,
             regions: Vec::new(),
+            clear_under: Vec::new(),
+            zone_areas: Vec::new(),
             pour_cost: 0.0,
             warnings: pcb.warnings.iter().chain(&copper.warnings).cloned().collect(),
+            text_note: copper.text_note.clone(),
             via_height: nm((pcb.thickness_m - OUTER_COPPER_M).max(0.0)),
             net_clearances,
             class_names,
@@ -489,6 +512,8 @@ impl Board {
             shape_bboxes: Vec::new(),
             bboxes: Vec::new(),
             cells: HashMap::new(),
+            unslotted: Vec::new(),
+            spare_spokes: Vec::new(),
         };
         board.names_nets = crate::custom::names_nets(&board.custom);
         board.via_free = (0..board.nets.len() as u32).map(|n| board.net_maximum("via_count", n).is_some_and(|(_, max)| max < 1.0 - 1e-9)).collect();
@@ -593,7 +618,7 @@ impl Board {
             for side in [one("F.Cu"), one("B.Cu")] {
                 if openings & side != 0 && layers & side == 0 {
                     let lists_copper = pad.layers.iter().any(|l| l.ends_with(".Cu"));
-                    apertures.push((pad_shapes.iter().map(|s| grown(s, margin)).collect(), side, lists_copper.then_some(base.net)));
+                    apertures.push((pad_shapes.iter().map(|s| grown(s, margin)).collect(), side, (lists_copper || !plated).then_some(base.net)));
                 }
             }
             if unjoined != 0 {
@@ -681,6 +706,14 @@ impl Board {
         for zone in copper.zones.iter().filter(|z| !z.name.is_empty() && z.outline.len() >= 3) {
             board.areas.push((zone.name.clone(), Shape::Polygon(zone.outline.iter().copied().map(Point::from_m).collect()), mask(&zone.layers)));
         }
+        struct ZoneArea {
+            priority: u32,
+            net: u32,
+            layers: u64,
+            outline: Shape,
+            cutouts: Vec<Shape>,
+        }
+        let mut zone_areas: Vec<ZoneArea> = Vec::new();
         for (z, zone) in copper.zones.iter().enumerate() {
             // A soft via keepout forbids nothing; the router only avoids putting vias in it.
             if zone.name.to_ascii_lowercase().starts_with(SOFT_NO_VIA) {
@@ -707,7 +740,27 @@ impl Board {
                 }
                 continue;
             }
+            if zone.outline.len() >= 3 {
+                let poly = |p: &Vec<[f64; 2]>| Shape::Polygon(p.iter().copied().map(Point::from_m).collect());
+                board.zone_areas.push(crate::regions::ZoneArea {
+                    net: zone.net,
+                    layers: mask(&zone.layers),
+                    outline: poly(&zone.outline),
+                    cutouts: zone.cutouts.iter().filter(|c| c.len() >= 3).map(poly).collect(),
+                    clearance: nm(zone.clearance),
+                    min_thickness: nm(zone.min_thickness),
+                });
+            }
             let kept = blocks.iter().any(|b| b.zones.contains(&z));
+            if zone.net != 0 && zone.outline.len() >= 3 {
+                zone_areas.push(ZoneArea {
+                    priority: zone.priority,
+                    net: zone.net,
+                    layers: mask(&zone.layers),
+                    outline: Shape::Polygon(zone.outline.iter().copied().map(Point::from_m).collect()),
+                    cutouts: zone.cutouts.iter().filter(|c| c.len() >= 3).map(|c| Shape::Polygon(c.iter().copied().map(Point::from_m).collect())).collect(),
+                });
+            }
             // A zone saved unfilled has no copper to read. Kept, as a block's, its outline stands
             // for it, as it would for a plane's (`set_planes`); a pour refilled round the routes
             // needs none.
@@ -721,49 +774,17 @@ impl Board {
             }
             for (layer, poly) in &zone.filled {
                 if poly.len() >= 3 {
-                    let shape = Shape::Polygon(poly.iter().copied().map(Point::from_m).collect());
-                    // An island a zone keeps, narrow as a track, is copper laid by hand, as a
-                    // reference layout's strips are: the router steers clear of it and joins it,
-                    // as KiCad will not drop it. A wider one, a plane's, is poured round the routes.
-                    let laid = zone.keep_islands && zone.net != 0 && shape.depth(crate::connect::deepest(&shape)) <= (LAID_WIDTH / 2) as f64;
-                    let id = board.insert(Item { kind: Kind::Pour { zone: z, kept: kept || laid }, net: zone.net, layers: one(layer), shape, hole: None, locked: true, span: None });
-                    if laid {
-                        board.laid_islands.insert(id);
-                    }
+                    board.insert(Item {
+                        kind: Kind::Pour { zone: z, kept },
+                        net: zone.net,
+                        layers: one(layer),
+                        shape: Shape::Polygon(poly.iter().copied().map(Point::from_m).collect()),
+                        hole: None,
+                        locked: true,
+                        span: None,
+                    });
                 }
             }
-        }
-        let bare = |front: bool, back: bool| (if front { one("F.Cu") } else { 0 }) | (if back { one("B.Cu") } else { 0 });
-        board.via_openings = (bare(copper.vias_bare[0], copper.vias_bare[1]), nm(copper.pad_to_mask_clearance.max(0.0)));
-        for g in &copper.mask_graphics {
-            let layer = bare(g.layer == "F.Mask", g.layer == "B.Mask");
-            let shapes: Vec<Shape> = g.polygons.iter().map(|poly| Shape::Polygon(poly.iter().copied().map(Point::from_m).collect())).collect();
-            apertures.push((shapes, layer, None));
-        }
-        for (shapes, layer, net) in apertures {
-            if layer == 0 {
-                continue;
-            }
-            let l = layer.trailing_zeros() as usize;
-            // As KiCad judges an opening that belongs to no copper: by the nets of the pads it
-            // bares, over the whole of it (its outline's stroke is drawn in pieces), a pad being
-            // bared when its copper there touches the opening. One net may run there; with none
-            // or several, none may.
-            let net = net.unwrap_or_else(|| {
-                let mut nets: Vec<u32> = Vec::new();
-                for shape in &shapes {
-                    for id in board.near(l, shape.bbox()) {
-                        let Some(it) = board.item(id) else { continue };
-                        if matches!(it.kind, Kind::Pad { .. }) && it.on(l) && shape.gap_within(&it.shape, 1.0) == 0.0 {
-                            nets.push(it.net);
-                        }
-                    }
-                }
-                nets.sort_unstable();
-                nets.dedup();
-                if let [n] = nets[..] { n } else { 0 }
-            });
-            board.mask_areas.extend(shapes.into_iter().map(|shape| (shape, layer, net)));
         }
         // A net tie's groups: its footprint, and the nets each joins.
         let tie_nets = |fp: usize| -> Vec<(Vec<String>, Vec<u32>)> {
@@ -805,7 +826,120 @@ impl Board {
         for (id, fp, nets) in tie_pads {
             board.ties.insert(id, (fp, nets));
         }
+        let bare = |front: bool, back: bool| (if front { one("F.Cu") } else { 0 }) | (if back { one("B.Cu") } else { 0 });
+        board.via_openings = (bare(copper.vias_bare[0], copper.vias_bare[1]), nm(copper.pad_to_mask_clearance.max(0.0)));
+        for g in &copper.mask_graphics {
+            let layer = bare(g.layer == "F.Mask", g.layer == "B.Mask");
+            let shapes: Vec<Shape> = g.polygons.iter().map(|poly| Shape::Polygon(poly.iter().copied().map(Point::from_m).collect())).collect();
+            apertures.push((shapes, layer, None));
+        }
+        let mask_margin = board.mask_margin();
+        let max_via_open = board.via_openings.1 + board.mask_web + mask_margin;
+        let search_reach = mask_margin.max(max_via_open);
+        for (shapes, layer, net) in apertures {
+            if layer == 0 || shapes.is_empty() {
+                continue;
+            }
+            let l = layer.trailing_zeros() as usize;
+            // As KiCad judges an opening that belongs to no copper: over the whole `BOARD_ITEM`,
+            // every bared piece of copper must share one net. Fixed copper (pads, locked tracks
+            // and vias, drawn copper outside net ties) decides first: one net > 0 admits that net,
+            // several or net 0 admits none. When none touches it, a copper zone or pour beneath it
+            // claims its net; otherwise any single net may enter. A pad's opening merely near it
+            // decides nothing: closing the opening for that would bury the pads of fine-pitch parts
+            // whose drawn openings sit within the mask web of each other (DSKY_alarm's IC3).
+            let net = net.unwrap_or_else(|| {
+                let mut nets: Vec<u32> = Vec::new();
+                for shape in &shapes {
+                    for id in board.near(l, shape.bbox().grow(search_reach)) {
+                        let Some(it) = board.item(id) else { continue };
+                        if !it.on(l) {
+                            continue;
+                        }
+                        match it.kind {
+                            Kind::Pad { .. } if shape.gap_within(&it.shape, mask_margin as f64) < mask_margin as f64 => nets.push(it.net),
+                            Kind::Pour { kept: true, .. }
+                                if !board.ties.contains_key(&id)
+                                    && shape.gap_within(&it.shape, mask_margin as f64) < mask_margin as f64 =>
+                            {
+                                nets.push(it.net);
+                            }
+                            Kind::Track | Kind::Via if it.locked => {
+                                let reach = mask_margin + board.via_opening_on(it, layer);
+                                if shape.gap_within(&it.shape, reach as f64) < reach as f64 {
+                                    nets.push(it.net);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                if nets.is_empty() {
+                    let pour_banned = |s: &Shape| -> bool {
+                        board.near(l, s.bbox()).into_iter().any(|kid| {
+                            let Some(kit) = board.item(kid) else { return false };
+                            let Kind::Keepout { forbids, .. } = &kit.kind else { return false };
+                            let in_hole = board.keepout_holes.get(&kid).is_some_and(|holes| holes.iter().any(|h| crate::check::within(h, s, 0)));
+                            kit.on(l) && forbids.copperpour && crate::check::within(&kit.shape, s, 0) && !in_hole
+                        })
+                    };
+                    for s in &shapes {
+                        if pour_banned(s) {
+                            continue;
+                        }
+                        let mut best: Option<u32> = None;
+                        for z in &zone_areas {
+                            if z.layers & layer != 0
+                                && s.gap_within(&z.outline, mask_margin as f64) < mask_margin as f64
+                                && !z.cutouts.iter().any(|c| crate::check::within(c, s, 0))
+                            {
+                                best = Some(best.map_or(z.priority, |b| b.max(z.priority)));
+                            }
+                        }
+                        if let Some(top) = best {
+                            for z in &zone_areas {
+                                if z.priority == top
+                                    && z.layers & layer != 0
+                                    && s.gap_within(&z.outline, mask_margin as f64) < mask_margin as f64
+                                    && !z.cutouts.iter().any(|c| crate::check::within(c, s, 0))
+                                {
+                                    nets.push(z.net);
+                                }
+                            }
+                        }
+                    }
+                    if nets.is_empty() {
+                        for shape in &shapes {
+                            for id in board.near(l, shape.bbox().grow(mask_margin)) {
+                                let Some(it) = board.item(id) else { continue };
+                                if matches!(it.kind, Kind::Pour { kept: false, .. })
+                                    && it.on(l)
+                                    && shape.gap_within(&it.shape, mask_margin as f64) < mask_margin as f64
+                                {
+                                    nets.push(it.net);
+                                }
+                            }
+                        }
+                    }
+                }
+                nets.sort_unstable();
+                nets.dedup();
+                match nets[..] {
+                    [] => {
+                        let g = board.mask_groups.len() as u32;
+                        let start = board.mask_areas.len();
+                        board.mask_groups.push(start..start + shapes.len());
+                        ANY_ONE_NET | g
+                    }
+                    [n] => n,
+                    _ => 0,
+                }
+            });
+            board.mask_areas.extend(shapes.into_iter().map(|shape| (shape, layer, net)));
+        }
         board.limits = crate::check::Limits::of(&board);
+        let keep_islands: std::collections::BTreeSet<usize> = copper.zones.iter().enumerate().filter(|(_, z)| z.keep_islands).map(|(k, _)| k).collect();
+        board.lay_protected_copper(&keep_islands);
         board.reserve_spokes(pcb, copper, &pad_items);
         let short = board.lengths_out_of_reach();
         board.warnings.extend(short);
@@ -921,9 +1055,19 @@ impl Board {
             Some((c, r)) => sb.union(BBox::of([c]).grow(r)),
             None => sb,
         };
-        for slot in self.slots(&item) {
-            for (x, y) in Board::cells_of(b) {
-                self.cells.entry((slot, x, y)).or_default().push(id);
+        let slots = self.slots(&item);
+        if slots.is_empty() {
+            self.unslotted.push(id);
+        } else {
+            for slot in slots {
+                for (x, y) in Board::cells_of(b) {
+                    self.cells.entry((slot, x, y)).or_default().push(id);
+                }
+            }
+        }
+        if matches!(item.kind, Kind::Spoke { spare, .. } if spare > 0) {
+            if let Err(pos) = self.spare_spokes.binary_search(&id) {
+                self.spare_spokes.insert(pos, id);
             }
         }
         self.items.push(Some(item));
@@ -953,9 +1097,21 @@ impl Board {
             Some((c, r)) => sb.union(BBox::of([c]).grow(r)),
             None => sb,
         };
-        for slot in self.slots(&item) {
-            for (x, y) in Board::cells_of(b) {
-                self.cells.entry((slot, x, y)).or_default().push(id);
+        let slots = self.slots(&item);
+        if slots.is_empty() {
+            if let Err(pos) = self.unslotted.binary_search(&id) {
+                self.unslotted.insert(pos, id);
+            }
+        } else {
+            for slot in slots {
+                for (x, y) in Board::cells_of(b) {
+                    self.cells.entry((slot, x, y)).or_default().push(id);
+                }
+            }
+        }
+        if matches!(item.kind, Kind::Spoke { spare, .. } if spare > 0) {
+            if let Err(pos) = self.spare_spokes.binary_search(&id) {
+                self.spare_spokes.insert(pos, id);
             }
         }
         if id >= self.items.len() {
@@ -971,11 +1127,21 @@ impl Board {
     pub fn remove(&mut self, id: ItemId) -> Option<Item> {
         let item = self.items.get_mut(id)?.take()?;
         let b = self.bboxes[id];
-        for slot in self.slots(&item) {
-            for (x, y) in Board::cells_of(b) {
-                if let Some(ids) = self.cells.get_mut(&(slot, x, y)) {
-                    ids.retain(|i| *i != id);
+        let slots = self.slots(&item);
+        if slots.is_empty() {
+            self.unslotted.retain(|i| *i != id);
+        } else {
+            for slot in slots {
+                for (x, y) in Board::cells_of(b) {
+                    if let Some(ids) = self.cells.get_mut(&(slot, x, y)) {
+                        ids.retain(|i| *i != id);
+                    }
                 }
+            }
+        }
+        if matches!(item.kind, Kind::Spoke { spare, .. } if spare > 0) {
+            if let Ok(pos) = self.spare_spokes.binary_search(&id) {
+                self.spare_spokes.remove(pos);
             }
         }
         Some(item)
@@ -1007,6 +1173,49 @@ impl Board {
         out.sort_unstable();
         out.dedup();
         out
+    }
+
+    /// Every item whose shape's bounding box overlaps `b`, in ascending id order, found through
+    /// the spatial cells rather than walking every item on the board.
+    pub fn overlapping(&self, b: BBox) -> Vec<ItemId> {
+        let mut out: Vec<ItemId> = Vec::new();
+        for slot in 0..=self.layers.len() {
+            for (x, y) in Board::cells_of(b) {
+                if let Some(ids) = self.cells.get(&(slot, x, y)) {
+                    for &id in ids {
+                        if self.items.get(id).is_some_and(Option::is_some) && self.shape_bboxes[id].overlaps(b) {
+                            out.push(id);
+                        }
+                    }
+                }
+            }
+        }
+        for &id in &self.unslotted {
+            if self.items.get(id).is_some_and(Option::is_some) && self.shape_bboxes[id].overlaps(b) {
+                out.push(id);
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    /// Thermal spoke items whose pad has at least one spoke to spare, in ascending id order.
+    pub fn spare_spokes(&self) -> &[ItemId] {
+        &self.spare_spokes
+    }
+
+    /// Largest class clearance of any net on the board, or `None` when the board has no nets.
+    pub fn max_net_clearance(&self) -> Option<Nm> {
+        if self.nets.is_empty() {
+            return None;
+        }
+        let max_known = self.net_clearances.iter().copied().max();
+        if self.net_clearances.len() < self.nets.len() {
+            Some(max_known.map_or(self.min_clearance_nm, |m| m.max(self.min_clearance_nm)))
+        } else {
+            max_known
+        }
     }
 
     /// Moves a footprint's pads and rule areas by `by`. Unlocked tracks and vias that touched its
@@ -1116,10 +1325,86 @@ impl Board {
     }
 
     /// Whether an item is a plane's pour.
-    /// Whether item `id` is one of the [`Board::laid_islands`], which must join its net like a
+    /// Whether item `id` is one of the [`Board::join_islands`], which must join its net like a
     /// loose piece of track.
     pub fn must_join(&self, id: ItemId) -> bool {
+        self.join_islands.contains(&id)
+    }
+
+    /// Whether item `id` is one of the [`Board::laid_islands`], copper kept as laid.
+    pub fn is_laid(&self, id: ItemId) -> bool {
         self.laid_islands.contains(&id)
+    }
+
+    /// Whether `item`, a via, stands in laid copper of its own net ([`Board::laid_islands`]): a
+    /// reference layout's via in a zone the rules protect, which is part of that copper and
+    /// stays when the board is stripped for routing (easy2350's PGND and COUT vias).
+    pub fn in_laid_copper(&self, item: &Item) -> bool {
+        let Shape::Capsule { a, .. } = item.shape else { return false };
+        item.kind == Kind::Via
+            && self.laid_islands.iter().filter_map(|&id| self.item(id)).any(|piece| piece.net == item.net && piece.layers & item.layers != 0 && piece.shape.contains(a))
+    }
+
+    /// Finds the [`Board::laid_islands`] and [`Board::join_islands`] among the zones' fills, and
+    /// keeps them as laid. `keep_islands` are the zones that keep every island of their fill.
+    fn lay_protected_copper(&mut self, keep_islands: &std::collections::BTreeSet<usize>) {
+        let keepouts = self.items().any(|(_, it)| matches!(it.kind, Kind::Keepout { forbids, .. } if forbids.tracks && forbids.vias));
+        if !keepouts && !self.custom.has("disallow") {
+            return;
+        }
+        let nets: std::collections::BTreeSet<u32> = self.items().filter(|(_, it)| it.is_copper() && it.net != 0).map(|(_, it)| it.net).collect();
+        let pours: Vec<ItemId> = self.items().filter(|(_, it)| matches!(it.kind, Kind::Pour { zone, .. } if zone != DRAWN) && it.net != 0).map(|(id, _)| id).collect();
+        for id in pours {
+            let Some(piece) = self.item(id).cloned() else { continue };
+            if !self.protected(&piece, &nets) {
+                continue;
+            }
+            let Kind::Pour { zone, .. } = piece.kind else { continue };
+            if let Some(mut it) = self.remove(id) {
+                it.kind = Kind::Pour { zone, kept: true };
+                self.restore(id, it);
+            }
+            self.laid_islands.insert(id);
+            if keep_islands.contains(&zone) {
+                self.join_islands.insert(id);
+            }
+        }
+    }
+
+    /// Whether the rules keep every other net's tracks and vias off `piece`, at points sampled
+    /// across it: a rule area forbidding both there, or for each other net a custom rule
+    /// disallowing its tracks there and one disallowing its vias.
+    fn protected(&self, piece: &Item, nets: &std::collections::BTreeSet<u32>) -> bool {
+        let layer = piece.layers.trailing_zeros() as usize;
+        let b = piece.shape.bbox();
+        const N: i64 = 8;
+        let mut points: Vec<Point> = (0..=N)
+            .flat_map(|j| (0..=N).map(move |i| (i, j)))
+            .map(|(i, j)| Point::new(b.min.x + (b.max.x - b.min.x) * i / N, b.min.y + (b.max.y - b.min.y) * j / N))
+            .filter(|&p| piece.shape.contains(p))
+            .collect();
+        points.push(crate::connect::deepest(&piece.shape));
+        let r = (self.min_track_width_any().max(1) + 1) / 2;
+        let all = (1u64 << self.layers.len()) - 1;
+        points.iter().all(|&p| {
+            let dot = BBox::of([p]);
+            let in_keepout = self.near(layer, dot).into_iter().any(|k| {
+                self.item(k).is_some_and(|it| {
+                    matches!(it.kind, Kind::Keepout { forbids, .. } if forbids.tracks && forbids.vias)
+                        && it.on(layer)
+                        && it.shape.contains(p)
+                        && !self.keepout_holes.get(&k).is_some_and(|holes| holes.iter().any(|h| h.contains(p)))
+                })
+            });
+            in_keepout
+                || (self.custom.has("disallow")
+                    && nets.iter().filter(|&&n| n != piece.net).all(|&net| {
+                        let track = Item { kind: Kind::Track, net, layers: 1 << layer, shape: Shape::Capsule { a: p, b: p, r }, hole: None, locked: false, span: None };
+                        let via = Item { kind: Kind::Via, net, layers: all, shape: Shape::Capsule { a: p, b: p, r }, hole: Some((p, r / 2)), locked: false, span: None };
+                        self.disallowed("track", &crate::custom::Thing::Item(self, ItemId::MAX, &track), layer) == kicad_pcb::dru::Tri::True
+                            && self.disallowed("via", &crate::custom::Thing::Item(self, ItemId::MAX, &via), layer) == kicad_pcb::dru::Tri::True
+                    }))
+        })
     }
 
     pub fn is_plane(&self, item: &Item) -> bool {
@@ -1202,4 +1487,62 @@ pub fn arc_chords(s: [f64; 2], m: [f64; 2], e: [f64; 2], half_width: f64) -> (Ve
         })
         .collect();
     (points, sag)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn overlapping_matches_linear_bbox_scan_across_mutations() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/earring.kicad_pcb");
+        let mut board = Board::load(&path).unwrap().0;
+        let linear = |b: &Board, q: BBox| -> Vec<ItemId> {
+            b.items().filter_map(|(id, _)| b.bbox(id).filter(|bb| bb.overlaps(q)).map(|_| id)).collect()
+        };
+        // Include an unslotted item (layers == 0, hole == None) and a via with a wide drill.
+        let unslotted = board.insert(Item {
+            kind: Kind::Keepout { forbids: Keepout { tracks: true, ..Keepout::default() }, footprint: None },
+            net: 0,
+            layers: 0,
+            shape: Shape::Capsule { a: Point::new(5_000_000, 5_000_000), b: Point::new(8_000_000, 7_000_000), r: 200_000 },
+            hole: None,
+            locked: false,
+            span: None,
+        });
+        let via = board.insert(Item {
+            kind: Kind::Via,
+            net: 1,
+            layers: 3,
+            shape: Shape::Capsule { a: Point::new(6_500_000, 6_000_000), b: Point::new(6_500_000, 6_000_000), r: 150_000 },
+            hole: Some((Point::new(6_500_000, 6_000_000), 300_000)),
+            locked: false,
+            span: None,
+        });
+        let extent = BBox::of(board.items().flat_map(|(_, it)| {
+            let b = it.shape.bbox();
+            [b.min, b.max]
+        }));
+        let check_all = |b: &Board| {
+            for ix in -1..=4 {
+                for iy in -1..=4 {
+                    let x0 = extent.min.x + ix * (extent.max.x - extent.min.x) / 3;
+                    let y0 = extent.min.y + iy * (extent.max.y - extent.min.y) / 3;
+                    let q = BBox { min: Point::new(x0, y0), max: Point::new(x0 + 3_500_000, y0 + 2_700_000) };
+                    assert_eq!(b.overlapping(q), linear(b, q), "window ({ix}, {iy})");
+                }
+            }
+        };
+        check_all(&board);
+        let removed_u = board.remove(unslotted).unwrap();
+        let removed_v = board.remove(via).unwrap();
+        check_all(&board);
+        board.restore(unslotted, removed_u);
+        board.restore(via, removed_v);
+        check_all(&board);
+        board.discard(via);
+        board.discard(unslotted);
+        check_all(&board);
+    }
 }

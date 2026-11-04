@@ -24,9 +24,10 @@ pub mod place;
 pub mod read;
 pub mod rules;
 pub mod sexpr;
+pub mod text;
 pub mod write;
 
-pub use copper::{read_copper, ArcTrack, Copper, CopperLayer, Group, Keepout, Outline, PadCopper, PadShape, Span, Track, Via, Zone};
+pub use copper::{read_copper, read_copper_with, ArcTrack, Copper, CopperLayer, Group, Keepout, Outline, PadCopper, PadShape, Span, Track, Via, Zone};
 pub use model::*;
 pub use outline::{
     arc_is_ccw, chain, circumcenter, Loop, OutlineError, OutlineLoops, Segment, OUTLINE_WELD_M,
@@ -63,10 +64,15 @@ pub fn parse_kicad_pcb(text: &str) -> Result<Pcb, KicadParse> {
 
 /// The board and the copper a router works with, from one parse.
 pub fn parse_board(text: &str) -> Result<(Pcb, Copper), KicadParse> {
+    parse_board_with(text, text::shaper())
+}
+
+/// [`parse_board`], its copper and mask text shaped by `shaper` rather than the environment's.
+pub fn parse_board_with(text: &str, shaper: text::Shaper) -> Result<(Pcb, Copper), KicadParse> {
     let mut root = sexpr::parse(text)?;
     sexpr::number_nets(&mut root);
     let pcb = read::read(&root)?;
-    let copper = copper::read_copper(&root, &pcb.footprints)?;
+    let copper = copper::read_copper_with(&root, &pcb.footprints, shaper)?;
     Ok((pcb, copper))
 }
 
