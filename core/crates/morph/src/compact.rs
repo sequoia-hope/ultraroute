@@ -7695,13 +7695,12 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(
-            rep.steps_accepted >= 4 && rep.steps_accepted < 20,
-            "expected partial shrink stopped by drawn copper edge clearance, got {}/20 (jam={:?})",
-            rep.steps_accepted,
+        assert_eq!(
+            rep.steps_accepted, 3,
+            "expected 3/20 steps (0.94x) before drawn copper hits 0.500 mm edge clearance (jam={:?})",
             rep.jam
         );
-        assert!(rep.achieved_factor <= 0.92 && rep.achieved_factor > 0.60);
+        assert!((rep.achieved_factor - 0.94).abs() < 1e-9);
         let jam = rep.jam.as_deref().unwrap_or("");
         assert!(
             jam.contains("EdgeClearance") && jam.contains("drawn copper"),
