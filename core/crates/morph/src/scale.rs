@@ -85,7 +85,7 @@ pub fn scale(text: &str, rules: Rules, opts: &ScaleOptions) -> Result<ScaleRepor
         .iter()
         .map(|f| opts.lock.contains(&f.reference))
         .collect();
-    let orig_yards = extract_footprint_yards(text, &orig_pcb);
+    let orig_yards = extract_footprint_yards(text, &orig_pcb, &orig_copper);
     let fp_envs = compute_footprint_envelopes(&orig_pcb, &orig_copper, &orig_board, &orig_yards);
 
     let mut cand_pos =
@@ -326,21 +326,94 @@ pub(crate) fn compute_footprint_envelopes(
         .collect()
 }
 
-pub(crate) fn extract_footprint_yards(text: &str, pcb: &Pcb) -> Vec<FootprintYards> {
+pub(crate) fn footprint_file_ordinals(copper: &Copper) -> (Vec<usize>, Vec<usize>) {
+    let n = copper.footprint_at.len();
+    let mut file_to_canon: Vec<usize> = (0..n).collect();
+    file_to_canon.sort_by_key(|&f| (copper.footprint_at[f].map_or(usize::MAX, |s| s.start), f));
+    let mut canon_to_file = vec![0usize; n];
+    for (ord, &f) in file_to_canon.iter().enumerate() {
+        canon_to_file[f] = ord;
+    }
+    (file_to_canon, canon_to_file)
+}
+
+pub(crate) fn zone_file_ordinals(copper: &Copper) -> (Vec<usize>, Vec<usize>) {
+    let n = copper.zones.len();
+    let mut file_to_canon: Vec<usize> = (0..n).collect();
+    file_to_canon.sort_by_key(|&z| (copper.zones[z].span.start, z));
+    let mut canon_to_file = vec![0usize; n];
+    for (ord, &z) in file_to_canon.iter().enumerate() {
+        canon_to_file[z] = ord;
+    }
+    (file_to_canon, canon_to_file)
+}
+
+fn align_parsed_to_orig(orig_copper: &Copper, pcb: &mut Pcb, copper: &mut Copper) {
+    let (_, orig_fp_ord) = footprint_file_ordinals(orig_copper);
+    let (new_file_to_fp, _) = footprint_file_ordinals(copper);
+    if orig_fp_ord.len() == new_file_to_fp.len() && pcb.footprints.len() == orig_fp_ord.len() {
+        let n = orig_fp_ord.len();
+        let new_of_orig: Vec<usize> = (0..n).map(|f| new_file_to_fp[orig_fp_ord[f]]).collect();
+        if new_of_orig.iter().enumerate().any(|(i, &j)| i != j) {
+            let mut orig_of_new = vec![0usize; n];
+            for (orig_f, &new_f) in new_of_orig.iter().enumerate() {
+                orig_of_new[new_f] = orig_f;
+            }
+            let mut old_fps: Vec<Option<Footprint>> =
+                std::mem::take(&mut pcb.footprints).into_iter().map(Some).collect();
+            pcb.footprints = new_of_orig.iter().filter_map(|&f| old_fps[f].take()).collect();
+            copper.locked_footprints =
+                new_of_orig.iter().map(|&f| copper.locked_footprints[f]).collect();
+            copper.footprint_at = new_of_orig.iter().map(|&f| copper.footprint_at[f]).collect();
+            let mut old_yards = std::mem::take(&mut copper.courtyards);
+            copper.courtyards = new_of_orig.iter().map(|&f| old_yards[f].take()).collect();
+            for pad in &mut copper.pads {
+                pad.footprint = orig_of_new[pad.footprint];
+            }
+            copper.pads.sort_by_key(|p| (p.footprint, p.pad));
+            for z in &mut copper.zones {
+                z.footprint = z.footprint.map(|f| orig_of_new[f]);
+            }
+            for g in copper.graphics.iter_mut().chain(&mut copper.mask_graphics) {
+                g.footprint = g.footprint.map(|f| orig_of_new[f]);
+            }
+        }
+    }
+
+    let (_, orig_z_ord) = zone_file_ordinals(orig_copper);
+    let (new_file_to_z, _) = zone_file_ordinals(copper);
+    if orig_z_ord.len() == new_file_to_z.len() && copper.zones.len() == orig_z_ord.len() {
+        let nz = orig_z_ord.len();
+        let new_of_orig_z: Vec<usize> = (0..nz).map(|z| new_file_to_z[orig_z_ord[z]]).collect();
+        if new_of_orig_z.iter().enumerate().any(|(i, &j)| i != j) {
+            let mut old_zones: Vec<Option<Zone>> =
+                std::mem::take(&mut copper.zones).into_iter().map(Some).collect();
+            copper.zones = new_of_orig_z.iter().filter_map(|&z| old_zones[z].take()).collect();
+        }
+    }
+}
+
+pub(crate) fn extract_footprint_yards(
+    text: &str,
+    pcb: &Pcb,
+    copper: &Copper,
+) -> Vec<FootprintYards> {
     let mut out = vec![FootprintYards::default(); pcb.footprints.len()];
     let Ok(root) = kicad_pcb::sexpr::parse(text) else {
         return out;
     };
-    let mut fp_idx = 0usize;
+    let (file_to_canon, _) = footprint_file_ordinals(copper);
+    let mut fp_file_ord = 0usize;
     for child in root.args() {
         if child.head() != Some("footprint") {
             continue;
         }
-        let Some(fp) = pcb.footprints.get(fp_idx) else {
-            break;
-        };
-        out[fp_idx] = parse_one_footprint_yards(child, fp);
-        fp_idx += 1;
+        if let Some(&f) = file_to_canon.get(fp_file_ord) {
+            if let Some(fp) = pcb.footprints.get(f) {
+                out[f] = parse_one_footprint_yards(child, fp);
+            }
+        }
+        fp_file_ord += 1;
     }
     out
 }
@@ -884,19 +957,26 @@ pub(crate) fn build_scaled_bare_board(
     extra_obstacles: &[Item],
 ) -> Result<(Board, Copper, String), String> {
     let centre_m = [centre.0 * 1e-9, centre.1 * 1e-9];
+    let (_, fp_canon_to_file) = footprint_file_ordinals(orig_copper);
+    let (z_file_to_canon, z_canon_to_file) = zone_file_ordinals(orig_copper);
     let fp_edits: Vec<(usize, [f64; 2], [f64; 2])> = fp_shifts
         .iter()
         .map(|&(f, shift)| {
             let orig = orig_pcb.footprints[f].at;
             let orig_nm = Point::from_m(orig);
             let to_m = [(orig_nm.x + shift.x) as f64 * 1e-9, (orig_nm.y + shift.y) as f64 * 1e-9];
-            (f, orig, to_m)
+            (fp_canon_to_file[f], orig, to_m)
         })
         .collect();
     let plane_flags: Vec<bool> =
         orig_copper.zones.iter().map(|z| is_board_plane_zone(orig_board_bb, z)).collect();
-    let zone_map = |z: usize, p: [f64; 2]| -> [f64; 2] {
-        if plane_flags.get(z).copied().unwrap_or(true) {
+    let zone_map = |z_file: usize, p: [f64; 2]| -> [f64; 2] {
+        let is_plane = z_file_to_canon
+            .get(z_file)
+            .and_then(|&z| plane_flags.get(z))
+            .copied()
+            .unwrap_or(true);
+        if is_plane {
             [centre_m[0] + factor * (p[0] - centre_m[0]), centre_m[1] + factor * (p[1] - centre_m[1])]
         } else {
             let pt = Point::from_m(p);
@@ -909,7 +989,8 @@ pub(crate) fn build_scaled_bare_board(
         scale_edits(bare_text, centre_m, factor, &fp_edits, Some(&zone_map), &[])
             .map_err(|e| e.to_string())?;
     let unfilled_text = apply(bare_text, &Edit { remove: rem, replace: rep, ..Edit::default() });
-    let (pcb, copper) = parse_board(&unfilled_text).map_err(|e| e.to_string())?;
+    let (mut pcb, mut copper) = parse_board(&unfilled_text).map_err(|e| e.to_string())?;
+    align_parsed_to_orig(orig_copper, &mut pcb, &mut copper);
     let blocks = Block::of(&pcb, &copper);
     let has_kept_zones = blocks.iter().any(|b| !b.zones.is_empty());
     if !has_kept_zones {
@@ -928,11 +1009,16 @@ pub(crate) fn build_scaled_bare_board(
         return Ok((board, copper, unfilled_text));
     }
 
+    let file_fills: Vec<ZoneFill> = fills
+        .into_iter()
+        .map(|zf| ZoneFill { zone: z_canon_to_file[zf.zone], ..zf })
+        .collect();
     let (rem2, rep2) =
-        scale_edits(bare_text, centre_m, factor, &fp_edits, Some(&zone_map), &fills)
+        scale_edits(bare_text, centre_m, factor, &fp_edits, Some(&zone_map), &file_fills)
             .map_err(|e| e.to_string())?;
     let filled_text = apply(bare_text, &Edit { remove: rem2, replace: rep2, ..Edit::default() });
-    let (pcb2, copper2) = parse_board(&filled_text).map_err(|e| e.to_string())?;
+    let (mut pcb2, mut copper2) = parse_board(&filled_text).map_err(|e| e.to_string())?;
+    align_parsed_to_orig(orig_copper, &mut pcb2, &mut copper2);
     let mut board2 = Board::new(&pcb2, &copper2, rules.clone());
     board2.unfilled = all_unfilled;
     Ok((board2, copper2, filled_text))
@@ -1475,7 +1561,7 @@ fn carry_copper(
             size: v.size,
             drill: v.drill,
             layers: v.layers.clone(),
-            net: v.net,
+            net: board.file_net(v.net),
             locked: v.locked,
         });
         obstacle_items.push(Item {
@@ -1534,7 +1620,7 @@ fn carry_copper(
                 end: [w[1].x as f64 * 1e-9, w[1].y as f64 * 1e-9],
                 width,
                 layer: layer_name.clone(),
-                net,
+                net: board.file_net(net),
                 locked,
             });
             obstacle_items.push(Item {

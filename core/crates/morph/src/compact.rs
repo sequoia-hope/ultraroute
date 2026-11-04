@@ -215,7 +215,7 @@ pub fn compact(text: &str, rules: Rules, opts: &CompactOptions) -> Result<Compac
         .iter()
         .map(|f| opts.lock.contains(&f.reference))
         .collect();
-    let orig_yards = extract_footprint_yards(text, &orig_pcb);
+    let orig_yards = extract_footprint_yards(text, &orig_pcb, &orig_copper);
     let fp_envs = compute_footprint_envelopes(&orig_pcb, &orig_copper, &orig_board, &orig_yards);
     let initial_yard_pen = courtyard_penetrations(&orig_yards, &orig_fp_at, &orig_fp_at);
 
@@ -1338,7 +1338,7 @@ impl CopperGraph {
                 end: [b.x as f64 * 1e-9, b.y as f64 * 1e-9],
                 width: (e.r * 2) as f64 * 1e-9,
                 layer: board.layers[e.layer].clone(),
-                net: e.net,
+                net: board.file_net(e.net),
                 locked: e.locked,
             });
         }
@@ -1356,7 +1356,7 @@ impl CopperGraph {
                     size: (r * 2) as f64 * 1e-9,
                     drill: (dr * 2) as f64 * 1e-9,
                     layers: [board.layers[first].clone(), board.layers[last].clone()],
-                    net,
+                    net: board.file_net(net),
                     locked,
                 });
             }
@@ -6392,12 +6392,13 @@ mod tests {
             "pinched central parts stopped locally while outer parts continued"
         );
         let (pcb, copper) = parse_board(&rep.text).unwrap();
-        // Outer parts P_WEST (idx 4, x = 2.5) and P_EAST (idx 5, x = 17.5) shrank by 0.65 around
-        // x = 10: span went from 15.0 mm down to ~9.75 mm.
-        let outer_span_mm = (pcb.footprints[5].at[0] - pcb.footprints[4].at[0]) * 1e3;
+        let fp = |r: &str| pcb.footprints.iter().find(|f| f.reference == r).unwrap();
+        // Outer parts P_WEST (x = 2.5) and P_EAST (x = 17.5) shrank by 0.65 around x = 10:
+        // span went from 15.0 mm down to ~9.75 mm.
+        let outer_span_mm = (fp("P_EAST").at[0] - fp("P_WEST").at[0]) * 1e3;
         assert!(outer_span_mm < 10.0, "outer parts achieved 35% shrink: span={outer_span_mm} mm");
-        // Central opposite-side pair U_FRONT (idx 0) and U_BACK (idx 1) kept >= 1.80 mm separation.
-        let pinch_dy_mm = (pcb.footprints[1].at[1] - pcb.footprints[0].at[1]) * 1e3;
+        // Central opposite-side pair U_FRONT and U_BACK kept >= 1.80 mm separation.
+        let pinch_dy_mm = (fp("U_BACK").at[1] - fp("U_FRONT").at[1]) * 1e3;
         assert!(pinch_dy_mm >= 1.795, "opposite-side parts respected via clearance: dy={pinch_dy_mm}");
 
         let b = Board::new(&pcb, &copper, rules);
@@ -6465,7 +6466,8 @@ mod tests {
             "slide_pinched_vias must slide the pinched via along its track"
         );
         let (pcb, copper) = parse_board(&rep.text).unwrap();
-        let dy_mm = (pcb.footprints[1].at[1] - pcb.footprints[0].at[1]) * 1e3;
+        let fp = |r: &str| pcb.footprints.iter().find(|f| f.reference == r).unwrap();
+        let dy_mm = (fp("U_BACK").at[1] - fp("U_FRONT").at[1]) * 1e3;
         assert!(
             dy_mm < 1.50,
             "via escaped the throat so U_FRONT and U_BACK closed past 1.80 mm to {dy_mm:.3} mm"
@@ -6528,14 +6530,23 @@ mod tests {
         assert_eq!(rep1.steps_accepted, 10, "jam: {:?}", rep1.jam);
 
         let (pcb, copper) = parse_board(&rep1.text).unwrap();
+        let fp_at = |p: &Pcb, r: &str| p.footprints.iter().find(|f| f.reference == r).unwrap().at;
         assert_eq!(
-            pcb.footprints[0].at, orig_pcb.footprints[0].at,
+            fp_at(&pcb, "J_LOCK"),
+            fp_at(&orig_pcb, "J_LOCK"),
             "locked footprint J_LOCK must not move by 1 nm"
         );
+        // Board centre x = 10.0 mm, R_FAR starts at 16.5 mm, factor = 0.75 => 10 + 0.75 * 6.5 = 14.875 mm.
         assert!(
-            pcb.footprints[2].at[0] < 14.5e-3,
-            "unlocked R_FAR moved inward: x={}",
-            pcb.footprints[2].at[0]
+            (fp_at(&pcb, "R_FAR")[0] - 14.875e-3).abs() < 5e-6,
+            "unlocked R_FAR moved inward to 14.875 mm: x={}",
+            fp_at(&pcb, "R_FAR")[0]
+        );
+        // R_NEAR starts at 3.0 mm (nominal 0.75x = 4.75 mm) and stops at <= 3.70 mm against locked J_LOCK (5.2 mm).
+        assert!(
+            fp_at(&pcb, "R_NEAR")[0] > 3.5e-3 && fp_at(&pcb, "R_NEAR")[0] <= 3.705e-3,
+            "R_NEAR stopped cleanly against locked J_LOCK: x={}",
+            fp_at(&pcb, "R_NEAR")[0]
         );
         let b = Board::new(&pcb, &copper, rules);
         assert!(check(&b).is_empty());

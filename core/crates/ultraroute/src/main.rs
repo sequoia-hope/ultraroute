@@ -337,6 +337,10 @@ fn run_compact(args: &[String]) {
                 })
             })
             .collect();
+        let max_part_stops =
+            rep.steps.iter().filter(|s| s.accepted).map(|s| s.part_stops).max().unwrap_or(0);
+        let total_via_slides: usize =
+            rep.steps.iter().filter(|s| s.accepted).map(|s| s.via_slides).sum();
         let summary = json!({
             "input": a.input,
             "output": a.output,
@@ -344,6 +348,11 @@ fn run_compact(args: &[String]) {
             "achieved_factor": rep.achieved_factor,
             "steps_requested": rep.steps_requested,
             "steps_accepted": rep.steps_accepted,
+            "segments": last_kept.segments,
+            "vias": last_kept.vias,
+            "track_length_mm": last_kept.track_length_mm,
+            "part_stops": max_part_stops,
+            "via_slides": total_via_slides,
             "elapsed_s": elapsed,
             "cpu_s": cpu_s,
             "peak_memory_mb": peak_memory_mb(),
