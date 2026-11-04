@@ -155,7 +155,7 @@ pub fn mm(m: f64) -> String {
 pub struct ZoneFill {
     pub zone: usize,
     pub layer: String,
-    pub rects: Vec<[f64; 4]>,
+    pub polygons: Vec<Vec<[f64; 2]>>,
 }
 
 /// Per-zone point warp `(zone_index, point_m) -> new_point_m`.
@@ -309,19 +309,21 @@ fn drop_and_fill_zone(
     }
     let mut filled = String::new();
     for zf in zone_fills.iter().filter(|f| f.zone == zone_idx) {
-        for &[x0, y0, x1, y1] in &zf.rects {
+        for poly in &zf.polygons {
+            if poly.len() < 3 {
+                continue;
+            }
             filled.push_str(&format!(
-                "\t\t(filled_polygon\n\t\t\t(layer \"{}\")\n\t\t\t(pts\n\t\t\t\t(xy {} {}) (xy {} {}) (xy {} {}) (xy {} {})\n\t\t\t)\n\t\t)\n",
-                zf.layer,
-                mm(x0),
-                mm(y0),
-                mm(x1),
-                mm(y0),
-                mm(x1),
-                mm(y1),
-                mm(x0),
-                mm(y1)
+                "\t\t(filled_polygon\n\t\t\t(layer \"{}\")\n\t\t\t(pts\n\t\t\t\t",
+                zf.layer
             ));
+            for (i, &[x, y]) in poly.iter().enumerate() {
+                if i > 0 {
+                    filled.push(' ');
+                }
+                filled.push_str(&format!("(xy {} {})", mm(x), mm(y)));
+            }
+            filled.push_str("\n\t\t\t)\n\t\t)\n");
         }
     }
     if filled.is_empty() {
@@ -500,7 +502,11 @@ mod tests {
         let factor = 1.5;
         let orig = [4e-3, 2e-3];
         let to = [centre[0] + factor * (orig[0] - centre[0]), centre[1] + factor * (orig[1] - centre[1])];
-        let fills = vec![ZoneFill { zone: 1, layer: "F.Cu".into(), rects: vec![[2e-3, 2e-3, 3e-3, 3e-3]] }];
+        let fills = vec![ZoneFill {
+            zone: 1,
+            layer: "F.Cu".into(),
+            polygons: vec![vec![[2e-3, 2e-3], [3e-3, 2e-3], [3e-3, 3e-3], [2e-3, 3e-3]]],
+        }];
         let (remove, replace) = scale_edits(text, centre, factor, &[(0, orig, to)], None, &fills).unwrap();
         let out = apply(text, &Edit { remove, replace, ..Edit::default() });
         let (pcb, copper) = crate::parse_board(&out).unwrap();

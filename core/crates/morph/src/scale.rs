@@ -3,7 +3,7 @@
 //! about the same centre, local component zones move with the warp field so regulator rings under
 //! a package stay aligned with its pads, and tracks and vias flow with the harmonic field.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use board::{arc_chords, nm, point_segment, BBox, Block, Board, Item, Kind, Nm, Point, Shape};
 use kicad_pcb::sexpr::Node;
@@ -1057,22 +1057,16 @@ pub(crate) fn recarve_kept_zones_in_board(board: &mut Board, copper: &Copper) {
         let Some(zone) = copper.zones.get(zf.zone) else { continue };
         let Some(layer_idx) = board.layers.iter().position(|l| l == &zf.layer) else { continue };
         let layer_mask = 1u64 << layer_idx;
-        for [x0, y0, x1, y1] in zf.rects {
-            let p0 = Point::from_m([x0, y0]);
-            let p1 = Point::from_m([x1, y1]);
-            if p1.x <= p0.x || p1.y <= p0.y {
+        for poly in zf.polygons {
+            if poly.len() < 3 {
                 continue;
             }
+            let pts: Vec<Point> = poly.into_iter().map(Point::from_m).collect();
             board.insert(Item {
                 kind: Kind::Pour { zone: zf.zone, kept: true },
                 net: zone.net,
                 layers: layer_mask,
-                shape: Shape::Polygon(vec![
-                    Point::new(p0.x, p0.y),
-                    Point::new(p1.x, p0.y),
-                    Point::new(p1.x, p1.y),
-                    Point::new(p0.x, p1.y),
-                ]),
+                shape: Shape::Polygon(pts),
                 hole: None,
                 locked: true,
                 span: None,
@@ -1129,14 +1123,20 @@ fn carve_kept_zones(board: &Board, copper: &Copper, blocks: &[Block]) -> Vec<Zon
         for layer in layers {
             if let Some(r) = carve_one_zone(board, zone, layer, &poured) {
                 if kept_set.contains(&z) {
-                    let rects = r
-                        .rects()
+                    let polygons = r
+                        .polygons()
                         .into_iter()
-                        .map(|[x0, y0, x1, y1]| {
-                            [x0 as f64 * 1e-9, y0 as f64 * 1e-9, x1 as f64 * 1e-9, y1 as f64 * 1e-9]
+                        .map(|pts| {
+                            pts.into_iter()
+                                .map(|p| [p.x as f64 * 1e-9, p.y as f64 * 1e-9])
+                                .collect()
                         })
                         .collect();
-                    out.push(ZoneFill { zone: z, layer: board.layers[layer].clone(), rects });
+                    out.push(ZoneFill {
+                        zone: z,
+                        layer: board.layers[layer].clone(),
+                        polygons,
+                    });
                 }
                 poured.push((zone.net, nm(zone.clearance), layer, r));
             }
@@ -1303,39 +1303,195 @@ impl PourRaster {
         self.cells = kept;
     }
 
-    fn rects(&self) -> Vec<[Nm; 4]> {
-        let mut done = Vec::new();
-        let mut open: Vec<(usize, usize, usize)> = Vec::new();
-        for j in 0..=self.h {
-            let mut runs = Vec::new();
-            if j < self.h {
-                let mut i = 0;
-                while i < self.w {
-                    if self.cells[j * self.w + i] {
-                        let from = i;
-                        while i < self.w && self.cells[j * self.w + i] {
-                            i += 1;
+    /// Converts each 4-connected component of filled cells into one simple orthogonal polygon,
+    /// splicing any interior holes into the outer boundary via horizontal keyhole cuts so KiCad's
+    /// pre-refill connectivity engine sees a single connected island per component.
+    fn polygons(&self) -> Vec<Vec<Point>> {
+        let mut visited = vec![false; self.w * self.h];
+        let mut in_comp = vec![false; self.w * self.h];
+        let mut stack = Vec::new();
+        let mut out = Vec::new();
+
+        for sj in 0..self.h {
+            for si in 0..self.w {
+                let sk = sj * self.w + si;
+                if !self.cells[sk] || visited[sk] {
+                    continue;
+                }
+                visited[sk] = true;
+                in_comp[sk] = true;
+                stack.push((si, sj));
+                let mut comp = vec![(si, sj)];
+                while let Some((ci, cj)) = stack.pop() {
+                    for (ni, nj) in [
+                        (ci.wrapping_sub(1), cj),
+                        (ci + 1, cj),
+                        (ci, cj.wrapping_sub(1)),
+                        (ci, cj + 1),
+                    ] {
+                        if ni < self.w && nj < self.h {
+                            let nk = nj * self.w + ni;
+                            if self.cells[nk] && !visited[nk] {
+                                visited[nk] = true;
+                                in_comp[nk] = true;
+                                stack.push((ni, nj));
+                                comp.push((ni, nj));
+                            }
                         }
-                        runs.push((from, i));
                     }
-                    i += 1;
+                }
+                comp.sort_unstable();
+
+                let mut edges: Vec<((i32, i32), (i32, i32))> = Vec::with_capacity(comp.len() * 2);
+                {
+                    let has = |x: i32, y: i32| -> bool {
+                        x >= 0
+                            && y >= 0
+                            && (x as usize) < self.w
+                            && (y as usize) < self.h
+                            && in_comp[y as usize * self.w + x as usize]
+                    };
+                    for &(ui, uj) in &comp {
+                        let (i, j) = (ui as i32, uj as i32);
+                        if !has(i, j - 1) {
+                            edges.push(((i, j), (i + 1, j)));
+                        }
+                        if !has(i + 1, j) {
+                            edges.push(((i + 1, j), (i + 1, j + 1)));
+                        }
+                        if !has(i, j + 1) {
+                            edges.push(((i + 1, j + 1), (i, j + 1)));
+                        }
+                        if !has(i - 1, j) {
+                            edges.push(((i, j + 1), (i, j)));
+                        }
+                    }
+                }
+                for &(ui, uj) in &comp {
+                    in_comp[uj * self.w + ui] = false;
+                }
+                edges.sort_unstable();
+
+                let mut out_adj: BTreeMap<(i32, i32), Vec<usize>> = BTreeMap::new();
+                for (ei, &(u, _)) in edges.iter().enumerate() {
+                    out_adj.entry(u).or_default().push(ei);
+                }
+
+                let mut used = vec![false; edges.len()];
+                let mut loops: Vec<Vec<(i32, i32)>> = Vec::new();
+                for ei in 0..edges.len() {
+                    if used[ei] {
+                        continue;
+                    }
+                    let mut lp = Vec::new();
+                    let mut cur = ei;
+                    while !used[cur] {
+                        used[cur] = true;
+                        let (u, v) = edges[cur];
+                        lp.push(u);
+                        let (dx, dy) = (v.0 - u.0, v.1 - u.1);
+                        let pref = (v.0 - dy, v.1 + dx);
+                        let Some(cands) = out_adj.get(&v) else { break };
+                        let next = cands
+                            .iter()
+                            .copied()
+                            .find(|&k| !used[k] && edges[k].1 == pref)
+                            .or_else(|| cands.iter().copied().find(|&k| !used[k]));
+                        let Some(nk) = next else { break };
+                        cur = nk;
+                    }
+                    if lp.len() >= 3 {
+                        loops.push(lp);
+                    }
+                }
+
+                let sarea = |lp: &[(i32, i32)]| -> i64 {
+                    (0..lp.len())
+                        .map(|k| {
+                            let (a, b) = (lp[k], lp[(k + 1) % lp.len()]);
+                            a.0 as i64 * b.1 as i64 - b.0 as i64 * a.1 as i64
+                        })
+                        .sum()
+                };
+
+                let mut outers: Vec<Vec<(i32, i32)>> = Vec::new();
+                let mut holes: Vec<Vec<(i32, i32)>> = Vec::new();
+                for lp in loops {
+                    let a = sarea(&lp);
+                    if a > 0 {
+                        outers.push(lp);
+                    } else if a < 0 {
+                        let idx = (0..lp.len()).min_by_key(|&k| lp[k]).unwrap_or(0);
+                        let mut rot = Vec::with_capacity(lp.len());
+                        rot.extend_from_slice(&lp[idx..]);
+                        rot.extend_from_slice(&lp[..idx]);
+                        holes.push(rot);
+                    }
+                }
+                let Some(mut outer) = outers.into_iter().max_by_key(|lp| sarea(lp)) else {
+                    continue;
+                };
+                holes.sort_by_key(|h| h[0]);
+
+                for h_rot in holes {
+                    let (hx, hy) = h_rot[0];
+                    let mut best_k: Option<usize> = None;
+                    let mut best_tx = i32::MIN;
+                    let no = outer.len();
+                    for k in 0..no {
+                        let (u, v) = (outer[k], outer[(k + 1) % no]);
+                        if u.0 == v.0 && u.1 == hy + 1 && v.1 == hy && v.0 < hx && v.0 > best_tx {
+                            best_tx = v.0;
+                            best_k = Some((k + 1) % no);
+                        }
+                    }
+                    if let Some(bk) = best_k {
+                        let mut bridge = Vec::with_capacity(h_rot.len() + 2);
+                        bridge.push((hx, hy));
+                        bridge.extend_from_slice(&h_rot[1..]);
+                        bridge.push((hx, hy));
+                        bridge.push((best_tx, hy));
+                        let ins = bk + 1;
+                        outer.splice(ins..ins, bridge);
+                    }
+                }
+
+                let mut changed = true;
+                while changed && outer.len() >= 3 {
+                    changed = false;
+                    let n = outer.len();
+                    let mut nxt = Vec::with_capacity(n);
+                    for k in 0..n {
+                        let a = outer[(k + n - 1) % n];
+                        let b = outer[k];
+                        let c = outer[(k + 1) % n];
+                        let (dx1, dy1) = ((b.0 - a.0) as i64, (b.1 - a.1) as i64);
+                        let (dx2, dy2) = ((c.0 - b.0) as i64, (c.1 - b.1) as i64);
+                        if dx1 * dy2 - dy1 * dx2 == 0 && dx1 * dx2 + dy1 * dy2 >= 0 {
+                            changed = true;
+                        } else {
+                            nxt.push(b);
+                        }
+                    }
+                    outer = nxt;
+                }
+
+                if outer.len() >= 3 {
+                    out.push(
+                        outer
+                            .into_iter()
+                            .map(|(gi, gj)| {
+                                Point::new(
+                                    (self.i0 + gi as i64) * POUR_STEP,
+                                    (self.j0 + gj as i64) * POUR_STEP,
+                                )
+                            })
+                            .collect(),
+                    );
                 }
             }
-            let mut still = Vec::with_capacity(runs.len());
-            for (from, to, top) in open.drain(..) {
-                if let Some(pos) = runs.iter().position(|&r| r == (from, to)) {
-                    runs.swap_remove(pos);
-                    still.push((from, to, top));
-                } else {
-                    let x = |i: usize| (self.i0 + i as i64) * POUR_STEP;
-                    let y = |j: usize| (self.j0 + j as i64) * POUR_STEP;
-                    done.push([x(from), y(top), x(to), y(j)]);
-                }
-            }
-            still.extend(runs.into_iter().map(|(from, to)| (from, to, j)));
-            open = still;
         }
-        done
+        out
     }
 }
 
@@ -1796,5 +1952,25 @@ mod tests {
         );
         let board = Board::new(&pcb, &copper, rules);
         assert!(check(&board).is_empty(), "zero DRC violations after 1.1x scale: {:?}", check(&board));
+    }
+
+    #[test]
+    fn pour_raster_emits_single_keyhole_polygon_per_connected_island() {
+        let mut r = PourRaster { i0: 0, j0: 0, w: 5, h: 5, cells: vec![true; 25] };
+        // Hollow out interior cell (2, 2) so the 5x5 island has an interior hole.
+        r.cells[2 * 5 + 2] = false;
+        let polys = r.polygons();
+        assert_eq!(polys.len(), 1, "4-connected ring must emit a single keyhole polygon");
+        let sh = Shape::Polygon(polys[0].clone());
+        for j in 0..5 {
+            for i in 0..5 {
+                let c = r.center(i, j);
+                assert_eq!(
+                    sh.contains(c),
+                    (i, j) != (2, 2),
+                    "cell ({i}, {j}) containment mismatch"
+                );
+            }
+        }
     }
 }
