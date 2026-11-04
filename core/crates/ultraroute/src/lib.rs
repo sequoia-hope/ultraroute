@@ -40,7 +40,7 @@ pub use watch::{Cleaned, Flow, StageEvent, Unwatched, Watch};
 
 pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--plane-via-reach MM] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--negotiate-jacobi] [--negotiate-reroute-all] [--diff-pairs] [--prefanout] [--escape-room|--no-escape-room] [--prefanout-mode stub|dogbone|grid|inner|same] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--negotiate] [--rip-up] [--rip-boxed|--no-rip-boxed] [--nudge] [--tighten] [--arcs MM] [--via-cost MM[,OPEN_MM]] [--gpu] \
 [--timeout SECONDS] [--cpu-clock] [--cell MM] [--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--guard-ties|--no-guard-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--uuid-seed N] [--adopt] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
-[--recipe default|bench|minimal] [--live PATH|-] [--live-fps N] [--live-step MS] [--blame] [--stats|--report FILE] [--no-timing] [-h|--help]
+[--recipe default|bench|minimal] [--live PATH|-] [--live-fps N] [--live-step MS] [--blame] [--stats|--report FILE] [--timing|--no-timing] [-h|--help]
 --place takes millimetres with y pointing up: give KiCad's y negated (KiCad y 127.5 is -127.5).
 Copper and mask text is stroked by the kicad-text program ($ULTRAROUTE_TEXT_HELPER, else next to this one, else on PATH; none: boxes);
 ultraroute text-helper prints the one a route would run.";
@@ -153,7 +153,9 @@ pub struct Args {
     /// Where to write the run's stats and findings as JSON (`--stats`, or `--report` as Studio
     /// names it).
     pub stats: Option<String>,
-    /// Skip sub-stage and per-move CPU timing so bucket and effort timers stay zero.
+    /// Turn on fine-grained sub-stage bucket, per-move effort and progress CPU timing (`--timing`).
+    pub timing: bool,
+    /// Skip all CPU timing, including coarse per-stage timers (`--no-timing`).
     pub no_timing: bool,
     /// The command line as read, the recipe's flags put in.
     pub line: Vec<String>,
@@ -263,6 +265,7 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
         live_step: 0,
         blame: false,
         stats: None,
+        timing: false,
         no_timing: false,
         line: args.to_vec(),
     };
@@ -391,7 +394,14 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
             "--verbose" | "-v" => a.verbose = true,
             "--blame" => a.blame = true,
             "--stats" | "--report" => a.stats = Some(value()?),
-            "--no-timing" => a.no_timing = true,
+            "--timing" => {
+                a.timing = true;
+                a.no_timing = false;
+            }
+            "--no-timing" => {
+                a.timing = false;
+                a.no_timing = true;
+            }
             "--via-avoid" => {
                 let v = value()?;
                 let n: Vec<f64> = v.split(',').map(|x| x.trim().parse::<f64>()).collect::<Result<_, _>>().map_err(|e| format!("--via-avoid {v}: {e}"))?;
@@ -1256,7 +1266,7 @@ pub fn route(
     let log = run_log(a, &live, started, watch.as_ref().and_then(|w| w.log()));
     let mut hooks = watch::Hooks { live: live.clone(), user: watch };
     let threads = a.threads.unwrap_or_else(default_threads);
-    let sink = (!a.no_timing).then(board::work::CpuSink::new);
+    let sink = (a.timing && !a.no_timing).then(board::work::CpuSink::new);
     let _sink_guard = board::work::install_sink(sink.clone());
     let mut mark = Mark::take(a, &board, sink.as_deref(), &mut stats);
     let (mut ran, mut stopped): (Vec<&str>, bool) = (Vec::new(), false);
@@ -1562,15 +1572,23 @@ struct Mark {
     vias: usize,
     work: grid::work::Work,
     snap: board::work::CpuSnap,
+    proc_cpu_ns: u64,
 }
 
 impl Mark {
     fn take(a: &Args, board: &Board, sink: Option<&board::work::CpuSink>, stats: &mut RunStats) -> Mark {
+        let coarse = !a.no_timing && sink.is_none();
         let pause = board::work::pause_sink();
         let t = Instant::now();
+        let cpu_t0 = if coarse { board::work::process_cpu_ns() } else { 0 };
         let (open, copper, vias) = (open_airlines(a, board), stages::copper_keys(board), vias_on(board));
         stats.stats_seconds += t.elapsed().as_secs_f64();
-        stats.stats_cpu_seconds += pause.close() as f64 * 1e-9;
+        let paused_ns = if coarse {
+            board::work::process_cpu_ns().saturating_sub(cpu_t0)
+        } else {
+            pause.close()
+        };
+        stats.stats_cpu_seconds += paused_ns as f64 * 1e-9;
         // Last, so the counting itself is not counted as the next stage's work or CPU.
         Mark {
             open,
@@ -1578,6 +1596,7 @@ impl Mark {
             vias,
             work: grid::work::Work::now(),
             snap: sink.map_or_else(Default::default, |s| s.snap()),
+            proc_cpu_ns: if coarse { board::work::process_cpu_ns() } else { 0 },
         }
     }
 
@@ -1597,27 +1616,43 @@ impl Mark {
         detail: Value,
         stats: &mut RunStats,
     ) -> StageStats {
+        let coarse = !a.no_timing && sink.is_none();
         let work = grid::work::Work::now().since(&self.work);
         let seconds = from.elapsed().as_secs_f64();
-        let end_snap = sink.map_or_else(Default::default, |s| s.snap());
-        let delta = end_snap.since(&self.snap);
-        let (cpu_seconds, cpu) = stats::CpuBreakdown::from_ns(delta.run_cpu_ns, &delta.buckets_ns);
+        let (end_snap, delta, stage_cpu_ns) = if let Some(s) = sink {
+            let end = s.snap();
+            let d = end.since(&self.snap);
+            (end, d, d.run_cpu_ns)
+        } else if coarse {
+            let end_ns = board::work::process_cpu_ns();
+            (Default::default(), Default::default(), end_ns.saturating_sub(self.proc_cpu_ns))
+        } else {
+            (Default::default(), Default::default(), 0)
+        };
+        let (cpu_seconds, cpu) = stats::CpuBreakdown::from_ns(stage_cpu_ns, &delta.buckets_ns);
         let effort = stats::Effort::from_ns(cpu_seconds, useful_ns, kept_other_ns, wasted_ns);
         let mut next = Mark::take(a, board, sink, stats);
         // The connections the stage leaves open, filed: the failures are the open set after it.
         {
             let pause = board::work::pause_sink();
             let t = Instant::now();
+            let cpu_t0 = if coarse { board::work::process_cpu_ns() } else { 0 };
             let before: HashSet<(ItemId, ItemId)> = self.open.iter().map(stages::pair_key).collect();
             stages::reconcile_failures(board, &mut stats.failures, given_up, name, leaves_open, &before, &next.open);
             stats.stats_seconds += t.elapsed().as_secs_f64();
             if let Some(s) = sink {
                 reconcile_stage_events(s, ev_before, name, self.snap, end_snap, &delta, self.open.len(), next.open.len());
             }
-            stats.stats_cpu_seconds += pause.close() as f64 * 1e-9;
+            let paused_ns = if coarse {
+                board::work::process_cpu_ns().saturating_sub(cpu_t0)
+            } else {
+                pause.close()
+            };
+            stats.stats_cpu_seconds += paused_ns as f64 * 1e-9;
         }
         next.work = grid::work::Work::now();
         next.snap = sink.map_or_else(Default::default, |s| s.snap());
+        next.proc_cpu_ns = if coarse { board::work::process_cpu_ns() } else { 0 };
         let done = StageStats {
             name,
             started: from.duration_since(begun).as_secs_f64(),

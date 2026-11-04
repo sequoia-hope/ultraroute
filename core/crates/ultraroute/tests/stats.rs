@@ -93,7 +93,7 @@ fn every_open_connection_is_a_finding() {
 
 #[test]
 fn sub_stage_cpu_and_effort_account_for_stage_time() {
-    let s = stats(&["--cell", "0.1", "--threads", "2"]);
+    let s = stats(&["--cell", "0.1", "--threads", "2", "--timing"]);
     for section in ["board", "summary", "moves", "progress"] {
         let mut ns = Vec::new();
         numbers(&s[section], &mut ns);
@@ -133,6 +133,16 @@ fn sub_stage_cpu_and_effort_account_for_stage_time() {
     assert!(neg["effort"]["accounted_seconds"].as_f64().unwrap() > 0.0, "{neg}");
     assert!(s["moves"]["negotiation"]["rounds"].as_u64().unwrap() > 0, "{}", s["moves"]);
     assert!(!s["progress"]["open_curve"].as_array().unwrap().is_empty(), "{}", s["progress"]);
+
+    // Default (without --timing): coarse stage CPU seconds are recorded, while fine-grained
+    // buckets, effort and progress timelines stay zero/empty.
+    let coarse = stats(&["--cell", "0.1", "--threads", "1"]);
+    assert!(coarse["summary"]["cpu_seconds"].as_f64().unwrap() > 0.0, "{coarse}");
+    for st in coarse["stages"].as_array().unwrap() {
+        assert_eq!(st["cpu"]["accounted"].as_f64().unwrap(), 0.0, "{st}");
+        assert_eq!(st["effort"]["accounted_seconds"].as_f64().unwrap(), 0.0, "{st}");
+    }
+    assert!(coarse["progress"]["open_curve"].as_array().unwrap().is_empty(), "{}", coarse["progress"]);
 
     // With --no-timing, all CPU and effort counters stay zero while stages and work counts still report.
     let off = stats(&["--cell", "0.1", "--threads", "1", "--no-timing"]);

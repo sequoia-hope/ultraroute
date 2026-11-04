@@ -377,17 +377,18 @@ struct Owned {
 
 impl Owned {
     fn of(map: &ObstacleMap) -> Owned {
-        let _b = board::work::enter(board::work::Bucket::MapPatch);
-        let by_net = |owner: &[i32]| {
-            let mut out: FxHashMap<i32, Vec<u32>> = FxHashMap::default();
-            for (c, &o) in owner.iter().enumerate() {
-                if o > 0 {
-                    out.entry(o).or_default().push(c as u32);
+        board::work::in_bucket(board::work::Bucket::MapPatch, || {
+            let by_net = |owner: &[i32]| {
+                let mut out: FxHashMap<i32, Vec<u32>> = FxHashMap::default();
+                for (c, &o) in owner.iter().enumerate() {
+                    if o > 0 {
+                        out.entry(o).or_default().push(c as u32);
+                    }
                 }
-            }
-            out
-        };
-        Owned { nodes: by_net(&map.owner), vias: by_net(&map.via_owner) }
+                out
+            };
+            Owned { nodes: by_net(&map.owner), vias: by_net(&map.via_owner) }
+        })
     }
 
     /// Flips `grid`'s blocked and via-blocked cells from `from_net`'s view of `map` to `to_net`'s.
@@ -395,20 +396,21 @@ impl Owned {
         if from_net == to_net {
             return;
         }
-        let _b = board::work::enter(board::work::Bucket::MapPatch);
-        for (who, blocked) in [(from_net, true), (to_net, false)] {
-            if let Some(cells) = self.nodes.get(&(who as i32)) {
-                for &c in cells {
-                    grid.blocked[c as usize] = blocked;
+        board::work::in_bucket(board::work::Bucket::MapPatch, || {
+            for (who, blocked) in [(from_net, true), (to_net, false)] {
+                if let Some(cells) = self.nodes.get(&(who as i32)) {
+                    for &c in cells {
+                        grid.blocked[c as usize] = blocked;
+                    }
+                }
+                if let Some(cells) = self.vias.get(&(who as i32)) {
+                    for &c in cells {
+                        grid.via_blocked[c as usize] = blocked;
+                    }
                 }
             }
-            if let Some(cells) = self.vias.get(&(who as i32)) {
-                for &c in cells {
-                    grid.via_blocked[c as usize] = blocked;
-                }
-            }
-        }
-        grid.net = to_net;
+            grid.net = to_net;
+        });
     }
 }
 
@@ -510,50 +512,53 @@ struct PassClaims {
 
 impl PassClaims {
     fn new(claimer: &Claimer) -> PassClaims {
-        let _b = board::work::enter(board::work::Bucket::Zones);
-        let cells = claimer.nx * claimer.ny;
-        PassClaims {
-            trace: Claims::new(&claimer.trace_alias, claimer.layers * cells),
-            via: Claims::new(&claimer.via_alias, if claimer.exact { cells } else { 0 }),
-            holes: SameNetHoles::default(),
-        }
+        board::work::in_bucket(board::work::Bucket::Zones, || {
+            let cells = claimer.nx * claimer.ny;
+            PassClaims {
+                trace: Claims::new(&claimer.trace_alias, claimer.layers * cells),
+                via: Claims::new(&claimer.via_alias, if claimer.exact { cells } else { 0 }),
+                holes: SameNetHoles::default(),
+            }
+        })
     }
 
     /// Claims the route's zones, and returns them: by viewer, its trace and via cells.
     fn add(&mut self, claimer: &mut Claimer, r: Route) -> Touched {
-        let _b = board::work::enter(board::work::Bucket::Zones);
-        let touched = Touched { trace: claimer.trace(r), via: claimer.via(r), ring: r.hole_ring.to_vec() };
-        self.trace.add(r.net, &touched.trace);
-        if claimer.exact {
-            self.via.add(r.net, &touched.via);
-            self.holes.add(r.net, r.hole_ring);
-        }
-        touched
+        board::work::in_bucket(board::work::Bucket::Zones, || {
+            let touched = Touched { trace: claimer.trace(r), via: claimer.via(r), ring: r.hole_ring.to_vec() };
+            self.trace.add(r.net, &touched.trace);
+            if claimer.exact {
+                self.via.add(r.net, &touched.via);
+                self.holes.add(r.net, r.hole_ring);
+            }
+            touched
+        })
     }
 
     /// Drops the route's claims, and returns the zones they were on, as [`PassClaims::add`].
     fn remove(&mut self, claimer: &mut Claimer, r: Route) -> Touched {
-        let _b = board::work::enter(board::work::Bucket::Zones);
-        let touched = Touched { trace: claimer.trace(r), via: claimer.via(r), ring: r.hole_ring.to_vec() };
-        self.trace.remove(r.net, &touched.trace);
-        if claimer.exact {
-            self.via.remove(r.net, &touched.via);
-            self.holes.remove(r.net, r.hole_ring);
-        }
-        touched
+        board::work::in_bucket(board::work::Bucket::Zones, || {
+            let touched = Touched { trace: claimer.trace(r), via: claimer.via(r), ring: r.hole_ring.to_vec() };
+            self.trace.remove(r.net, &touched.trace);
+            if claimer.exact {
+                self.via.remove(r.net, &touched.via);
+                self.holes.remove(r.net, r.hole_ring);
+            }
+            touched
+        })
     }
 
     fn clear(&mut self) {
-        let _b = board::work::enter(board::work::Bucket::Zones);
-        self.trace.clear();
-        self.via.clear();
-        self.holes.per_net.clear();
+        board::work::in_bucket(board::work::Bucket::Zones, || {
+            self.trace.clear();
+            self.via.clear();
+            self.holes.per_net.clear();
+        });
     }
 
     /// Whether a route runs into a claim: its cells, other than its own ends', into another
     /// net's, or a via of it into another net's or a hole ring of its own net.
     fn hit(&self, r: Route, own_ends: &BTreeSet<usize>, nx: usize, cells: usize, exact: bool) -> bool {
-        let _b = board::work::enter(board::work::Bucket::Zones);
         let trace = self.trace.seen_by(r.class);
         let traces = r.path.iter().chain(r.legs).map(|&(l, i, j)| l * cells + j * nx + i).any(|n| !own_ends.contains(&n) && trace.others(r.net, n) > 0);
         traces || exact && r.vias.iter().any(|&c| self.via.seen_by(r.class).others(r.net, c) > 0 || self.holes.count(r.net, c) > 0)
@@ -645,8 +650,9 @@ impl Claimer {
         if !self.exact {
             return Vec::new();
         }
-        let _b = board::work::enter(board::work::Bucket::Zones);
-        stamp_cells_2d(vias, self.nx, self.ny, &self.hole_discs[class], &mut self.seen)
+        board::work::in_bucket(board::work::Bucket::Zones, || {
+            stamp_cells_2d(vias, self.nx, self.ny, &self.hole_discs[class], &mut self.seen)
+        })
     }
 }
 
@@ -1184,7 +1190,7 @@ fn run_pass(
             summary.commit_wasted_ns = summary.commit_wasted_ns.saturating_add(board::work::timed_run_ns().saturating_sub(kt0));
             continue;
         };
-        if committed.hit(r, &own_ends[k], nx, cells, options.via_zones) {
+        if board::work::in_bucket(board::work::Bucket::Zones, || committed.hit(r, &own_ends[k], nx, cells, options.via_zones)) {
             summary.commit_wasted_ns = summary.commit_wasted_ns.saturating_add(board::work::timed_run_ns().saturating_sub(kt0));
             continue;
         }
@@ -1736,74 +1742,76 @@ impl PriceTable {
 /// where those are so many that building it whole is quicker.
 #[allow(clippy::too_many_arguments)]
 fn patch_grid(p: &mut Patchable, net: u32, owned: &Owned, map: &ObstacleMap, zones: &PassClaims, history: &[u32], via_history: &[u32], present: f64, via_scale: f64, via_zones: bool, grid: &mut RouteGrid) -> bool {
-    let _b = board::work::enter(board::work::Bucket::MapPatch);
-    let trace = &zones.trace.by_viewer[&p.trace_viewer];
-    let (was, now) = (trace.per_net.get(&p.net), trace.per_net.get(&net));
-    let len = |m: Option<&FxHashMap<u32, u16>>| m.map_or(0, HashMap::len);
-    let owns = |who: u32| owned.nodes.get(&(who as i32)).map_or(0, Vec::len);
-    let flips = if p.net == net { 0 } else { owns(p.net) + owns(net) };
-    if 4 * (len(was) + len(now) + p.dirty.len() + flips) > grid.blocked.len() {
-        return false;
-    }
-    owned.flip(p.net, net, grid);
-    let w = p.weight;
-    let tp = PriceTable::new(present, w);
-    fn keys(m: Option<&FxHashMap<u32, u16>>) -> impl Iterator<Item = u32> + '_ {
-        m.into_iter().flat_map(|m| m.keys().copied())
-    }
-    let old = if p.net == net { None } else { was };
-    for c in keys(old).chain(p.dirty.iter().copied()) {
-        let i = c as usize;
-        grid.penalty[i] = tp.at(history[i], trace.count[i]);
-    }
-    for c in keys(now) {
-        let i = c as usize;
-        grid.penalty[i] = tp.at(history[i], trace.count[i] - 1);
-    }
-    p.dirty.clear();
-    if via_zones {
-        let vias = &zones.via.by_viewer[&p.via_viewer];
-        let vp = PriceTable::new(present * via_scale, w);
-        let (was, now) = (vias.per_net.get(&p.net), vias.per_net.get(&net));
+    board::work::in_bucket(board::work::Bucket::MapPatch, || {
+        let trace = &zones.trace.by_viewer[&p.trace_viewer];
+        let (was, now) = (trace.per_net.get(&p.net), trace.per_net.get(&net));
+        let len = |m: Option<&FxHashMap<u32, u16>>| m.map_or(0, HashMap::len);
+        let owns = |who: u32| owned.nodes.get(&(who as i32)).map_or(0, Vec::len);
+        let flips = if p.net == net { 0 } else { owns(p.net) + owns(net) };
+        if 4 * (len(was) + len(now) + p.dirty.len() + flips) > grid.blocked.len() {
+            return false;
+        }
+        owned.flip(p.net, net, grid);
+        let w = p.weight;
+        let tp = PriceTable::new(present, w);
+        fn keys(m: Option<&FxHashMap<u32, u16>>) -> impl Iterator<Item = u32> + '_ {
+            m.into_iter().flat_map(|m| m.keys().copied())
+        }
         let old = if p.net == net { None } else { was };
-        let old_holes = if p.net == net { None } else { zones.holes.per_net.get(&p.net) };
-        let now_holes = zones.holes.per_net.get(&net);
-        let avoid_slice = map.via_avoid.as_slice();
-        let avoid = |i: usize| avoid_slice.get(i).copied().unwrap_or(0);
-        for c in keys(old).chain(keys(old_holes)).chain(p.dirty_vias.iter().copied()).chain(keys(now_holes)) {
+        for c in keys(old).chain(p.dirty.iter().copied()) {
             let i = c as usize;
-            grid.via_penalty[i] = avoid(i).saturating_add(vp.at(via_history[i], vias.count[i]));
+            grid.penalty[i] = tp.at(history[i], trace.count[i]);
         }
         for c in keys(now) {
             let i = c as usize;
-            let (h, n) = (via_history[i], vias.count[i]);
-            let full = vp.at(h, n);
-            grid.via_penalty[i] = avoid(i).saturating_add(full).saturating_sub(full).saturating_add(vp.at(h, n.saturating_sub(1)));
+            grid.penalty[i] = tp.at(history[i], trace.count[i] - 1);
         }
-        if let Some(ring) = now_holes {
-            for (&c, &k) in ring {
-                if k > 0 {
-                    let i = c as usize;
-                    grid.via_penalty[i] = grid.via_penalty[i].saturating_add(vp.at(0, k));
+        p.dirty.clear();
+        if via_zones {
+            let vias = &zones.via.by_viewer[&p.via_viewer];
+            let vp = PriceTable::new(present * via_scale, w);
+            let (was, now) = (vias.per_net.get(&p.net), vias.per_net.get(&net));
+            let old = if p.net == net { None } else { was };
+            let old_holes = if p.net == net { None } else { zones.holes.per_net.get(&p.net) };
+            let now_holes = zones.holes.per_net.get(&net);
+            let avoid_slice = map.via_avoid.as_slice();
+            let avoid = |i: usize| avoid_slice.get(i).copied().unwrap_or(0);
+            for c in keys(old).chain(keys(old_holes)).chain(p.dirty_vias.iter().copied()).chain(keys(now_holes)) {
+                let i = c as usize;
+                grid.via_penalty[i] = avoid(i).saturating_add(vp.at(via_history[i], vias.count[i]));
+            }
+            for c in keys(now) {
+                let i = c as usize;
+                let (h, n) = (via_history[i], vias.count[i]);
+                let full = vp.at(h, n);
+                grid.via_penalty[i] = avoid(i).saturating_add(full).saturating_sub(full).saturating_add(vp.at(h, n.saturating_sub(1)));
+            }
+            if let Some(ring) = now_holes {
+                for (&c, &k) in ring {
+                    if k > 0 {
+                        let i = c as usize;
+                        grid.via_penalty[i] = grid.via_penalty[i].saturating_add(vp.at(0, k));
+                    }
                 }
             }
+            p.dirty_vias.clear();
         }
-        p.dirty_vias.clear();
-    }
-    p.net = net;
-    true
+        p.net = net;
+        true
+    })
 }
 
 /// Each node's present price for `net` alone, without history: for a rescue, which has none.
 fn crowd_into(zones: &Zones, present: f64, net: u32, out: &mut Vec<u32>) {
-    let _b = board::work::enter(board::work::Bucket::MapPatch);
-    let tp = PriceTable::new(present, 1.0);
-    out.clear();
-    out.extend(zones.count.iter().map(|&n| tp.at(0, n)));
-    for c in zones.per_net.get(&net).into_iter().flat_map(|m| m.keys().copied()) {
-        let i = c as usize;
-        out[i] = tp.at(0, zones.count[i] - 1);
-    }
+    board::work::in_bucket(board::work::Bucket::MapPatch, || {
+        let tp = PriceTable::new(present, 1.0);
+        out.clear();
+        out.extend(zones.count.iter().map(|&n| tp.at(0, n)));
+        for c in zones.per_net.get(&net).into_iter().flat_map(|m| m.keys().copied()) {
+            let i = c as usize;
+            out[i] = tp.at(0, zones.count[i] - 1);
+        }
+    });
 }
 
 /// The hole rings of `net`'s other routes: in a Jacobi round its own, `own_ring`, is still among
@@ -1831,36 +1839,38 @@ fn via_penalties_into(zones: &PassClaims, class: &str, own_ring: &[u32], via_his
 /// `hole_ring`, the times its net's other routes keep a via from it, onto `out`: the grid's own
 /// via costs (its via-avoid areas), or nothing.
 pub fn via_price_into(via_history: &[u32], count: &[u16], own: impl Iterator<Item = u32>, hole_ring: &[(u32, u16)], via_present: f64, weight: f64, out: &mut Vec<u32>) {
-    let _b = board::work::enter(board::work::Bucket::MapPatch);
-    if out.len() != count.len() {
-        out.clear();
-        out.resize(count.len(), 0);
-    }
-    let vp = PriceTable::new(via_present, weight);
-    for ((o, &h), &n) in out.iter_mut().zip(via_history).zip(count) {
-        *o = o.saturating_add(vp.at(h, n));
-    }
-    for c in own {
-        let (c, h, n) = (c as usize, via_history[c as usize], count[c as usize]);
-        out[c] = out[c].saturating_sub(vp.at(h, n)).saturating_add(vp.at(h, n.saturating_sub(1)));
-    }
-    for &(c, n) in hole_ring {
-        out[c as usize] = out[c as usize].saturating_add(vp.at(0, n));
-    }
+    board::work::in_bucket(board::work::Bucket::MapPatch, || {
+        if out.len() != count.len() {
+            out.clear();
+            out.resize(count.len(), 0);
+        }
+        let vp = PriceTable::new(via_present, weight);
+        for ((o, &h), &n) in out.iter_mut().zip(via_history).zip(count) {
+            *o = o.saturating_add(vp.at(h, n));
+        }
+        for c in own {
+            let (c, h, n) = (c as usize, via_history[c as usize], count[c as usize]);
+            out[c] = out[c].saturating_sub(vp.at(h, n)).saturating_add(vp.at(h, n.saturating_sub(1)));
+        }
+        for &(c, n) in hole_ring {
+            out[c as usize] = out[c as usize].saturating_add(vp.at(0, n));
+        }
+    });
 }
 
 /// Each node's price from a round's `history` and `count` of nets covering it, the nodes `own`
 /// covers counted one fewer, scaled by `weight`: what [`penalties_into`] gives a connection, for
 /// a worker handed the round's counts once instead of every connection's prices.
 pub fn price_into(history: &[u32], count: &[u16], own: impl Iterator<Item = u32>, present: f64, weight: f64, out: &mut Vec<u32>) {
-    let _b = board::work::enter(board::work::Bucket::MapPatch);
-    out.clear();
-    let tp = PriceTable::new(present, weight);
-    out.extend(history.iter().zip(count).map(|(&h, &n)| tp.at(h, n)));
-    for c in own {
-        let c = c as usize;
-        out[c] = tp.at(history[c], count[c] - 1);
-    }
+    board::work::in_bucket(board::work::Bucket::MapPatch, || {
+        out.clear();
+        let tp = PriceTable::new(present, weight);
+        out.extend(history.iter().zip(count).map(|(&h, &n)| tp.at(h, n)));
+        for c in own {
+            let c = c as usize;
+            out[c] = tp.at(history[c], count[c] - 1);
+        }
+    });
 }
 
 /// One Jacobi round with the fields solved together, a batch at a time, on the solver's device.

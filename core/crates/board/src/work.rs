@@ -4,7 +4,7 @@
 //! to decide anything, so turning them on or off cannot change a route.
 
 use std::cell::{Cell, RefCell};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// `check_item` and `check_item_with_pours` calls.
@@ -189,6 +189,8 @@ impl CpuSnap {
     }
 }
 
+static SINK_COUNT: AtomicUsize = AtomicUsize::new(0);
+
 thread_local! {
     static ACTIVE: Cell<u8> = const { Cell::new(NO_SINK) };
     static SINCE_NS: Cell<u64> = const { Cell::new(0) };
@@ -196,24 +198,40 @@ thread_local! {
     static SINK: RefCell<Option<Arc<CpuSink>>> = const { RefCell::new(None) };
 }
 
+/// Fast global check: `false` unless at least one thread currently has an active [`CpuSink`]
+/// installed (`--timing`), avoiding TLS lookups and `Drop` landing pads when fine timing is off.
+#[inline(always)]
+pub fn any_sink_active() -> bool {
+    SINK_COUNT.load(Ordering::Relaxed) != 0
+}
+
 /// Whether timing is enabled on the calling thread.
-#[inline]
+#[inline(always)]
 pub fn timing_active() -> bool {
-    ACTIVE.with(|a| a.get() != NO_SINK)
+    any_sink_active() && ACTIVE.with(|a| a.get() != NO_SINK)
 }
 
 /// The calling thread's CPU nanoseconds when timing is active, or `0` without reading the clock
-/// when timing is off (`--no-timing`).
-#[inline]
+/// when fine-grained timing is off.
+#[inline(always)]
 pub fn timed_thread_ns() -> u64 {
     if timing_active() { thread_cpu_ns() } else { 0 }
 }
 
 /// Cumulative CPU nanoseconds on the active run's sink (main thread plus joined workers), or `0`
-/// without reading the clock when timing is off (`--no-timing`).
-#[inline]
+/// without reading the clock when fine-grained timing is off.
+#[inline(always)]
 pub fn timed_run_ns() -> u64 {
-    if !timing_active() {
+    if !any_sink_active() {
+        return 0;
+    }
+    timed_run_ns_slow()
+}
+
+#[cold]
+#[inline(never)]
+fn timed_run_ns_slow() -> u64 {
+    if ACTIVE.with(|a| a.get() == NO_SINK) {
         return 0;
     }
     SINK.with(|s| s.borrow().as_ref().map_or_else(thread_cpu_ns, |k| k.run_cpu_ns()))
@@ -221,26 +239,38 @@ pub fn timed_run_ns() -> u64 {
 
 /// The sink installed on the calling thread, if any, to hand across `std::thread::scope`.
 pub fn current_sink() -> Option<Arc<CpuSink>> {
+    if !any_sink_active() {
+        return None;
+    }
     SINK.with(|s| s.borrow().clone())
 }
 
 /// Installs `sink` on the calling thread for the life of the returned guard. When `sink` is
-/// `None` (`--no-timing`), timing stays disabled and bucket guards cost a single byte check.
+/// `None` (default without `--timing`), `SINK_COUNT` stays zero so bucket and event calls bypass
+/// TLS and clock syscalls completely.
 pub fn install_sink(sink: Option<Arc<CpuSink>>) -> SinkGuard {
+    let counted = sink.is_some();
+    if counted {
+        SINK_COUNT.fetch_add(1, Ordering::Relaxed);
+    }
     let prev_sink = SINK.with(|s| s.replace(sink.clone()));
-    let prev_active = ACTIVE.with(|a| a.replace(if sink.is_some() { IDLE } else { NO_SINK }));
-    let prev_since = SINCE_NS.with(|t| t.replace(if sink.is_some() { thread_cpu_ns() } else { 0 }));
-    SinkGuard { prev_sink, prev_active, prev_since, worker_start: None }
+    let prev_active = ACTIVE.with(|a| a.replace(if counted { IDLE } else { NO_SINK }));
+    let prev_since = SINCE_NS.with(|t| t.replace(if counted { thread_cpu_ns() } else { 0 }));
+    SinkGuard { prev_sink, prev_active, prev_since, worker_start: None, counted }
 }
 
 /// Attaches a scoped worker thread to `sink` and adds the worker's total thread CPU time to
 /// `sink.worker_ns` when the guard drops at the end of the worker's run.
 pub fn attach_worker(sink: Option<Arc<CpuSink>>) -> SinkGuard {
+    let counted = sink.is_some();
+    if counted {
+        SINK_COUNT.fetch_add(1, Ordering::Relaxed);
+    }
     let start = sink.as_ref().map(|_| thread_cpu_ns());
     let prev_sink = SINK.with(|s| s.replace(sink.clone()));
-    let prev_active = ACTIVE.with(|a| a.replace(if sink.is_some() { IDLE } else { NO_SINK }));
+    let prev_active = ACTIVE.with(|a| a.replace(if counted { IDLE } else { NO_SINK }));
     let prev_since = SINCE_NS.with(|t| t.replace(start.unwrap_or(0)));
-    SinkGuard { prev_sink, prev_active, prev_since, worker_start: start }
+    SinkGuard { prev_sink, prev_active, prev_since, worker_start: start, counted }
 }
 
 pub struct SinkGuard {
@@ -248,6 +278,7 @@ pub struct SinkGuard {
     prev_active: u8,
     prev_since: u64,
     worker_start: Option<u64>,
+    counted: bool,
 }
 
 impl Drop for SinkGuard {
@@ -265,12 +296,25 @@ impl Drop for SinkGuard {
         });
         ACTIVE.with(|a| a.set(self.prev_active));
         SINCE_NS.with(|t| t.set(self.prev_since));
+        if self.counted {
+            SINK_COUNT.fetch_sub(1, Ordering::Relaxed);
+        }
     }
 }
 
 /// Pauses bucket attribution and `run_cpu_ns` while stats-only bookkeeping (`Mark::take`) runs,
 /// returning the CPU nanoseconds spent inside the paused block when closed.
+#[inline]
 pub fn pause_sink() -> PauseGuard {
+    if !any_sink_active() {
+        return PauseGuard { prev: NO_SINK, start_ns: 0 };
+    }
+    pause_sink_slow()
+}
+
+#[cold]
+#[inline(never)]
+fn pause_sink_slow() -> PauseGuard {
     let prev = ACTIVE.with(|a| a.replace(NO_SINK));
     if prev == NO_SINK {
         return PauseGuard { prev, start_ns: 0 };
@@ -327,9 +371,9 @@ impl Drop for PauseGuard {
 /// Starts a top-level timeline event when `EVENT_DEPTH` is zero. Nested calls (such as `shove`
 /// calling `route_open` or `rip_up` internally) increment depth without emitting overlapping
 /// events.
-#[inline]
+#[inline(always)]
 pub fn begin_event() -> EventGuard {
-    if !timing_active() {
+    if !any_sink_active() {
         return EventGuard { active: false, top: false, snap: CpuSnap::default() };
     }
     begin_event_slow()
@@ -338,6 +382,9 @@ pub fn begin_event() -> EventGuard {
 #[cold]
 #[inline(never)]
 fn begin_event_slow() -> EventGuard {
+    if ACTIVE.with(|a| a.get() == NO_SINK) {
+        return EventGuard { active: false, top: false, snap: CpuSnap::default() };
+    }
     let d = EVENT_DEPTH.with(|c| {
         let cur = c.get();
         c.set(cur + 1);
@@ -357,7 +404,7 @@ pub struct EventGuard {
 }
 
 impl EventGuard {
-    #[inline]
+    #[inline(always)]
     pub fn finish(mut self, kind: &'static str, outcome: &'static str, open_after: Option<usize>) {
         if self.top {
             self.record(kind, outcome, open_after);
@@ -388,7 +435,7 @@ impl EventGuard {
 }
 
 impl Drop for EventGuard {
-    #[inline]
+    #[inline(always)]
     fn drop(&mut self) {
         if self.active {
             if self.top {
@@ -399,11 +446,36 @@ impl Drop for EventGuard {
     }
 }
 
+/// Runs `f` credited to `bucket`. When no [`CpuSink`] is active anywhere in the process, runs
+/// `f()` directly with no `Drop` guard on the stack, keeping hot loops free of unwind landing pads.
+#[inline(always)]
+pub fn in_bucket<R>(bucket: Bucket, f: impl FnOnce() -> R) -> R {
+    if !any_sink_active() {
+        return f();
+    }
+    in_bucket_slow(bucket, f)
+}
+
+#[cold]
+#[inline(never)]
+fn in_bucket_slow<R>(bucket: Bucket, f: impl FnOnce() -> R) -> R {
+    let _scope = enter_checked(bucket as u8);
+    f()
+}
+
 /// Credits the calling thread's CPU time to `bucket` until the returned [`Scope`] drops,
 /// pausing any outer bucket so nested calls never double-count.
-#[inline]
+#[inline(always)]
 pub fn enter(bucket: Bucket) -> Scope {
-    let b = bucket as u8;
+    if !any_sink_active() {
+        return Scope { prev: NO_SINK, entered: bucket as u8, switched: false };
+    }
+    enter_checked(bucket as u8)
+}
+
+#[cold]
+#[inline(never)]
+fn enter_checked(b: u8) -> Scope {
     let cur = ACTIVE.with(|a| a.get());
     if cur == NO_SINK || cur == b {
         return Scope { prev: cur, entered: b, switched: false };
@@ -455,7 +527,7 @@ pub struct Scope {
 }
 
 impl Drop for Scope {
-    #[inline]
+    #[inline(always)]
     fn drop(&mut self) {
         if self.switched {
             exit_slow(self.prev, self.entered);
