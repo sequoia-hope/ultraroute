@@ -2504,7 +2504,7 @@ fn project_footprints_on_board(
         ps.sort_unstable();
     }
 
-    let mut run_guard_iters = |board: &mut Board, cand_pos: &mut [Point], max_iters: usize| {
+    let run_guard_iters = |board: &mut Board, cand_pos: &mut [Point], max_iters: usize| {
         for _iter in 0..max_iters {
             let mut hs_group: Vec<Vec<HalfPlane>> = vec![Vec::new(); n];
             append_static_fp_guard_constraints(
@@ -7502,27 +7502,28 @@ mod tests {
 \t(gr_line (start 24 0) (end 24 16) (stroke (width 0.1)) (layer \"Edge.Cuts\") (uuid \"e2\"))
 \t(gr_line (start 24 16) (end 0 16) (stroke (width 0.1)) (layer \"Edge.Cuts\") (uuid \"e3\"))
 \t(gr_line (start 0 16) (end 0 0) (stroke (width 0.1)) (layer \"Edge.Cuts\") (uuid \"e4\"))
-\t(footprint \"R\" (layer \"F.Cu\") (uuid \"frl\") (at 8.0 4.5)
+\t(footprint \"R\" (layer \"F.Cu\") (uuid \"frl\") (at 8.0 8.0)
 \t\t(property \"Reference\" \"R_LOCK\" (at 0 0 0) (layer \"F.SilkS\") (uuid \"rrl\"))
 \t\t(pad \"1\" smd rect (at 0 0) (size 1.0 1.0) (layers \"F.Cu\" \"F.Mask\") (net 1 \"A\") (uuid \"prl\"))
 \t)
-\t(footprint \"R\" (layer \"F.Cu\") (uuid \"frm\") (at 5.5 4.5)
+\t(footprint \"R\" (layer \"F.Cu\") (uuid \"frm\") (at 5.5 8.0)
 \t\t(property \"Reference\" \"R_MOVE\" (at 0 0 0) (layer \"F.SilkS\") (uuid \"rrm\"))
 \t\t(pad \"1\" smd rect (at 0 0) (size 1.0 1.0) (layers \"F.Cu\" \"F.Mask\") (net 2 \"B\") (uuid \"prm\"))
 \t)
-\t(footprint \"R\" (layer \"F.Cu\") (uuid \"frf\") (at 20.0 4.5)
+\t(footprint \"R\" (layer \"F.Cu\") (uuid \"frf\") (at 12.0 13.0)
 \t\t(property \"Reference\" \"R_FAR\" (at 0 0 0) (layer \"F.SilkS\") (uuid \"rrf\"))
 \t\t(pad \"1\" smd rect (at 0 0) (size 1.0 1.0) (layers \"F.Cu\" \"F.Mask\") (net 1 \"A\") (uuid \"prf\"))
 \t)
-\t(footprint \"H\" (layer \"F.Cu\") (uuid \"fhl\") (at 9.0 11.5)
+\t(footprint \"H\" (layer \"F.Cu\") (uuid \"fhl\") (at 15.0 8.0)
 \t\t(property \"Reference\" \"H_LOCK\" (at 0 0 0) (layer \"F.SilkS\") (uuid \"rhl\"))
 \t\t(pad \"\" np_thru_hole circle (at 0 0) (size 1.0 1.0) (drill 1.0) (layers \"*.Cu\" \"*.Mask\") (solder_mask_margin 1.0) (uuid \"phl\"))
 \t)
-\t(footprint \"FID\" (layer \"F.Cu\") (uuid \"ffm\") (at 5.0 11.5)
+\t(footprint \"FID\" (layer \"F.Cu\") (uuid \"ffm\") (at 19.0 8.0)
 \t\t(property \"Reference\" \"FID_MOVE\" (at 0 0 0) (layer \"F.SilkS\") (uuid \"rfm\"))
 \t\t(pad \"1\" smd circle (at 0 0) (size 0.8 0.8) (layers \"F.Cu\" \"F.Mask\") (solder_mask_margin 0.5) (uuid \"pfm\"))
 \t)
-\t(segment (start 8.0 4.5) (end 20.0 4.5) (width 0.2) (layer \"F.Cu\") (net 1) (uuid \"s1\"))
+\t(segment (start 8.0 8.0) (end 8.0 13.0) (width 0.2) (layer \"F.Cu\") (net 1) (uuid \"s1\"))
+\t(segment (start 8.0 13.0) (end 12.0 13.0) (width 0.2) (layer \"F.Cu\") (net 1) (uuid \"s2\"))
 )\n";
         let rules = Rules::parse("{}").unwrap();
         let mut lock = HashSet::new();
@@ -7544,32 +7545,39 @@ mod tests {
         assert!((rep.achieved_factor - 0.65).abs() < 1e-9);
 
         let (pcb, copper) = parse_board(&rep.text).unwrap();
-        let fp_x_mm = |r: &str| pcb.footprints.iter().find(|f| f.reference == r).unwrap().at[0] * 1e3;
+        let fp_pt_mm = |r: &str| {
+            let at = pcb.footprints.iter().find(|f| f.reference == r).unwrap().at;
+            (at[0] * 1e3, at[1] * 1e3)
+        };
 
-        // Board shrinks to full 0.65x (24 x 16 -> 15.6 x 10.4 mm), and R_FAR hits 12 + 0.65*8 = 17.2 mm.
-        assert!((fp_x_mm("R_FAR") - 17.20).abs() < 0.01, "R_FAR x={:.4}", fp_x_mm("R_FAR"));
+        // Board shrinks to full 0.65x (24 x 16 -> 15.6 x 10.4 mm), and R_FAR hits y = 8 + 0.65*5.0 = 11.25 mm.
+        assert!(
+            (fp_pt_mm("R_FAR").1 - 11.25).abs() < 0.01,
+            "R_FAR y={:.4}",
+            fp_pt_mm("R_FAR").1
+        );
 
-        // SMD-to-SMD with `solder_mask_min_width = 0` (`mask_web == 0`) and `pad_to_mask_clearance = 0.2`:
-        // copper gap `(8.0 - x_rmove) - 1.0` must stay >= 0.400 mm (rather than bridging at 0.200 mm).
-        let smd_cu_gap_mm = (8.0 - fp_x_mm("R_MOVE")) - 1.0;
+        // SMD-to-SMD on centerline y = 8.0 with `solder_mask_min_width = 0` (`mask_web == 0`) and
+        // `pad_to_mask_clearance = 0.2`: 2D copper gap must stay >= 0.400 mm (not 0.200 mm).
+        let (rx, ry) = fp_pt_mm("R_MOVE");
+        let dx_smd = ((8.0 - rx).abs() - 1.0).max(0.0);
+        let dy_smd = ((8.0 - ry).abs() - 1.0).max(0.0);
+        let smd_cu_gap_mm = dx_smd.hypot(dy_smd);
         assert!(
             smd_cu_gap_mm >= 0.400,
-            "SMD pads bridged solder mask apertures (gap {smd_cu_gap_mm:.4} mm < 0.400 mm)"
+            "SMD pads bridged solder mask apertures (gap {smd_cu_gap_mm:.4} mm < 0.400 mm, pos=({rx:.4},{ry:.4}))"
         );
-        assert!(fp_x_mm("R_MOVE") > 6.45, "R_MOVE still compacted inward: x={:.4}", fp_x_mm("R_MOVE"));
+        assert!(rx > 6.45, "R_MOVE still compacted inward: x={rx:.4}");
 
-        // Copperless NPTH (`solder_mask_margin 1.0`) vs `<no net>` SMD fiducial (`solder_mask_margin 0.5`):
-        // shape gap `(9.0 - x_fid) - (0.5 + 0.4)` must stay >= 1.500 mm.
-        let npth_shape_gap_mm = (9.0 - fp_x_mm("FID_MOVE")) - 0.9;
+        // Copperless NPTH (`solder_mask_margin 1.0`) vs `<no net>` SMD fiducial (`solder_mask_margin 0.5`)
+        // on centerline y = 8.0: 2D pad shape gap must stay >= 1.500 mm.
+        let (fx, fy) = fp_pt_mm("FID_MOVE");
+        let npth_shape_gap_mm = ((fx - 15.0).hypot(fy - 8.0) - 0.9).max(0.0);
         assert!(
             npth_shape_gap_mm >= 1.500,
-            "NPTH mask opening bridged fiducial mask opening (gap {npth_shape_gap_mm:.4} mm < 1.500 mm)"
+            "NPTH mask opening bridged fiducial mask opening (gap {npth_shape_gap_mm:.4} mm < 1.500 mm, pos=({fx:.4},{fy:.4}))"
         );
-        assert!(
-            fp_x_mm("FID_MOVE") > 6.45,
-            "FID_MOVE still compacted inward: x={:.4}",
-            fp_x_mm("FID_MOVE")
-        );
+        assert!(fx < 17.55, "FID_MOVE still compacted inward from 19.0 mm: x={fx:.4}");
 
         let b = Board::new(&pcb, &copper, rules);
         assert!(check(&b).is_empty(), "DRC violations: {:?}", check(&b));
