@@ -373,8 +373,8 @@ pub fn compact(text: &str, rules: Rules, opts: &CompactOptions) -> Result<Compac
             &initial_yard_pen,
         );
 
-        let Some((step_bare, mut step_copper, mut step_bare_text, resolved_pos)) =
-            resolve_static_step_board(
+        let (step_bare, mut step_copper, mut step_bare_text, resolved_pos) =
+            match resolve_static_step_board(
                 &bare_text,
                 &rules,
                 &orig_pcb,
@@ -393,76 +393,34 @@ pub fn compact(text: &str, rules: Rules, opts: &CompactOptions) -> Result<Compac
                 &pad_masks,
                 &baseline_static_viols,
                 &orig_locked_items,
-            )?
-        else {
-            // Even moving footprints inward could not fit static pads/holes inside Edge.Cuts.
-            let raw_shifts: Vec<(usize, Point)> = (0..orig_fp_at.len())
-                .map(|f| {
-                    (
-                        f,
-                        Point::new(
-                            cur_fp_pos[f].x - orig_fp_at[f].x,
-                            cur_fp_pos[f].y - orig_fp_at[f].y,
-                        ),
-                    )
-                })
-                .collect();
-            let raw_field = build_scale_field(&orig_board, centre, f_s, &raw_shifts);
-            let (fail_board, _, _) = build_scaled_bare_board(
-                &bare_text,
-                &rules,
-                &orig_pcb,
-                &orig_copper,
-                orig_bb,
-                centre,
-                f_s,
-                &raw_shifts,
-                &raw_field,
-                &[],
-            )?;
-            let jam_msg = if orig_had_outline && fail_board.outline.is_empty() {
-                format!("board outline loop broke at factor {f_s:.4}")
-            } else {
-                collect_static_violations(&fail_board, &pad_masks, &baseline_static_viols)
-                    .1
-                    .or_else(|| {
-                        courtyard_violation_desc(
-                            &fail_board,
-                            &orig_yards,
-                            &orig_fp_at,
-                            &step_fp_pos,
-                            &initial_yard_pen,
-                        )
-                    })
-                    .unwrap_or_else(|| {
-                        format!("static footprint or board-edge violation at factor {f_s:.4}")
-                    })
+            )? {
+                Ok(resolved) => resolved,
+                Err((sz, jam_msg)) => {
+                    let rep = StepReport {
+                        step,
+                        factor: f_s,
+                        accepted: false,
+                        size_mm: sz,
+                        violations: 1,
+                        track_length_mm: total_track_length_mm(&cur_board),
+                        segments: count_tracks(&cur_board),
+                        vias: count_vias(&cur_board),
+                        acid_traps: dfm_counts(&cur_board),
+                        courtyard_stops: yard_stops,
+                        part_stops: 0,
+                        via_slides: 0,
+                        jam: Some(jam_msg.clone()),
+                    };
+                    if opts.verbose {
+                        eprintln!(
+                            "compact step {step}/{steps_req} (factor {f_s:.4}): JAMMED on static check ({jam_msg})"
+                        );
+                    }
+                    step_reports.push(rep);
+                    final_jam = Some(jam_msg);
+                    break;
+                }
             };
-            let sz = bbox_size_mm(board_bounds(&fail_board));
-            let rep = StepReport {
-                step,
-                factor: f_s,
-                accepted: false,
-                size_mm: sz,
-                violations: 1,
-                track_length_mm: total_track_length_mm(&cur_board),
-                segments: count_tracks(&cur_board),
-                vias: count_vias(&cur_board),
-                acid_traps: dfm_counts(&cur_board),
-                courtyard_stops: yard_stops,
-                part_stops: 0,
-                via_slides: 0,
-                jam: Some(jam_msg.clone()),
-            };
-            if opts.verbose {
-                eprintln!(
-                    "compact step {step}/{steps_req} (factor {f_s:.4}): JAMMED on static check ({jam_msg})"
-                );
-            }
-            step_reports.push(rep);
-            final_jam = Some(jam_msg);
-            break;
-        };
 
         let saved_graph = graph.clone();
         graph.subdivide_long_edges(SUBDIVIDE_LEN);
@@ -2411,7 +2369,7 @@ pub(crate) fn project_scaled_footprints(
     );
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn resolve_static_step_board(
     bare_text: &str,
     rules: &Rules,
@@ -2431,8 +2389,9 @@ fn resolve_static_step_board(
     pad_masks: &PadMaskTable,
     baseline_static: &HashMap<StaticViolKey, f64>,
     orig_locked_items: &[Item],
-) -> Result<Option<StaticStepBoard>, String> {
+) -> Result<Result<StaticStepBoard, ([f64; 2], String)>, String> {
     let orig_had_outline = !orig_board.outline.is_empty();
+    let mut last_err = ([0.0, 0.0], String::new());
     for attempt in 0..4 {
         let shifts: Vec<(usize, Point)> = (0..orig_at.len())
             .map(|f| (f, Point::new(cand_pos[f].x - orig_at[f].x, cand_pos[f].y - orig_at[f].y)))
@@ -2451,15 +2410,22 @@ fn resolve_static_step_board(
             &field,
             &warped_locked,
         )?;
+        let sz = bbox_size_mm(board_bounds(&board));
         if orig_had_outline && board.outline.is_empty() {
-            return Ok(None);
+            return Ok(Err((sz, format!("board outline loop broke at factor {factor:.4}"))));
         }
-        let (viols, _) = collect_static_violations(&board, pad_masks, baseline_static);
+        let (viols, viol_desc) = collect_static_violations(&board, pad_masks, baseline_static);
         let yard_err =
             courtyard_violation_desc(&board, orig_yards, orig_at, &cand_pos, allowed_yards);
         if viols.is_empty() && yard_err.is_none() {
-            return Ok(Some((board, copper, text, cand_pos)));
+            return Ok(Ok((board, copper, text, cand_pos)));
         }
+        last_err = (
+            sz,
+            viol_desc.or(yard_err).unwrap_or_else(|| {
+                format!("static footprint or board-edge violation at factor {factor:.4}")
+            }),
+        );
         if attempt == 3 {
             break;
         }
@@ -2480,7 +2446,7 @@ fn resolve_static_step_board(
             break;
         }
     }
-    Ok(None)
+    Ok(Err(last_err))
 }
 
 #[allow(clippy::too_many_arguments)]
