@@ -425,6 +425,15 @@ pub fn compact(text: &str, rules: Rules, opts: &CompactOptions) -> Result<Compac
             } else {
                 collect_static_violations(&fail_board, &pad_masks, &baseline_static_viols)
                     .1
+                    .or_else(|| {
+                        courtyard_violation_desc(
+                            &fail_board,
+                            &orig_yards,
+                            &orig_fp_at,
+                            &step_fp_pos,
+                            &initial_yard_pen,
+                        )
+                    })
                     .unwrap_or_else(|| {
                         format!("static footprint or board-edge violation at factor {f_s:.4}")
                     })
@@ -3296,12 +3305,22 @@ fn added_airlines(board: &Board, baseline: &BaselineConn) -> (usize, Option<Stri
     (extra, desc)
 }
 
+fn drawn_ordinals_on_board(board: &Board) -> HashMap<ItemId, usize> {
+    board
+        .items()
+        .filter(|(_, it)| matches!(it.kind, Kind::Pour { zone, kept: true } if zone == board::DRAWN))
+        .enumerate()
+        .map(|(ord, (id, _))| (id, ord))
+        .collect()
+}
+
 fn collect_static_violations(
     board: &Board,
     pad_masks: &PadMaskTable,
     baseline: &HashMap<StaticViolKey, f64>,
 ) -> (HashMap<StaticViolKey, f64>, Option<String>) {
     let pad_ords = pad_ordinals_on_board(board);
+    let drawn_ords = drawn_ordinals_on_board(board);
     let num_layers = board.layers.len();
     let outer_cu = outer_mask_layers(board);
     let hole_edge_req = nm(board.rules.min_hole_clearance);
@@ -3347,9 +3366,20 @@ fn collect_static_violations(
         let Some(&(_, ord_a)) = pad_ords.get(&id) else { continue };
 
         for v in check_item(board, id) {
+            if v.b.and_then(|bid| board.item(bid)).is_some_and(|oit| {
+                matches!(oit.kind, Kind::Track | Kind::Via | Kind::Spoke { .. })
+                    || matches!(oit.kind, Kind::Pour { zone, .. } if zone != board::DRAWN)
+            }) {
+                continue;
+            }
             let (b_fp, b_pad_ord) = v
                 .b
-                .and_then(|bid| pad_ords.get(&bid).copied())
+                .and_then(|bid| {
+                    pad_ords
+                        .get(&bid)
+                        .copied()
+                        .or_else(|| drawn_ords.get(&bid).map(|&bo| (usize::MAX, bo)))
+                })
                 .map_or((None, None), |(bf, bo)| (Some(bf), Some(bo)));
             let key = StaticViolKey {
                 kind: StaticCheckKind::BoardRule(v.rule),
@@ -3361,7 +3391,7 @@ fn collect_static_violations(
             record_viol(&mut out, &mut first_desc, key, v.gap, &|| describe_violation(board, &v));
         }
 
-        // Cross-footprint unplated NPTH hole vs other footprints' copper pads (KiCad DRC hole_clearance).
+        // Cross-footprint unplated NPTH hole vs other footprints' copper pads or drawn copper (KiCad DRC hole_clearance).
         if hole_edge_req > 0 && !it.plated_hole() {
             if let Some(hs_a) = board.hole_shape(id, it) {
                 let qh = hs_a.bbox().grow(hole_edge_req);
@@ -3371,34 +3401,59 @@ fn collect_static_violations(
                             continue;
                         }
                         let Some(it_b) = board.item(id_b) else { continue };
-                        let Kind::Pad { footprint: fp_b, number: ref pad_b, .. } = it_b.kind else {
-                            continue;
-                        };
-                        if fp_b == fp_a || !it_b.is_copper() || !it_b.on(l) {
+                        if !it_b.is_copper() || !it_b.on(l) {
                             continue;
                         }
-                        let gap = hs_a.gap_within(&it_b.shape, hole_edge_req as f64);
-                        if gap + 500.0 < hole_edge_req as f64 {
-                            let ord_b = pad_ords[&id_b].1;
-                            let key = StaticViolKey {
-                                kind: StaticCheckKind::BoardRule(Rule::HoleClearance),
-                                a_fp: fp_a,
-                                a_pad_ord: ord_a,
-                                b_fp: Some(fp_b),
-                                b_pad_ord: Some(ord_b),
-                            };
-                            record_viol(&mut out, &mut first_desc, key, gap, &|| {
-                                format!(
-                                    "HoleClearance on {}: {}-{} NPTH vs {}-{} (gap {:.3} mm < required {:.3} mm)",
-                                    board.layers[l],
-                                    board.footprints[fp_a].reference,
-                                    pad_a,
-                                    board.footprints[fp_b].reference,
-                                    pad_b,
-                                    gap * 1e-6,
-                                    hole_edge_req as f64 * 1e-6
-                                )
-                            });
+                        match it_b.kind {
+                            Kind::Pad { footprint: fp_b, number: ref pad_b, .. } if fp_b != fp_a => {
+                                let gap = hs_a.gap_within(&it_b.shape, hole_edge_req as f64);
+                                if gap + 500.0 < hole_edge_req as f64 {
+                                    let ord_b = pad_ords[&id_b].1;
+                                    let key = StaticViolKey {
+                                        kind: StaticCheckKind::BoardRule(Rule::HoleClearance),
+                                        a_fp: fp_a,
+                                        a_pad_ord: ord_a,
+                                        b_fp: Some(fp_b),
+                                        b_pad_ord: Some(ord_b),
+                                    };
+                                    record_viol(&mut out, &mut first_desc, key, gap, &|| {
+                                        format!(
+                                            "HoleClearance on {}: {}-{} NPTH vs {}-{} (gap {:.3} mm < required {:.3} mm)",
+                                            board.layers[l],
+                                            board.footprints[fp_a].reference,
+                                            pad_a,
+                                            board.footprints[fp_b].reference,
+                                            pad_b,
+                                            gap * 1e-6,
+                                            hole_edge_req as f64 * 1e-6
+                                        )
+                                    });
+                                }
+                            }
+                            Kind::Pour { zone, kept: true } if zone == board::DRAWN => {
+                                let gap = hs_a.gap_within(&it_b.shape, hole_edge_req as f64);
+                                if gap + 500.0 < hole_edge_req as f64 {
+                                    let d_ord = drawn_ords.get(&id_b).copied().unwrap_or(0);
+                                    let key = StaticViolKey {
+                                        kind: StaticCheckKind::BoardRule(Rule::HoleClearance),
+                                        a_fp: fp_a,
+                                        a_pad_ord: ord_a,
+                                        b_fp: Some(usize::MAX),
+                                        b_pad_ord: Some(d_ord),
+                                    };
+                                    record_viol(&mut out, &mut first_desc, key, gap, &|| {
+                                        format!(
+                                            "HoleClearance on {}: {}-{} NPTH vs drawn copper (gap {:.3} mm < required {:.3} mm)",
+                                            board.layers[l],
+                                            board.footprints[fp_a].reference,
+                                            pad_a,
+                                            gap * 1e-6,
+                                            hole_edge_req as f64 * 1e-6
+                                        )
+                                    });
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -3498,6 +3553,42 @@ fn collect_static_violations(
             }
         }
     }
+
+    // Drawn copper (`gr_text`, `gr_line`, `gr_poly`, `fp_text`, `fp_line` on `*.Cu`, stored as
+    // `Kind::Pour { zone: DRAWN, kept: true }`) vs board outline edges, keepouts, and distinct-net
+    // drawn copper. Rigid `gr_text` glyphs keep their font size as `Edge.Cuts` shrinks inward.
+    for (id, it) in board.items() {
+        let Kind::Pour { zone, kept: true } = it.kind else { continue };
+        if zone != board::DRAWN {
+            continue;
+        }
+        let Some(&d_ord) = drawn_ords.get(&id) else { continue };
+        for v in check_item(board, id) {
+            let keep = match v.b.and_then(|bid| board.item(bid)) {
+                None => true,
+                Some(oit) => match oit.kind {
+                    Kind::Keepout { .. } => true,
+                    Kind::Pour { zone: z2, kept: true } => z2 == board::DRAWN && oit.net != it.net,
+                    _ => false,
+                },
+            };
+            if !keep {
+                continue;
+            }
+            let (b_fp, b_pad_ord) = v
+                .b
+                .and_then(|bid| drawn_ords.get(&bid).copied())
+                .map_or((None, None), |bo| (Some(usize::MAX), Some(bo)));
+            let key = StaticViolKey {
+                kind: StaticCheckKind::BoardRule(v.rule),
+                a_fp: usize::MAX,
+                a_pad_ord: d_ord,
+                b_fp,
+                b_pad_ord,
+            };
+            record_viol(&mut out, &mut first_desc, key, v.gap, &|| describe_violation(board, &v));
+        }
+    }
     (out, first_desc)
 }
 
@@ -3545,6 +3636,9 @@ fn describe_violation(board: &Board, v: &Violation) -> String {
             }
             Kind::Via => format!("via ({net}) at ({mx:.2}, {my:.2}) mm"),
             Kind::Track => format!("track ({net}) near ({mx:.2}, {my:.2}) mm"),
+            Kind::Pour { zone, .. } if *zone == board::DRAWN => {
+                format!("drawn copper ({net}) near ({mx:.2}, {my:.2}) mm")
+            }
             Kind::Pour { .. } => format!("pour ({net}) near ({mx:.2}, {my:.2}) mm"),
             Kind::Keepout { .. } => format!("keepout near ({mx:.2}, {my:.2}) mm"),
             Kind::Spoke { footprint, .. } => {
@@ -7581,6 +7675,86 @@ mod tests {
 
         let b = Board::new(&pcb, &copper, rules);
         assert!(check(&b).is_empty(), "DRC violations: {:?}", check(&b));
+        assert!(connectivity_without_pours(&b).airlines.is_empty());
+    }
+
+    #[test]
+    fn compact_stops_before_drawn_copper_graphic_hits_board_edge() {
+        // Rigid `gr_text` on `F.Cu` (`(size 1.5 1.5) (thickness 0.3)` rotated 270 deg at x = 18.0 mm
+        // inside a 20 x 30 mm board with `min_copper_edge_clearance = 0.50 mm`): its anchor scales
+        // with `Edge.Cuts`, so `x_edge(f) - x_txt(f) = 2.0 * f`, while its glyph half-height (~0.90 mm)
+        // stays fixed. Compaction accepts several steps cleanly (without tripping on internal `<no net>`
+        // stroke crossings) and stops before `gap < 0.50 mm`.
+        let text = "(kicad_pcb
+\t(version 20241229)
+\t(general (thickness 1.6))
+\t(layers (0 \"F.Cu\" signal) (2 \"B.Cu\" signal) (44 \"Edge.Cuts\" user))
+\t(net 0 \"\")
+\t(net 1 \"SIG\")
+\t(gr_line (start 0 0) (end 20 0) (stroke (width 0.1)) (layer \"Edge.Cuts\") (uuid \"e1\"))
+\t(gr_line (start 20 0) (end 20 30) (stroke (width 0.1)) (layer \"Edge.Cuts\") (uuid \"e2\"))
+\t(gr_line (start 20 30) (end 0 30) (stroke (width 0.1)) (layer \"Edge.Cuts\") (uuid \"e3\"))
+\t(gr_line (start 0 30) (end 0 0) (stroke (width 0.1)) (layer \"Edge.Cuts\") (uuid \"e4\"))
+\t(gr_text \"SERVO_44\" (at 18.0 15.0 270) (layer \"F.Cu\") (uuid \"gt1\")
+\t\t(effects (font (size 1.5 1.5) (thickness 0.3)))
+\t)
+\t(footprint \"R\" (layer \"F.Cu\") (uuid \"fr1\") (at 6.0 15.0)
+\t\t(property \"Reference\" \"R1\" (at 0 0 0) (layer \"F.SilkS\") (uuid \"rr1\"))
+\t\t(pad \"1\" smd rect (at 0 0) (size 1.0 1.0) (layers \"F.Cu\") (net 1 \"SIG\") (uuid \"pr1\"))
+\t)
+\t(footprint \"R\" (layer \"F.Cu\") (uuid \"fr2\") (at 12.0 15.0)
+\t\t(property \"Reference\" \"R2\" (at 0 0 0) (layer \"F.SilkS\") (uuid \"rr2\"))
+\t\t(pad \"1\" smd rect (at 0 0) (size 1.0 1.0) (layers \"F.Cu\") (net 1 \"SIG\") (uuid \"pr2\"))
+\t)
+\t(segment (start 6.0 15.0) (end 12.0 15.0) (width 0.2) (layer \"F.Cu\") (net 1) (uuid \"s1\"))
+)\n";
+        let rules = Rules::parse("{}").unwrap();
+        let (orig_pcb, orig_copper) = parse_board(text).unwrap();
+        let orig_b = Board::new(&orig_pcb, &orig_copper, rules.clone());
+        assert!(
+            check(&orig_b).iter().all(|v| v.rule != Rule::EdgeClearance),
+            "baseline board must have clean edge clearance: {:?}",
+            check(&orig_b)
+        );
+
+        let rep = compact(
+            text,
+            rules.clone(),
+            &CompactOptions {
+                factor: 0.60,
+                steps: Some(20),
+                lock: HashSet::new(),
+                uuid_seed: Some(11),
+                verbose: false,
+            },
+        )
+        .unwrap();
+        assert!(
+            rep.steps_accepted >= 4 && rep.steps_accepted < 20,
+            "expected partial shrink stopped by drawn copper edge clearance, got {}/20 (jam={:?})",
+            rep.steps_accepted,
+            rep.jam
+        );
+        assert!(rep.achieved_factor <= 0.92 && rep.achieved_factor > 0.60);
+        let jam = rep.jam.as_deref().unwrap_or("");
+        assert!(
+            jam.contains("EdgeClearance") && jam.contains("drawn copper"),
+            "jam should cite EdgeClearance on drawn copper, got: {jam}"
+        );
+
+        let (pcb, copper) = parse_board(&rep.text).unwrap();
+        let b = Board::new(&pcb, &copper, rules);
+        assert!(
+            check(&b).iter().all(|v| v.rule != Rule::EdgeClearance),
+            "compacted board must keep drawn copper edge clearance: {:?}",
+            check(&b)
+        );
+        assert_eq!(
+            check(&b).len(),
+            check(&orig_b).len(),
+            "compaction must add zero violations: {:?}",
+            check(&b)
+        );
         assert!(connectivity_without_pours(&b).airlines.is_empty());
     }
 }
