@@ -1117,7 +1117,7 @@ fn carve_kept_zones(board: &Board, copper: &Copper, blocks: &[Block]) -> Vec<Zon
         .collect();
     order.sort_by_key(|&z| std::cmp::Reverse(copper.zones[z].priority));
 
-    let mut poured: Vec<(u32, usize, PourRaster)> = Vec::new();
+    let mut poured: Vec<(u32, Nm, usize, PourRaster)> = Vec::new();
     let mut out = Vec::new();
     for z in order {
         let zone = &copper.zones[z];
@@ -1138,7 +1138,7 @@ fn carve_kept_zones(board: &Board, copper: &Copper, blocks: &[Block]) -> Vec<Zon
                         .collect();
                     out.push(ZoneFill { zone: z, layer: board.layers[layer].clone(), rects });
                 }
-                poured.push((zone.net, layer, r));
+                poured.push((zone.net, nm(zone.clearance), layer, r));
             }
         }
     }
@@ -1353,7 +1353,7 @@ fn carve_one_zone(
     board: &Board,
     zone: &Zone,
     layer: usize,
-    poured: &[(u32, usize, PourRaster)],
+    poured: &[(u32, Nm, usize, PourRaster)],
 ) -> Option<PourRaster> {
     let outline: Vec<Point> = zone.outline.iter().copied().map(Point::from_m).collect();
     if outline.len() < 3 {
@@ -1375,10 +1375,39 @@ fn carve_one_zone(
             r.scan(&[&cp], false);
         }
     }
+    let inside_or_on_outline = |c: Point| -> bool {
+        board::inside(c, &outline)
+            || (0..outline.len())
+                .any(|m| point_segment(c, outline[m], outline[(m + 1) % outline.len()]) <= 500.0)
+    };
     for k in 0..outline.len() {
         let (a, e) = (outline[k], outline[(k + 1) % outline.len()]);
-        let eb = BBox::of([a, e]).grow(POUR_STEP);
-        r.clear(eb, |p| point_segment(p, a, e) < POUR_CORNER_PAD);
+        let (cols, rows) = r.span(BBox::of([a, e]).grow(POUR_STEP));
+        for j in rows {
+            for i in cols.clone() {
+                let idx = j * r.w + i;
+                if !r.cells[idx] || point_segment(r.center(i, j), a, e) >= POUR_CORNER_PAD {
+                    continue;
+                }
+                let x0 = (r.i0 + i as i64) * POUR_STEP;
+                let y0 = (r.j0 + j as i64) * POUR_STEP;
+                let vert_inside = [a, e].iter().any(|v| {
+                    v.x > x0 + 500
+                        && v.x < x0 + POUR_STEP - 500
+                        && v.y > y0 + 500
+                        && v.y < y0 + POUR_STEP - 500
+                });
+                let corners = [
+                    Point::new(x0, y0),
+                    Point::new(x0 + POUR_STEP, y0),
+                    Point::new(x0, y0 + POUR_STEP),
+                    Point::new(x0 + POUR_STEP, y0 + POUR_STEP),
+                ];
+                if vert_inside || !corners.iter().all(|&c| inside_or_on_outline(c)) {
+                    r.cells[idx] = false;
+                }
+            }
+        }
     }
     if !board.outline.is_empty() {
         let mut board_area = r.clone();
@@ -1459,11 +1488,11 @@ fn carve_one_zone(
             point_segment(p, a, end) < reach
         });
     }
-    for (other, l, done) in poured {
+    for (other, other_own, l, done) in poured {
         if *l != layer || *other == net {
             continue;
         }
-        let c = own.max(board.clearance(net, *other)) as f64 + POUR_CORNER_PAD;
+        let c = own.max(*other_own).max(board.clearance(net, *other)) as f64 + POUR_CORNER_PAD;
         for j in 0..done.h {
             for i in 0..done.w {
                 if !done.cells[j * done.w + i] {
@@ -1476,13 +1505,13 @@ fn carve_one_zone(
                 if done.edge(i, j) {
                     let p = done.center(i, j);
                     r.clear(BBox::of([p]).grow(c as Nm + POUR_STEP), |q| {
-                        q.distance(p) < c + POUR_STEP as f64 * 0.5
+                        q.distance(p) < c + POUR_CORNER_PAD
                     });
                 }
             }
         }
     }
-    r.open(nm(zone.min_thickness) / 2);
+    r.open((nm(zone.min_thickness) - POUR_STEP).max(0) / 2);
     if net != 0 {
         r.keep_seeded(&seeds);
     }

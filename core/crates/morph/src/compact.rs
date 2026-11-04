@@ -103,7 +103,8 @@ enum Anchor {
         fp_ref: Point,
         orig_pad: Shape,
         cur_pad: Shape,
-        init_margin: f64,
+        min_overlap: f64,
+        centre_in_pad: bool,
         r: Nm,
         drill_r: Nm,
         layers: u64,
@@ -126,7 +127,7 @@ struct Particle {
     anchor: Anchor,
     locked: bool,
     via_tether: Option<(usize, f64)>,
-    plane_zones: Vec<(usize, f64)>,
+    plane_zones: Vec<(usize, Nm, f64)>,
 }
 
 impl Particle {
@@ -284,7 +285,29 @@ pub fn compact(text: &str, rules: Rules, opts: &CompactOptions) -> Result<Compac
     let mut accepted_steps = 0usize;
     let mut final_jam: Option<String> = None;
 
+    let has_kept_zones = orig_board.blocks.iter().any(|b| !b.zones.is_empty());
+
     if (opts.factor - 1.0).abs() <= 1e-12 {
+        if has_kept_zones {
+            let final_obs: Vec<Item> = cur_board
+                .items()
+                .filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via))
+                .map(|(_, it)| it.clone())
+                .collect();
+            let (_, _, recarved_text) = build_scaled_bare_board(
+                &bare_text,
+                &rules,
+                &orig_pcb,
+                &orig_copper,
+                orig_bb,
+                centre,
+                1.0,
+                &zero_shifts,
+                &zero_field,
+                &final_obs,
+            )?;
+            cur_bare_text = recarved_text;
+        }
         let out_text = graph.write_onto(&cur_bare_text, &cur_board, opts.uuid_seed);
         return Ok(CompactReport {
             text: out_text,
@@ -640,6 +663,39 @@ pub fn compact(text: &str, rules: Rules, opts: &CompactOptions) -> Result<Compac
         }
     }
 
+    if has_kept_zones {
+        let final_shifts: Vec<(usize, Point)> = (0..orig_fp_at.len())
+            .map(|f| {
+                (
+                    f,
+                    Point::new(
+                        cur_fp_pos[f].x - orig_fp_at[f].x,
+                        cur_fp_pos[f].y - orig_fp_at[f].y,
+                    ),
+                )
+            })
+            .collect();
+        let final_field = build_scale_field(&orig_board, centre, cur_factor, &final_shifts);
+        let final_obs: Vec<Item> = cur_board
+            .items()
+            .filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via))
+            .map(|(_, it)| it.clone())
+            .collect();
+        let (_, _, recarved_text) = build_scaled_bare_board(
+            &bare_text,
+            &rules,
+            &orig_pcb,
+            &orig_copper,
+            orig_bb,
+            centre,
+            cur_factor,
+            &final_shifts,
+            &final_field,
+            &final_obs,
+        )?;
+        cur_bare_text = recarved_text;
+    }
+
     let out_text = graph.write_onto(&cur_bare_text, &cur_board, opts.uuid_seed);
     Ok(CompactReport {
         text: out_text,
@@ -659,6 +715,34 @@ fn build_incremental_field(
     inc_shifts: &[(usize, Point)],
 ) -> WarpField {
     build_scale_field(cur_board, centre, rel_factor, inc_shifts)
+}
+
+fn within_hops(adj: &[Vec<usize>], starts: &[usize], target: usize, max_hops: usize) -> bool {
+    if starts.contains(&target) {
+        return true;
+    }
+    let mut cur: Vec<usize> = starts.to_vec();
+    let mut seen: Vec<usize> = starts.to_vec();
+    for _ in 0..max_hops {
+        let mut next = Vec::new();
+        for u in cur {
+            let Some(nbs) = adj.get(u) else { continue };
+            for &v in nbs {
+                if v == target {
+                    return true;
+                }
+                if !seen.contains(&v) {
+                    seen.push(v);
+                    next.push(v);
+                }
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        cur = next;
+    }
+    false
 }
 
 impl CopperGraph {
@@ -723,15 +807,20 @@ impl CopperGraph {
             }
             let anchor = match find_pad(at, v.net, mask) {
                 Some((fp, pad_shape)) => {
-                    let (_, _, _, gap, _, _) =
-                        closest_seg_shape((at.x as f64, at.y as f64), (at.x as f64, at.y as f64), r, &pad_shape);
-                    let init_margin = (-gap - r as f64).clamp(1_000.0, 15_000.0);
+                    let (_, _, _, gap, _, _) = closest_seg_shape(
+                        (at.x as f64, at.y as f64),
+                        (at.x as f64, at.y as f64),
+                        r,
+                        &pad_shape,
+                    );
+                    let min_overlap = r as f64 + (-gap - r as f64).clamp(1_000.0, 15_000.0);
                     Anchor::PadVia {
                         footprint: fp,
                         fp_ref: fp_at[fp],
                         orig_pad: pad_shape.clone(),
                         cur_pad: pad_shape,
-                        init_margin,
+                        min_overlap,
+                        centre_in_pad: true,
                         r,
                         drill_r,
                         layers: mask,
@@ -826,18 +915,15 @@ impl CopperGraph {
                 id
             };
 
-        // Record off-centre T-junction pairs `(endpoint_pt, split_q_on_seg, max_dist, layer, net)`
-        // so they stay tethered without emitting fake hook segments that would form acute angles.
-        let mut t_tethers: Vec<(Point, Point, f64, usize, u32)> = Vec::new();
-
+        // Pass 1: split raw segments ONLY at exact collinear junctions (`d <= 2_000 nm`) so 45-degree
+        // staircase bends and dogbone fanouts are not shattered by nearby vertices of the same trace.
         for &(a, b, r, l, net, locked) in &raw {
             let (dx, dy) = ((b.x - a.x) as f64, (b.y - a.y) as f64);
             let len2 = dx * dx + dy * dy;
             let mut stops: Vec<(f64, Point)> = vec![(0.0, a), (1.0, b)];
 
             if let Some(cands) = split_pts.get(&(net, l)) {
-                let reach = r + 350_000;
-                let bb = BBox::of([a, b]).grow(reach);
+                let bb = BBox::of([a, b]).grow(3_000);
                 let i0 = cands.partition_point(|p| p.x < bb.min.x);
                 let i1 = cands.partition_point(|p| p.x <= bb.max.x);
                 for &p in &cands[i0..i1] {
@@ -852,23 +938,8 @@ impl CopperGraph {
                         (a.x as f64 + dx * t).round() as Nm,
                         (a.y as f64 + dy * t).round() as Nm,
                     );
-                    let d = q.distance(p);
-                    if d <= 2_000.0 {
+                    if q.distance(p) <= 2_000.0 {
                         stops.push((t, p));
-                    } else {
-                        let extra_r = end_r.get(&(net, l, p)).copied().unwrap_or(0);
-                        let touch_lim = (r + extra_r) as f64;
-                        if d + 500.0 < touch_lim {
-                            stops.push((t, q));
-                            let is_via_cand = via_map
-                                .get(&(net, p))
-                                .and_then(|&vid| particles[vid].is_via())
-                                .is_some_and(|(_, _, mask, _, _)| mask & (1u64 << l) != 0);
-                            if !is_via_cand {
-                                let max_d = (d + 3_000.0).min((touch_lim - 1_500.0).max(d));
-                                t_tethers.push((p, q, max_d, l, net));
-                            }
-                        }
                     }
                 }
             }
@@ -892,6 +963,116 @@ impl CopperGraph {
                 }
             }
         }
+
+        let link_adj = |adj: &mut Vec<Vec<usize>>, u: usize, v: usize, n: usize| {
+            if adj.len() < n {
+                adj.resize_with(n, Vec::new);
+            }
+            if u != v {
+                if !adj[u].contains(&v) {
+                    adj[u].push(v);
+                }
+                if !adj[v].contains(&u) {
+                    adj[v].push(u);
+                }
+            }
+        };
+        let mut adj: Vec<Vec<usize>> = vec![Vec::new(); particles.len()];
+        for e in &edges {
+            link_adj(&mut adj, e.u, e.v, particles.len());
+        }
+
+        // Pass 2: split edges at off-centre grazing T-junctions (`2_000 < d < r + extra_r - 500`)
+        // ONLY when the grazing vertex `p` is NOT already connected within 4 hops along the trace.
+        let mut t_tethers: Vec<(Point, Point, f64, usize, u32)> = Vec::new();
+        let n_pass1 = edges.len();
+        for ei in 0..n_pass1 {
+            let Edge { u, v, layer: l, net, r, locked, active } = edges[ei];
+            if !active || net == 0 {
+                continue;
+            }
+            let a = Point::new(particles[u].pos.0.round() as Nm, particles[u].pos.1.round() as Nm);
+            let b = Point::new(particles[v].pos.0.round() as Nm, particles[v].pos.1.round() as Nm);
+            let (dx, dy) = ((b.x - a.x) as f64, (b.y - a.y) as f64);
+            let len2 = dx * dx + dy * dy;
+            if len2 <= 1.0 {
+                continue;
+            }
+            let mut g_stops: Vec<(f64, Point)> = Vec::new();
+            if let Some(cands) = split_pts.get(&(net, l)) {
+                let reach = r + 350_000;
+                let bb = BBox::of([a, b]).grow(reach);
+                let i0 = cands.partition_point(|p| p.x < bb.min.x);
+                let i1 = cands.partition_point(|p| p.x <= bb.max.x);
+                for &p in &cands[i0..i1] {
+                    if p == a || p == b || p.y < bb.min.y || p.y > bb.max.y {
+                        continue;
+                    }
+                    let t = ((p.x - a.x) as f64 * dx + (p.y - a.y) as f64 * dy) / len2;
+                    if t <= 1e-6 || t >= 1.0 - 1e-6 {
+                        continue;
+                    }
+                    let q = Point::new(
+                        (a.x as f64 + dx * t).round() as Nm,
+                        (a.y as f64 + dy * t).round() as Nm,
+                    );
+                    let d = q.distance(p);
+                    if d <= 2_000.0 {
+                        continue;
+                    }
+                    let extra_r = end_r.get(&(net, l, p)).copied().unwrap_or(0);
+                    let touch_lim = (r + extra_r) as f64;
+                    if d + 500.0 >= touch_lim {
+                        continue;
+                    }
+                    let pid_p = via_map
+                        .get(&(net, p))
+                        .copied()
+                        .filter(|&vid| {
+                            particles[vid]
+                                .is_via()
+                                .is_some_and(|(_, _, mask, _, _)| mask & (1u64 << l) != 0)
+                        })
+                        .or_else(|| node_map.get(&(net, l, p)).copied());
+                    let Some(pid_p) = pid_p else { continue };
+                    if within_hops(&adj, &[u, v], pid_p, 4) {
+                        continue;
+                    }
+                    g_stops.push((t, q));
+                    if particles[pid_p].is_via().is_none() {
+                        let max_d = (d + 3_000.0).min((touch_lim - 1_500.0).max(d));
+                        t_tethers.push((p, q, max_d, l, net));
+                    }
+                }
+            }
+            if !g_stops.is_empty() {
+                edges[ei].active = false;
+                adj[u].retain(|&x| x != v);
+                adj[v].retain(|&x| x != u);
+                let mut stops = vec![(0.0, a), (1.0, b)];
+                stops.extend(g_stops);
+                stops.sort_by(|x, y| x.0.total_cmp(&y.0));
+                let mut pts: Vec<Point> = Vec::with_capacity(stops.len());
+                for &(_, pt) in &stops {
+                    if pts.last().copied() != Some(pt) {
+                        pts.push(pt);
+                    }
+                }
+                for w in pts.windows(2) {
+                    let su = get_node(&mut particles, net, l, w[0]);
+                    let sv = get_node(&mut particles, net, l, w[1]);
+                    if su != sv {
+                        if locked {
+                            particles[su].locked = true;
+                            particles[sv].locked = true;
+                        }
+                        edges.push(Edge { u: su, v: sv, layer: l, net, r, locked, active: true });
+                        link_adj(&mut adj, su, sv, particles.len());
+                    }
+                }
+            }
+        }
+        edges.retain(|e| e.active);
 
         // Tether off-centre particles inside same-net vias, apply T-junction tethers, and pin
         // grazing pad contacts without adding any artificial segments.
@@ -919,7 +1100,8 @@ impl CopperGraph {
             let net = sample_net[pid];
             let l = sample_layer[pid];
             let r = max_r[pid];
-            // Check if this particle sits inside a same-net via's copper disc off-centre.
+            // Check if this particle sits inside a same-net via's copper disc off-centre without
+            // already connecting to that via along the routed trace.
             let mut best_via: Option<(usize, f64, Nm)> = None;
             for (&(vnet, vat), &vpid) in &via_map {
                 if vnet != net || vpid == pid {
@@ -929,6 +1111,7 @@ impl CopperGraph {
                     let d = pt.distance(vat);
                     if mask & (1u64 << l) != 0
                         && d + 500.0 < (vr + r) as f64
+                        && !within_hops(&adj, &[pid], vpid, 4)
                         && best_via.is_none_or(|(_, bd, _)| d < bd)
                     {
                         best_via = Some((vpid, d, vr));
@@ -939,6 +1122,7 @@ impl CopperGraph {
                 let lim = (vr + r) as f64;
                 let max_d = (vr as f64 - 5_000.0).max(d + 5_000.0).min((lim - 5_000.0).max(d));
                 particles[pid].via_tether = Some((vpid, max_d));
+                link_adj(&mut adj, pid, vpid, particles.len());
                 continue;
             }
             // If a degree-1 endpoint overlaps a same-net pad without its centre inside, pin it.
@@ -959,16 +1143,17 @@ impl CopperGraph {
                 if epid != qpid
                     && matches!(particles[epid].anchor, Anchor::Free)
                     && particles[epid].via_tether.is_none()
+                    && !within_hops(&adj, &[epid], qpid, 4)
                 {
                     particles[epid].via_tether = Some((qpid, max_d));
+                    link_adj(&mut adj, epid, qpid, particles.len());
                 }
             }
         }
 
         // Also tether round-cap-to-round-cap endpoint joints (where an endpoint `p` overlaps
-        // another same-net, same-layer vertex `q` within `r_p + r_q - 500 nm` outside `0 < t < 1`).
-        let direct_edges: HashSet<(usize, usize)> =
-            edges.iter().map(|e| (e.u.min(e.v), e.u.max(e.v))).collect();
+        // another same-net, same-layer vertex `q` within `r_p + r_q - 500 nm` outside `0 < t < 1`
+        // without already connecting within 4 hops along the trace).
         let mut by_nl: HashMap<(u32, usize), Vec<usize>> = HashMap::new();
         for pid in 0..particles.len() {
             if deg[pid] > 0 && particles[pid].is_via().is_none() {
@@ -992,7 +1177,7 @@ impl CopperGraph {
                 let rp = max_r[pid];
                 let mut best_q: Option<(usize, f64, Nm)> = None;
                 for &qpid in &list {
-                    if qpid == pid || direct_edges.contains(&(pid.min(qpid), pid.max(qpid))) {
+                    if qpid == pid || within_hops(&adj, &[pid], qpid, 4) {
                         continue;
                     }
                     // Strict priority order `(is_pad, deg, rev_id)` guarantees an acyclic tether DAG.
@@ -1013,11 +1198,98 @@ impl CopperGraph {
                         best_q = Some((qpid, d, rq));
                     }
                 }
-                if let Some((qpid, d, rq)) = best_q {
-                    let lim = (rp + rq) as f64;
+                if let Some((qpid, d, _)) = best_q {
+                    let lim = (rp + max_r[qpid]) as f64;
                     let max_d = (d + 3_000.0).min((lim - 1_500.0).max(d));
                     particles[pid].via_tether = Some((qpid, max_d));
+                    link_adj(&mut adj, pid, qpid, particles.len());
                 }
+            }
+        }
+
+        // Promote unlocked vias whose annular ring overlaps a same-net pad (centre outside pad)
+        // WITHOUT an explicit short track into that pad into `Anchor::PadVia`, so pad-grazing vias
+        // translate with their host footprint and never detach when footprints shift.
+        for vpid in 0..particles.len() {
+            let Anchor::Via { r: vr, drill_r: vdr, layers: vlayers, net: vnet, locked: false } =
+                particles[vpid].anchor
+            else {
+                continue;
+            };
+            if particles[vpid].locked || vnet == 0 {
+                continue;
+            }
+            let vpos = particles[vpid].pos;
+            let qbb = seg_bbox(vpos, vpos, vr + 2_000);
+            let mut best_pad: Option<(usize, Shape, f64)> = None;
+            for l in (0..board.layers.len()).filter(|&l| vlayers & (1u64 << l) != 0) {
+                for oid in board.near(l, qbb) {
+                    let Some(oit) = board.item(oid) else { continue };
+                    let Kind::Pad { footprint, .. } = oit.kind else { continue };
+                    if oit.net != vnet || !oit.on(l) {
+                        continue;
+                    }
+                    let (_, _, _, gap, _, _) = closest_seg_shape(vpos, vpos, vr, &oit.shape);
+                    let ov0 = -gap;
+                    if ov0 <= 500.0 {
+                        continue;
+                    }
+                    let mut reach_pad = false;
+                    let mut cur = vec![vpid];
+                    let mut seen = vec![vpid];
+                    for _ in 0..3 {
+                        let mut next = Vec::new();
+                        for u in cur {
+                            let Some(nbs) = adj.get(u) else { continue };
+                            for &nb in nbs {
+                                if matches!(particles[nb].anchor, Anchor::Pad { footprint: f, .. } if f == footprint)
+                                {
+                                    let pnb = Point::new(
+                                        particles[nb].pos.0.round() as Nm,
+                                        particles[nb].pos.1.round() as Nm,
+                                    );
+                                    let dot = Shape::Capsule { a: pnb, b: pnb, r: 2_000 };
+                                    if oit.shape.contains(pnb)
+                                        || oit.shape.gap_within(&dot, 2_000.0) <= 0.0
+                                    {
+                                        reach_pad = true;
+                                        break;
+                                    }
+                                }
+                                if !seen.contains(&nb) {
+                                    seen.push(nb);
+                                    next.push(nb);
+                                }
+                            }
+                            if reach_pad {
+                                break;
+                            }
+                        }
+                        if reach_pad || next.is_empty() {
+                            break;
+                        }
+                        cur = next;
+                    }
+                    if !reach_pad && best_pad.as_ref().is_none_or(|(_, _, bov)| ov0 > *bov) {
+                        best_pad = Some((footprint, oit.shape.clone(), ov0));
+                    }
+                }
+            }
+            if let Some((fp, pad_shape, ov0)) = best_pad {
+                let min_overlap = (ov0 - 300.0).max(500.0).min(35_000.0).min(ov0);
+                particles[vpid].anchor = Anchor::PadVia {
+                    footprint: fp,
+                    fp_ref: fp_at[fp],
+                    orig_pad: pad_shape.clone(),
+                    cur_pad: pad_shape,
+                    min_overlap,
+                    centre_in_pad: false,
+                    r: vr,
+                    drill_r: vdr,
+                    layers: vlayers,
+                    net: vnet,
+                    locked: false,
+                };
             }
         }
 
@@ -1633,7 +1905,7 @@ fn resolve_courtyard_stops(
 ) -> usize {
     let (leader, members) = fp_family_groups(orig_at.len(), envs, fp_locked);
     let mut stopped: HashSet<usize> = HashSet::new();
-    for _pass in 0..16 {
+    for pass in 0..36 {
         let pens = courtyard_penetrations(orig_yards, orig_at, cand_pos);
         let mut pairs: Vec<(usize, usize, u8)> = pens
             .into_iter()
@@ -1677,8 +1949,9 @@ fn resolve_courtyard_stops(
             let dlg = ((clg.x - plg.x) as f64, (clg.y - plg.y) as f64);
 
             // Locked footprints never move by even 1 nm: common-mode translation is zero whenever
-            // either side is locked.
-            let cm = if fp_locked[lf] || fp_locked[lg] {
+            // either side is locked, and switches to pure monotone contraction after pass 11 so
+            // multi-body courtyard chains always converge without oscillation.
+            let cm = if pass >= 12 || fp_locked[lf] || fp_locked[lg] {
                 Point::new(0, 0)
             } else {
                 Point::new(
@@ -1744,7 +2017,7 @@ fn resolve_courtyard_stops(
             };
 
             let (d0_f, d0_g) = eval_deltas(0.0, 1.0);
-            let (fin_df, fin_dg) = if ok_deltas(d0_f, d0_g) {
+            let (mut fin_df, mut fin_dg) = if ok_deltas(d0_f, d0_g) {
                 let (mut lo, mut hi) = (0.0f64, 1.0f64);
                 for _ in 0..10 {
                     let mid = (lo + hi) * 0.5;
@@ -1770,6 +2043,40 @@ fn resolve_courtyard_stops(
                 eval_deltas(0.0, lo)
             };
 
+            if !ok_deltas(fin_df, fin_dg) {
+                let scale_raw = |gamma: f64| -> (Point, Point) {
+                    let sf = if fp_locked[lf] {
+                        Point::new(0, 0)
+                    } else {
+                        Point::new((dlf.0 * gamma).round() as Nm, (dlf.1 * gamma).round() as Nm)
+                    };
+                    let sg = if fp_locked[lg] {
+                        Point::new(0, 0)
+                    } else {
+                        Point::new((dlg.0 * gamma).round() as Nm, (dlg.1 * gamma).round() as Nm)
+                    };
+                    (sf, sg)
+                };
+                let (mut lo, mut hi) = (0.0f64, 1.0f64);
+                for _ in 0..12 {
+                    let mid = (lo + hi) * 0.5;
+                    let (sm_f, sm_g) = scale_raw(mid);
+                    if ok_deltas(sm_f, sm_g) {
+                        lo = mid;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                let (sf, sg) = scale_raw(lo);
+                if ok_deltas(sf, sg) {
+                    fin_df = sf;
+                    fin_dg = sg;
+                } else {
+                    fin_df = Point::new(0, 0);
+                    fin_dg = Point::new(0, 0);
+                }
+            }
+
             if !fp_locked[lf] {
                 for &m in &members[lf] {
                     cand_pos[m] = Point::new(prev_pos[m].x + fin_df.x, prev_pos[m].y + fin_df.y);
@@ -1782,6 +2089,45 @@ fn resolve_courtyard_stops(
                 }
                 stopped.insert(lg);
             }
+        }
+    }
+
+    // Final exact backstop: revert any still-overlapping unlocked family to `prev_pos`.
+    for _ in 0..orig_at.len().max(1) {
+        let pens = courtyard_penetrations(orig_yards, orig_at, cand_pos);
+        let mut bad: Vec<(usize, usize, u8)> = pens
+            .into_iter()
+            .filter_map(|(key, pen)| {
+                if leader[key.0] == leader[key.1] {
+                    return None;
+                }
+                let d0 = allowed.get(&key).copied().unwrap_or(0.0);
+                if d0 >= KICAD_COURTYARD_TOL_NM {
+                    return None;
+                }
+                (pen > d0 + 1e-6).then_some(key)
+            })
+            .collect();
+        if bad.is_empty() {
+            break;
+        }
+        bad.sort_unstable();
+        let mut reverted = false;
+        for (f, g, _) in bad {
+            for &ldr in &[leader[f], leader[g]] {
+                if !fp_locked[ldr] {
+                    for &m in &members[ldr] {
+                        if cand_pos[m] != prev_pos[m] {
+                            cand_pos[m] = prev_pos[m];
+                            reverted = true;
+                        }
+                    }
+                    stopped.insert(ldr);
+                }
+            }
+        }
+        if !reverted {
+            break;
         }
     }
     stopped.len()
@@ -2180,7 +2526,55 @@ fn append_static_fp_guard_constraints(
                 .map(|p| Point::new(p.x + dg.x, p.y + dg.y))
                 .collect();
             let (nx, ny) = courtyard_contact_normal(&yf, &yg);
-            push_pair(lf, lg, nx, ny, (pen - d0) + 1_500.0, hs_group);
+            push_pair(lf, lg, nx, ny, (pen - d0) + 2_000.0, hs_group);
+        }
+    }
+
+    // Proactive non-penetration barriers (`need <= 0`) between nearby non-overlapping courtyards so
+    // copper or pad reaction pushes slide footprints tangentially instead of stepping into a neighbour.
+    for side in 0..=1u8 {
+        let mut polys: Vec<(usize, usize, BBox, Shape)> = Vec::new();
+        for f in 0..n {
+            let df = Point::new(cur_fp_pos[f].x - orig_at[f].x, cur_fp_pos[f].y - orig_at[f].y);
+            for pa in yard_side_polys(&orig_yards[f], side) {
+                if pa.len() >= 3 {
+                    let sh = Shape::Polygon(
+                        pa.iter().map(|p| Point::new(p.x + df.x, p.y + df.y)).collect(),
+                    );
+                    polys.push((f, leader[f], sh.bbox(), sh));
+                }
+            }
+        }
+        for i in 0..polys.len() {
+            let (f, lf, bba, ref sa) = polys[i];
+            let qbb = bba.grow(15_000);
+            for &(g, lg, bbb, ref sb) in &polys[(i + 1)..] {
+                if lf == lg || (group_immob[lf] && group_immob[lg]) || !qbb.overlaps(bbb) {
+                    continue;
+                }
+                let key = (f.min(g), f.max(g), side);
+                if pens.contains_key(&key)
+                    || allowed_yards.get(&key).copied().unwrap_or(0.0) >= KICAD_COURTYARD_TOL_NM
+                {
+                    continue;
+                }
+                let (gap, nx, ny) = closest_shape_shape(sa, sb);
+                if (0.0..15_000.0).contains(&gap) {
+                    match (!group_immob[lf], !group_immob[lg]) {
+                        (true, true) => {
+                            hs_group[lf].push(HalfPlane { nx, ny, need: -gap * 0.48 });
+                            hs_group[lg].push(HalfPlane { nx: -nx, ny: -ny, need: -gap * 0.48 });
+                        }
+                        (true, false) => {
+                            hs_group[lf].push(HalfPlane { nx, ny, need: -gap * 0.95 });
+                        }
+                        (false, true) => {
+                            hs_group[lg].push(HalfPlane { nx: -nx, ny: -ny, need: -gap * 0.95 });
+                        }
+                        (false, false) => {}
+                    }
+                }
+            }
         }
     }
 
@@ -2835,39 +3229,104 @@ fn describe_violation(board: &Board, v: &Violation) -> String {
 }
 
 fn record_via_zones(board: &Board, graph: &mut CopperGraph) {
-    for p in &mut graph.particles {
-        let Some((vr, _, layers, net, _)) = p.is_via() else { continue };
-        if net == 0 {
+    let kept_zones: HashSet<usize> =
+        board.blocks.iter().flat_map(|b| b.zones.iter().copied()).collect();
+    let mut deg = vec![0usize; graph.particles.len()];
+    let mut edge_layer = vec![0usize; graph.particles.len()];
+    let mut edge_net = vec![0u32; graph.particles.len()];
+    let mut edge_r = vec![0i64; graph.particles.len()];
+    for e in &graph.edges {
+        if !e.active {
             continue;
         }
+        for &pid in &[e.u, e.v] {
+            deg[pid] += 1;
+            edge_layer[pid] = e.layer;
+            edge_net[pid] = e.net;
+            edge_r[pid] = edge_r[pid].max(e.r);
+        }
+    }
+
+    for (pi, p) in graph.particles.iter_mut().enumerate() {
         let pt = Point::new(p.pos.0.round() as Nm, p.pos.1.round() as Nm);
-        for &(z, znet, zmask, ref shape) in &board.unfilled {
-            if znet == net && (zmask & layers) != 0 && shape.contains(pt) {
-                let (_, _, _, gap, _, _) = closest_seg_shape(p.pos, p.pos, vr, shape);
-                let dist_in = (-gap - vr as f64).max(0.0);
-                let init_margin = dist_in.clamp(500.0, 20_000.0);
-                p.plane_zones.push((z, init_margin));
+        if let Some((vr, _, layers, net, _)) = p.is_via() {
+            if net == 0 {
+                continue;
+            }
+            for &(z, znet, zmask, ref shape) in &board.unfilled {
+                if znet == net && (zmask & layers) != 0 && shape.contains(pt) {
+                    let (_, _, _, gap, _, _) = closest_seg_shape(p.pos, p.pos, vr, shape);
+                    let dist_in = (-gap - vr as f64).max(0.0);
+                    let min_ov = vr as f64 + dist_in.clamp(500.0, 20_000.0);
+                    p.plane_zones.push((z, vr, min_ov));
+                }
+            }
+        } else if matches!(p.anchor, Anchor::Free) && deg[pi] == 1 && p.via_tether.is_none() {
+            let net = edge_net[pi];
+            if net == 0 {
+                continue;
+            }
+            let lmask = 1u64 << edge_layer[pi];
+            let er = edge_r[pi];
+            for &(z, znet, zmask, ref shape) in &board.unfilled {
+                if znet != net || (zmask & lmask) == 0 {
+                    continue;
+                }
+                let (_, _, _, gap, _, _) = closest_seg_shape(p.pos, p.pos, er, shape);
+                let ov0 = -gap;
+                if kept_zones.contains(&z) && ov0 > 500.0 {
+                    let min_ov = (ov0 - 5_000.0).max(ov0 * 0.85).clamp(1_000.0, 120_000.0).min(ov0);
+                    p.plane_zones.push((z, er, min_ov));
+                } else if !kept_zones.contains(&z) && shape.contains(pt) {
+                    let dist_in = (ov0 - er as f64).max(0.0);
+                    let min_ov = er as f64 + dist_in.clamp(500.0, 20_000.0);
+                    p.plane_zones.push((z, er, min_ov));
+                }
             }
         }
     }
 }
 
 fn check_via_zones(board: &Board, graph: &CopperGraph) -> Option<String> {
-    for p in &graph.particles {
+    let kept_zones: HashSet<usize> =
+        board.blocks.iter().flat_map(|b| b.zones.iter().copied()).collect();
+    for (pi, p) in graph.particles.iter().enumerate() {
         if p.plane_zones.is_empty() {
             continue;
         }
-        let Some((_, _, _, net, _)) = p.is_via() else { continue };
         let pt = Point::new(p.pos.0.round() as Nm, p.pos.1.round() as Nm);
-        for &(z, _) in &p.plane_zones {
-            if let Some((_, _, _, shape)) = board.unfilled.iter().find(|u| u.0 == z) {
-                if !shape.contains(pt) {
-                    return Some(format!(
-                        "via of {} at ({:.2}, {:.2}) mm drifted outside its plane zone",
-                        board.net_name(net),
-                        pt.x as f64 * 1e-6,
-                        pt.y as f64 * 1e-6
-                    ));
+        if let Some((_, _, _, net, _)) = p.is_via() {
+            for &(z, _, _) in &p.plane_zones {
+                if let Some((_, _, _, shape)) = board.unfilled.iter().find(|u| u.0 == z) {
+                    if !shape.contains(pt) {
+                        return Some(format!(
+                            "via of {} at ({:.2}, {:.2}) mm drifted outside its plane zone",
+                            board.net_name(net),
+                            pt.x as f64 * 1e-6,
+                            pt.y as f64 * 1e-6
+                        ));
+                    }
+                }
+            }
+        } else {
+            let net = graph
+                .edges
+                .iter()
+                .find(|e| e.active && (e.u == pi || e.v == pi))
+                .map_or(0, |e| e.net);
+            for &(z, _, _) in &p.plane_zones {
+                if kept_zones.contains(&z) {
+                    continue;
+                }
+                if let Some((_, _, _, shape)) = board.unfilled.iter().find(|u| u.0 == z) {
+                    if !shape.contains(pt) {
+                        return Some(format!(
+                            "track endpoint of {} at ({:.2}, {:.2}) mm drifted outside its plane zone",
+                            board.net_name(net),
+                            pt.x as f64 * 1e-6,
+                            pt.y as f64 * 1e-6
+                        ));
+                    }
                 }
             }
         }
@@ -3948,6 +4407,27 @@ fn relax_core(
 
             let holes_slot = num_layers;
 
+            // 3a-0. Keep plane-stitching vias and pour-landing track endpoints inside their zones.
+            for (pi, p) in graph.particles.iter().enumerate() {
+                if p.mobility() <= 0.0 || p.plane_zones.is_empty() {
+                    continue;
+                }
+                let pos_i = p.pos;
+                for &(z, cap_r, min_ov) in &p.plane_zones {
+                    if let Some((_, _, _, zshape)) = board.unfilled.iter().find(|u| u.0 == z) {
+                        let (_, _, _, gap, nx, ny) = closest_seg_shape(pos_i, pos_i, cap_r, zshape);
+                        let ov = -gap;
+                        if ov < min_ov {
+                            constraints[pi].push(HalfPlane {
+                                nx: -nx,
+                                ny: -ny,
+                                need: min_ov - ov,
+                            });
+                        }
+                    }
+                }
+            }
+
             // 3a. Via constraints against static board + other dynamic vias.
             for (pi, p) in graph.particles.iter().enumerate() {
                 let Some((vr, vdr, vlayers, vnet, _)) = p.is_via() else { continue };
@@ -3957,34 +4437,16 @@ fn relax_core(
                 let v_item = v_id.and_then(|id| board.item(id));
                 let host_lg = particle_fp_leader(pi, graph);
 
-                // Keep unlocked via-in-pad inside its host pad's copper polygon.
-                if let Anchor::PadVia { ref cur_pad, init_margin, locked: false, .. } = p.anchor {
+                // Keep unlocked via-in-pad or pad-grazing via overlapping its host pad.
+                if let Anchor::PadVia { ref cur_pad, min_overlap, locked: false, .. } = p.anchor {
                     let (_, _, _, gap, nx, ny) = closest_seg_shape(pos_i, pos_i, vr, cur_pad);
-                    let dist_in = -gap - vr as f64;
-                    if dist_in < init_margin {
+                    let ov = -gap;
+                    if ov < min_overlap {
                         constraints[pi].push(HalfPlane {
                             nx: -nx,
                             ny: -ny,
-                            need: init_margin - dist_in,
+                            need: min_overlap - ov,
                         });
-                    }
-                }
-
-                // Keep plane-stitching vias inside their initial plane polygon.
-                if mob_i > 0.0 && !p.plane_zones.is_empty() {
-                    for &(z, init_margin) in &p.plane_zones {
-                        if let Some((_, _, _, zshape)) = board.unfilled.iter().find(|u| u.0 == z) {
-                            let (_, _, _, gap, nx, ny) =
-                                closest_seg_shape(pos_i, pos_i, vr, zshape);
-                            let dist_in = -gap - vr as f64;
-                            if dist_in < init_margin {
-                                constraints[pi].push(HalfPlane {
-                                    nx: -nx,
-                                    ny: -ny,
-                                    need: init_margin - dist_in,
-                                });
-                            }
-                        }
                     }
                 }
 
@@ -4159,7 +4621,12 @@ fn relax_core(
                                         let own_host_pad = matches!(
                                             (&p.anchor, &oit.kind),
                                             (
-                                                Anchor::PadVia { footprint: fh, cur_pad, .. },
+                                                Anchor::PadVia {
+                                                    footprint: fh,
+                                                    cur_pad,
+                                                    centre_in_pad: true,
+                                                    ..
+                                                },
                                                 Kind::Pad { footprint: fo, .. }
                                             ) if fh == fo && cur_pad == &oit.shape
                                         );
@@ -5242,8 +5709,21 @@ fn polish_on_board(graph: &mut CopperGraph, board: &mut Board) {
                     let mut legal_group = true;
                     for (idx, &gp) in group.iter().enumerate() {
                         let cand = Point::new(base_pts[idx].x + delta.x, base_pts[idx].y + delta.y);
-                        if let Anchor::PadVia { ref cur_pad, .. } = graph.particles[gp].anchor {
-                            if !cur_pad.contains(cand) {
+                        if let Anchor::PadVia { ref cur_pad, min_overlap, centre_in_pad, r, .. } =
+                            graph.particles[gp].anchor
+                        {
+                            let ok_pad = if centre_in_pad {
+                                cur_pad.contains(cand)
+                            } else {
+                                -closest_seg_shape(
+                                    (cand.x as f64, cand.y as f64),
+                                    (cand.x as f64, cand.y as f64),
+                                    r,
+                                    cur_pad,
+                                )
+                                .3 >= min_overlap
+                            };
+                            if !ok_pad {
                                 legal_group = false;
                                 break;
                             }
@@ -5261,12 +5741,21 @@ fn polish_on_board(graph: &mut CopperGraph, board: &mut Board) {
                             legal_group = false;
                             break;
                         }
-                        if graph.particles[gp].plane_zones.iter().any(|&(z, _)| {
-                            board
-                                .unfilled
-                                .iter()
-                                .find(|u| u.0 == z)
-                                .is_some_and(|(_, _, _, sh)| !sh.contains(cand))
+                        if graph.particles[gp].plane_zones.iter().any(|&(z, cap_r, min_ov)| {
+                            board.unfilled.iter().find(|u| u.0 == z).is_some_and(|(_, _, _, sh)| {
+                                if graph.particles[gp].is_via().is_some() {
+                                    !sh.contains(cand)
+                                } else {
+                                    -closest_seg_shape(
+                                        (cand.x as f64, cand.y as f64),
+                                        (cand.x as f64, cand.y as f64),
+                                        cap_r,
+                                        sh,
+                                    )
+                                    .3 + 500.0
+                                        < min_ov
+                                }
+                            })
                         }) {
                             legal_group = false;
                             break;
@@ -5338,6 +5827,7 @@ fn shorten_taut_chains(graph: &mut CopperGraph, board: &mut Board) {
             if !matches!(part.anchor, Anchor::Free)
                 || part.locked
                 || part.via_tether.is_some()
+                || !part.plane_zones.is_empty()
                 || tethered_targets[pid]
                 || inc[pid].len() != 2
             {
@@ -6551,5 +7041,63 @@ mod tests {
         let b = Board::new(&pcb, &copper, rules);
         assert!(check(&b).is_empty());
         assert!(connectivity_without_pours(&b).airlines.is_empty());
+    }
+
+    #[test]
+    fn compact_preserves_pad_grazing_via_and_staircase_segments() {
+        let text = "(kicad_pcb
+\t(version 20241229)
+\t(general (thickness 1.6))
+\t(layers (0 \"F.Cu\" signal) (2 \"B.Cu\" signal) (44 \"Edge.Cuts\" user) (46 \"B.CrtYd\" user) (47 \"F.CrtYd\" user))
+\t(net 0 \"\")
+\t(net 1 \"SIG\")
+\t(net 2 \"OBS\")
+\t(gr_line (start 0 0) (end 20 0) (stroke (width 0.1)) (layer \"Edge.Cuts\") (uuid \"e1\"))
+\t(gr_line (start 20 0) (end 20 12) (stroke (width 0.1)) (layer \"Edge.Cuts\") (uuid \"e2\"))
+\t(gr_line (start 20 12) (end 0 12) (stroke (width 0.1)) (layer \"Edge.Cuts\") (uuid \"e3\"))
+\t(gr_line (start 0 12) (end 0 0) (stroke (width 0.1)) (layer \"Edge.Cuts\") (uuid \"e4\"))
+\t(footprint \"C\" (layer \"B.Cu\") (uuid \"fcb\") (at 4.0 6.0)
+\t\t(property \"Reference\" \"C_BACK\" (at 0 0 0) (layer \"B.SilkS\") (uuid \"rcb\"))
+\t\t(fp_rect (start -0.7 -0.7) (end 0.7 0.7) (stroke (width 0.05)) (layer \"B.CrtYd\") (uuid \"ccb\"))
+\t\t(pad \"1\" smd rect (at 0 0) (size 0.8 0.8) (layers \"B.Cu\") (net 1 \"SIG\") (uuid \"pcb\"))
+\t)
+\t(footprint \"C\" (layer \"B.Cu\") (uuid \"fcs\") (at 5.5 6.0)
+\t\t(property \"Reference\" \"C_STOP\" (at 0 0 0) (layer \"B.SilkS\") (uuid \"rcs\"))
+\t\t(fp_rect (start -0.7 -0.7) (end 0.7 0.7) (stroke (width 0.05)) (layer \"B.CrtYd\") (uuid \"ccs\"))
+\t\t(pad \"1\" smd rect (at 0 0) (size 0.8 0.8) (layers \"B.Cu\") (net 2 \"OBS\") (uuid \"pcs\"))
+\t)
+\t(footprint \"R\" (layer \"F.Cu\") (uuid \"frt\") (at 16.0 6.16)
+\t\t(property \"Reference\" \"R_TOP\" (at 0 0 0) (layer \"F.SilkS\") (uuid \"rrt\"))
+\t\t(fp_rect (start -0.7 -0.7) (end 0.7 0.7) (stroke (width 0.05)) (layer \"F.CrtYd\") (uuid \"crt\"))
+\t\t(pad \"1\" smd rect (at 0 0) (size 0.8 0.8) (layers \"F.Cu\") (net 1 \"SIG\") (uuid \"prt\"))
+\t)
+\t(via (at 4.54 6.0) (size 0.4) (drill 0.2) (layers \"F.Cu\" \"B.Cu\") (net 1) (uuid \"vg\"))
+\t(segment (start 4.54 6.0) (end 4.70 6.16) (width 0.2) (layer \"F.Cu\") (net 1) (uuid \"s1\"))
+\t(segment (start 4.70 6.16) (end 16.0 6.16) (width 0.2) (layer \"F.Cu\") (net 1) (uuid \"s2\"))
+)\n";
+        let rules = Rules::parse("{}").unwrap();
+        let mut lock = HashSet::new();
+        lock.insert("C_STOP".to_string());
+        let rep = compact(
+            text,
+            rules.clone(),
+            &CompactOptions {
+                factor: 0.75,
+                steps: Some(10),
+                lock,
+                uuid_seed: Some(77),
+                verbose: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(rep.steps[0].segments, 2, "dogbone bend must not shatter at step 0");
+        assert_eq!(rep.steps_accepted, 10, "jam: {:?}", rep.jam);
+        let (pcb, copper) = parse_board(&rep.text).unwrap();
+        let b = Board::new(&pcb, &copper, rules);
+        assert!(check(&b).is_empty(), "DRC violations: {:?}", check(&b));
+        assert!(
+            connectivity_without_pours(&b).airlines.is_empty(),
+            "pad-grazing via must remain connected to C_BACK-1"
+        );
     }
 }
