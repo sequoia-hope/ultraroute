@@ -9,3 +9,7 @@ license = "MIT"
 
 [dependencies]
 kicad-pcb = { path = "../kicad-pcb" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Thread and process CPU clocks for sub-stage timing (`work::enter`).
+libc = "0.2"

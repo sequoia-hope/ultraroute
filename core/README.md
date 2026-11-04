@@ -164,6 +164,7 @@ lengths, the deadline, and, of kind `rule`, every project or custom rule left ou
 | `--live-step MS` | least time between the stream's step frames |
 | `--blame` | list what stands in the way of every connection left open |
 | `--stats FILE`, `--report FILE` | write the run's stats and findings as JSON |
+| `--no-timing` | skip sub-stage and per-move CPU timing (the stage timers in `--report` stay zero) |
 | `--verbose`, `-v` | everything the router does, on standard error, and the stats table |
 | `-h`, `--help` | print the flags |
 

@@ -74,6 +74,11 @@ pub struct RipStats {
     /// stretch, by the connection's two ends, with its width and length.
     pub corridor: usize,
     pub corridors: Vec<(ItemId, ItemId, Nm, Nm)>,
+    pub setup_ns: u64,
+    pub kept_ns: u64,
+    pub no_path_ns: u64,
+    pub hard_conflict_ns: u64,
+    pub no_better_ns: u64,
 }
 
 /// At most so many connections a corridor round tries: each may build a fine map round itself.
@@ -165,16 +170,23 @@ pub fn rip_up_watch(
     let mut corridor_maps: HashMap<String, ObstacleMap> = HashMap::new();
     let mut full_grid = grid.clone();
     loop {
-        let mut open = joined(board, options.pours_block).airlines;
+        let sep = board::work::begin_event();
+        let st0 = board::work::timed_run_ns();
+        let all_open = joined(board, options.pours_block).airlines;
+        let board_open_now = all_open.len();
+        let mut open = all_open;
         open.retain(|a| !plane_nets.contains(&a.net));
         open.sort_by(|a, b| a.from.distance(a.to).total_cmp(&b.from.distance(b.to)));
         open.retain(|a| !tried.contains(&(a.from_item, a.to_item)));
         if corridors {
             open.retain(|a| !cornered.contains(&(a.from_item, a.to_item)));
         }
+        stats.setup_ns = stats.setup_ns.saturating_add(board::work::timed_run_ns().saturating_sub(st0));
         if open.is_empty() || out_of_time() {
+            sep.finish("rip_setup", "empty", Some(board_open_now));
             break;
         }
+        sep.finish("rip_setup", "setup", Some(board_open_now));
         let kept_before = stats.kept;
         let mut corridor_tries = 0;
         for airline in open {
@@ -197,6 +209,8 @@ pub fn rip_up_watch(
                 corridor_tries += 1;
                 cornered.insert((airline.from_item, airline.to_item));
             }
+            let ev = board::work::begin_event();
+            let t0 = board::work::timed_run_ns();
             stats.attempts += 1;
             let score_before = score(board);
             let before = score_before.1;
@@ -256,17 +270,20 @@ pub fn rip_up_watch(
                     } else {
                         Some(&*plane_maps.entry(key.clone()).or_insert_with(|| made(&|id| !soft_set.contains(&id) || !plane(id))))
                     };
-                    let plane_cost = (options.rip_cost / 40).max(5);
-                    let price = |soft: bool, plane: bool| if soft { options.rip_cost } else if plane { plane_cost } else { 0 };
-                    grid.penalty.clear();
-                    let nodes = grid.blocked.len();
-                    let net = airline.net;
-                    grid.penalty.extend((0..nodes).map(|n| price(soft_map.blocked_at(net, n), plane_map.is_some_and(|m| m.blocked_at(net, n)))));
-                    if options.region_repair {
-                        // A via is priced where it would rip, as a track is.
-                        grid.via_penalty.resize(grid.cell_count(), 0);
-                        for (c, p) in grid.via_penalty.iter_mut().enumerate() {
-                            *p += price(soft_map.via_blocked_at(net, c), plane_map.is_some_and(|m| m.via_blocked_at(net, c)));
+                    {
+                        let _b = board::work::enter(board::work::Bucket::MapPatch);
+                        let plane_cost = (options.rip_cost / 40).max(5);
+                        let price = |soft: bool, plane: bool| if soft { options.rip_cost } else if plane { plane_cost } else { 0 };
+                        grid.penalty.clear();
+                        let nodes = grid.blocked.len();
+                        let net = airline.net;
+                        grid.penalty.extend((0..nodes).map(|n| price(soft_map.blocked_at(net, n), plane_map.is_some_and(|m| m.blocked_at(net, n)))));
+                        if options.region_repair {
+                            // A via is priced where it would rip, as a track is.
+                            grid.via_penalty.resize(grid.cell_count(), 0);
+                            for (c, p) in grid.via_penalty.iter_mut().enumerate() {
+                                *p += price(soft_map.via_blocked_at(net, c), plane_map.is_some_and(|m| m.via_blocked_at(net, c)));
+                            }
                         }
                     }
                     let (sources, targets) = if options.region_repair {
@@ -297,7 +314,11 @@ pub fn rip_up_watch(
                     None => None,
                     Some((path, sources, targets, narrowed)) => {
                         let path_pts: Vec<(usize, Point)> = path.iter().map(|&(l, i, j)| (grid.layers[l], grid.centre(i, j))).collect();
-                        let Some(new) = pieces(&grid, &path, &sources, &targets) else { continue };
+                        let Some(new) = pieces(&grid, &path, &sources, &targets) else {
+                            stats.no_path_ns = stats.no_path_ns.saturating_add(board::work::timed_run_ns().saturating_sub(t0));
+                            ev.finish("rip_try", "no_path", Some(before));
+                            continue;
+                        };
                         Some((path_pts, new, narrowed.then_some(2 * grid.half_width), None))
                     }
                 }
@@ -306,6 +327,8 @@ pub fn rip_up_watch(
                 stats.no_path += 1;
                 tell(&options.log, "ripping up", || format!("{net_name}: no way through, even ripping"), None);
                 watch(board, RipAttempt { airline: &airline, path: Vec::new(), ripped: Vec::new(), laid: Vec::new(), open_before: before, open_after: before, outcome: "no path" });
+                stats.no_path_ns = stats.no_path_ns.saturating_add(board::work::timed_run_ns().saturating_sub(t0));
+                ev.finish("rip_try", "no_path", Some(before));
                 continue;
             };
 
@@ -343,6 +366,8 @@ pub fn rip_up_watch(
                 tell(&options.log, "ripping up", || format!("{net_name}: blocked by copper that may not be ripped"), None);
                 *board = snapshot;
                 watch(board, RipAttempt { airline: &airline, path: path_pts, ripped: ripped_items, laid: Vec::new(), open_before: before, open_after: before, outcome: "hard conflict" });
+                stats.hard_conflict_ns = stats.hard_conflict_ns.saturating_add(board::work::timed_run_ns().saturating_sub(t0));
+                ev.finish("rip_try", "hard_conflict", Some(before));
                 continue;
             }
             let ripped = ripped_items.len();
@@ -444,12 +469,16 @@ pub fn rip_up_watch(
                 cornered.clear();
                 tell(&options.log, "ripping up", || format!("{net_name}: kept, {after} connections open"), None);
                 watch(board, RipAttempt { airline: &airline, path: path_pts, ripped: ripped_items, laid: all_laid, open_before: before, open_after: after, outcome: "kept" });
+                stats.kept_ns = stats.kept_ns.saturating_add(board::work::timed_run_ns().saturating_sub(t0));
+                ev.finish("rip_try", "kept", Some(after));
             } else {
                 stats.no_better += 1;
                 tell(&options.log, "ripping up", || format!("{net_name}: no better, put back"), None);
                 watch(board, RipAttempt { airline: &airline, path: path_pts, ripped: ripped_items, laid: all_laid, open_before: before, open_after: after, outcome: "no better" });
                 *board = snapshot;
                 *soft = soft_before;
+                stats.no_better_ns = stats.no_better_ns.saturating_add(board::work::timed_run_ns().saturating_sub(t0));
+                ev.finish("rip_try", "no_better", Some(before));
             }
         }
         if stats.kept == kept_before {
@@ -593,15 +622,18 @@ fn try_corridor(
             hard.view_into(net, grid);
             all.view_into(net, full_grid);
             let full_free = |n: usize| !full_grid.blocked[n];
-            grid.penalty.clear();
-            let nodes = grid.blocked.len();
-            grid.penalty.extend((0..nodes).map(|n| {
-                price(soft.blocked_at(net, n), planes && plane.blocked_at(net, n)) + if full_free(n) { 0 } else { NARROW_CELL_PENALTY }
-            }));
-            if options.region_repair {
-                grid.via_penalty.resize(grid.cell_count(), 0);
-                for (c, p) in grid.via_penalty.iter_mut().enumerate() {
-                    *p += price(soft.via_blocked_at(net, c), planes && plane.via_blocked_at(net, c));
+            {
+                let _b = board::work::enter(board::work::Bucket::MapPatch);
+                grid.penalty.clear();
+                let nodes = grid.blocked.len();
+                grid.penalty.extend((0..nodes).map(|n| {
+                    price(soft.blocked_at(net, n), planes && plane.blocked_at(net, n)) + if full_free(n) { 0 } else { NARROW_CELL_PENALTY }
+                }));
+                if options.region_repair {
+                    grid.via_penalty.resize(grid.cell_count(), 0);
+                    for (c, p) in grid.via_penalty.iter_mut().enumerate() {
+                        *p += price(soft.via_blocked_at(net, c), planes && plane.via_blocked_at(net, c));
+                    }
                 }
             }
             let ends = |b: &mut Board, g: &RouteGrid, item: ItemId| corridor_terminals(b, full_grid, g, &full_free, item);

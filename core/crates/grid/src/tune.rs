@@ -283,6 +283,7 @@ pub fn match_lengths(board: &mut Board, pairs: &[Pair], soft: &mut Vec<ItemId>, 
 
 /// `match_lengths`, telling `watch` of every bump kept.
 pub fn match_lengths_watch(board: &mut Board, pairs: &[Pair], soft: &mut Vec<ItemId>, deadline: &Deadline, watch: &mut dyn FnMut(&Board, &TuneBump)) -> TuneStats {
+    let _b = board::work::enter(board::work::Bucket::Geometry);
     let mut stats = TuneStats::default();
     for pair in pairs {
         // The bumps go on the shorter net's way from end to end, but the skew is KiCad's.

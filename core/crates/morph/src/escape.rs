@@ -17,6 +17,7 @@ use crate::flow::{cut, junctions, layer_of};
 /// of them. Tracks are cut into pieces no longer than `piece` so they bend. Counts the pieces
 /// moved by the rule's two kinds of move, and returns the board file's spans of what moved.
 pub fn shift_copper(board: &mut Board, soft: &mut Vec<ItemId>, piece: f64, rule: &dyn Fn(Point, u32, Option<usize>) -> Option<(Point, bool)>) -> (usize, usize, Vec<Span>) {
+    let _t = board::work::enter(board::work::Bucket::Geometry);
     // A point stays put when copper there could touch a pad, on any layer: every piece meeting
     // at a point must get the same answer, whatever its own width or layers.
     let reach = board

@@ -32,6 +32,7 @@ const MOST_TURN: f64 = 0.75 * std::f64::consts::PI + 1e-6;
 /// breaks a rule, down to the track's width. `soft` is updated with the tracks and chords that
 /// replace them; the arcs laid are returned.
 pub fn round_corners(board: &mut Board, soft: &mut Vec<ItemId>, radius: Nm) -> Vec<RoundArc> {
+    let _b = board::work::enter(board::work::Bucket::Geometry);
     let soft_set: HashSet<ItemId> = soft.iter().copied().filter(|id| board.item(*id).is_some_and(|it| !it.locked)).collect();
     let mut arcs = Vec::new();
     let mut replaced: HashSet<ItemId> = HashSet::new();

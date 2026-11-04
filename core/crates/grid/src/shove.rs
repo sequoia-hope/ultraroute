@@ -143,6 +143,10 @@ pub struct ShoveTry {
     pub open_before: usize,
     pub open_after: usize,
     pub kept: bool,
+    pub cpu_ns: u64,
+    pub plough_ns: u64,
+    pub reroute_ns: u64,
+    pub repair_ns: u64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -151,6 +155,7 @@ pub struct ShoveStats {
     /// Copper from the board file that moved or was ripped in a kept try, for removing from the
     /// file; what moved is in `soft` and is written back from there.
     pub removed_spans: Vec<Span>,
+    pub setup_ns: u64,
 }
 
 /// What `watch` is shown, with the board as it stands.
@@ -205,11 +210,15 @@ pub fn shove_escape(
     let out_of_time = || options.deadline.expired();
     let region = options.plough == Plough::Region;
     let mut stats = ShoveStats::default();
+    let sev = board::work::begin_event();
+    let st0 = board::work::timed_run_ns();
     let mut cache = PassCache::of(board, options);
     if region {
         stats.removed_spans.extend(settle(board, soft, options.pours_block, &cache.plane_nets, None));
         board::probe::mark("shove/settle-start", board);
     }
+    stats.setup_ns = stats.setup_ns.saturating_add(board::work::timed_run_ns().saturating_sub(st0));
+    sev.finish("shove_setup", "setup", None);
     let mut tried: HashSet<ItemId> = HashSet::new();
     let (mut reaches, mut net_reaches) = (options.reaches.clone(), options.net_reaches.clone());
     // Ties the region plough kept since a try last freed anything, by net: past a few, nets only
@@ -219,6 +228,8 @@ pub fn shove_escape(
         if out_of_time() {
             break;
         }
+        let ev = board::work::begin_event();
+        let t0 = board::work::timed_run_ns();
         let mut open = open_now(board, options.pours_block);
         crate::jitter::shuffle(&mut open, options.seed.wrapping_add(stats.tries.len() as u64));
         // Plane nets last: `join_planes` makes most of their connections, not a plough.
@@ -229,6 +240,8 @@ pub fn shove_escape(
             let ends = if region && is_pad(a.to_item) && !is_pad(a.from_item) { [a.to_item, a.from_item] } else { [a.from_item, a.to_item] };
             ends.into_iter().find(|id| !tried.contains(id) && on_parts(board, *id, &options.parts)).map(|p| (p, a.clone()))
         }) else {
+            stats.setup_ns = stats.setup_ns.saturating_add(board::work::timed_run_ns().saturating_sub(t0));
+            ev.finish("shove_scan", "done", Some(open.len()));
             break;
         };
         tried.insert(pad);
@@ -237,10 +250,25 @@ pub fn shove_escape(
         let reach = widened.unwrap_or(options.reach);
         let options = &ShoveOptions { reach, ..options.clone() };
         let score_before = score(&open, &cache.plane_nets);
-        let mut t = ShoveTry { net: airline.net, pad, to, reach, rounds: Vec::new(), routed: false, open_before: open.len(), open_after: 0, kept: false };
+        let mut t = ShoveTry {
+            net: airline.net,
+            pad,
+            to,
+            reach,
+            rounds: Vec::new(),
+            routed: false,
+            open_before: open.len(),
+            open_after: 0,
+            kept: false,
+            cpu_ns: 0,
+            plough_ns: 0,
+            reroute_ns: 0,
+            repair_ns: 0,
+        };
         tell(&options.log, "shoving", || format!("{}: {} is trapped; ploughing a way out", board.net_name(airline.net), item_name(board, pad)), Some(Focus::Connection { net: airline.net, from: airline.from, to: airline.to }));
         watch(board, ShoveEvent::Start(&t));
         let snapshot = (board.clone(), soft.clone());
+        let plough_t0 = board::work::timed_run_ns();
         let mut spans = Vec::new();
         // Copper of the net that reaches no pad is no part of the rest of the net: a way out to
         // it would join nothing, so it goes first.
@@ -274,7 +302,9 @@ pub fn shove_escape(
             cascade(board, solver, options, soft, &mut cache, &mut t, &open, &snapshot.1, &mut spans, &out_of_time, watch);
             board::probe::mark("shove/cascade", board);
         }
+        t.plough_ns = board::work::timed_run_ns().saturating_sub(plough_t0);
         if changed {
+            let reroute_t0 = board::work::timed_run_ns();
             let again = route_open(
                 board,
                 solver,
@@ -287,8 +317,10 @@ pub fn shove_escape(
                 spans.extend(settle(board, soft, options.pours_block, &cache.plane_nets, None));
                 board::probe::mark("shove/settle", board);
             }
+            t.reroute_ns = board::work::timed_run_ns().saturating_sub(reroute_t0);
             let worse = |board: &Board| score(&open_now(board, options.pours_block), &cache.plane_nets) >= score_before;
             if t.routed && options.repair_seconds > 0.0 && worse(board) {
+                let repair_t0 = board::work::timed_run_ns();
                 // Rip-up and reroute with the freed connection held still; for the region plough,
                 // then again with it free, for two nets in one mouth that must swap lanes.
                 let held = hold(board, soft, &snapshot.1, &|n| n == t.net);
@@ -303,6 +335,7 @@ pub fn shove_escape(
                 if region {
                     spans.extend(settle(board, soft, options.pours_block, &cache.plane_nets, None));
                 }
+                t.repair_ns = board::work::timed_run_ns().saturating_sub(repair_t0);
             }
             let after = open_now(board, options.pours_block);
             let score_after = score(&after, &cache.plane_nets);
@@ -346,6 +379,20 @@ pub fn shove_escape(
                 tried.extend([airline.from_item, airline.to_item, far]);
             }
         }
+        t.cpu_ns = board::work::timed_run_ns().saturating_sub(t0);
+        let outcome = if t.kept && t.open_after < t.open_before {
+            "kept_closed"
+        } else if t.kept {
+            "kept_tie"
+        } else if !changed {
+            "walled_no_path"
+        } else if t.routed {
+            "reverted_routed"
+        } else {
+            "reverted_trapped"
+        };
+        let board_open_end = if t.kept { t.open_after } else { t.open_before };
+        ev.finish("shove_try", outcome, Some(board_open_end));
         stats.tries.push(t);
     }
     stats

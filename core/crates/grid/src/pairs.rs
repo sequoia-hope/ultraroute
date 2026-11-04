@@ -104,6 +104,8 @@ pub struct PairStats {
     /// Length of the coupled runs' tracks, pads to pads, averaged over the two nets.
     pub run_mm: f64,
     pub laid: Vec<ItemId>,
+    pub coupled_ns: u64,
+    pub failed_ns: u64,
 }
 
 /// Whether two net names are a pair's positive and negative: alike but for one P (or +) against
@@ -552,6 +554,7 @@ pub fn route_pairs(board: &mut Board, options: &PairOptions, watch: &mut dyn FnM
 
 /// `route_pairs`, telling `watch` of every run tried, laid or not.
 pub fn route_pairs_watch(board: &mut Board, options: &PairOptions, watch: &mut dyn FnMut(&Board, &PairRun)) -> PairStats {
+    let _b = board::work::enter(board::work::Bucket::Geometry);
     let mut stats = PairStats::default();
     for pair in diff_pairs(board) {
         stats.pairs += 1;
@@ -586,6 +589,7 @@ pub fn route_pairs_watch(board: &mut Board, options: &PairOptions, watch: &mut d
             if ends_joined(&conn, a, b) {
                 continue;
             }
+            let rt0 = board::work::timed_run_ns();
             stats.runs += 1;
             tell(
                 &options.log,
@@ -665,6 +669,7 @@ pub fn route_pairs_watch(board: &mut Board, options: &PairOptions, watch: &mut d
                     );
                     stats.matched += 1;
                     stats.laid.extend(laid.iter().copied());
+                    stats.coupled_ns = stats.coupled_ns.saturating_add(board::work::timed_run_ns().saturating_sub(rt0));
                     watch(board, &PairRun { pair: &pair, from: a.mid, to: b.mid, layer: None, centreline: &[], laid: &laid });
                     continue;
                 }
@@ -707,6 +712,7 @@ pub fn route_pairs_watch(board: &mut Board, options: &PairOptions, watch: &mut d
                     stats.coupled_mm += coupled_len * 1e-6;
                     stats.run_mm += run_len * 1e-6;
                     stats.laid.extend(committed.laid.iter().copied());
+                    stats.coupled_ns = stats.coupled_ns.saturating_add(board::work::timed_run_ns().saturating_sub(rt0));
                     watch(
                         board,
                         &PairRun {
@@ -736,9 +742,11 @@ pub fn route_pairs_watch(board: &mut Board, options: &PairOptions, watch: &mut d
                 stats.coupled_mm += laid.1 * 1e-6;
                 stats.run_mm += 0.5 * items_track_len(board, &laid.0) * 1e-6;
                 stats.laid.extend(laid.0.iter().copied());
+                stats.coupled_ns = stats.coupled_ns.saturating_add(board::work::timed_run_ns().saturating_sub(rt0));
                 watch(board, &PairRun { pair: &pair, from: a.mid, to: b.mid, layer: Some(layer), centreline: &laid.2, laid: &laid.0 });
                 continue;
             }
+            stats.failed_ns = stats.failed_ns.saturating_add(board::work::timed_run_ns().saturating_sub(rt0));
             watch(board, &PairRun { pair: &pair, from: a.mid, to: b.mid, layer: None, centreline: &[], laid: &[] });
         }
 
@@ -799,6 +807,7 @@ struct CommittedRun {
 /// centreline start between them.
 /// `None` if the deadline passes before the maps are made.
 fn coupled_grid(board: &Board, options: &PairOptions, pair: &Pair, profile: &Profile, a: PinPair, b: PinPair) -> Option<RouteGrid> {
+    let _b = board::work::enter(board::work::Bucket::MapBuild);
     let (pref_vp, min_vp) = via_pitches(board, pair, profile);
     let fat = Profile {
         class: format!("pair {}", board.net_name(pair.p)),

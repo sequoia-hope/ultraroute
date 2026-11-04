@@ -112,6 +112,7 @@ fn stitched(board: &Board, island: &Item, layer: usize, end: Point, reach: Nm, u
 /// Lays a locked via at each end of every laid strip that lies over copper of its net on
 /// another layer, nearest the end that lays cleanly.
 pub fn stitch_islands(board: &mut Board, log: &Option<Log>) -> IslandStats {
+    let _b = board::work::enter(board::work::Bucket::Geometry);
     let mut stats = IslandStats::default();
     // The longest strips first: a spoke's ends are the reference's via spots, which the shorter
     // stubs over them then share.

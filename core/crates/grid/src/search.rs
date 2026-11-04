@@ -253,6 +253,7 @@ impl NodeHeap {
 /// Cost from the nearest source to every cell (`UNREACHED` where none, and everywhere when the
 /// grid's deadline passes before the field is done).
 pub fn cost_field(grid: &RouteGrid, sources: &[usize], via_cost: u32) -> Vec<u32> {
+    let _t = board::work::enter(board::work::Bucket::Astar);
     let cells = grid.cell_count();
     let mut cost = vec![UNREACHED; grid.blocked.len()];
     let mut heap = NodeHeap::new();
@@ -312,6 +313,7 @@ pub fn trace_back(
     targets: &[usize],
     via_cost: u32,
 ) -> Option<GridPath> {
+    let _t = board::work::enter(board::work::Bucket::Astar);
     let cells = grid.cell_count();
     let mut at = *targets
         .iter()
@@ -639,6 +641,7 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
         };
     }
     work::add(&work::ASTAR, 1);
+    let _t = board::work::enter(board::work::Bucket::Astar);
     BUFS.with(|bufs| {
         let mut b = bufs.borrow_mut();
         let nodes = grid.blocked.len();

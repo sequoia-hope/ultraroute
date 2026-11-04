@@ -84,3 +84,56 @@ fn every_open_connection_is_a_finding() {
     let names: Vec<&str> = s["stages"].as_array().unwrap().iter().map(|st| st["name"].as_str().unwrap()).collect();
     assert_eq!(names, ["set-up", "cleaning", "result", "write"]);
 }
+
+#[test]
+fn sub_stage_cpu_and_effort_account_for_stage_time() {
+    let s = stats(&["--cell", "0.1", "--threads", "2"]);
+    for section in ["board", "summary", "moves", "progress"] {
+        let mut ns = Vec::new();
+        numbers(&s[section], &mut ns);
+        assert!(ns.iter().all(|n| n.is_finite() && *n >= 0.0), "{section}: {ns:?}");
+    }
+    let mut stage_cpu_sum = 0.0;
+    for st in s["stages"].as_array().unwrap() {
+        let name = st["name"].as_str().unwrap();
+        let cpu_s = st["cpu_seconds"].as_f64().unwrap();
+        stage_cpu_sum += cpu_s;
+        let c = &st["cpu"];
+        let buckets = ["astar", "map_build", "map_patch", "zones", "checks", "connectivity", "terminals", "geometry"];
+        let bucket_sum: f64 = buckets.iter().map(|k| c[*k].as_f64().unwrap()).sum();
+        let accounted = c["accounted"].as_f64().unwrap();
+        let other = c["other"].as_f64().unwrap();
+        assert!(bucket_sum <= cpu_s, "{name}: buckets {bucket_sum} > stage {cpu_s}");
+        assert!((accounted - bucket_sum).abs() <= 1e-12, "{name}: accounted {accounted} != {bucket_sum}");
+        assert!(accounted + other <= cpu_s, "{name}: accounted + other {} > stage {cpu_s}", accounted + other);
+        assert!((cpu_s - (accounted + other)).abs() <= 1e-9, "{name}: remainder gap on {cpu_s}");
+
+        let e = &st["effort"];
+        let eff_sum = e["useful_seconds"].as_f64().unwrap()
+            + e["kept_other_seconds"].as_f64().unwrap()
+            + e["wasted_seconds"].as_f64().unwrap();
+        let eff_acc = e["accounted_seconds"].as_f64().unwrap();
+        let eff_oth = e["other_seconds"].as_f64().unwrap();
+        assert!(eff_sum <= cpu_s, "{name}: effort {eff_sum} > stage {cpu_s}");
+        assert!((eff_acc - eff_sum).abs() <= 1e-12, "{name}: effort accounted {eff_acc} != {eff_sum}");
+        assert!(eff_acc + eff_oth <= cpu_s, "{name}: effort accounted + other {} > stage {cpu_s}", eff_acc + eff_oth);
+        assert!((cpu_s - (eff_acc + eff_oth)).abs() <= 1e-9, "{name}: effort remainder gap on {cpu_s}");
+    }
+    assert!(stage_cpu_sum > 0.0);
+    assert!((s["summary"]["cpu_seconds"].as_f64().unwrap() - stage_cpu_sum).abs() <= 1e-9);
+    let neg = s["stages"].as_array().unwrap().iter().find(|st| st["name"] == "negotiation").unwrap();
+    assert!(neg["cpu"]["astar"].as_f64().unwrap() > 0.0, "{neg}");
+    assert!(neg["cpu"]["zones"].as_f64().unwrap() > 0.0, "{neg}");
+    assert!(neg["effort"]["accounted_seconds"].as_f64().unwrap() > 0.0, "{neg}");
+    assert!(s["moves"]["negotiation"]["rounds"].as_u64().unwrap() > 0, "{}", s["moves"]);
+    assert!(!s["progress"]["open_curve"].as_array().unwrap().is_empty(), "{}", s["progress"]);
+
+    // With --no-timing, all CPU and effort counters stay zero while stages and work counts still report.
+    let off = stats(&["--cell", "0.1", "--threads", "1", "--no-timing"]);
+    assert_eq!(off["summary"]["cpu_seconds"].as_f64().unwrap(), 0.0);
+    for st in off["stages"].as_array().unwrap() {
+        assert_eq!(st["cpu_seconds"].as_f64().unwrap(), 0.0, "{st}");
+        assert_eq!(st["cpu"]["accounted"].as_f64().unwrap(), 0.0, "{st}");
+        assert_eq!(st["effort"]["accounted_seconds"].as_f64().unwrap(), 0.0, "{st}");
+    }
+}

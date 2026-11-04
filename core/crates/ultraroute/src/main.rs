@@ -39,12 +39,18 @@ fn main() {
             std::process::exit(2);
         }
     };
+    let load_t0 = if a.no_timing { 0 } else { board::work::process_cpu_ns() };
     let (board, text) = match Board::load(a.input.as_ref()) {
         Ok(b) => b,
         Err(e) => {
             eprintln!("{e}");
             std::process::exit(1);
         }
+    };
+    let load_cpu_seconds = if a.no_timing {
+        0.0
+    } else {
+        board::work::process_cpu_ns().saturating_sub(load_t0) as f64 * 1e-9
     };
     for w in board.rules.warnings.iter().chain(&board.warnings) {
         eprintln!("warning: {w}");
@@ -122,7 +128,11 @@ fn main() {
         eprintln!("memory: peak {mb} MB");
     }
     if let Some(path) = &a.stats {
-        let stats = RunStats { memory: ultraroute::stats::Memory { peak_mb: peak, ..stats.memory }, ..stats };
+        let stats = RunStats {
+            load_cpu_seconds,
+            memory: ultraroute::stats::Memory { peak_mb: peak, ..stats.memory },
+            ..stats
+        };
         let json = serde_json::to_string_pretty(&stats).expect("the stats are plain data");
         if let Err(e) = std::fs::write(path, json + "\n") {
             eprintln!("{path}: {e}");

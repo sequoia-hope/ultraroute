@@ -252,6 +252,7 @@ impl ObstacleMap {
     /// [`ObstacleMap::window`], leaving out the items `skip` names, as [`ObstacleMap::without`].
     pub fn window_without(board: &Board, profile: Profile, h: Nm, bounds: board::BBox, pours_block: bool, skip: &dyn Fn(ItemId) -> bool) -> ObstacleMap {
         crate::work::add(&crate::work::MAPS, 1);
+        let _t = board::work::enter(board::work::Bucket::MapBuild);
         let (x0, y0) = (bounds.min.x, bounds.min.y);
         let nx = ((bounds.max.x - x0) / h).max(1) as usize;
         let ny = ((bounds.max.y - y0) / h).max(1) as usize;
@@ -321,6 +322,7 @@ impl ObstacleMap {
     /// pours again.
     pub fn subwindow(&self, board: &Board, bounds: board::BBox) -> ObstacleMap {
         crate::work::add(&crate::work::MAPS, 1);
+        let _t = board::work::enter(board::work::Bucket::MapBuild);
         let h = self.h;
         let i0 = (bounds.min.x - self.x0).div_euclid(h).clamp(0, self.nx.saturating_sub(1) as Nm) as usize;
         let j0 = (bounds.min.y - self.y0).div_euclid(h).clamp(0, self.ny.saturating_sub(1) as Nm) as usize;
@@ -399,6 +401,7 @@ impl ObstacleMap {
     /// [`ObstacleMap::without`], or `None` if `deadline` passes first.
     pub fn without_by(board: &Board, profile: Profile, h: Nm, pours_block: bool, skip: &dyn Fn(ItemId) -> bool, deadline: &Deadline) -> Option<ObstacleMap> {
         crate::work::add(&crate::work::MAPS, 1);
+        let _t = board::work::enter(board::work::Bucket::MapBuild);
         let b = map_extent(board);
         let (x0, y0) = (b.min.x, b.min.y);
         let nx = ((b.max.x - x0) / h).max(1) as usize;
@@ -1179,6 +1182,7 @@ impl ObstacleMap {
 
     /// Records what `id` claims.
     pub fn stamp(&mut self, board: &Board, id: ItemId) {
+        let _t = board::work::enter(board::work::Bucket::MapPatch);
         let gkey = self.grid_stamp_key(board);
         self.stamp_with_key(board, id, gkey.as_ref());
     }
@@ -1386,6 +1390,7 @@ impl ObstacleMap {
     /// The grid a net sees: a cell is blocked unless nothing claims it or only this net does.
     /// `grid` made over as this map's view for `net`, keeping its buffers.
     pub fn view_into(&self, net: u32, grid: &mut RouteGrid) {
+        let _t = board::work::enter(board::work::Bucket::MapPatch);
         let net_i = net as i32;
         self.header_into(net, grid);
         grid.blocked.resize(self.owner.len(), false);
@@ -1406,6 +1411,7 @@ impl ObstacleMap {
     }
 
     pub fn view(&self, net: u32) -> RouteGrid {
+        let _t = board::work::enter(board::work::Bucket::MapPatch);
         let net_i = net as i32;
         let mut grid = RouteGrid {
             net,

@@ -164,6 +164,11 @@ pub struct Stats {
     pub corridor: usize,
     /// Each narrowed stretch of those, by the connection's two ends, with its width and length.
     pub corridors: Vec<(ItemId, ItemId, Nm, Nm)>,
+    pub setup_ns: u64,
+    pub routed_ns: u64,
+    pub no_terminal_ns: u64,
+    pub no_path_ns: u64,
+    pub refused_ns: u64,
 }
 
 /// How a path reaches a terminal's copper when its cell's centre is not on it: from `from` on the
@@ -213,9 +218,12 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
     // first: an airline into a pin walled in a pocket hides the way between the pins either side.
     let mut respan = false;
     loop {
+        let sep = board::work::begin_event();
+        let st0 = board::work::timed_run_ns();
         // Unless pours are kept as planes, they will be refilled around what is routed, and may
         // no longer join what they join now; so every connection is made in tracks.
         let conn = if options.pours_block { connectivity(board) } else { connectivity_without_pours(board) };
+        let mut est_open = conn.airlines.len();
         let mut open = conn.airlines.clone();
         if let Some(only) = &options.nets {
             open.retain(|a| only.contains(&a.net));
@@ -232,18 +240,24 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
             }
         }
         open.retain(|a| !given_up.contains(&(a.from_item, a.to_item)));
+        stats.setup_ns = stats.setup_ns.saturating_add(board::work::timed_run_ns().saturating_sub(st0));
         if open.is_empty() {
+            sep.finish("route_setup", "empty", options.nets.is_none().then_some(est_open));
             if respan || given_up.is_empty() {
                 break;
             }
             respan = true;
             continue;
         }
+        sep.finish("route_setup", "setup", options.nets.is_none().then_some(est_open));
         let routed_before = stats.routed;
         for airline in open {
             if out_of_time() {
                 return stats;
             }
+            let ev = board::work::begin_event();
+            let t0 = board::work::timed_run_ns();
+            let mut map_build_ns = 0u64;
             let net_name = board.net_name(airline.net).to_string();
             tell(
                 &options.log,
@@ -253,7 +267,13 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
             );
             let profile = Profile::for_net(board, airline.net);
             if !maps.contains_key(&profile.class) {
-                let Some(map) = ObstacleMap::new_by(board, profile.clone(), options.cell, options.pours_block, &options.deadline) else { return stats };
+                let mt0 = board::work::timed_run_ns();
+                let Some(map) = ObstacleMap::new_by(board, profile.clone(), options.cell, options.pours_block, &options.deadline) else {
+                    stats.setup_ns = stats.setup_ns.saturating_add(board::work::timed_run_ns().saturating_sub(t0));
+                    ev.finish("route_setup", "cut", None);
+                    return stats;
+                };
+                map_build_ns = map_build_ns.saturating_add(board::work::timed_run_ns().saturating_sub(mt0));
                 maps.insert(profile.class.clone(), map);
             }
             let mut tried = attempt(board, solver, options, &maps[&profile.class], &mut grid, directional, &airline);
@@ -301,7 +321,12 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
                     (narrow.half_width, narrow.narrow_half_width) = (hw, profile.narrow_half_width.min(hw));
                     let key = format!("{}\u{0}c{hw}", profile.class);
                     if !maps.contains_key(&key) {
-                        let Some(map) = ObstacleMap::new_by(board, narrow.clone(), options.cell, options.pours_block, &options.deadline) else { break };
+                        let mt0 = board::work::timed_run_ns();
+                        let Some(map) = ObstacleMap::new_by(board, narrow.clone(), options.cell, options.pours_block, &options.deadline) else {
+                            map_build_ns = map_build_ns.saturating_add(board::work::timed_run_ns().saturating_sub(mt0));
+                            break;
+                        };
+                        map_build_ns = map_build_ns.saturating_add(board::work::timed_run_ns().saturating_sub(mt0));
                         maps.insert(key.clone(), map);
                     }
                     let (full_map, narrow_map) = (&maps[&profile.class], &maps[&key]);
@@ -329,6 +354,7 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
                     }
                 }
             }
+            let mut cause_tag: &'static str = "closed";
             let laid = match tried {
                 Ok(items) => Some(items),
                 Err(missed) => {
@@ -339,9 +365,18 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
                         Missed::Refused => "refused",
                     };
                     match missed {
-                        Missed::Start | Missed::End => stats.no_terminal += 1,
-                        Missed::Path => stats.no_path += 1,
-                        _ => stats.refused += 1,
+                        Missed::Start | Missed::End => {
+                            stats.no_terminal += 1;
+                            cause_tag = "no_terminal";
+                        }
+                        Missed::Path => {
+                            stats.no_path += 1;
+                            cause_tag = "no_path";
+                        }
+                        _ => {
+                            stats.refused += 1;
+                            cause_tag = "refused";
+                        }
                     }
                     if why != "refused" {
                         stats.failures.push((airline.from_item, airline.to_item, why));
@@ -359,6 +394,7 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
             match laid {
                 Some(items) => {
                     stats.routed += 1;
+                    est_open = est_open.saturating_sub(1);
                     stats.vias += items.iter().filter(|id| board.item(**id).is_some_and(|it| it.kind == Kind::Via)).count();
                     for map in maps.values_mut() {
                         for &id in &items {
@@ -367,10 +403,23 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
                     }
                     stats.laid.extend(items);
                     watch(board);
+                    let total_dt = board::work::timed_run_ns().saturating_sub(t0);
+                    stats.setup_ns = stats.setup_ns.saturating_add(map_build_ns.min(total_dt));
+                    stats.routed_ns = stats.routed_ns.saturating_add(total_dt.saturating_sub(map_build_ns));
+                    ev.finish("route_conn", "closed", options.nets.is_none().then_some(est_open));
                 }
                 None => {
                     stats.failed += 1;
                     given_up.insert((airline.from_item, airline.to_item));
+                    let total_dt = board::work::timed_run_ns().saturating_sub(t0);
+                    stats.setup_ns = stats.setup_ns.saturating_add(map_build_ns.min(total_dt));
+                    let conn_dt = total_dt.saturating_sub(map_build_ns);
+                    match cause_tag {
+                        "no_terminal" => stats.no_terminal_ns = stats.no_terminal_ns.saturating_add(conn_dt),
+                        "no_path" => stats.no_path_ns = stats.no_path_ns.saturating_add(conn_dt),
+                        _ => stats.refused_ns = stats.refused_ns.saturating_add(conn_dt),
+                    }
+                    ev.finish("route_conn", cause_tag, None);
                 }
             }
         }
@@ -482,9 +531,12 @@ fn attempt_corridor(
     narrow_map.view_into(airline.net, grid);
     grid.directional = directional;
     let net = airline.net;
-    let nodes = grid.blocked.len();
-    grid.penalty.clear();
-    grid.penalty.extend((0..nodes).map(|n| if full_grid.blocked[n] { NARROW_CELL_PENALTY } else { 0 }));
+    {
+        let _b = board::work::enter(board::work::Bucket::MapPatch);
+        let nodes = grid.blocked.len();
+        grid.penalty.clear();
+        grid.penalty.extend((0..nodes).map(|n| if full_grid.blocked[n] { NARROW_CELL_PENALTY } else { 0 }));
+    }
     let full_free = |n: usize| !full_grid.blocked[n];
     let sources = corridor_terminals(board, full_grid, grid, &full_free, airline.from_item);
     if sources.is_empty() {
@@ -509,6 +561,7 @@ fn attempt_corridor(
 /// step between two cells free at full width may still clip a corner beside them, and that step
 /// alone goes narrow rather than the whole corridor refused.
 pub(crate) fn narrow_clipped(board: &mut Board, pieces: &mut [Item], full_hw: Nm, narrow_hw: Nm, fits: &dyn Fn(&Board, ItemId) -> bool) {
+    let _b = board::work::enter(board::work::Bucket::Geometry);
     if narrow_hw >= full_hw {
         return;
     }
@@ -708,6 +761,7 @@ pub(crate) fn ends_with_pads(
     pads: &[ItemId],
     ends: &dyn Fn(&mut Board, &RouteGrid, ItemId) -> Vec<Terminal>,
 ) -> Vec<Terminal> {
+    let _b = board::work::enter(board::work::Bucket::Terminals);
     let centre = |board: &Board, id: ItemId| {
         board.bbox(id).map(|b| Point::new((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2))
     };
@@ -786,6 +840,7 @@ fn terminals_within_rules(board: &mut Board, grid: &RouteGrid, id: ItemId) -> Ve
 /// hole: a through-hole pin's neighbours are far enough apart for straight legs. At full width,
 /// then necked as [`Profile::neck_into`] allows.
 fn bent_terminals(board: &mut Board, grid: &RouteGrid, id: ItemId) -> Vec<Terminal> {
+    let _b = board::work::enter(board::work::Bucket::Terminals);
     if !board.item(id).is_some_and(|it| matches!(it.kind, Kind::Pad { .. }) && it.hole.is_none()) {
         return Vec::new();
     }
@@ -806,6 +861,7 @@ fn bent_terminals(board: &mut Board, grid: &RouteGrid, id: ItemId) -> Vec<Termin
 /// to the narrowest track the net may have may reach further, as a designer would leave a
 /// fine-pitch pad.
 pub(crate) fn terminals(board: &mut Board, grid: &RouteGrid, id: ItemId) -> Vec<Terminal> {
+    let _b = board::work::enter(board::work::Bucket::Terminals);
     let found = terminals_within_rules(board, grid, id);
     if !found.is_empty() {
         return found;
@@ -830,6 +886,7 @@ pub(crate) fn terminals(board: &mut Board, grid: &RouteGrid, id: ItemId) -> Vec<
 }
 
 pub(crate) fn item_terminals(board: &mut Board, grid: &RouteGrid, id: ItemId, leg_half_width: Nm, leg_cells: Nm, tries: usize) -> Vec<Terminal> {
+    let _b = board::work::enter(board::work::Bucket::Terminals);
     let Some(item) = board.item(id).cloned() else { return Vec::new() };
     let mut out: Vec<Terminal> = Vec::new();
     let bb = item.shape.bbox();
@@ -984,6 +1041,7 @@ pub(crate) fn lay(board: &mut Board, grid: &RouteGrid, path: &GridPath, sources:
 }
 
 fn lay_pieces(board: &mut Board, grid: &RouteGrid, pieces: Vec<Item>) -> Option<Vec<ItemId>> {
+    let _b = board::work::enter(board::work::Bucket::Geometry);
     let mut laid = Vec::new();
     let holes = board.layers.len();
     for piece in pieces {
@@ -1021,6 +1079,7 @@ fn lay_pieces(board: &mut Board, grid: &RouteGrid, pieces: Vec<Item>) -> Option<
 /// The tracks and vias a path becomes: straight runs merged, a via at each layer change, legs to
 /// the terminals' anchors where needed.
 pub(crate) fn pieces(grid: &RouteGrid, path: &GridPath, sources: &[Terminal], targets: &[Terminal]) -> Option<Vec<Item>> {
+    let _b = board::work::enter(board::work::Bucket::Geometry);
     let index = |&(l, i, j): &(usize, usize, usize)| grid.index(l, i, j);
     let leg = |terminals: &[Terminal], cell: usize| terminals.iter().find(|t| t.0 == cell && t.1.is_some()).and_then(|t| t.1);
     let first = path.first()?;
@@ -1113,6 +1172,7 @@ pub(crate) fn pieces_corridor(
     sources: &[Terminal],
     targets: &[Terminal],
 ) -> Option<Vec<Item>> {
+    let _b = board::work::enter(board::work::Bucket::Geometry);
     let index = |&(l, i, j): &(usize, usize, usize)| grid.index(l, i, j);
     let leg = |terminals: &[Terminal], cell: usize| terminals.iter().find(|t| t.0 == cell && t.1.is_some()).and_then(|t| t.1);
     let first = path.first()?;

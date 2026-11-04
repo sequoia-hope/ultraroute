@@ -118,6 +118,7 @@ fn part_of(kind: &Kind) -> Option<usize> {
 /// with the displacement each needs, and whatever else the route had to pass. Parts owning
 /// either end are never blamed: moving them moves the end too. The board is left as it was.
 pub fn blame(board: &mut Board, from: ItemId, to: ItemId, options: &BlameOptions, movable: &dyn Fn(usize) -> bool) -> BlameReport {
+    let _b = board::work::enter(board::work::Bucket::MapPatch);
     let mut report = BlameReport::default();
     let Some(net) = board.item(from).map(|it| it.net).filter(|n| *n != 0) else {
         report.walled_off = true;
