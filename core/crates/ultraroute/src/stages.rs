@@ -34,6 +34,10 @@ pub struct Ledger {
     pub(crate) lengths: Vec<regions::MaxLength>,
     pub(crate) first: HashSet<u32>,
     pub(crate) costs: ViaCosts,
+    /// What `escape_parts` found.
+    pub(crate) escape_parts: Option<Vec<usize>>,
+    /// The connections the running stage gave up on, filed when it is done.
+    pub(crate) given_up: Vec<Failure>,
     /// What routing one connection at a time after negotiation did.
     pub(crate) routed: grid::Stats,
     /// Tightening's figures, told once the via pass has pulled tight again.
@@ -81,14 +85,175 @@ impl StageCtx<'_> {
         open_airlines(self.args, self.board)
     }
 
-    /// Each connection a route left given up, for the stats.
+    /// Each connection a route left given up, for the stats: [`reconcile_failures`] files them
+    /// when the stage is done.
     fn failed(&mut self, stage: &'static str, failures: &[(ItemId, ItemId, &'static str)]) {
         for &(from, to, reason) in failures {
             let net = self.board.item(from).map_or("", |it| self.board.net_name(it.net)).to_string();
             let (from, to) = (grid::item_name(self.board, from), grid::item_name(self.board, to));
-            self.stats.failures.push(Failure { stage, net, from, to, reason });
+            self.ledger.given_up.push(Failure { stage, net, from, to, reason });
         }
     }
+}
+
+/// Keeps `failures` to the connections `open` after `stage`: a connection it closed leaves; one
+/// it gave up on (`given_up`) takes that reason and its ends, under the stage that first gave up
+/// on it; one it opened, not open `before` it, enters as `"opened"`; and one open all along that
+/// no stage has given up on enters as `unseen` says (`Stage::leaves_open`), or waits.
+pub(crate) fn reconcile_failures(
+    board: &Board,
+    failures: &mut Vec<Failure>,
+    given_up: Vec<Failure>,
+    stage: &'static str,
+    unseen: Option<&'static str>,
+    before: &HashSet<(ItemId, ItemId)>,
+    open: &[board::Airline],
+) {
+    if open.is_empty() {
+        failures.clear();
+        return;
+    }
+    let prev = std::mem::take(failures);
+    let mut used_prev = vec![false; prev.len()];
+    let mut used_fresh = vec![false; given_up.len()];
+    for air in open {
+        let net = board.net_name(air.net).to_string();
+        let (cur_from, cur_to) = (grid::item_name(board, air.from_item), grid::item_name(board, air.to_item));
+        let old = best_failure_match(&net, &cur_from, &cur_to, &prev, &used_prev, |f| (&f.net, &f.from, &f.to));
+        if let Some((i, _)) = old {
+            used_prev[i] = true;
+        }
+        // Prefer the last attempt on this airline when `route_open` tried a net more than once.
+        let now = best_failure_match_rev(&net, &cur_from, &cur_to, &given_up, &used_fresh, |f| (&f.net, &f.from, &f.to));
+        if let Some((j, _)) = now {
+            used_fresh[j] = true;
+        }
+        let was_open = before.contains(&pair_key(air));
+        match (old, now) {
+            (Some((i, _)), Some((j, _))) => {
+                let f = &given_up[j];
+                // Left open is no reason: the stage that gives one takes it over.
+                let stage = if prev[i].reason == LEFT_OPEN { f.stage } else { prev[i].stage };
+                failures.push(Failure { stage, net, from: f.from.clone(), to: f.to.clone(), reason: f.reason });
+            }
+            (Some((i, flipped)), None) => {
+                let reason = if flipped { flip_end_reason(prev[i].reason) } else { prev[i].reason };
+                failures.push(Failure { stage: prev[i].stage, net, from: cur_from, to: cur_to, reason });
+            }
+            (None, Some((j, _))) => {
+                let f = &given_up[j];
+                failures.push(Failure { stage: f.stage, net, from: f.from.clone(), to: f.to.clone(), reason: f.reason });
+            }
+            (None, None) if !was_open => failures.push(Failure { stage, net, from: cur_from, to: cur_to, reason: "opened" }),
+            (None, None) => {
+                if let Some(reason) = unseen {
+                    failures.push(Failure { stage, net, from: cur_from, to: cur_to, reason });
+                }
+            }
+        }
+    }
+}
+
+/// What a stage that tries every open connection files one it leaves open without saying why.
+pub(crate) const LEFT_OPEN: &str = "left open";
+
+/// An airline's two ends, either way round.
+pub(crate) fn pair_key(a: &board::Airline) -> (ItemId, ItemId) {
+    (a.from_item.min(a.to_item), a.from_item.max(a.to_item))
+}
+
+fn is_generic_end(name: &str) -> bool {
+    matches!(name, "a track" | "a via" | "copper" | "gone")
+}
+
+fn flip_end_reason(reason: &'static str) -> &'static str {
+    match reason {
+        "no terminal at the start" => "no terminal at the end",
+        "no terminal at the end" => "no terminal at the start",
+        other => other,
+    }
+}
+
+fn pair_match_score(a0: &str, a1: &str, b0: &str, b1: &str) -> Option<(i32, bool)> {
+    let end_score = |x: &str, y: &str| {
+        if x != y {
+            0
+        } else if is_generic_end(x) {
+            3
+        } else {
+            20
+        }
+    };
+    let direct = end_score(a0, b0) + end_score(a1, b1);
+    let flipped = end_score(a0, b1) + end_score(a1, b0);
+    let has_generic = is_generic_end(a0) || is_generic_end(a1) || is_generic_end(b0) || is_generic_end(b1);
+    if direct == 0 && flipped == 0 && !has_generic {
+        return None;
+    }
+    if flipped > direct {
+        Some((flipped + 1, true))
+    } else {
+        Some((direct + 1, false))
+    }
+}
+
+fn best_failure_match<'a, T>(
+    net: &str,
+    from: &str,
+    to: &str,
+    items: &'a [T],
+    used: &[bool],
+    fields: impl Fn(&'a T) -> (&'a str, &'a str, &'a str),
+) -> Option<(usize, bool)> {
+    let mut best: Option<(i32, usize, bool)> = None;
+    for (i, item) in items.iter().enumerate() {
+        if used[i] {
+            continue;
+        }
+        let (f_net, f_from, f_to) = fields(item);
+        if f_net != net {
+            continue;
+        }
+        let Some((score, flipped)) = pair_match_score(from, to, f_from, f_to) else { continue };
+        if best.is_none_or(|(b, _, _)| score > b) {
+            best = Some((score, i, flipped));
+        }
+    }
+    best.map(|(_, i, flipped)| (i, flipped))
+}
+
+fn best_failure_match_rev<'a, T>(
+    net: &str,
+    from: &str,
+    to: &str,
+    items: &'a [T],
+    used: &[bool],
+    fields: impl Fn(&'a T) -> (&'a str, &'a str, &'a str),
+) -> Option<(usize, bool)> {
+    let mut best: Option<(i32, usize, bool)> = None;
+    for (i, item) in items.iter().enumerate().rev() {
+        if used[i] {
+            continue;
+        }
+        let (f_net, f_from, f_to) = fields(item);
+        if f_net != net {
+            continue;
+        }
+        let Some((score, flipped)) = pair_match_score(from, to, f_from, f_to) else { continue };
+        if best.is_none_or(|(b, _, _)| score > b) {
+            best = Some((score, i, flipped));
+        }
+    }
+    best.map(|(_, i, flipped)| (i, flipped))
+}
+
+/// The parts whose pads are escaped and ploughed at, found once a run: no stage before the
+/// nudge moves a part.
+fn escape_parts(a: &Args, board: &Board, ledger: &mut Ledger) -> Vec<usize> {
+    ledger
+        .escape_parts
+        .get_or_insert_with(|| if a.escape_room { morph::escape_room(board) } else { morph::fine_pitch(board, 500_000) })
+        .clone()
 }
 
 /// One stage of a run.
@@ -100,6 +265,11 @@ pub trait Stage: Sync {
     }
     /// Runs it, returning its own figures for the stats.
     fn run(&self, ctx: &mut StageCtx) -> Value;
+    /// For a stage that tries every open connection, or ends the run, what a connection open
+    /// after it that no stage has given up on is filed as (`reconcile_failures`).
+    fn leaves_open(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 /// Before routing: the router's own copper adopted, the planner's regions and the via and pour
@@ -173,7 +343,7 @@ impl Stage for Prefanout {
 
     fn run(&self, ctx: &mut StageCtx) -> Value {
         let a = ctx.args;
-        let parts = morph::fine_pitch(ctx.board, 500_000);
+        let parts = escape_parts(a, ctx.board, ctx.ledger);
         let defaults = grid::PrefanoutOptions::default();
         // Open differential pairs are held back from pre-fanout so `route_pairs` can fan out and
         // couple their pads together; any pair pad still open afterwards is escaped after.
@@ -195,6 +365,7 @@ impl Stage for Prefanout {
             mode: a.prefanout_mode.unwrap_or(defaults.mode),
             order: a.prefanout_order.unwrap_or(defaults.order),
             inward: true,
+            guard_mouths: a.escape_room,
             parts,
             skip_nets,
             pours_block: a.pours_block,
@@ -332,8 +503,8 @@ impl Stage for PairEscapes {
 
     fn run(&self, ctx: &mut StageCtx) -> Value {
         let a = ctx.args;
+        let fine: HashSet<usize> = escape_parts(a, ctx.board, ctx.ledger).into_iter().collect();
         let board = &*ctx.board;
-        let fine: HashSet<usize> = morph::fine_pitch(board, 500_000).into_iter().collect();
         let pair_nets: HashSet<u32> = grid::diff_pairs(board).iter().flat_map(|pr| [pr.p, pr.n]).collect();
         let open = ctx.open();
         let open_fine_pair_nets: HashSet<u32> = open
@@ -356,6 +527,7 @@ impl Stage for PairEscapes {
             mode: a.prefanout_mode.unwrap_or(defaults.mode),
             order: a.prefanout_order.unwrap_or(defaults.order),
             inward: false,
+            guard_mouths: a.escape_room,
             parts: fine.into_iter().collect(),
             skip_nets: skip_others,
             pours_block: a.pours_block,
@@ -445,6 +617,10 @@ impl Stage for Negotiation {
         "negotiation"
     }
 
+    fn leaves_open(&self) -> Option<&'static str> {
+        Some(LEFT_OPEN)
+    }
+
     fn enabled(&self, a: &Args, _: &Board, _: &Ledger) -> bool {
         a.negotiate
     }
@@ -498,6 +674,10 @@ pub struct Finishing;
 impl Stage for Finishing {
     fn name(&self) -> &'static str {
         "finishing"
+    }
+
+    fn leaves_open(&self) -> Option<&'static str> {
+        Some(LEFT_OPEN)
     }
 
     fn run(&self, ctx: &mut StageCtx) -> Value {
@@ -598,6 +778,10 @@ impl Stage for RipUp {
         "rip-up"
     }
 
+    fn leaves_open(&self) -> Option<&'static str> {
+        Some(LEFT_OPEN)
+    }
+
     fn enabled(&self, a: &Args, _: &Board, _: &Ledger) -> bool {
         a.rip_up
     }
@@ -609,6 +793,7 @@ impl Stage for RipUp {
             via_cost: ctx.ledger.costs.rip,
             deadline: ctx.deadline(),
             pours_block: a.pours_block,
+            rip_boxed: a.rip_boxed,
             log: ctx.log.clone(),
             ..Default::default()
         };
@@ -660,6 +845,10 @@ impl Stage for Shove {
         "shove"
     }
 
+    fn leaves_open(&self) -> Option<&'static str> {
+        Some(LEFT_OPEN)
+    }
+
     fn enabled(&self, a: &Args, _: &Board, _: &Ledger) -> bool {
         a.shove
     }
@@ -668,15 +857,18 @@ impl Stage for Shove {
         let a = ctx.args;
         let deadline = ctx.deadline();
         let started = ctx.clock.started;
+        // The region plough frees any connection; the rip plough only those at these parts.
+        let parts: Option<HashSet<usize>> =
+            (a.shove_plough.unwrap_or(grid::ShoveOptions::default().plough) != grid::Plough::Region).then(|| escape_parts(a, ctx.board, ctx.ledger).into_iter().collect());
         let (mut passes, mut unlocked) = (
-            shove_pass(a, ctx.board, ctx.solver, &mut ctx.ledger.laid, started, &deadline, ctx.log, ctx.watch, &mut ctx.ledger.removed, &mut ctx.stats.moves, &mut ctx.effort_ns),
+            shove_pass(a, ctx.board, ctx.solver, &mut ctx.ledger.laid, started, &deadline, ctx.log, ctx.watch, &mut ctx.ledger.removed, &parts, &mut ctx.stats.moves, &mut ctx.effort_ns),
             0,
         );
         if a.diff_pairs && !ctx.ledger.pairs.is_empty() {
             let open = ctx.open();
             unlocked = unlock_pairs_near_open(ctx.board, &ctx.ledger.pairs, &open);
             if unlocked > 0 {
-                passes += shove_pass(a, ctx.board, ctx.solver, &mut ctx.ledger.laid, started, &deadline, ctx.log, ctx.watch, &mut ctx.ledger.removed, &mut ctx.stats.moves, &mut ctx.effort_ns);
+                passes += shove_pass(a, ctx.board, ctx.solver, &mut ctx.ledger.laid, started, &deadline, ctx.log, ctx.watch, &mut ctx.ledger.removed, &parts, &mut ctx.stats.moves, &mut ctx.effort_ns);
                 relock_pairs(ctx.board, &ctx.ledger.pairs);
             }
         }
@@ -849,6 +1041,10 @@ impl Stage for Refinish {
         "refinishing"
     }
 
+    fn leaves_open(&self) -> Option<&'static str> {
+        Some(LEFT_OPEN)
+    }
+
     fn run(&self, ctx: &mut StageCtx) -> Value {
         let before = ctx.open().len();
         if before == 0 {
@@ -870,6 +1066,7 @@ impl Stage for Refinish {
         let (u, w) = ctx.stats.moves.record_single(&s);
         ctx.effort_ns = (u, 0, w);
         ctx.ledger.laid.extend(s.laid.iter().copied());
+        ctx.failed("refinishing", &s.failures);
         narrowed(ctx, &s.narrowed);
         corridors(ctx, &s.corridors);
         if s.routed > 0 {
@@ -983,6 +1180,10 @@ pub struct Outcome;
 impl Stage for Outcome {
     fn name(&self) -> &'static str {
         "result"
+    }
+
+    fn leaves_open(&self) -> Option<&'static str> {
+        Some("never tried")
     }
 
     fn run(&self, ctx: &mut StageCtx) -> Value {
@@ -1223,6 +1424,7 @@ fn shove_pass(
     log: &Option<grid::Log>,
     watch: &mut dyn Watch,
     removed: &mut Vec<Span>,
+    parts: &Option<HashSet<usize>>,
     moves: &mut crate::stats::MoveStats,
     effort_ns: &mut (u64, u64, u64),
 ) -> usize {
@@ -1253,20 +1455,19 @@ fn shove_pass(
             break;
         }
         passes += 1;
-        let fine: HashSet<usize> = morph::fine_pitch(board, 500_000).into_iter().collect();
         let s = grid::shove_escape(
             board,
             solver,
             &grid::ShoveOptions {
                 cell: a.cell.unwrap_or(defaults.cell),
-                // Ripping and renegotiating round a path frees any connection, not only an escape.
-                parts: (!region).then_some(fine),
+                parts: parts.clone(),
                 plough,
                 reach,
                 reaches: reaches.clone(),
                 net_reaches: net_reaches.clone(),
                 repair_seconds: a.shove_repair.unwrap_or(defaults.repair_seconds),
                 accept_ties: a.shove_ties,
+                guard_ties: a.guard_ties,
                 negotiate_repasses: a.negotiate_repasses.map_or(defaults.negotiate_repasses, |r| r.min(1)),
                 cascade: a.shove_cascade.unwrap_or(defaults.cascade),
                 seed: a.seed.wrapping_mul(1000).wrapping_add(pass as u64 + 1),

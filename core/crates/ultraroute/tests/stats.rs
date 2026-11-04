@@ -56,6 +56,8 @@ fn every_stage_the_recipe_runs_is_in_the_stats() {
     assert_eq!(s["settings"]["threads"], 4);
     let opens = s["findings"].as_array().unwrap().iter().filter(|f| f["kind"] == "open").count();
     assert_eq!(opens as u64, m["opens"].as_u64().unwrap());
+    // A failure for every connection left open, and none for one closed.
+    assert_eq!(s["failures"].as_array().unwrap().len() as u64, m["opens"].as_u64().unwrap(), "{}", s["failures"]);
 }
 
 #[test]
@@ -68,6 +70,10 @@ fn every_open_connection_is_a_finding() {
     let findings = s["findings"].as_array().unwrap();
     let opens: Vec<&Value> = findings.iter().filter(|f| f["kind"] == "open").collect();
     assert_eq!(opens.len(), 376);
+    // No stage tried them: each is filed as never tried, when the run ended.
+    let failures = s["failures"].as_array().unwrap();
+    assert_eq!(failures.len(), 376);
+    assert!(failures.iter().all(|f| f["stage"] == "result" && f["reason"] == "never tried"), "{:?}", failures[0]);
     for f in &opens {
         assert_eq!(f["severity"], "error");
         let net = f["nets"][0].as_str().unwrap();
@@ -136,4 +142,66 @@ fn sub_stage_cpu_and_effort_account_for_stage_time() {
         assert_eq!(st["cpu"]["accounted"].as_f64().unwrap(), 0.0, "{st}");
         assert_eq!(st["effort"]["accounted_seconds"].as_f64().unwrap(), 0.0, "{st}");
     }
+}
+
+fn run_text(text: &str, flags: &[&str]) -> Value {
+    let mut args = vec!["route".to_string(), "inline.kicad_pcb".to_string(), "-o".to_string(), "unused.kicad_pcb".to_string()];
+    args.extend(flags.iter().map(|s| (*s).to_string()));
+    let a = ultraroute::parse(&args).unwrap();
+    let (pcb, copper) = kicad_pcb::parse_board(text).unwrap();
+    let board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+    let routed = ultraroute::route(&a, board, text, None, Arc::new(AtomicBool::new(false)), None, None);
+    serde_json::to_value(&routed.stats).unwrap()
+}
+
+#[test]
+fn shove_updates_report_failures_when_closing_or_opening_connections() {
+    // One-lane corridor: B starts adopted with a narrow escape through two fixed jaws, so finishing
+    // gives up on A; with --no-guard-ties, shove's tie swap routes A and knocks B open inside the
+    // jaws. A must leave `failures` and B must enter it.
+    let swap_board = "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal))
+        (net 0 \"\") (net 1 \"A\") (net 2 \"B\") (net 3 \"W1\") (net 4 \"W2\") (net 5 \"W3\")
+        (gr_rect (start 0 0) (end 10 4.2) (layer \"Edge.Cuts\") (width 0.1))
+        (footprint \"Part\" (layer \"F.Cu\") (at 0 0)
+            (property \"Reference\" \"U1\" (at 0 0) (layer \"F.SilkS\"))
+            (pad \"1\" smd circle (at 1.5 2.0) (size 0.4 0.4) (layers \"F.Cu\") (net 1 \"A\"))
+            (pad \"2\" smd circle (at 8.5 2.0) (size 0.4 0.4) (layers \"F.Cu\") (net 1 \"A\"))
+            (pad \"3\" smd circle (at 5.0 1.0) (size 0.24 0.24) (layers \"F.Cu\") (net 2 \"B\"))
+            (pad \"4\" smd circle (at 8.5 3.1) (size 0.4 0.4) (layers \"F.Cu\") (net 2 \"B\"))
+            (pad \"w1\" smd rect (at 4.5 1.1) (size 0.4 1.0) (layers \"F.Cu\") (net 3 \"W1\"))
+            (pad \"w2\" smd rect (at 5.5 1.1) (size 0.4 1.0) (layers \"F.Cu\") (net 4 \"W2\"))
+            (pad \"w3\" smd rect (at 5.0 3.0) (size 0.4 1.2) (layers \"F.Cu\") (net 5 \"W3\")))
+        (segment (start 5.0 1.0) (end 5.0 2.0) (width 0.12) (layer \"F.Cu\") (net 2) (uuid \"b1\"))
+        (segment (start 5.0 2.0) (end 8.5 2.0) (width 0.2) (layer \"F.Cu\") (net 2) (uuid \"b2\"))
+        (segment (start 8.5 2.0) (end 8.5 3.1) (width 0.2) (layer \"F.Cu\") (net 2) (uuid \"b3\")))";
+    let swapped = run_text(
+        swap_board,
+        &["--adopt", "--shove-plough", "region", "--shove-reach", "0.8", "--shove-repair", "0", "--shove-ties", "--no-guard-ties", "--shove-passes", "1"],
+    );
+    assert_eq!(swapped["summary"]["opens"], 1, "{swapped}");
+    let failures = swapped["failures"].as_array().unwrap();
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert_eq!(failures[0]["net"], "B", "{failures:?}");
+    assert_eq!(failures[0]["stage"], "shove", "{failures:?}");
+
+    // B's adopted ring walls A1 in on its one layer, so finishing gives up on A; shove rips a
+    // side of the ring (B stays joined round the other) and closes A. `failures` must end empty.
+    let rescue_board = "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal))
+        (net 0 \"\") (net 1 \"A\") (net 2 \"B\")
+        (gr_rect (start 0 0) (end 20 20) (layer \"Edge.Cuts\") (width 0.1))
+        (footprint \"Part\" (layer \"F.Cu\") (at 0 0)
+            (property \"Reference\" \"U1\" (at 0 0) (layer \"F.SilkS\"))
+            (pad \"1\" smd circle (at 5 10) (size 0.6 0.6) (layers \"F.Cu\") (net 1 \"A\"))
+            (pad \"2\" smd circle (at 15 10) (size 0.6 0.6) (layers \"F.Cu\") (net 1 \"A\"))
+            (pad \"3\" smd circle (at 2 2) (size 0.6 0.6) (layers \"F.Cu\") (net 2 \"B\"))
+            (pad \"4\" smd circle (at 2 18) (size 0.6 0.6) (layers \"F.Cu\") (net 2 \"B\")))
+        (segment (start 2 2) (end 8 2) (width 0.2) (layer \"F.Cu\") (net 2) (uuid \"s1\"))
+        (segment (start 8 2) (end 8 18) (width 0.2) (layer \"F.Cu\") (net 2) (uuid \"s2\"))
+        (segment (start 8 18) (end 2 18) (width 0.2) (layer \"F.Cu\") (net 2) (uuid \"s3\"))
+        (segment (start 2 18) (end 2 2) (width 0.2) (layer \"F.Cu\") (net 2) (uuid \"s4\")))";
+    let rescued = run_text(rescue_board, &["--adopt", "--shove-plough", "region", "--shove-reach", "1.0", "--shove-passes", "2"]);
+    let shove = rescued["stages"].as_array().unwrap().iter().find(|st| st["name"] == "shove").expect("shove ran");
+    assert_eq!((shove["open_before"].as_u64(), shove["open_after"].as_u64()), (Some(1), Some(0)), "{shove}");
+    assert_eq!(rescued["summary"]["opens"], 0, "{rescued}");
+    assert!(rescued["failures"].as_array().unwrap().is_empty(), "{:?}", rescued["failures"]);
 }

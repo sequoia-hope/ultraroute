@@ -186,6 +186,8 @@ struct StageFilm<'c> {
     board_path: String,
     out: PathBuf,
     pours_block: bool,
+    /// The parts escaped and ploughed at are chosen by escape room, as the run chose them.
+    escape_room: bool,
     fb: Option<FilmBuilder>,
     /// The board as the stage got it: negotiation's trial routes are drawn over it.
     base: Option<Board>,
@@ -207,7 +209,7 @@ impl StageFilm<'_> {
 
     /// The window and the default title and subtitle of the film, from the board the stage gets.
     fn frame_of(&self, board: &Board) -> (BBox, bool, String, String) {
-        let fine = || morph::fine_pitch(board, 500_000);
+        let fine = || if self.escape_room { morph::escape_room(board) } else { morph::fine_pitch(board, 500_000) };
         let around = |parts: Vec<usize>, by: i64| parts.iter().filter_map(|&f| pad_box_of(board, f)).reduce(BBox::union).map(|b| b.grow(by));
         let (window, cropped) = match self.feature.as_str() {
             "prefanout" => (around(fine(), 2_500_000), true),
@@ -761,6 +763,7 @@ fn film_stage(feature: &str, stage: &'static str, cli: &Cli) {
         board_path: board_path.clone(),
         out,
         pours_block: a.pours_block,
+        escape_room: a.escape_room,
         fb: None,
         base: None,
         seen: Seen::default(),

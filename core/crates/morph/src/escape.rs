@@ -106,6 +106,7 @@ pub fn shift_copper(board: &mut Board, soft: &mut Vec<ItemId>, piece: f64, rule:
 /// sides of the board, such as the front and back fingers of a card-edge connector at the same
 /// `(x, y)`, do not crowd each other's layer.
 pub fn fine_pitch(board: &Board, pitch: Nm) -> Vec<usize> {
+    let _t = board::work::enter(board::work::Bucket::Geometry);
     let mut centres: HashMap<usize, Vec<(Point, u32, u64)>> = HashMap::new();
     for (_, it) in board.items() {
         if let Kind::Pad { footprint, .. } = it.kind {
@@ -127,6 +128,81 @@ pub fn fine_pitch(board: &Board, pitch: Nm) -> Vec<usize> {
         })
         .map(|(f, _)| f)
         .collect();
+    out.sort_unstable();
+    out
+}
+
+/// Footprints whose surface pads have too little room round them to leave fanout to chance: where
+/// a pin's gaps to its neighbours on the same layer and to the board edge cannot pass tracks at
+/// the rules' widths and clearances. A wide-pitch SOIC out in the open has its inward and outward
+/// sides free even when no track fits between adjacent pins; a fine-pitch package, a compact
+/// multi-row IC, or an edge-pinned module pressed against `Edge.Cuts` does not.
+pub fn escape_room(board: &Board) -> Vec<usize> {
+    let _t = board::work::enter(board::work::Bucket::Geometry);
+    let mut by_part: HashMap<usize, Vec<(ItemId, &Item, Point)>> = HashMap::new();
+    for (id, it) in board.items() {
+        if let Kind::Pad { footprint, .. } = it.kind {
+            if !it.is_copper() {
+                continue;
+            }
+            let bb = it.shape.bbox();
+            let c = Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2);
+            by_part.entry(footprint).or_default().push((id, it, c));
+        }
+    }
+    let mut out = Vec::new();
+    for (fp, pads) in by_part {
+        if pads.len() < 4 {
+            continue;
+        }
+        let tight = pads.iter().enumerate().any(|(i, &(id_a, a, ca))| {
+            if a.hole.is_some() || a.net == 0 {
+                return false;
+            }
+            let class = board.rules.class_of(board.net_name(a.net));
+            let min_w = board.min_track_width_of(a.net);
+            let full_w = board::nm(class.as_ref().map_or(board.rules.min_track_width, |c| c.track_width.max(board.rules.min_track_width))).max(min_w);
+            let narrow_w = if min_w > 0 { min_w.min(full_w) } else { full_w };
+            let own_clr = board.pad_clearances.get(&id_a).copied().unwrap_or(0);
+            let clr = board::nm(class.as_ref().map_or(board.rules.min_clearance, |c| c.clearance.max(board.rules.min_clearance))).max(own_clr);
+            let full_room = (full_w + 2 * clr) as f64;
+            let pair_pitch = (narrow_w + clr + 105_000) as f64;
+            let mouth_need = (narrow_w / 2 + clr + 25_000) as f64;
+            let ring_room = full_room + 600_000.0;
+            let centre_dot = Shape::Capsule { a: ca, b: ca, r: 0 };
+
+            let (mut tight_n, mut fine_n) = (0usize, false);
+            for (j, &(_, b, cb)) in pads.iter().enumerate() {
+                if i == j || b.net == a.net || a.layers & b.layers == 0 {
+                    continue;
+                }
+                let pitch = ca.distance(cb);
+                if pitch <= 500_000.0 || pitch < pair_pitch || centre_dot.gap_within(&b.shape, mouth_need) < mouth_need {
+                    fine_n = true;
+                    break;
+                }
+                let g = a.shape.gap_within(&b.shape, ring_room);
+                if g < ring_room && g < full_room {
+                    tight_n += 1;
+                }
+            }
+            if fine_n {
+                return true;
+            }
+            if tight_n < 2 {
+                return false;
+            }
+            let bb_a = a.shape.bbox();
+            board.outline_edges.iter().any(|&(ea, eb, ebb, eclr)| {
+                let need = (narrow_w + clr + eclr) as f64;
+                ebb.grow(need.ceil() as Nm + 20_000).overlaps(bb_a)
+                    && a.shape.gap_within(&Shape::Capsule { a: ea, b: eb, r: 0 }, need) < need
+            })
+        });
+        if tight {
+            out.push(fp);
+        }
+    }
     out.sort_unstable();
     out
 }
@@ -218,5 +294,64 @@ mod tests {
             });
         }
         assert_eq!(fine_pitch(&board, 500_000), vec![1]);
+    }
+
+    #[test]
+    fn escape_room_catches_edge_pinned_modules_and_skips_open_wide_soics() {
+        let (pcb, copper) = kicad_pcb::parse_board(
+            "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal) (31 \"B.Cu\" signal))
+             (net 0 \"\") (net 1 \"A\") (net 2 \"B\") (net 3 \"C\") (net 4 \"D\")
+             (gr_rect (start 0 0) (end 30 30) (layer \"Edge.Cuts\") (width 0.1)))",
+        )
+        .unwrap();
+        let rules = kicad_pcb::Rules::parse(
+            "{\"board\":{\"design_settings\":{\"rules\":{\"min_track_width\":0.2,\"min_clearance\":0.2,\"min_copper_edge_clearance\":0.5}}},
+              \"net_settings\":{\"classes\":[{\"name\":\"Default\",\"track_width\":0.25,\"clearance\":0.2}]}}",
+        )
+        .unwrap();
+        let mut board = Board::new(&pcb, &copper, rules);
+        // Footprint 0: 1.27 mm edge-pinned module right against x = 0 Edge.Cuts with 1.0 mm pads (0.27 mm gap).
+        for k in 0..4 {
+            board.insert(Item {
+                kind: Kind::Pad { footprint: 0, number: format!("{}", k + 1), plated: false },
+                net: (k + 1) as u32,
+                layers: 1,
+                shape: Shape::Capsule { a: Point::new(600_000, 5_000_000 + k * 1_270_000), b: Point::new(1_600_000, 5_000_000 + k * 1_270_000), r: 500_000 },
+                hole: None,
+                locked: true,
+                span: None,
+            });
+        }
+        // Footprint 1: 1.27 mm SOIC-8 in open board space (0.60 mm pads, 0.67 mm gap, 4.0 mm row spacing).
+        for row in 0..2 {
+            for k in 0..4 {
+                let x = 15_000_000 + row * 4_000_000;
+                let y = 12_000_000 + k * 1_270_000;
+                board.insert(Item {
+                    kind: Kind::Pad { footprint: 1, number: format!("{}", row * 4 + k + 1), plated: false },
+                    net: (k + 1) as u32,
+                    layers: 1,
+                    shape: Shape::Capsule { a: Point::new(x - 400_000, y), b: Point::new(x + 400_000, y), r: 300_000 },
+                    hole: None,
+                    locked: true,
+                    span: None,
+                });
+            }
+        }
+        // Footprint 2: mil-converted 0.5004 mm pitch QFN row that misses a hard 0.500 mm pitch cutoff.
+        for k in 0..4 {
+            let x = 15_000_000 + k * 500_400;
+            board.insert(Item {
+                kind: Kind::Pad { footprint: 2, number: format!("{}", k + 1), plated: false },
+                net: (k + 1) as u32,
+                layers: 1,
+                shape: Shape::Capsule { a: Point::new(x, 22_000_000), b: Point::new(x, 22_400_000), r: 150_000 },
+                hole: None,
+                locked: true,
+                span: None,
+            });
+        }
+        assert!(fine_pitch(&board, 500_000).is_empty());
+        assert_eq!(escape_room(&board), vec![0, 2]);
     }
 }

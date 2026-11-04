@@ -6,18 +6,18 @@ use kicad_pcb::*;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let text = std::fs::read_to_string(&args[1]).expect("read the board");
-    let (_, copper) = parse_board(&text).expect("parse the board");
+    let (pcb, copper) = parse_board(&text).expect("parse the board");
     let edit = Edit {
         remove: copper.tracks.iter().map(|t| t.span).chain(copper.vias.iter().map(|v| v.span)).collect(),
         tracks: copper
             .tracks
             .iter()
-            .map(|t| NewTrack { start: t.start, end: t.end, width: t.width, layer: t.layer.clone(), net: t.net, locked: false })
+            .map(|t| NewTrack { start: t.start, end: t.end, width: t.width, layer: t.layer.clone(), net: pcb.file_net(t.net), locked: false })
             .collect(),
         vias: copper
             .vias
             .iter()
-            .map(|v| NewVia { at: v.at, size: v.size, drill: v.drill, layers: v.layers.clone(), net: v.net, locked: false })
+            .map(|v| NewVia { at: v.at, size: v.size, drill: v.drill, layers: v.layers.clone(), net: pcb.file_net(v.net), locked: false })
             .collect(),
         arcs: Vec::new(),
         replace: Vec::new(),

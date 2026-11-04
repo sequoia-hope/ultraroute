@@ -28,8 +28,12 @@ pub struct Pcb {
     /// Number of `(layers …)` entries whose name ends in `.Cu`.
     pub copper_layers: u32,
     /// Top-level `(net N "NAME")` entries, net 0 (the unconnected net)
-    /// included, in file order.
+    /// included, in file order; [`crate::parse_board`] numbers them by name.
     pub nets: Vec<Net>,
+    /// Each net's number in the file, by the number [`crate::parse_board`] gave it; empty where
+    /// the numbers are the file's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file_nets: Vec<u32>,
     /// Every primitive on `Edge.Cuts`, board frame, metres, in file order:
     /// board-level `gr_*` first, then each footprint's `fp_*` placed.
     pub outline: Vec<OutlinePrimitive>,

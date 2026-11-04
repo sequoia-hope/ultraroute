@@ -373,14 +373,12 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
                             stats.no_path += 1;
                             cause_tag = "no_path";
                         }
-                        _ => {
+                        Missed::Refused => {
                             stats.refused += 1;
                             cause_tag = "refused";
                         }
                     }
-                    if why != "refused" {
-                        stats.failures.push((airline.from_item, airline.to_item, why));
-                    }
+                    stats.failures.push((airline.from_item, airline.to_item, why));
                     None
                 }
             };
@@ -1296,7 +1294,7 @@ pub fn arc_edits(board: &Board, arcs: &[crate::RoundArc]) -> Vec<kicad_pcb::NewA
             end: metres(arc.end),
             width: arc.width as f64 * 1e-9,
             layer: board.layers[arc.layers.trailing_zeros() as usize].clone(),
-            net: arc.net,
+            net: board.file_net(arc.net),
             locked: false,
         })
         .collect()
@@ -1310,7 +1308,7 @@ pub fn edits(board: &Board, laid: &[ItemId]) -> (Vec<kicad_pcb::NewTrack>, Vec<k
         match (&item.kind, &item.shape) {
             (Kind::Track, Shape::Capsule { a, b, r }) => {
                 let layer = (0..board.layers.len()).find(|l| item.on(*l)).map_or_else(String::new, |l| board.layers[l].clone());
-                tracks.push(kicad_pcb::NewTrack { start: metres(*a), end: metres(*b), width: 2.0 * *r as f64 * 1e-9, layer, net: item.net, locked: item.locked });
+                tracks.push(kicad_pcb::NewTrack { start: metres(*a), end: metres(*b), width: 2.0 * *r as f64 * 1e-9, layer, net: board.file_net(item.net), locked: item.locked });
             }
             (Kind::Via, Shape::Capsule { a, r, .. }) => {
                 let on: Vec<usize> = (0..board.layers.len()).filter(|l| item.on(*l)).collect();
@@ -1323,7 +1321,7 @@ pub fn edits(board: &Board, laid: &[ItemId]) -> (Vec<kicad_pcb::NewTrack>, Vec<k
                     size: 2.0 * *r as f64 * 1e-9,
                     drill: 2.0 * item.hole.map_or(0, |h| h.1) as f64 * 1e-9,
                     layers: [board.layers[first].clone(), board.layers[last].clone()],
-                    net: item.net,
+                    net: board.file_net(item.net),
                     locked: item.locked,
                 });
             }

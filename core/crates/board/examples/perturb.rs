@@ -7,13 +7,14 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let text = std::fs::read_to_string(&args[1]).expect("read the board");
     let out = std::path::Path::new(&args[2]);
-    let (_, copper) = parse_board(&text).expect("parse the board");
+    let (pcb, mut copper) = parse_board(&text).expect("parse the board");
+    copper.tracks.sort_by_key(|t| t.span.start);
     let track = |t: &Track, by: [f64; 2]| NewTrack {
         start: [t.start[0] + by[0], t.start[1] + by[1]],
         end: [t.end[0] + by[0], t.end[1] + by[1]],
         width: t.width,
         layer: t.layer.clone(),
-        net: t.net,
+        net: pcb.file_net(t.net),
         locked: false,
     };
     let all_copper: Vec<Span> = copper.tracks.iter().map(|t| t.span).chain(copper.vias.iter().map(|v| v.span)).collect();

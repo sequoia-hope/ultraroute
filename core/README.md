@@ -54,8 +54,9 @@ Run the tests with `cargo test --workspace` (about 240 tests), and `cargo clippy
 
 A route command that names no stage runs the default recipe, `ultraroute::RECIPE`:
 
-    --negotiate --rip-up --tighten --prefanout --diff-pairs --shove-plough region --shove-reach 0.5
-    --shove-repair 20 --shove-ties --shove-passes 60 --shove-patience 8
+    --negotiate --rip-up --rip-boxed --tighten --prefanout --escape-room --diff-pairs
+    --shove-plough region --shove-reach 0.5 --shove-repair 20 --shove-ties --guard-ties
+    --shove-passes 60 --shove-patience 8
 
 It is the benchmark's recipe (`docs/pcbench.md`), measured as the best the router has.
 `--recipe default` (or `bench`, the same) puts it first and lets later flags override it.
@@ -115,6 +116,7 @@ lengths, the deadline, and, of kind `rule`, every project or custom rule left ou
 | `--adopt` | treat the board's unlocked tracks and vias as the router's own: free to rip, move and rewrite |
 | `--no-route` | only load, strip and place, then write |
 | `--prefanout` | escape every fine-pitch part's pads before routing |
+| `--escape-room`, `--no-escape-room` | choose the parts to escape by their pins' room against neighbours and the board edge rather than a fixed 0.5 mm pitch, and keep sibling and held-back pad mouths open; the parts so chosen are also those the pair escapes and `--shove-plough rip` work at |
 | `--prefanout-mode stub\|dogbone\|grid\|inner\|same` | how the escapes are laid; default `inner` (a fine-grid route across layers). `same` first tries an escape without a via for a pad whose net meets no other layer; measured as no better than the default (`docs/pcbench.md`), kept as an option |
 | `--prefanout-order round\|inner\|trapped` | the order a part's pads claim escapes; default `inner` |
 | `--prefanout-ring MM` | how far past the part's pads the escapes end (0.2 to 5 mm; default 1.1) |
@@ -127,6 +129,7 @@ lengths, the deadline, and, of kind `rule`, every project or custom rule left ou
 | `--negotiate-jacobi` | each round routes against the last on `--threads` threads, instead of one connection after another; slower to converge on the fixtures (Stage 4 notes) |
 | `--negotiate-reroute-all` | every round reroutes every connection, not only those that collided (the old way; slower) |
 | `--rip-up` | let blocked connections cross the router's own copper, rerouting what they rip |
+| `--rip-boxed`, `--no-rip-boxed` | in rip-up, a connection boxed in by the router's copper (an end with no way out until that copper is lifted, or no way even ripping) is tried with the copper round its ends lifted, then on half-size cells in a window round it, where vias are priced as ripping; one so laid is held while what it ripped is rerouted, negotiated and given one more short rip-up, all counted in attempts and rounds rather than seconds. Other connections are tried as without it |
 | `--shove` | plough a way out for connections trapped at fine-pitch pads |
 | `--shove-plough rip\|region` | how the plough clears the copper in its way (implies `--shove`); `region` rips round the pinch and negotiates it again |
 | `--shove-reach MM` | how far the plough clears (default 2) |
@@ -134,6 +137,7 @@ lengths, the deadline, and, of kind `rule`, every project or custom rule left ou
 | `--shove-passes N` | plough passes, each in another order (default 1) |
 | `--shove-patience N` | passes in a row that free nothing before it stops (default 1) |
 | `--shove-ties` | keep a try that frees its connection without losing ground elsewhere |
+| `--guard-ties`, `--no-guard-ties` | refuse a shove tie move that leaves a newly opened connection boxed in around its end |
 | `--shove-cascade N` | connections a try knocked loose that are ploughed in turn (default 0) |
 | `--nudge` | move unlocked parts aside for connections nothing else could route; not in the default (it moves the designer's parts) |
 | `--tighten` | straighten the routed copper |
@@ -169,6 +173,28 @@ lengths, the deadline, and, of kind `rule`, every project or custom rule left ou
 | `-h`, `--help` | print the flags |
 
 A test (`tests/cli.rs`) checks that this table names every flag in `ultraroute::USAGE`.
+
+**One board, one route.** With one seed and a timeout never reached, a run's output depends on the
+board, not on how its file orders it (`tests/order_free.rs`; `tools/shuffle_check.py` for any
+board). `kicad_pcb::parse_board` puts what it reads in an order of what each thing is (`canon.rs`):
+nets numbered by name, footprints by reference, library and place, pads by number, tracks, vias and
+zones by net name, layer and geometry; no file position or uuid decides anything. The output keeps
+the file's own items where they stand, with their uuids, and writes new copper at the end in the
+router's order under the file's net numbers, so `--uuid-seed` gives each new piece the same uuid
+whatever the order.
+
+A zone's saved fill is input, though, not something the router works out. `--pour-cost` prices
+crossing a pour by the polygons saved in the file, so with it a file whose fills are stale is a
+different input from the same board freshly filled, and routes differently until refilled (the
+earring repro: the same items in two orders, one with stale GND fills, differ with `--pour-cost 3`
+and agree with `--pour-cost 0`). Refilling is not perfectly repeatable either: two KiCad refills
+of one file have been seen to differ in one zone, so even refilled files can differ under
+`--pour-cost`. Other uses of saved fills (`--auto-planes`, planes joining their nets, kept islands,
+which fills the writer drops) read them too.
+
+Time is what is still outside this: `--timeout`, and each try's
+cap in rip-up, shove and nudge, stop work where the clock says; `--cpu-clock` makes that a matter of
+CPU seconds, not of what else the machine is doing.
 
 `--regions` reads `routing.json` version 1 (format in `crates/ultraroute/src/regions.rs`, more in
 `docs/library.md`): `regions` (polygons with `never`, `must`, `avoid` and `prefer` rules for

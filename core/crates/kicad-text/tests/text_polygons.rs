@@ -199,3 +199,29 @@ fn copper_and_mask_text_polygons_match_kicad_stroke_outlines() {
         assert!(clear_samples > 0, "{label}: strokes must leave empty space inside the text block");
     }
 }
+
+/// The strokes come out in the reader's one order, like boxes: the file's forms reversed read the
+/// same, footprint texts placed by their own footprints.
+#[test]
+fn strokes_do_not_depend_on_the_files_order() {
+    use kicad_pcb::sexpr::{self, Node};
+    let text = std::fs::read_to_string(dir("tests/fixtures/text_v9.kicad_pcb")).unwrap();
+    let root = sexpr::parse(&text).unwrap();
+    let kids: Vec<&Node> = root.args().iter().filter(|c| c.head().is_some_and(|h| h == "footprint" || h.starts_with("gr_"))).collect();
+    assert!(kids.len() > 3 && kids.iter().any(|c| c.head() == Some("footprint")));
+    let (mut flipped, mut at) = (String::new(), 0);
+    for (slot, form) in kids.iter().zip(kids.iter().rev()) {
+        flipped.push_str(&text[at..slot.pos().start]);
+        flipped.push_str(&text[form.pos().start..form.pos().end]);
+        at = slot.pos().end;
+    }
+    flipped.push_str(&text[at..]);
+    assert_ne!(flipped, text);
+    let helper = PathBuf::from(env!("CARGO_BIN_EXE_kicad-text"));
+    let read = |t: &str| kicad_pcb::parse_board_with(t, kicad_pcb::text::Shaper::Helper(&helper, kicad_pcb::text::HELPER_TIMEOUT)).unwrap().1;
+    let (a, b) = (read(&text), read(&flipped));
+    assert!(a.text_note.as_deref().is_some_and(|n| n.contains("stroked by")), "{:?}", a.text_note);
+    assert!(a.graphics.len() + a.mask_graphics.len() > 3);
+    assert_eq!(a.graphics, b.graphics);
+    assert_eq!(a.mask_graphics, b.mask_graphics);
+}
