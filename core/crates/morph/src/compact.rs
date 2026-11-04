@@ -240,7 +240,9 @@ pub fn compact(text: &str, rules: Rules, opts: &CompactOptions) -> Result<Compac
         &zero_field,
         &orig_locked_items,
     )?;
-    let baseline_static_viols = collect_static_violations(&cur_board, &HashMap::new()).0;
+    let pad_masks = PadMaskTable::from_board_copper(&orig_pcb, &orig_copper);
+    let baseline_static_viols =
+        collect_static_violations(&cur_board, &pad_masks, &HashMap::new()).0;
     let (_, _) = graph.sync_to_board(&mut cur_board);
     recarve_kept_zones_in_board(&mut cur_board, &zero_copper);
     let baseline_airlines = baseline_connectivity(&cur_board);
@@ -388,6 +390,7 @@ pub fn compact(text: &str, rules: Rules, opts: &CompactOptions) -> Result<Compac
                 &fp_envs,
                 &fp_locked,
                 &initial_yard_pen,
+                &pad_masks,
                 &baseline_static_viols,
                 &orig_locked_items,
             )?
@@ -420,9 +423,11 @@ pub fn compact(text: &str, rules: Rules, opts: &CompactOptions) -> Result<Compac
             let jam_msg = if orig_had_outline && fail_board.outline.is_empty() {
                 format!("board outline loop broke at factor {f_s:.4}")
             } else {
-                collect_static_violations(&fail_board, &baseline_static_viols).1.unwrap_or_else(
-                    || format!("static footprint or board-edge violation at factor {f_s:.4}"),
-                )
+                collect_static_violations(&fail_board, &pad_masks, &baseline_static_viols)
+                    .1
+                    .unwrap_or_else(|| {
+                        format!("static footprint or board-edge violation at factor {f_s:.4}")
+                    })
             };
             let sz = bbox_size_mm(board_bounds(&fail_board));
             let rep = StepReport {
@@ -480,6 +485,7 @@ pub fn compact(text: &str, rules: Rules, opts: &CompactOptions) -> Result<Compac
             &fp_envs,
             &orig_yards,
             &initial_yard_pen,
+            &pad_masks,
             &baseline_static_viols,
         );
 
@@ -555,7 +561,7 @@ pub fn compact(text: &str, rules: Rules, opts: &CompactOptions) -> Result<Compac
             &initial_yard_pen,
         );
         let (static_set, static_desc) =
-            collect_static_violations(&trial_board, &baseline_static_viols);
+            collect_static_violations(&trial_board, &pad_masks, &baseline_static_viols);
         let static_cnt = static_set.len();
         let (extra_open, open_desc) = added_airlines(&trial_board, &baseline_airlines);
         let drifted_via = check_via_zones(&trial_board, &graph);
@@ -2168,44 +2174,128 @@ fn courtyard_violation_desc(
 
 type StaticStepBoard = (Board, Copper, String, Vec<Point>);
 
-fn cross_fp_pad_mask_gap(
+#[derive(Clone, Default)]
+pub(crate) struct PadMaskTable {
+    /// Per `(footprint_idx, pad_item_ordinal)`, `[front_margin_nm, back_margin_nm]` when that pad
+    /// opens `F.Mask` (`[0]`) or `B.Mask` (`[1]`), including `0` margin and copperless `NPTH` pads.
+    openings: HashMap<(usize, usize), [Option<Nm>; 2]>,
+    /// Widest positive solder-mask expansion of any pad on the board.
+    widest_opening: Nm,
+}
+
+impl PadMaskTable {
+    fn from_board_copper(pcb: &Pcb, copper: &Copper) -> Self {
+        let mut counts = vec![0usize; pcb.footprints.len()];
+        let mut openings = HashMap::new();
+        let mut widest_opening = 0;
+        for pad in &copper.pads {
+            if pad.footprint >= counts.len() {
+                continue;
+            }
+            let opened = |side: &str| pad.layers.iter().any(|l| l == side || l == "*.Mask");
+            let margin = nm(pad.mask_margin.unwrap_or(copper.pad_to_mask_clearance).max(0.0));
+            let f_open = opened("F.Mask").then_some(margin);
+            let b_open = opened("B.Mask").then_some(margin);
+            if f_open.is_some() || b_open.is_some() {
+                widest_opening = widest_opening.max(margin);
+            }
+            let n_items = match &pad.outline {
+                kicad_pcb::Outline::Circle { .. } => 1,
+                kicad_pcb::Outline::Polygons(polys) => polys.len().max(1),
+            };
+            for _ in 0..n_items {
+                let ord = counts[pad.footprint];
+                counts[pad.footprint] += 1;
+                if f_open.is_some() || b_open.is_some() {
+                    openings.insert((pad.footprint, ord), [f_open, b_open]);
+                }
+            }
+        }
+        Self { openings, widest_opening }
+    }
+}
+
+fn outer_mask_layers(board: &Board) -> [Option<usize>; 2] {
+    [
+        board.layers.iter().position(|l| l == "F.Cu"),
+        board.layers.iter().position(|l| l == "B.Cu"),
+    ]
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cross_fp_pad_mask_gap_side(
     board: &Board,
+    pad_masks: &PadMaskTable,
     id_a: ItemId,
     it_a: &Item,
+    fp_a: usize,
+    ord_a: usize,
     id_b: ItemId,
     it_b: &Item,
-    layer: usize,
+    fp_b: usize,
+    ord_b: usize,
+    side: usize,
+    cu_layer: usize,
 ) -> Nm {
-    let lbit = 1u64 << layer;
-    if !it_a.on(layer) || !it_b.on(layer) {
+    if fp_a == fp_b {
         return 0;
     }
-    if (it_a.net == it_b.net && it_a.net != 0) || board.is_tied(id_a, it_a, id_b, it_b) {
+    let cu_a = it_a.on(cu_layer);
+    let cu_b = it_b.on(cu_layer);
+    if !cu_a && !cu_b {
         return 0;
     }
-    let oa = board
-        .mask_openings
-        .get(&id_a)
-        .filter(|(m, _)| m & lbit != 0)
-        .map(|(_, d)| *d);
-    let ob = board
-        .mask_openings
-        .get(&id_b)
-        .filter(|(m, _)| m & lbit != 0)
-        .map(|(_, d)| *d);
-    let mut req = 0;
-    if let Some(da) = oa {
-        req = req.max(da + board.mask_margin());
+    let oa = pad_masks.openings.get(&(fp_a, ord_a)).and_then(|m| m[side]);
+    let ob = pad_masks.openings.get(&(fp_b, ord_b)).and_then(|m| m[side]);
+    if (!cu_a && oa.is_none()) || (!cu_b && ob.is_none()) {
+        return 0;
     }
-    if let Some(db) = ob {
-        req = req.max(db + board.mask_margin());
+    let a_net = if !cu_a && matches!(it_a.kind, Kind::Pad { plated: false, .. }) {
+        0
+    } else {
+        it_a.net
+    };
+    let b_net = if !cu_b && matches!(it_b.kind, Kind::Pad { plated: false, .. }) {
+        0
+    } else {
+        it_b.net
+    };
+    if (a_net == b_net && a_net != 0) || board.is_tied(id_a, it_a, id_b, it_b) {
+        return 0;
     }
-    if let (Some(da), Some(db)) = (oa, ob) {
-        if board.mask_web > 0 {
-            req = req.max(da + db + board.mask_web);
+    match (oa, ob) {
+        (Some(da), Some(db)) => da + db + board.mask_web + board.mask_margin(),
+        (Some(da), None) => da + board.mask_margin(),
+        (None, Some(db)) => db + board.mask_margin(),
+        (None, None) => 0,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cross_fp_pad_mask_gap_max(
+    board: &Board,
+    pad_masks: &PadMaskTable,
+    outer_cu: [Option<usize>; 2],
+    id_a: ItemId,
+    it_a: &Item,
+    fp_a: usize,
+    ord_a: usize,
+    id_b: ItemId,
+    it_b: &Item,
+    fp_b: usize,
+    ord_b: usize,
+) -> Option<(usize, Nm)> {
+    let mut best: Option<(usize, Nm)> = None;
+    for (side, l_opt) in outer_cu.into_iter().enumerate() {
+        let Some(l) = l_opt else { continue };
+        let req = cross_fp_pad_mask_gap_side(
+            board, pad_masks, id_a, it_a, fp_a, ord_a, id_b, it_b, fp_b, ord_b, side, l,
+        );
+        if req > 0 && best.is_none_or(|(_, br)| req > br) {
+            best = Some((l, req));
         }
     }
-    req
+    best
 }
 
 fn pad_ordinals_on_board(board: &Board) -> HashMap<ItemId, (usize, usize)> {
@@ -2225,6 +2315,8 @@ fn pad_ordinals_on_board(board: &Board) -> HashMap<ItemId, (usize, usize)> {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn project_scaled_footprints(
+    orig_pcb: &Pcb,
+    orig_copper: &Copper,
     orig_board: &Board,
     orig_yards: &[FootprintYards],
     envs: &[FootprintEnvelope],
@@ -2245,6 +2337,7 @@ pub(crate) fn project_scaled_footprints(
         &allowed_yards,
     );
 
+    let pad_masks = PadMaskTable::from_board_copper(orig_pcb, orig_copper);
     let mut bare = orig_board.clone();
     let drop_ids: Vec<ItemId> = bare
         .items()
@@ -2254,7 +2347,7 @@ pub(crate) fn project_scaled_footprints(
     for id in drop_ids {
         bare.remove(id);
     }
-    let baseline_static = collect_static_violations(&bare, &HashMap::new()).0;
+    let baseline_static = collect_static_violations(&bare, &pad_masks, &HashMap::new()).0;
 
     let scale_pt = |p: Point| -> Point {
         Point::new(
@@ -2304,6 +2397,7 @@ pub(crate) fn project_scaled_footprints(
         orig_at,
         cand_pos,
         &allowed_yards,
+        &pad_masks,
         &baseline_static,
     );
 }
@@ -2325,6 +2419,7 @@ fn resolve_static_step_board(
     envs: &[FootprintEnvelope],
     fp_locked: &[bool],
     allowed_yards: &HashMap<(usize, usize, u8), f64>,
+    pad_masks: &PadMaskTable,
     baseline_static: &HashMap<StaticViolKey, f64>,
     orig_locked_items: &[Item],
 ) -> Result<Option<StaticStepBoard>, String> {
@@ -2350,7 +2445,7 @@ fn resolve_static_step_board(
         if orig_had_outline && board.outline.is_empty() {
             return Ok(None);
         }
-        let (viols, _) = collect_static_violations(&board, baseline_static);
+        let (viols, _) = collect_static_violations(&board, pad_masks, baseline_static);
         let yard_err =
             courtyard_violation_desc(&board, orig_yards, orig_at, &cand_pos, allowed_yards);
         if viols.is_empty() && yard_err.is_none() {
@@ -2369,6 +2464,7 @@ fn resolve_static_step_board(
             prev_pos,
             &mut cand_pos,
             allowed_yards,
+            pad_masks,
             baseline_static,
         );
         if cand_pos == before {
@@ -2388,6 +2484,7 @@ fn project_footprints_on_board(
     prev_pos: &[Point],
     cand_pos: &mut [Point],
     allowed_yards: &HashMap<(usize, usize, u8), f64>,
+    pad_masks: &PadMaskTable,
     baseline_static: &HashMap<StaticViolKey, f64>,
 ) {
     let n = orig_at.len();
@@ -2407,41 +2504,46 @@ fn project_footprints_on_board(
         ps.sort_unstable();
     }
 
-    for _iter in 0..28 {
-        let mut hs_group: Vec<Vec<HalfPlane>> = vec![Vec::new(); n];
-        append_static_fp_guard_constraints(
-            board,
-            &fp_pads,
-            &pad_ords,
-            &leader,
-            &group_immob,
-            orig_yards,
-            orig_at,
-            cand_pos,
-            allowed_yards,
-            baseline_static,
-            &mut hs_group,
-        );
-        let mut moved_any = false;
-        for g in 0..n {
-            if members[g].is_empty() || group_immob[g] || hs_group[g].is_empty() {
-                continue;
-            }
-            let raw = solve_half_planes_2d((0.0, 0.0), &hs_group[g]);
-            let step = clamp_vec(raw, 400_000.0);
-            let delta = Point::new(step.0.round() as Nm, step.1.round() as Nm);
-            if delta != Point::new(0, 0) {
-                for &m in &members[g] {
-                    board.shift_footprint(m, delta);
-                    cand_pos[m] = Point::new(cand_pos[m].x + delta.x, cand_pos[m].y + delta.y);
+    let mut run_guard_iters = |board: &mut Board, cand_pos: &mut [Point], max_iters: usize| {
+        for _iter in 0..max_iters {
+            let mut hs_group: Vec<Vec<HalfPlane>> = vec![Vec::new(); n];
+            append_static_fp_guard_constraints(
+                board,
+                &fp_pads,
+                &pad_ords,
+                &leader,
+                &group_immob,
+                orig_yards,
+                orig_at,
+                cand_pos,
+                allowed_yards,
+                pad_masks,
+                baseline_static,
+                &mut hs_group,
+            );
+            let mut moved_any = false;
+            for g in 0..n {
+                if members[g].is_empty() || group_immob[g] || hs_group[g].is_empty() {
+                    continue;
                 }
-                moved_any = true;
+                let raw = solve_half_planes_2d((0.0, 0.0), &hs_group[g]);
+                let step = clamp_vec(raw, 400_000.0);
+                let delta = Point::new(step.0.round() as Nm, step.1.round() as Nm);
+                if delta != Point::new(0, 0) {
+                    for &m in &members[g] {
+                        board.shift_footprint(m, delta);
+                        cand_pos[m] = Point::new(cand_pos[m].x + delta.x, cand_pos[m].y + delta.y);
+                    }
+                    moved_any = true;
+                }
+            }
+            if !moved_any {
+                break;
             }
         }
-        if !moved_any {
-            break;
-        }
-    }
+    };
+
+    run_guard_iters(board, cand_pos, 28);
 
     let before_yard = cand_pos.to_vec();
     resolve_courtyard_stops(
@@ -2453,11 +2555,16 @@ fn project_footprints_on_board(
         cand_pos,
         allowed_yards,
     );
+    let mut yard_moved = false;
     for f in 0..n {
         let d = Point::new(cand_pos[f].x - before_yard[f].x, cand_pos[f].y - before_yard[f].y);
         if d != Point::new(0, 0) {
             board.shift_footprint(f, d);
+            yard_moved = true;
         }
+    }
+    if yard_moved {
+        run_guard_iters(board, cand_pos, 10);
     }
 }
 
@@ -2472,6 +2579,7 @@ fn append_static_fp_guard_constraints(
     orig_at: &[Point],
     cur_fp_pos: &[Point],
     allowed_yards: &HashMap<(usize, usize, u8), f64>,
+    pad_masks: &PadMaskTable,
     baseline_static: &HashMap<StaticViolKey, f64>,
     hs_group: &mut [Vec<HalfPlane>],
 ) {
@@ -2479,8 +2587,10 @@ fn append_static_fp_guard_constraints(
     let num_layers = board.layers.len();
     let holes_slot = num_layers;
     let rule_reach = board.max_rule_reach();
+    let outer_cu = outer_mask_layers(board);
     let hole_edge_req = nm(board.rules.min_hole_clearance);
     const BUF: f64 = 2_000.0;
+    const PROACTIVE_NM: f64 = 25_000.0;
 
     let eff_static_req = |key: StaticViolKey, full_req: Nm| -> f64 {
         if full_req <= 0 {
@@ -2514,6 +2624,26 @@ fn append_static_fp_guard_constraints(
             }
             (true, false) => hs[ga].push(HalfPlane { nx, ny, need }),
             (false, true) => hs[gb].push(HalfPlane { nx: -nx, ny: -ny, need }),
+            (false, false) => {}
+        }
+    };
+
+    let push_proactive_pair = |ga: usize,
+                               gb: usize,
+                               nx: f64,
+                               ny: f64,
+                               slack: f64,
+                               hs: &mut [Vec<HalfPlane>]| {
+        if ga == gb || !(0.0..PROACTIVE_NM).contains(&slack) {
+            return;
+        }
+        match (!group_immob[ga], !group_immob[gb]) {
+            (true, true) => {
+                hs[ga].push(HalfPlane { nx, ny, need: -slack * 0.48 });
+                hs[gb].push(HalfPlane { nx: -nx, ny: -ny, need: -slack * 0.48 });
+            }
+            (true, false) => hs[ga].push(HalfPlane { nx, ny, need: -slack * 0.92 }),
+            (false, true) => hs[gb].push(HalfPlane { nx: -nx, ny: -ny, need: -slack * 0.92 }),
             (false, false) => {}
         }
     };
@@ -2615,7 +2745,7 @@ fn append_static_fp_guard_constraints(
                         b_fp: None,
                         b_pad_ord: None,
                     };
-                    let qedge = it_a.shape.bbox().grow(rule_reach);
+                    let qedge = it_a.shape.bbox().grow(rule_reach + PROACTIVE_NM as Nm);
                     for &(ea, eb, ebb, eclr) in &board.outline_edges {
                         if !ebb.overlaps(qedge) {
                             continue;
@@ -2628,6 +2758,8 @@ fn append_static_fp_guard_constraints(
                         let (gap, nx, ny) = closest_shape_shape(&it_a.shape, &eshape);
                         if gap < req {
                             hs_group[lf].push(HalfPlane { nx, ny, need: req - gap });
+                        } else if gap < req + PROACTIVE_NM {
+                            hs_group[lf].push(HalfPlane { nx, ny, need: -(gap - req) * 0.92 });
                         }
                     }
                 }
@@ -2644,7 +2776,9 @@ fn append_static_fp_guard_constraints(
                             hole_edge_req,
                         );
                         if req > 0.0 {
-                            let qedge = hs_a.bbox().grow(hole_edge_req + BUF as Nm);
+                            let qedge = hs_a
+                                .bbox()
+                                .grow(hole_edge_req + (BUF + PROACTIVE_NM) as Nm);
                             for &(ea, eb, ebb, _) in &board.outline_edges {
                                 if !ebb.overlaps(qedge) {
                                     continue;
@@ -2653,6 +2787,12 @@ fn append_static_fp_guard_constraints(
                                 let (gap, nx, ny) = closest_shape_shape(&hs_a, &eshape);
                                 if gap < req {
                                     hs_group[lf].push(HalfPlane { nx, ny, need: req - gap });
+                                } else if gap < req + PROACTIVE_NM {
+                                    hs_group[lf].push(HalfPlane {
+                                        nx,
+                                        ny,
+                                        need: -(gap - req) * 0.92,
+                                    });
                                 }
                             }
                         }
@@ -2662,7 +2802,7 @@ fn append_static_fp_guard_constraints(
 
             // Shared-layer copper pads and keepouts.
             if it_a.is_copper() {
-                let qbb = bb_a.grow(rule_reach);
+                let qbb = bb_a.grow(rule_reach + PROACTIVE_NM as Nm);
                 for l in (0..num_layers).filter(|&l| it_a.on(l)) {
                     for id_b in board.near(l, qbb) {
                         if id_b == id_a {
@@ -2703,6 +2843,16 @@ fn append_static_fp_guard_constraints(
                                         } else if !group_immob[lf] {
                                             hs_group[lf].push(HalfPlane { nx, ny, need: BUF - gap });
                                         }
+                                    } else if gap < BUF + PROACTIVE_NM {
+                                        if let Some(lg) = lg_opt {
+                                            push_proactive_pair(lf, lg, nx, ny, gap - BUF, hs_group);
+                                        } else if !group_immob[lf] {
+                                            hs_group[lf].push(HalfPlane {
+                                                nx,
+                                                ny,
+                                                need: -(gap - BUF) * 0.92,
+                                            });
+                                        }
                                     }
                                 }
                             }
@@ -2720,8 +2870,6 @@ fn append_static_fp_guard_constraints(
                                         &Thing::Item(board, id_b, it_b),
                                         l,
                                     );
-                                    let mask_full =
-                                        cross_fp_pad_mask_gap(board, id_a, it_a, id_b, it_b, l);
                                     let req_f = eff_static_req(
                                         StaticViolKey {
                                             kind: StaticCheckKind::BoardRule(Rule::Clearance),
@@ -2731,28 +2879,27 @@ fn append_static_fp_guard_constraints(
                                             b_pad_ord: Some(ord_b),
                                         },
                                         clr_full,
-                                    )
-                                    .max(eff_static_req(
-                                        StaticViolKey {
-                                            kind: StaticCheckKind::PadMaskBridge,
-                                            a_fp: f,
-                                            a_pad_ord: ord_a,
-                                            b_fp: Some(*g),
-                                            b_pad_ord: Some(ord_b),
-                                        },
-                                        mask_full,
-                                    ));
+                                    );
                                     if req_f > 0.0
                                         && it_a
                                             .shape
                                             .bbox()
-                                            .grow(req_f.ceil() as Nm)
+                                            .grow((req_f + PROACTIVE_NM).ceil() as Nm)
                                             .overlaps(it_b.shape.bbox())
                                     {
                                         let (gap, nx, ny) =
                                             closest_shape_shape(&it_a.shape, &it_b.shape);
                                         if gap < req_f {
                                             push_pair(lf, lg, nx, ny, req_f - gap, hs_group);
+                                        } else {
+                                            push_proactive_pair(
+                                                lf,
+                                                lg,
+                                                nx,
+                                                ny,
+                                                gap - req_f,
+                                                hs_group,
+                                            );
                                         }
                                     }
                                 }
@@ -2781,7 +2928,7 @@ fn append_static_fp_guard_constraints(
                                     && it_a
                                         .shape
                                         .bbox()
-                                        .grow(req.ceil() as Nm)
+                                        .grow((req + PROACTIVE_NM).ceil() as Nm)
                                         .overlaps(it_b.shape.bbox())
                                 {
                                     let (gap, nx, ny) =
@@ -2792,6 +2939,12 @@ fn append_static_fp_guard_constraints(
                                             ny,
                                             need: req - gap,
                                         });
+                                    } else if gap < req + PROACTIVE_NM {
+                                        hs_group[lf].push(HalfPlane {
+                                            nx,
+                                            ny,
+                                            need: -(gap - req) * 0.92,
+                                        });
                                     }
                                 }
                             }
@@ -2801,9 +2954,71 @@ fn append_static_fp_guard_constraints(
                 }
             }
 
+            // Cross-footprint solder-mask aperture clearance (including 0-web pad-to-pad and NPTH
+            // mask openings in `holes_slot` / `unslotted`).
+            let my_open = pad_masks
+                .openings
+                .get(&(f, ord_a))
+                .into_iter()
+                .flatten()
+                .flatten()
+                .copied()
+                .max()
+                .unwrap_or(0);
+            let mask_reach = my_open
+                + pad_masks.widest_opening
+                + board.mask_web
+                + board.mask_margin()
+                + (BUF + PROACTIVE_NM) as Nm
+                + 2_000;
+            for id_b in board.overlapping(it_a.shape.bbox().grow(mask_reach)) {
+                if id_b <= id_a {
+                    continue;
+                }
+                let Some(it_b) = board.item(id_b) else { continue };
+                let Kind::Pad { footprint: g, .. } = it_b.kind else { continue };
+                if g == f {
+                    continue;
+                }
+                let lg = leader[g];
+                if lg == lf || (group_immob[lf] && group_immob[lg]) {
+                    continue;
+                }
+                let ord_b = pad_ords[&id_b].1;
+                let Some((_, mask_full)) = cross_fp_pad_mask_gap_max(
+                    board, pad_masks, outer_cu, id_a, it_a, f, ord_a, id_b, it_b, g, ord_b,
+                ) else {
+                    continue;
+                };
+                let req_f = eff_static_req(
+                    StaticViolKey {
+                        kind: StaticCheckKind::PadMaskBridge,
+                        a_fp: f,
+                        a_pad_ord: ord_a,
+                        b_fp: Some(g),
+                        b_pad_ord: Some(ord_b),
+                    },
+                    mask_full,
+                );
+                if req_f > 0.0
+                    && it_a
+                        .shape
+                        .bbox()
+                        .grow((req_f + PROACTIVE_NM).ceil() as Nm)
+                        .overlaps(it_b.shape.bbox())
+                {
+                    let (gap, nx, ny) = closest_shape_shape(&it_a.shape, &it_b.shape);
+                    if gap < req_f {
+                        push_pair(lf, lg, nx, ny, req_f - gap, hs_group);
+                    } else {
+                        push_proactive_pair(lf, lg, nx, ny, gap - req_f, hs_group);
+                    }
+                }
+            }
+
             // Drilled holes of `id_a` vs other footprints' holes and copper pads.
             if let Some(hs_a) = board.hole_shape(id_a, it_a) {
-                let qh = hs_a.bbox().grow(rule_reach);
+                let qh = hs_a.bbox().grow(rule_reach + PROACTIVE_NM as Nm);
                 for id_b in board.near(holes_slot, qh) {
                     if id_b <= id_a {
                         continue;
@@ -2833,6 +3048,8 @@ fn append_static_fp_guard_constraints(
                             let (gap, nx, ny) = closest_shape_shape(&hs_a, &hs_b);
                             if gap < req {
                                 push_pair(lf, lg, nx, ny, req - gap, hs_group);
+                            } else {
+                                push_proactive_pair(lf, lg, nx, ny, gap - req, hs_group);
                             }
                         }
                     }
@@ -2868,6 +3085,8 @@ fn append_static_fp_guard_constraints(
                             let (gap, nx, ny) = closest_shape_shape(&hs_a, &it_b.shape);
                             if gap < req {
                                 push_pair(lf, lg, nx, ny, req - gap, hs_group);
+                            } else {
+                                push_proactive_pair(lf, lg, nx, ny, gap - req, hs_group);
                             }
                         }
                     }
@@ -3079,11 +3298,12 @@ fn added_airlines(board: &Board, baseline: &BaselineConn) -> (usize, Option<Stri
 
 fn collect_static_violations(
     board: &Board,
+    pad_masks: &PadMaskTable,
     baseline: &HashMap<StaticViolKey, f64>,
 ) -> (HashMap<StaticViolKey, f64>, Option<String>) {
     let pad_ords = pad_ordinals_on_board(board);
     let num_layers = board.layers.len();
-    let rule_reach = board.max_rule_reach();
+    let outer_cu = outer_mask_layers(board);
     let hole_edge_req = nm(board.rules.min_hole_clearance);
     let mut out: HashMap<StaticViolKey, f64> = HashMap::new();
     let mut first_desc = None;
@@ -3185,49 +3405,63 @@ fn collect_static_violations(
             }
         }
 
-        // Cross-footprint pad-to-pad solder-mask bridge check.
-        if it.is_copper() {
-            let qbb = it.shape.bbox().grow(rule_reach);
-            for l in (0..num_layers).filter(|&l| it.on(l)) {
-                for id_b in board.near(l, qbb) {
-                    if id_b <= id {
-                        continue;
-                    }
-                    let Some(it_b) = board.item(id_b) else { continue };
-                    let Kind::Pad { footprint: fp_b, number: ref pad_b, .. } = it_b.kind else {
-                        continue;
-                    };
-                    if fp_b == fp_a {
-                        continue;
-                    }
-                    let req = cross_fp_pad_mask_gap(board, id, it, id_b, it_b, l);
-                    if req <= 0 || !it.shape.bbox().grow(req).overlaps(it_b.shape.bbox()) {
-                        continue;
-                    }
-                    let gap = it.shape.gap_within(&it_b.shape, req as f64);
-                    if gap + 500.0 < req as f64 {
-                        let ord_b = pad_ords[&id_b].1;
-                        let key = StaticViolKey {
-                            kind: StaticCheckKind::PadMaskBridge,
-                            a_fp: fp_a,
-                            a_pad_ord: ord_a,
-                            b_fp: Some(fp_b),
-                            b_pad_ord: Some(ord_b),
-                        };
-                        record_viol(&mut out, &mut first_desc, key, gap, &|| {
-                            format!(
-                                "SolderMaskBridge on {}: {}-{} vs {}-{} (gap {:.3} mm < required {:.3} mm)",
-                                board.layers[l],
-                                board.footprints[fp_a].reference,
-                                pad_a,
-                                board.footprints[fp_b].reference,
-                                pad_b,
-                                gap * 1e-6,
-                                req as f64 * 1e-6
-                            )
-                        });
-                    }
-                }
+        // Cross-footprint pad-to-pad solder-mask bridge check (including 0-web pad-to-pad and
+        // copperless NPTH mask openings).
+        let my_open = pad_masks
+            .openings
+            .get(&(fp_a, ord_a))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .copied()
+            .max()
+            .unwrap_or(0);
+        let mask_reach = my_open
+            + pad_masks.widest_opening
+            + board.mask_web
+            + board.mask_margin()
+            + 4_000;
+        for id_b in board.overlapping(it.shape.bbox().grow(mask_reach)) {
+            if id_b <= id {
+                continue;
+            }
+            let Some(it_b) = board.item(id_b) else { continue };
+            let Kind::Pad { footprint: fp_b, number: ref pad_b, .. } = it_b.kind else {
+                continue;
+            };
+            if fp_b == fp_a {
+                continue;
+            }
+            let ord_b = pad_ords[&id_b].1;
+            let Some((l, req)) = cross_fp_pad_mask_gap_max(
+                board, pad_masks, outer_cu, id, it, fp_a, ord_a, id_b, it_b, fp_b, ord_b,
+            ) else {
+                continue;
+            };
+            if !it.shape.bbox().grow(req).overlaps(it_b.shape.bbox()) {
+                continue;
+            }
+            let gap = it.shape.gap_within(&it_b.shape, req as f64);
+            if gap + 500.0 < req as f64 {
+                let key = StaticViolKey {
+                    kind: StaticCheckKind::PadMaskBridge,
+                    a_fp: fp_a,
+                    a_pad_ord: ord_a,
+                    b_fp: Some(fp_b),
+                    b_pad_ord: Some(ord_b),
+                };
+                record_viol(&mut out, &mut first_desc, key, gap, &|| {
+                    format!(
+                        "SolderMaskBridge on {}: {}-{} vs {}-{} (gap {:.3} mm < required {:.3} mm)",
+                        board.layers[l],
+                        board.footprints[fp_a].reference,
+                        pad_a,
+                        board.footprints[fp_b].reference,
+                        pad_b,
+                        gap * 1e-6,
+                        req as f64 * 1e-6
+                    )
+                });
             }
         }
 
@@ -4119,6 +4353,7 @@ fn settle_copper_only(graph: &mut CopperGraph, board: &mut Board) -> usize {
     let empty_envs: [FootprintEnvelope; 0] = [];
     let empty_yards: [FootprintYards; 0] = [];
     let empty_allowed = HashMap::new();
+    let empty_masks = PadMaskTable::default();
     let empty_base = HashMap::new();
     relax_core(
         graph,
@@ -4129,6 +4364,7 @@ fn settle_copper_only(graph: &mut CopperGraph, board: &mut Board) -> usize {
         &empty_envs,
         &empty_yards,
         &empty_allowed,
+        &empty_masks,
         &empty_base,
         false,
         3,
@@ -4146,6 +4382,7 @@ fn relax_step(
     fp_envs: &[FootprintEnvelope],
     orig_yards: &[FootprintYards],
     allowed_yards: &HashMap<(usize, usize, u8), f64>,
+    pad_masks: &PadMaskTable,
     baseline_static: &HashMap<StaticViolKey, f64>,
 ) -> (Vec<Point>, usize) {
     relax_core(
@@ -4157,6 +4394,7 @@ fn relax_step(
         fp_envs,
         orig_yards,
         allowed_yards,
+        pad_masks,
         baseline_static,
         true,
         6,
@@ -4173,6 +4411,7 @@ fn relax_core(
     fp_envs: &[FootprintEnvelope],
     orig_yards: &[FootprintYards],
     allowed_yards: &HashMap<(usize, usize, u8), f64>,
+    pad_masks: &PadMaskTable,
     baseline_static: &HashMap<StaticViolKey, f64>,
     enable_fp_coupling: bool,
     num_passes: usize,
@@ -5399,6 +5638,7 @@ fn relax_core(
                     orig_fp_at,
                     &cur_fp_pos,
                     allowed_yards,
+                    pad_masks,
                     baseline_static,
                     &mut hs_fp_group,
                 );
@@ -5525,11 +5765,13 @@ fn relax_core(
     }
 
     if enable_fp_coupling && cur_fp_pos != init_fp_pos {
+        let fp_locked_eff: Vec<bool> =
+            (0..n_fp).map(|f| fp_locked[f] || group_immob[leader[f]]).collect();
         let before_yard = cur_fp_pos.clone();
         resolve_courtyard_stops(
             orig_yards,
             fp_envs,
-            fp_locked,
+            &fp_locked_eff,
             orig_fp_at,
             init_fp_pos,
             &mut cur_fp_pos,
@@ -5546,6 +5788,44 @@ fn relax_core(
             if d != Point::new(0, 0) {
                 board.shift_footprint(f, d);
                 graph.shift_footprint_anchors(f, cur_fp_pos[f], d, &tethered_by);
+            }
+        }
+        for _cleanup in 0..12 {
+            let mut hs_guard: Vec<Vec<HalfPlane>> = vec![Vec::new(); n_fp];
+            append_static_fp_guard_constraints(
+                board,
+                &fp_pads,
+                &pad_ords,
+                &leader,
+                &group_immob,
+                orig_yards,
+                orig_fp_at,
+                &cur_fp_pos,
+                allowed_yards,
+                pad_masks,
+                baseline_static,
+                &mut hs_guard,
+            );
+            let mut moved_any = false;
+            for g in 0..n_fp {
+                if group_immob[g] || hs_guard[g].is_empty() {
+                    continue;
+                }
+                let raw = solve_half_planes_2d((0.0, 0.0), &hs_guard[g]);
+                let step = clamp_vec(raw, FP_STEP_CAP_NM);
+                let delta = Point::new(step.0.round() as Nm, step.1.round() as Nm);
+                if delta != Point::new(0, 0) {
+                    for &m in &members[g] {
+                        cur_fp_pos[m] =
+                            Point::new(cur_fp_pos[m].x + delta.x, cur_fp_pos[m].y + delta.y);
+                        board.shift_footprint(m, delta);
+                        graph.shift_footprint_anchors(m, cur_fp_pos[m], delta, &tethered_by);
+                    }
+                    moved_any = true;
+                }
+            }
+            if !moved_any {
+                break;
             }
         }
     }
@@ -7206,5 +7486,93 @@ mod tests {
             connectivity_without_pours(&b).airlines.is_empty(),
             "pad-grazing via must remain connected to C_BACK-1"
         );
+    }
+
+    #[test]
+    fn compact_stops_before_cross_footprint_solder_mask_bridge_and_npth_aperture() {
+        let text = "(kicad_pcb
+\t(version 20241229)
+\t(general (thickness 1.6))
+\t(layers (0 \"F.Cu\" signal) (2 \"B.Cu\" signal) (38 \"B.Mask\" user) (39 \"F.Mask\" user) (44 \"Edge.Cuts\" user))
+\t(setup (pad_to_mask_clearance 0.2))
+\t(net 0 \"\")
+\t(net 1 \"A\")
+\t(net 2 \"B\")
+\t(gr_line (start 0 0) (end 24 0) (stroke (width 0.1)) (layer \"Edge.Cuts\") (uuid \"e1\"))
+\t(gr_line (start 24 0) (end 24 16) (stroke (width 0.1)) (layer \"Edge.Cuts\") (uuid \"e2\"))
+\t(gr_line (start 24 16) (end 0 16) (stroke (width 0.1)) (layer \"Edge.Cuts\") (uuid \"e3\"))
+\t(gr_line (start 0 16) (end 0 0) (stroke (width 0.1)) (layer \"Edge.Cuts\") (uuid \"e4\"))
+\t(footprint \"R\" (layer \"F.Cu\") (uuid \"frl\") (at 8.0 4.5)
+\t\t(property \"Reference\" \"R_LOCK\" (at 0 0 0) (layer \"F.SilkS\") (uuid \"rrl\"))
+\t\t(pad \"1\" smd rect (at 0 0) (size 1.0 1.0) (layers \"F.Cu\" \"F.Mask\") (net 1 \"A\") (uuid \"prl\"))
+\t)
+\t(footprint \"R\" (layer \"F.Cu\") (uuid \"frm\") (at 5.5 4.5)
+\t\t(property \"Reference\" \"R_MOVE\" (at 0 0 0) (layer \"F.SilkS\") (uuid \"rrm\"))
+\t\t(pad \"1\" smd rect (at 0 0) (size 1.0 1.0) (layers \"F.Cu\" \"F.Mask\") (net 2 \"B\") (uuid \"prm\"))
+\t)
+\t(footprint \"R\" (layer \"F.Cu\") (uuid \"frf\") (at 20.0 4.5)
+\t\t(property \"Reference\" \"R_FAR\" (at 0 0 0) (layer \"F.SilkS\") (uuid \"rrf\"))
+\t\t(pad \"1\" smd rect (at 0 0) (size 1.0 1.0) (layers \"F.Cu\" \"F.Mask\") (net 1 \"A\") (uuid \"prf\"))
+\t)
+\t(footprint \"H\" (layer \"F.Cu\") (uuid \"fhl\") (at 9.0 11.5)
+\t\t(property \"Reference\" \"H_LOCK\" (at 0 0 0) (layer \"F.SilkS\") (uuid \"rhl\"))
+\t\t(pad \"\" np_thru_hole circle (at 0 0) (size 1.0 1.0) (drill 1.0) (layers \"*.Cu\" \"*.Mask\") (solder_mask_margin 1.0) (uuid \"phl\"))
+\t)
+\t(footprint \"FID\" (layer \"F.Cu\") (uuid \"ffm\") (at 5.0 11.5)
+\t\t(property \"Reference\" \"FID_MOVE\" (at 0 0 0) (layer \"F.SilkS\") (uuid \"rfm\"))
+\t\t(pad \"1\" smd circle (at 0 0) (size 0.8 0.8) (layers \"F.Cu\" \"F.Mask\") (solder_mask_margin 0.5) (uuid \"pfm\"))
+\t)
+\t(segment (start 8.0 4.5) (end 20.0 4.5) (width 0.2) (layer \"F.Cu\") (net 1) (uuid \"s1\"))
+)\n";
+        let rules = Rules::parse("{}").unwrap();
+        let mut lock = HashSet::new();
+        lock.insert("R_LOCK".to_string());
+        lock.insert("H_LOCK".to_string());
+        let rep = compact(
+            text,
+            rules.clone(),
+            &CompactOptions {
+                factor: 0.65,
+                steps: Some(10),
+                lock,
+                uuid_seed: Some(42),
+                verbose: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(rep.steps_accepted, 10, "jam: {:?}", rep.jam);
+        assert!((rep.achieved_factor - 0.65).abs() < 1e-9);
+
+        let (pcb, copper) = parse_board(&rep.text).unwrap();
+        let fp_x_mm = |r: &str| pcb.footprints.iter().find(|f| f.reference == r).unwrap().at[0] * 1e3;
+
+        // Board shrinks to full 0.65x (24 x 16 -> 15.6 x 10.4 mm), and R_FAR hits 12 + 0.65*8 = 17.2 mm.
+        assert!((fp_x_mm("R_FAR") - 17.20).abs() < 0.01, "R_FAR x={:.4}", fp_x_mm("R_FAR"));
+
+        // SMD-to-SMD with `solder_mask_min_width = 0` (`mask_web == 0`) and `pad_to_mask_clearance = 0.2`:
+        // copper gap `(8.0 - x_rmove) - 1.0` must stay >= 0.400 mm (rather than bridging at 0.200 mm).
+        let smd_cu_gap_mm = (8.0 - fp_x_mm("R_MOVE")) - 1.0;
+        assert!(
+            smd_cu_gap_mm >= 0.400,
+            "SMD pads bridged solder mask apertures (gap {smd_cu_gap_mm:.4} mm < 0.400 mm)"
+        );
+        assert!(fp_x_mm("R_MOVE") > 6.45, "R_MOVE still compacted inward: x={:.4}", fp_x_mm("R_MOVE"));
+
+        // Copperless NPTH (`solder_mask_margin 1.0`) vs `<no net>` SMD fiducial (`solder_mask_margin 0.5`):
+        // shape gap `(9.0 - x_fid) - (0.5 + 0.4)` must stay >= 1.500 mm.
+        let npth_shape_gap_mm = (9.0 - fp_x_mm("FID_MOVE")) - 0.9;
+        assert!(
+            npth_shape_gap_mm >= 1.500,
+            "NPTH mask opening bridged fiducial mask opening (gap {npth_shape_gap_mm:.4} mm < 1.500 mm)"
+        );
+        assert!(
+            fp_x_mm("FID_MOVE") > 6.45,
+            "FID_MOVE still compacted inward: x={:.4}",
+            fp_x_mm("FID_MOVE")
+        );
+
+        let b = Board::new(&pcb, &copper, rules);
+        assert!(check(&b).is_empty(), "DRC violations: {:?}", check(&b));
+        assert!(connectivity_without_pours(&b).airlines.is_empty());
     }
 }

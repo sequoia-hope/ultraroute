@@ -92,6 +92,8 @@ pub fn scale(text: &str, rules: Rules, opts: &ScaleOptions) -> Result<ScaleRepor
         nominal_scaled_positions(&orig_fp_at, &fp_envs, &fp_locked, centre, opts.factor);
     if (opts.factor - 1.0).abs() > 1e-12 {
         crate::compact::project_scaled_footprints(
+            &orig_pcb,
+            &orig_copper,
             &orig_board,
             &orig_yards,
             &fp_envs,
