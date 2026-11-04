@@ -1,352 +1,360 @@
 # Where Ultraroute Spends Its Time, and Which Decisions Could a Learned Policy Make?
 
-**Interactive visualization:** `http://localhost:8065/timing/` (`~/Software/ultraroute-lab/timing/index.html`, with data beside it in `~/Software/ultraroute-lab/timing/data.json`).
+**Interactive visualization:** `http://localhost:8065/timing/` ([`index.html`](file:///home/sequoia/Software/ultraroute-lab/timing/index.html), backed by live-measured [`data.json`](file:///home/sequoia/Software/ultraroute-lab/timing/data.json)).
 
 ---
 
 ## 1. Executive Summary
 
-### Where the router's CPU time goes
-Across all **1,182 PCBench boards** (`35,469.17 s` total single-thread CPU time; **331** direct post-`explore/speed` `HEAD` runs totaling `6,028.27 s` plus **851** remaining boards from `s1-cpu-cd0a82a` paired with `srvfull-a7831ee` stage logs):
+### Provenance: real hardware measurements vs survey-weighted population estimates
+Every timing, sub-operation, useful/wasted, open-count curve, multi-seed, and single-choice ablation figure in this report comes from running the instrumented release binary ([`358a016`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/board/src/work.rs), merged cleanly with `main` `8b71912` = `feat/order-free` + `explore/boxed`) on `sequoia-server` with `--cpu-clock --timing --report` and KiCad 9.0.8 DRC + [`pcbench.py`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/tools/pcbench.py) judging:
 
-1. **A heavy tail separates total CPU from the typical board.** The slowest **10% of boards** consume **42.30%** of all CPU across the 1,182-board corpus (`p90 = 115.20 s`, mean `30.01 s`, median `8.57 s`, IQR `2.20 - 36.70 s`) and **45.61%** of all CPU on the 331 direct `HEAD` boards (`p90 = 45.26 s`, mean `18.21 s`, median `6.61 s`, IQR `1.81 - 23.63 s`).
-2. **By pipeline stage:**
-   - **Total CPU sum (1,182 boards / 331 `HEAD` boards):** `negotiation` takes **53.23%** (`18,880.56 s`; **42.89%** / `2,585.68 s` on `HEAD-331`), `shove` takes **13.49%** (`4,783.25 s`; **27.62%** / `1,665.10 s` on `HEAD-331`), `vias` takes **12.44%** (`4,413.77 s`; **14.85%** / `895.13 s`), `prefanout` takes **6.12%** (`2,170.40 s`; **5.68%**), `finishing` takes **5.88%** (`2,085.30 s`; **0.86%**), `pairs` takes **4.56%** (`1,617.47 s`; **5.19%**), and `rip-up` takes **3.02%** (`1,072.53 s`; **1.50%**). Every other stage (`write` `0.32%`, `tightening` `0.27%`, `result` `0.27%`, `refinishing` `0.20%`, `cleaning` `0.12%`, `set-up` `0.06%`, `length matching` `0.03%`) is under `0.4%` of total CPU.
-   - **Median board (1,182 boards / 331 `HEAD` boards):** A typical board finishes cleanly without ever entering rescue stages (`shove`, `finishing`, `rip-up`, `prefanout`, and `pairs` all have **0.00%** median share). On the median board, `negotiation` takes **67.50%** (`58.63%` on `HEAD-331`), `vias` takes **13.02%** (`16.83%`), `write` takes **0.44%** (`0.55%`), `tightening` takes **0.36%** (`0.44%`), and `set-up` takes **0.22%** (`0.30%`).
-   - **Failing boards invert the stage ranking:** On `HEAD-331` time-limited failures (`n = 13`), `shove` alone consumes **69.9%** of all CPU (`negotiation` `15.2%`, `vias` `4.4%`). On boards that fail with time remaining (`n = 67` in 1,182; `n = 58` in `HEAD-331`), `negotiation` (`38.9%` / `40.0%`) and `shove` (`34.8%` / `34.7%`) split three-quarters of all CPU.
-3. **By sub-operation (post-`explore/speed`):**
-   - `explore/speed` (`8c5c1b9`, **1.40x** faster across the 331 shared PCBench boards: `8,418.50 s -> 6,028.27 s`, clean `257 -> 260`) eliminated the old **70%** `SipHash` `negotiate::patch_grid` bottleneck reported in `explore-nearmiss` (`hs3` sped up `m2-electronics_m2fc` negotiation **2.88x**, `23.86 s -> 8.27 s`) and cut static `ObstacleMap` construction ~4x via stamp/spoke caching (`hs1` sped up `CAL430FR_CAL430F` shove **1.45x**, `126.18 s -> 87.03 s`).
-   - Today, **`astar` (3D grid A* & field search)** is #1 at **59.28%** of corpus CPU (`21,025.92 s`; **55.27%** on `HEAD-331`, **63.44%** median board), followed by **`map_build`** at **9.03%** (`3,203.25 s`; **10.93%** on `HEAD-331`, driven by local subwindow maps in `shove`, `vias`, and `rip-up`), **`zones` (PathFinder congestion discs)** at **8.40%** (`2,980.63 s`), **`map_patch`** at **8.24%** (`2,923.57 s`), **`other` (unattributed path trace-back, sorting, S-expr output)** at **5.60%** (`1,987.57 s`), **`connectivity` (spatial union-find + Prim MST)** at **3.00%** (`1,062.60 s`), **`checks` (exact geometric DRC)** at **2.87%** (`1,019.70 s`), **`terminals`** at **1.96%** (`696.54 s`), and **`geometry` (polygon clearance & morph)** at **1.61%** (`569.38 s`).
-4. **Wasted vs useful work & zero-progress tail:**
-   - Across 1,182 boards, **55.14%** (`19,556.54 s`) of CPU goes to kept connection-closing work (`useful`), **8.18%** (`2,903.05 s`) to kept non-closing work (`kept_other`: fanout escapes, `shove` tie swaps, dropped vias, pulled-tight chains), **27.77%** (`9,851.16 s`) to **wasted** attempts (`35.26%` / `2,125.29 s` on `HEAD-331`), and **8.90%** (`3,158.43 s`) to stage setup/unattributed work (`other`).
-   - On boards that fail with time left (`n = 67`), **54.1%** of full-run CPU and **73.10%** of second-half `[0.5*T, T]` CPU is wasted (`71.81%` on `HEAD-331`), spent mostly in futile `shove` passes (`51.00%` of `[0.5*T, T]`) and post-failure `vias` reduction (`24.19%`) on an incomplete board.
-   - Across `HEAD-331`, **15.18%** of all CPU (`915.05 s`, **18.12%** of routing CPU) occurs in open-connection routing stages *after* the last moment `open` ever drops (`6.78%` / `2,403.09 s` across 1,182 boards, including **41.20%** of all CPU on `failed_with_time` boards). A plain post-negotiation patience stop rule (`Delta_t = 20 s` without a new record-low `min_open`) saves **934.54 s (15.50% of total CPU)** on `HEAD-331` with **0 clean boards lost**, though on the full 1,182-board set `Delta_t = 20 s` saves **2,805.76 s (7.91%)** at a regression cost of **18 slow-rescue clean boards lost** (`Delta_t = 45 s` saves `1,103.79 s` / `3.11%`, losing `5`).
+- **Measured unweighted corpus (`raw_214`, `214` unique PCBench boards):** All **48** `smoke` boards (`47 / 48` clean = `97.92%`, `101.02 s` stage CPU), all **74** `focus` boards (`24 / 74` clean = `32.43%`, `2,644.72 s`), and **100** spread-sampled boards (`rest100`, `74 / 100` clean = `74.00%`, `4,676.71 s`) from the remaining `1,068` PCBench boards (`smoke ∪ focus` has `114` unique boards + `100` `rest100` = **`214` boards**, **`138 / 214` clean = `64.49%`**, **`7,400.04 s`** total stage CPU, plus `7.36 s` board-load CPU and `9.86 s` paused stats bookkeeping CPU).
+- **Survey-weighted population estimate (`HT-1182`, clearly labelled as estimated):** Horvitz-Thompson inverse-probability scaling of those 214 measured boards (`weight = 1.0` on the `114` `smoke ∪ focus` boards, `weight = 10.68` on the `100` `rest100` boards, summing to `1,182.0` PCBench boards): **`854.3 / 1,182.0` clean (`72.28%`)**, **`52,670.61 s`** estimated total stage CPU.
+- **Exactness & overhead verified against `main` `8b71912`:**
+  1. **Workspace clippy & release tests (`sequoia-server`):** After fixing 6 `clippy::needless_range_loop` errors (`2b6734b`), both `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --release --workspace --no-fail-fast` passed with **0 warnings and 0 failures** on `358a016`.
+  2. **Rule-6 exactness proof (`Deadline::seconds = 1e6`, `--uuid-seed 1`):** Across all **48 / 48** non-time-limited `smoke` boards (`3,160` connections, `103.27 s` CPU), routed `.kicad_pcb` files were **byte-for-byte SHA-256 identical** across all 4 modes: `main` (`8b71912`), instrumented default, `--no-timing`, and `--timing --report` (`0` mismatches).
+  3. **Interleaved 5× CPU-clock overhead (`48` `smoke` boards):** Before opt-in (`2b6734b`), default-on fine timing added **`+3.96%`** sum-of-medians vs `main` (`76.67 s → 79.71 s`, per-board median `+4.58%`) and `--no-timing` still added **`+1.62%`** (`77.91 s`). Making fine timing opt-in via `--timing` and eliminating TLS/`Drop` landing pads on the inactive path ([`in_bucket`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/board/src/work.rs#L452-L464) + `SINK_COUNT` in `358a016`) cut default build overhead to **`+0.13%`** sum-of-medians (`77.00 s → 77.10 s`; **`+0.0007%`** sum-of-means) and `--no-timing` to **`-0.01%`** (`77.00 s`), while opt-in `--timing --report` adds **`+1.89%`** (`78.46 s`).
 
-### Which decisions could a learned policy make?
-- **Do NOT put RL in the A* inner loop (`search.rs`), `Negotiation` net ordering, `Via` cost selection, `Prefanout`, `Vias` reduction, or a run-level stop/restart wrapper:**
-  - `A*` pops a cell every ~50-200 ns; any neural call is 1,000x-10,000x too slow, whereas fixing `NodeHeap::push` (`search.rs:189`) to break equal-`f` ties by smaller `h` instead of raw `node` index is a 3-line classical change.
-  - Run-level stop/restart has large upside (**+4 clean** on 200 spread boards from 3 seeds, `160 -> 164`, and **+11 clean** on 34 time-limited near-misses, `12 -> 23`, `67.6%`), but yields only ~1-15 transitions per failing board across the entire corpus and is matched by a 15-line classical patience + seed/parameter restart controller.
-  - Static net ordering in `Negotiation` was already tested across 4 congestion/criticality rules on 200 boards in `explore-priority` (`-1` to `+1` clean boards) and washes out under PathFinder history pricing.
-  - Board-level `via_cost` has 1 decision per board (`1,182` data points total); `RipUp` needs tabu victim pricing (`rip_cost += 400` per failed victim) and fixing a missing `grid.via_penalty` gate (`ripup.rs:281-285`) before any ML.
-- **The ONE place where a learned policy (specifically a lightweight contextual bandit / offline-scored linear or GBDT model, not deep RL) is genuinely justified is `Shove` target, radius, and repair-budget selection (`core/crates/grid/src/shove.rs:203-404`):**
-  - `Shove` governs **27.62%** of `HEAD-331` CPU (`13.49%` of 1,182-board CPU, **43.62%** on near-misses, **69.9%** on `HEAD-331` time-limited failures), wastes **46.7%** of its own time on `HEAD-331` (`1,882.71 s` wasted across 1,182 boards, including `1,280.24 s` inside reverted 20-second `repair` runs and `451.85 s` in walled/failed ploughs), is the primary driver of the **12 -> 23 / 34** multi-seed near-miss rescues, and generates **4,945 self-labeled counterfactual move outcomes** per 1,182-board pass (`~20,000` across 4 seeds) with rich local geometric features (`soft_path` length/crossings, blocker-net count in 0.5/1/2 mm discs, pad `mouth_room`, net retry history).
-
-### Plain statement of what was and was not executed live
-- **Built and compiler-verified (`cargo check` exit 0, 0 warnings across `ultraroute --tests`, `web`, and `lab-films`):** Full Part 1 sub-stage CPU bucket timers, per-move/per-stage useful vs wasted effort tracking, open-count timeline instrumentation, `--no-timing` CLI flag, and integration test `sub_stage_cpu_and_effort_account_for_stage_time` in `core/crates/ultraroute/tests/stats.rs`.
-- **Blocked from live multi-core execution during this session:** On `loaf`, `~/.claude/bin/reserve --status` showed **20 of 22 bookable cores permanently held** by 5 stale reservations from earlier sessions (up to `440m` old at `0.0%` CPU pressure, with 12 jobs queued behind them). Ground rules forbid running `cargo test`, release `cargo build`, router batches, or KiCad DRC outside `reserve --here`, forbid committing/pushing uncommitted worktree changes to `sequoia-server`, and forbid touching `reserve`'s state files.
-- **Therefore:**
-  1. Live execution of `cargo test`, `cargo build --release`, the 48-board Rule-6 `Deadline::seconds = 1e6` byte-identical proof, the 3x interleaved instrumentation overhead benchmark, and the live 214-board / 4-seed / 8-ablation router batches **has not been run yet**. A single resumable foreground script, `./runs/run_when_unblocked.sh`, is wired and syntax-checked in this worktree to run every one of those steps under `reserve -c 8 --here` and overwrite `~/Software/ultraroute-lab/timing/data.json` as soon as `reserve` is cleared.
-  2. All Part 2 and Part 3 corpus measurements in this report and in `http://localhost:8065/timing/` are computed directly (`runs/analyze_existing_runs.py`) from **existing post-`explore/speed` `HEAD` runs** (`explore-text-v2-{smoke,focus,guard}-new`, 331 boards, seed 1, `--cpu-clock`), **all 1,182 PCBench runs** (`s1-cpu-cd0a82a` + `srvfull-a7831ee` logs, validated against 5 post-speed `hs3_new` `.report.json` files to **0.020 s mean absolute stage error**), archived `ULTRAROUTE_PROFILE` call stacks + `explore/speed` incremental A/B reports (`hs1`, `hs2`, `hs3`), **200-board x 3-seed + repeat** runs (`remed-0-base-{s0,s1,s2,s0b}`), **34-board x 3-seed & multi-timeout** runs (`explore-nearmiss`), and **100- to 240-board paired heuristic A/B runs** on disk.
+### Where the router's CPU time actually goes
+1. **Heavy tail vs typical board:** On the 214 measured boards, the slowest **10%** consume **35.55%** of all CPU (`mean = 34.58 s`, `median = 14.11 s`, IQR `2.52 – 50.21 s`, `p90 = 115.42 s`; `HT-1182` estimate: `mean = 44.56 s`, `median = 25.41 s`, `p90 = 117.94 s`, top-10% share `28.70%`).
+2. **By pipeline stage (`raw_214` measured / `HT-1182` estimated):**
+   - **Total CPU sum:** `negotiation` takes **35.69%** (`2,641.27 s` measured; `41.75%` / `21,990.18 s` HT), `shove` takes **27.54%** (`2,038.24 s`; `15.84%` / `8,344.84 s` HT — and **52.43%** on `focus`!), `vias` takes **11.32%** (`837.79 s`; `12.19%` HT), `prefanout` takes **9.46%** (`700.20 s`; `11.08%` HT, plus `0.61%` / `0.78%` in `pair-escapes`), `pairs` takes **5.12%** (`378.92 s`; `6.60%` HT), `rip-up` takes **4.53%** (`335.19 s`; `5.28%` HT), `finishing` takes **3.65%** (`270.36 s`; `4.85%` HT), and `corridors` takes **0.87%** (`64.37 s`; `0.34%` HT). Every other stage (`tightening` `0.48%`, `refinishing` `0.36%`, `write` `0.26%`, `cleaning` `0.07%`, `prune-escapes` `0.01%`, `result` `0.01%`, `length matching` `<0.01%`, `set-up` `<0.01%`, `merge-escapes` `<0.01%`) is under `0.5%`.
+   - **Median board (`raw_214`):** `negotiation` takes **46.16%** (IQR `22.67 – 59.40%`), `vias` takes **14.43%** (`5.53 – 30.63%`), and `prefanout` takes **1.37%** (`0.02 – 15.87%`), while rescue stages are near zero (`finishing` `0.16%`, `rip-up` `0.07%`, `shove` `0.06%`, `corridors` `0.01%`).
+3. **By hardware-timed sub-operation (`CLOCK_THREAD_CPUTIME_ID`, `raw_214` measured / `HT-1182` estimated):**
+   - **`astar` (`grid::search`)** is #1 at **42.50%** (`3,145.20 s` measured, median board `38.03%`; `45.07%` HT) — **not 59%** as the previous log reconstruction guessed (`+12.75 pp` formula overestimate on the same 214 runs).
+   - **`map_patch` (stamping items & congestion/soft prices onto `RouteGrid`)** is #2 at **19.60%** (`1,450.59 s` measured, median `15.90%`; `19.38%` HT) — **2.39× higher** than the previous `8.2%` estimate.
+   - **`geometry` (`morph` / polygon clearance / escape-room / pull-tight / mend)** is #3 at **9.64%** (`713.36 s` measured; `10.91%` HT) — **5.3× to 6.8× higher** than the previous `1.6%` estimate, driven by `--escape-room` in `prefanout` (`65.42%` of `prefanout` CPU) and `tightening` (`44.78%`).
+   - Followed by **`map_build`** at **8.15%** (`602.76 s`; `7.50%` HT), **`terminals`** at **7.75%** (`573.78 s`; `6.55%` HT, **3.5× higher** than estimated), **`connectivity`** at **3.70%** (`273.90 s`; `3.25%` HT), **`zones`** at **3.38%** (`250.14 s`; `3.09%` HT, **2.4× lower** than estimated), **`checks`** at **3.20%** (`236.56 s`; `2.79%` HT), and **`other` (unattributed)** at just **2.08%** (`153.75 s`; `1.47%` HT — **97.92% of stage CPU is accounted**).
+4. **Useful vs wasted work, zero-progress tail, and stop-rule regressions:**
+   - Across `raw_214`, **41.24%** (`3,051.54 s`) of all CPU goes to **wasted** attempts (`37.70%` / `19,856.33 s` HT), **37.83%** (`2,799.53 s`; `43.84%` HT) to kept connection-closing work (`useful`), **19.17%** (`1,418.88 s`; `16.50%` HT) to kept non-closing work (`kept_other`: fanout stubs, `709.39 s` of `shove` guarded tie swaps, dropped vias, tightened chains), and **1.76%** (`130.10 s`) to unattributed stage work.
+   - **Highest waste concentrations (`raw_214`):** `vias` wastes **91.51%** (`766.68 s` of `837.79 s`), `refinishing` **89.36%**, `rip-up` **83.42%** (`279.62 s` of `335.19 s`), `corridors` **65.80%**, `finishing` **55.09%**, `shove` **51.75%** (**`1,054.76 s`** wasted — the **largest absolute wasted CPU of any stage** on `raw_214`), and `negotiation` **24.45%** (`645.74 s`).
+   - **Failing runs' second half `[0.5×T, T]` (`76` failing boards, `2,399.71 s`):** **66.80% is wasted** (`1,602.94 s`), rising to **72.43% wasted** (`552.66 s` of `763.02 s`) on the `47` `failed_with_time` boards (`56.09%` `shove` + `20.94%` `vias` polishing an incomplete board).
+   - **Zero-progress tail & stop-rule cost/regression:** Across `raw_214`, **13.21%** of all CPU (`977.39 s`, `15.04%` of routing CPU; `8.03%` / `4,231.85 s` HT) is spent in routing stages after `open` last drops. **However, contrary to the previous report's `0 lost` claim at `Δt = 20 s`**, on post-`8b71912` `main` (`--guard-ties` + `--rip-boxed`) a causal post-negotiation stop rule at `Δt = 20 s` saves `1,134.85 s` (`15.34%` of `raw_214` CPU) **at the cost of losing 11 of 138 clean boards (`7.97%` of clean boards; `59.4` HT-estimated clean boards lost!)** and `+59` extra open connections. Even `Δt = 60 s` saves only `2.51%` while still losing **3 clean boards** (`kitspace_CA3306E`, `roomba-ESP12E_roomba-esp`, `medusa_medusa_cape`). A stop rule that aborts without restarting is therefore **not** safe on post-`8b71912` Ultraroute.
+5. **Live multi-seed spread, single-choice ablations, and re-ranked ML/heuristic decisions:**
+   - **4-seed spread on 20 stratified boards (`seeds 1..4`):** Clean count spans **`11 / 20` (worst-of-4) to `14 / 20` (best-of-4; `s1=14, s2=13, s3=13, s4=12`)**, and total open connections span **`40` (best-of-4) to `65` (worst-of-4; `s1=48, s2=42, s3=55, s4=64`)**, with **3 boards flipping clean/failed** (`minima-hardware_FrontPanel` `3/4`, `Hardware_Playground_sd_wav_pcm5100` `3/4`, `MicroMaple_MicroMaple` `2/4`) and **up to `5.91×` CPU swing across seeds on the same board** (`37.5 s` vs `221.4 s` on `minima-hardware_FrontPanel`).
+   - **8 live single-choice heuristic ablations on those 20 boards:** Disabling `--shove-ties` loses **`-2` clean boards** (`+7` open, `+7.47%` CPU); doubling `--negotiate-patience` `4 → 8` loses **`-2` clean boards** (`+9` open, **`+21.11%` CPU**); switching `--prefanout-order round` loses **`-2` clean boards** (`+4` open); cutting `--shove-repair` `20 → 5 s` loses **`-1` clean board** (`-4.30%` CPU); lowering `--via-cost` `5.0 → 2.0 mm` keeps `14/20` clean while cutting open connections **`48 → 43` (`-5`)**, cutting CPU **`-5.46%`**, and slashing `minima-hardware_FrontPanel` (`115.4 → 30.2 s`) and `sd_wav_pcm5100` (`91.3 → 30.3 s`) by **`3×`**; raising `--via-cost` `5.0 → 8.0 mm` worsens opens **`48 → 67` (`+19`)**; `seed=0` (unshuffled Pass-0) worsens opens `+5` and burns `+11.65%` CPU; `--nudge` gains `0` clean boards, worsens opens `+4`, and burns `+7.83%` CPU.
+   - **Updated decision ranking & RL verdict:** Live measurements promote **`Shove` target/radius/repair/tie selection to Rank `#1`** (`1,054.76 s` wasted > `977.39 s` oracle tail; **only strong candidate for a learned contextual bandit / offline RL scorer**, `3,918` measured tries / `11,914` HT), move **Run-level stall/skip-`Vias`/restart controller to `#2`** (classical: skip `Vias` when `open > 0` to save `388.76 s` raw / `2,499.98 s` HT with `0` regressions + checkpoint multi-seed/`via_cost` restart), keep **`Negotiation` at `#3`**, promote **`Prefanout` (`#7 → #4`, `10.08%` raw CPU, `-2` clean on `round`)** and **`Vias + Tightening` (`#8 → #7`, `766.85 s` wasted)** ahead of **`Single-net A*` (`#6 → #8`, `4.01%` raw CPU)**, and demote **`Nudge` to `#10`**.
 
 ---
 
 ## 2. Literature Check: The 2026 RL + FreeRouting Paper
 
-Web search located the exact 2026 paper Sequoia heard about:
+Web search located the citation matching Sequoia's description:
 
 - **Yin-Chi Liao, Sheng-Xin Pan, and Po-Jui Chiang**, *"Automation of PCB autorouting via world-model reinforcement learning and freerouting integration"*, **Expert Systems with Applications**, Vol. 311, Article 131424, 2026 (`DOI: 10.1016/j.eswa.2026.131424`).
 
-**What we read vs did not read:**
-- Liao, Pan, and Chiang (2026) is behind Elsevier ScienceDirect's paywall. No open-access preprint or full text is available on arXiv or the authors' pages, so **we have not read the paper** and make zero claims about its internal world-model state, action space, or benchmark numbers.
-- For open-access context that we *did* read in full (`scratch/pcbworld.txt`), we read **PCBWorld: Simulation-Grounded World Modeling for Printed Circuit Board Routing** (`arXiv:2607.05915v4`, 2026), which trains an action-conditioned world model (`PCBWM`) and policy directly over fine-grid cell actions on small synthetic/real sub-problems. Even with learned dynamics, cell-by-cell RL faces severe horizon length (`10^3 - 10^4` grid steps per net) and DRC brittle-termination problems at full board scale. That contrast sharpens why pairing a learned policy with a classical router only makes sense **above** the A* cell level, at coarse discrete decisions where a classical search handles exact DRC geometry and shortest paths.
+**Unread status (strictly observed):**
+- Liao, Pan, and Chiang (2026) is behind Elsevier ScienceDirect's paywall, with no open-access preprint or author-hosted PDF available. **We did not read this paper and do not infer its state space, action space, training loop, or results.**
+- Separately, an open-access paper we *did* read in full — **PCBWorld: Simulation-Grounded World Modeling for Printed Circuit Board Routing** (`arXiv:2607.05915v4`, 2026) — trains an action-conditioned world model (`PCBWM`) over fine-grid cell steps on small sub-problems, illustrating why cell-level RL faces `10^3–10^4`-step horizons and brittle DRC termination on full boards, whereas pairing learning with a classical router makes sense only at **coarse discrete move/target decisions above A\***.
 
 ---
 
-## 3. Part 1: Instrumentation Built and Verification Status
+## 3. Steps 1–3: Merge, Build/Test Fixes, Rule-6 Exactness Proof, and Overhead
 
-### Files created or modified
-- **`core/crates/board/Cargo.toml` & `core/crates/board/src/work.rs`:**
-  - Added thread-local exclusive sub-operation bucket profiler (`Bucket`: `Astar`, `MapBuild`, `MapPatch`, `Zones`, `Checks`, `Connectivity`, `Terminals`, `Geometry`), re-entrant `BucketGuard` stack (`enter_bucket`) that credits nested calls strictly to the innermost bucket without double-counting, and `RawEvent` (`NegRound`, `NegOverhead`, `Single`, `RipAttempt`, `ShoveAttempt`, `ShoveSetup`, `NudgeAttempt`, `NudgeBlame`, `PolishTry`) sink (`CpuSink`) backed by `libc::clock_gettime(CLOCK_THREAD_CPUTIME_ID)` (and `CLOCK_PROCESS_CPUTIME_ID` for process totals).
-  - When no `CpuSink` is installed (`--no-timing` or library callers without `--report`), `enter_bucket` checks a thread-local `bool` (`TIMING_ON == false`) and returns immediately with **zero syscalls**.
-- **`core/crates/board/src/{check.rs, connect.rs}`:**
-  - Guarded `Violations::check`, `Violations::check_Pads`, and geometric clearance routines under `Bucket::Checks`; guarded `connectivity`, `connectivity_without_pours`, `net_connectivity`, and `joined_copper` under `Bucket::Connectivity`.
-- **`core/crates/morph/src/{escape.rs, flow.rs}`:**
-  - Guarded `shift_copper`, `fine_pitch`, and `flow` (`WarpField` Laplace copper warping) under `Bucket::Geometry`.
-- **`core/crates/grid/src/{lib.rs, search.rs, grid.rs, negotiate.rs, route.rs, ripup.rs, shove.rs, nudge.rs, blame.rs, push.rs, vias.rs, cleanup.rs, prefanout.rs, pairs.rs, tune.rs, planes.rs, islands.rs, arcs.rs}`:**
-  - Guarded whole-search entry points (`route_astar`, `cost_field`, `walled_in` in `search.rs`) under `Bucket::Astar`. **Zero clock reads occur inside `run_astar_loop` or `NodeHeap`**.
-  - Guarded `ObstacleMap` construction (`grid.rs`) under `Bucket::MapBuild`, incremental track/via edits (`patch_grid` in `negotiate.rs` and `ObstacleMap` updates) under `Bucket::MapPatch`, `Zones::add`/`remove`/`others` under `Bucket::Zones`, terminal discovery (`terminals*` in `route.rs`, `cluster_terminals` in `vias.rs`, `terminals_lifting` in `shove.rs`) under `Bucket::Terminals`, and polygon/arc helpers under `Bucket::Geometry`.
-  - Recorded per-round and per-attempt `RawEvent` outcomes in `negotiate.rs`, `route.rs`, `ripup.rs`, `shove.rs`, `nudge.rs`, `blame.rs`, `vias.rs`, and `cleanup.rs` **without adding any extra `connectivity()` calls** (using each move's existing `open_before` / `open_after` counts so `Watch` ticks and route geometry never change).
-- **`core/crates/ultraroute/src/{stats.rs, stages.rs, lib.rs, main.rs}` & `core/README.md`:**
-  - Added `--no-timing` CLI flag (`Args.timing: bool`, default `true` when `--report` is requested; disables fine-grained TLS bucket & move timers for A/B overhead testing).
-  - Extended `--report` JSON (`RunStats`) with:
-    - `board`: `BoardInfo { copper_layers, pads, nets, fine_pitch_parts }`
-    - `load_cpu_seconds` and `stats_cpu_seconds` (CPU spent loading `.kicad_pcb` before stages and computing post-stage stats while `RunClock` is paused)
-    - Per-`StageReport` `cpu_seconds`, `open_before`, `open_after`, `cpu: CpuBreakdown { astar, map_build, map_patch, zones, checks, connectivity, terminals, geometry, accounted, other }`, and `effort: Effort { useful_seconds, kept_other_seconds, wasted_seconds, accounted_seconds, other_seconds }`
-    - Run-level `moves: MoveStats` (`negotiation`, `single`, `rip_up`, `shove`, `nudge`) and `progress: ProgressStats` (`initial_open`, `final_open`, `min_open`, `last_open_drop_cpu_seconds`, `last_open_drop_fraction`, `last_open_drop_stage`, `no_progress_routing_cpu_seconds`, `no_progress_total_cpu_seconds`, `open_curve`, `last_half`).
-  - **Exact IEEE-754 accounting (`step_down` in `stats.rs`):** Sub-stage buckets and effort components are clamped and rounded down by 1 ULP where needed so `accounted + other <= cpu_seconds` holds strictly in `f64` JSON output, with unattributed stage time shown explicitly in `other`.
-- **`core/crates/ultraroute/tests/stats.rs`:**
-  - Added integration test `sub_stage_cpu_and_effort_account_for_stage_time` asserting that `--report` populates `board`, `cpu`, `effort`, `moves`, and `progress`, that `astar > 0`, and that `accounted + other <= cpu_seconds` holds for every stage, alongside `no_timing_flag_disables_fine_buckets_without_changing_summary`.
+### 3.1 Merge with `main` `8b71912` and workspace Clippy / Release Tests (Step 1)
+1. **Merge (`5981f74`):** Resolved all 6 merge conflicts between `fac5cc2` (`explore/timing`) and `main` `8b71912` (`feat/order-free` + `explore/boxed`) in [`negotiate.rs`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/negotiate.rs), [`prefanout.rs`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/prefanout.rs), [`ripup.rs`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/ripup.rs), [`shove.rs`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/shove.rs), [`lib.rs`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/ultraroute/src/lib.rs), and [`stages.rs`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/ultraroute/src/stages.rs), preserving `main`'s exact routing behaviour (`--rip-boxed`, `--escape-room`, `--guard-ties`, canonical input order, and `shove` failure tracking) with the timing instrumentation on top.
+2. **Clippy failures found & fixed (`2b6734b`):** Running `cargo clippy --workspace --all-targets -- -D warnings` on `sequoia-server` caught **6 `clippy::needless_range_loop` errors** introduced by the original instrumentation (`2` in [`core/crates/board/src/work.rs`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/board/src/work.rs#L179-L215) indexing `buckets_ns[i]`, and `4` in [`core/crates/ultraroute/src/lib.rs`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/ultraroute/src/lib.rs#L539-L735) indexing ` raw_b[i]` / `b_sec[i]`). Replaced all 6 with iterator `enumerate()` / `zip()` loops.
+3. **Full workspace verification on `sequoia-server` (`2b6734b` & `358a016`):**
+   - `cargo clippy --workspace --all-targets -- -D warnings`: **0 warnings, exit 0**.
+   - `cargo test --release --workspace --no-fail-fast` (under `systemd-run --user --scope -q -p MemoryMax=8G -p MemorySwapMax=0`): **0 failures across all crates and integration suites**, including `tests/cli.rs::the_readme_names_every_flag` (after documenting `--timing` and `--no-timing` in [`core/README.md`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/README.md#L131-L132)) and [`tests/stats.rs::sub_stage_cpu_and_effort_account_for_stage_time`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/ultraroute/tests/stats.rs#L95-L155) (verifying `--timing`, default coarse mode, and `--no-timing`).
 
-### Verification status vs Part 1 hard requirements
-| Requirement | Status | Details |
-| :--- | :--- | :--- |
-| Compiles cleanly across workspace | **Verified** | `cargo check -p ultraroute --tests` and `cargo check -p web -p lab-films` exited `0` with `0` warnings. |
-| No clock reads in A* inner loop | **Verified in code** | `enter_bucket(Bucket::Astar)` wraps whole `route_astar` / `cost_field` / `walled_in` calls in `core/crates/grid/src/search.rs`; `run_astar_loop` and `NodeHeap` do not touch `work` or `clock_gettime`. |
-| Sub-stage accounting `<= stage_cpu` + test | **Implemented & check-clean; test execution blocked on `reserve`** | IEEE-754 `step_down` enforces `accounted + other <= cpu_seconds`; tested in `core/crates/ultraroute/tests/stats.rs`; across 4,845 reconstructed stage records in `existing_corpus_analysis.json`, max `(accounted + other) - stage_cpu = 0.00e0 s`. |
-| Byte-identical routes on >=20 boards (`Deadline::seconds` patched to `1e6` per Rule 6) | **Scripted in `runs/exactness_and_overhead.py` & `runs/run_when_unblocked.sh`; unexecuted** | Compares `main-1e6` (`947d08c`), `inst-1e6 --report`, and `inst-1e6 --no-timing --report` across **48** non-time-limited `smoke + focus` boards (building `-p ultraroute -p kicad-text` in each binary directory and restoring `clock.rs` via `trap`). Not yet run because `reserve` was deadlocked. |
-| CPU overhead measurement (`--report` vs `--no-timing` vs `main`) | **Scripted in `runs/exactness_and_overhead.py`; unexecuted** | Runs 3 interleaved `--cpu-clock` repeats across 25 boards; `--no-timing` flag is already wired if overhead exceeds ~1%. |
+### 3.2 Rule-6 Exactness Proof (`Deadline::seconds = 1e6`, Step 2)
+Built separate detached worktrees on `sequoia-server` with `CARGO_BUILD_BUILD_DIR=$PWD/target/build cargo build --release -p ultraroute -p kicad-text` (so `kicad-text` sits beside each `ultraroute` binary) and [`Deadline::seconds`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/clock.rs#L35-L42) patched to `1e6` in both checkouts:
+- `main_1e6` (`8b71912`): inode `6697949`, SHA-256 `29bf1dbfcd33b5292b121b57447cad4c78e6b8925cc25bff3014c2b31e32b49e`
+- `inst_1e6` (`358a016`): inode `6702174`, SHA-256 `e8454c46bee1a4fd1308eb505192cd3b83b6d0b05d2bb0cf3155b232d2c5292c`
 
----
+Routed all **48** `smoke` boards with `--strip-all --recipe default --seed 1 --uuid-seed 1 --threads 1 --timeout 120` under 4 modes (`main_1e6`, `inst_default_1e6`, `inst_off_1e6` = `--no-timing`, `inst_on_1e6` = `--timing --report`):
+- **Non-time-limited boards:** **48 / 48** (`3,160` connections, `103.27 s` CPU).
+- **Byte-identical `.kicad_pcb` SHA-256 across all 4 modes:** **48 / 48 (`0` mismatches)** — recorded in [`runs/exactness/summary.json`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/runs/exactness/summary.json).
 
-## 4. Part 2: Where the Router's Time Goes Across PCBench
+### 3.3 CPU Overhead Measurement & Opt-In `--timing` Fix (Step 3)
+Measured single-thread process CPU (`utime + stime` via `wait4` / `RUSAGE_CHILDREN`, `--cpu-clock`) across all **48 `smoke` boards**, **5 interleaved repeats** per board (`main` → `inst_default` → `inst_off` → `inst_on`, cyclic order shifted each repeat, `main` `8b71912` inode `6697481`, SHA-256 `2f01283e...`):
 
-### 4.1 Datasets, `explore/speed` hot-spot shift, and validation
-Because live binary runs were blocked by `loaf`'s `reserve` deadlock, `runs/analyze_existing_runs.py` measures two complementary on-disk datasets:
+| Build & Mode | Binary Inode | Sum of 48 Board Medians (s) | `Δ` vs `main` (Median Sum) | Sum of 48 Board Means (s) | `Δ` vs `main` (Mean Sum) | Per-Board Median `Δ` (IQR) | Normal-Clock Byte-Identical |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| **Before opt-in (`2b6734b`):** `main` (`8b71912`) | `6697481` | `76.668` | baseline | `76.762` | baseline | — | — |
+| **Before opt-in (`2b6734b`):** `--no-timing` | `6697596` | `77.912` | **`+1.62%`** | `78.043` | **`+1.67%`** | `+1.94%` | `48 / 48` |
+| **Before opt-in (`2b6734b`):** default-on `--report` | `6697596` | `79.706` | **`+3.96%`** | `79.774` | **`+3.92%`** | **`+4.58%`** (`+3.06%` to `+5.96%`) | `48 / 48` |
+| **After opt-in (`358a016`):** `main` (`8b71912`) | `6697481` | `77.004` | baseline | `77.114` | baseline | — | — |
+| **After opt-in (`358a016`):** **default** (coarse stage CPU) | `6697982` | `77.101` | **`+0.13%`** | `77.115` | **`+0.0007%`** | **`+0.20%`** (`-0.69%` to `+1.04%`) | `48 / 48` |
+| **After opt-in (`358a016`):** `--no-timing` | `6697982` | `76.995` | **`-0.01%`** | `77.115` | **`+0.0011%`** | **`+0.08%`** | `48 / 48` |
+| **After opt-in (`358a016`):** **`--timing --report`** | `6697982` | `78.462` | **`+1.89%`** | `78.575` | **`+1.89%`** | **`+1.83%`** (`+0.69%` to `+3.36%`) | `48 / 48` |
 
-1. **`HEAD-331` (`explore-text-v2-{smoke,focus,guard}-new`, 331 unique PCBench boards):** Routed on commit `c521114` (identical router code to `HEAD` `947d08c`), `--seed 1 --threads 1 --timeout 120 --cpu-clock`, with full `log.txt` stage/pass output and KiCad 9.0.8 DRC `result.json` (**260 / 331 clean = 78.55%**, total stage CPU `6,028.27 s`, plus `11.35 s` board-load CPU). On these exact 331 boards, pre-speed `s1-cpu-cd0a82a` took `8,418.50 s` (`257 / 331` clean), giving an exact post-`explore/speed` corpus speedup of **1.3965x** (`+3` net clean boards).
-2. **`Full-1182` (all 1,182 PCBench boards):** Uses `HEAD-331` directly for those 331 boards and combines `s1-cpu-cd0a82a` (`--seed 1 --cpu-clock`, `975 / 1,182` clean on `cd0a82a`, raw total `37,859.40 s`) with per-board `log.txt` stage proportions from `srvfull-a7831ee` for the remaining 851 boards (**978 / 1,182 clean = 82.74%**, total stage CPU `35,469.17 s`, plus `56.63 s` load CPU).
-
-**Validation of `log.txt` stage reconstruction:** Tested against all 5 post-speed `hs3_new` `.report.json` files inside `worktree-archive/explore-speed/files.tar.zst` (`59pct_keyboard`, `96boards-sensors_Sensors`, `CAL430FR_CAL430F`, `m2-electronics_m2fc`, `nan-15_pcb`), reconstructed stage durations match `.report.json` to **0.020 s mean absolute error** (max error `0.179 s`, on `96boards-sensors` `vias` `9.181 s` vs `9.360 s`).
-
-**How `explore/speed` (`8c5c1b9`) changed the hot spots from `explore-nearmiss`:**
-Archived incremental A/B `.report.json` runs in `explore-speed/files.tar.zst` show why `explore-nearmiss`'s 3-board profile was stale:
-- **`hs1` (stamp & spoke caches in `ObstacleMap`):** Cut `CAL430FR_CAL430F` `shove` from `126.18 s -> 87.03 s` (**1.45x**) and `rip-up` `1.33 s -> 0.81 s` (**1.64x**), shrinking static `map_build` ~4x.
-- **`hs2` (32-bucket radix `NodeHeap` + removing TLS `LocalKey::with` in `route_astar`):** Cut `59pct_keyboard` `negotiation` `109.11 s -> 67.39 s` (**1.62x**), `CAL430FR_CAL430F` `shove` `129.13 s -> 75.28 s` (**1.72x**), `finishing` **3.15x**, and `rip-up` **4.16x**.
-- **`hs3` (`FxHash` + in-place `patch_grid` per `(class, weight)`):** Cut `m2-electronics_m2fc` `negotiation` `23.86 s -> 8.27 s` (**2.88x**) and `59pct_keyboard` `negotiation` `61.05 s -> 42.72 s` (**1.43x**), **eliminating the 70.0% `SipHash` `negotiate::patch_grid` bottleneck** seen in `explore-nearmiss` (`map_patch` is now **8.24%** of corpus CPU). Across all 5 benchmark boards (`base -> hs3_new`), total runtime fell `1.47x - 2.22x` (`59pct_keyboard` `138.49 -> 62.46 s`, `CAL430FR` `173.17 -> 89.36 s`, `m2fc` `92.18 -> 62.68 s`, `96boards` `53.28 -> 34.95 s`, `nan-15` `51.79 -> 33.86 s`), rescuing **+10 `focus` boards** (`0 -> 10` clean, `guard` `240 -> 240`, `0` lost).
+**Why `2b6734b` exceeded 1% even with `--no-timing`, and how `358a016` fixed both:**
+- In `2b6734b`, `board::work::enter()` read thread-local storage (`TIMING_ON.with(...)`) across crate boundaries and returned a `Scope` with a `Drop` impl inside hot per-segment DRC (`check.rs`), obstacle-stamping (`grid.rs`), and congestion-zone (`negotiate.rs`) loops, forcing LLVM unwind landing pads even when disabled (`+1.62%` off, `+3.96%` on).
+- In `358a016` ([`work.rs:248-536`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/board/src/work.rs#L248-L536)), fine-grained bucket/event timing is gated behind opt-in **`--timing`**, checked first via a single relaxed global atomic (`SINK_COUNT == 0`), and hot callers use closure-based [`in_bucket`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/board/src/work.rs#L452-L464) with `#[cold] #[inline(never)]` slow paths so default runs have **zero TLS reads, zero `Drop` guards on hot stacks (`+0.13%` median / `+0.0007%` mean), and half the `--timing` overhead (`+3.96% → +1.89%`)**.
+- Across all **3,801 stage records** in the 214-board live `--timing --report` run, `max((accounted + other) - cpu_seconds) = 0.000e+00 s` (max IEEE-754 rounding gap `2.78e-17 s` on buckets, `1.39e-17 s` on effort).
 
 ---
 
-### 4.2 Overall Breakdown by Stage and Sub-Operation (Total CPU vs Median Board)
+## 4. Step 4: Live Measurements Across PCBench (`smoke`, `focus`, `rest100`, `214`, `HT-1182`)
+
+### 4.1 Summary across measured tiers vs survey-weighted population estimate
+| Dataset / Tier | Provenance | Boards | Clean Boards (%) | Stage CPU (s) | Load / Stats CPU (s) | Mean (s) | Median (IQR, s) | `p90` (s) | Top-10% CPU Share |
+| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| **`smoke`** | **Measured** | `48` | `47` (**`97.92%`**) | `101.02` | `0.47` / `0.29` | `2.10` | `1.29` (`0.73 – 3.44`) | `4.47` | `23.95%` |
+| **`focus`** | **Measured** | `74` | `24` (**`32.43%`**) | `2,644.72` | `1.99` / `2.06` | `35.74` | `22.40` (`5.36 – 53.61`) | `104.94` | `31.21%` |
+| **`rest100`** | **Measured** | `100` | `74` (**`74.00%`**) | `4,676.71` | `4.96` / `7.56` | `46.77` | `26.63` (`4.82 – 104.26`) | `118.06` | `27.57%` |
+| **`raw_214` (`smoke ∪ focus ∪ rest100`)** | **Measured** | **`214`** | **`138` (`64.49%`)** | **`7,400.04`** | `7.36` / `9.86` | **`34.58`** | **`14.11` (`2.52 – 50.21`)** | **`115.42`** | **`35.55%`** |
+| **`HT-1182` (PCBench survey scale)** | **ESTIMATED (HT)** | `1,182.0` | `854.3` (`72.28%`) | `52,670.61` | `55.41` / `83.00` | `44.56` | `25.41` (`4.03 – 86.59`) | `117.94` | `28.70%` |
+
+*(Note: `8` boards belong to both `smoke` and `focus`, so `|smoke ∪ focus| = 114` unique boards at weight `1.0`, plus `100` spread-sampled boards from the remaining `1,068` boards at weight `10.68`.)*
+
+### 4.2 Breakdown by pipeline stage and sub-operation
 
 #### By pipeline stage
-| Stage | Full-1182 CPU (s) | Full-1182 Total % | Full-1182 Mean % | Full-1182 Median % (IQR) | HEAD-331 CPU (s) | HEAD-331 Total % | HEAD-331 Median % (IQR) |
-| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `negotiation` | 18,880.56 | **53.23%** | 64.33% | **67.50%** (52.14 - 83.56%) | 2,585.68 | **42.89%** | **58.63%** (38.00 - 79.49%) |
-| `shove` | 4,783.25 | **13.49%** | 5.79% | **0.00%** (0.00 - 0.17%) | 1,665.10 | **27.62%** | **0.00%** (0.00 - 3.39%) |
-| `vias` | 4,413.77 | **12.44%** | 15.72% | **13.02%** (5.06 - 24.83%) | 895.13 | **14.85%** | **16.83%** (4.76 - 28.31%) |
-| `prefanout` | 2,170.40 | **6.12%** | 3.86% | **0.00%** (0.00 - 1.41%) | 342.37 | **5.68%** | **0.00%** (0.00 - 2.31%) |
-| `finishing` | 2,085.30 | **5.88%** | 1.91% | **0.00%** (0.00 - 0.44%) | 51.79 | **0.86%** | **0.00%** (0.00 - 0.52%) |
-| `pairs` | 1,617.47 | **4.56%** | 3.23% | **0.00%** (0.00 - 0.00%) | 312.65 | **5.19%** | **0.00%** (0.00 - 0.00%) |
-| `rip-up` | 1,072.53 | **3.02%** | 1.16% | **0.00%** (0.00 - 0.00%) | 90.71 | **1.50%** | **0.00%** (0.00 - 0.50%) |
-| `write` | 113.25 | 0.32% | 1.99% | 0.44% (0.22 - 1.23%) | 21.17 | 0.35% | 0.55% (0.22 - 1.60%) |
-| `tightening` | 95.76 | 0.27% | 1.18% | 0.36% (0.05 - 1.24%) | 21.37 | 0.35% | 0.44% (0.13 - 1.24%) |
-| `result` | 95.64 | 0.27% | 0.29% | 0.00% (0.00 - 0.00%) | 32.92 | 0.55% | 0.00% (0.00 - 0.00%) |
-| `refinishing` | 69.52 | 0.20% | 0.05% | 0.00% (0.00 - 0.00%) | 0.30 | 0.00% | 0.00% (0.00 - 0.00%) |
-| `cleaning` | 42.33 | 0.12% | 0.06% | 0.00% (0.00 - 0.00%) | 1.10 | 0.02% | 0.00% (0.00 - 0.00%) |
-| `set-up` | 20.11 | 0.06% | 0.41% | 0.22% (0.05 - 0.87%) | 5.60 | 0.09% | 0.30% (0.08 - 0.97%) |
-| `length matching` | 9.29 | 0.03% | 0.02% | 0.00% (0.00 - 0.00%) | 2.38 | 0.04% | 0.00% (0.00 - 0.00%) |
+| Stage | Measured `raw_214` CPU (s) | `raw_214` Total % | `raw_214` Median % (IQR) | `raw_214` Stage Waste % | `smoke` % | `focus` % | `rest100` % | ESTIMATED `HT-1182` CPU (s) | `HT-1182` Total % |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `negotiation` | `2,641.27` | **`35.69%`** | **`46.16%`** (`22.67 – 59.40%`) | `24.45%` | `50.88%` | `22.65%` | `42.74%` | `21,990.18` | `41.75%` |
+| `shove` | `2,038.24` | **`27.54%`** | `0.06%` (`0.02 – 17.36%`) | **`51.75%`** | `2.67%` | **`52.43%`** | `13.93%` | `8,344.84` | `15.84%` |
+| `vias` | `837.79` | **`11.32%`** | **`14.43%`** (`5.53 – 30.63%`) | **`91.51%`** | `27.57%` | `8.94%` | `12.33%` | `6,420.75` | `12.19%` |
+| `prefanout` | `700.20` | **`9.46%`** | `1.37%` (`0.02 – 15.87%`) | `12.14%` | `11.04%` | `6.11%` | `11.34%` | `5,834.07` | `11.08%` |
+| `pairs` | `378.92` | **`5.12%`** | `0.01%` (`0.00 – 0.06%`) | `0.52%` | `3.86%` | `2.07%` | `6.84%` | `3,475.88` | `6.60%` |
+| `rip-up` | `335.19` | **`4.53%`** | `0.07%` (`0.02 – 2.28%`) | **`83.42%`** | `0.36%` | `3.11%` | `5.39%` | `2,783.06` | `5.28%` |
+| `finishing` | `270.36` | **`3.65%`** | `0.16%` (`0.03 – 1.02%`) | **`55.09%`** | `0.35%` | `1.38%` | `5.00%` | `2,554.30` | `4.85%` |
+| `corridors` | `64.37` | `0.87%` | `0.01%` (`0.01 – 0.03%`) | **`65.80%`** | `0.01%` | `1.95%` | `0.27%` | `180.54` | `0.34%` |
+| `pair-escapes` | `45.38` | `0.61%` | `0.01%` (`0.00 – 0.02%`) | `5.54%` | `0.00%` | `0.29%` | `0.81%` | `409.08` | `0.78%` |
+| `tightening` | `35.22` | `0.48%` | `0.29%` (`0.14 – 0.66%`) | `0.48%` | `1.20%` | `0.28%` | `0.58%` | `303.54` | `0.58%` |
+| `refinishing` | `26.65` | `0.36%` | `0.02%` (`0.01 – 0.11%`) | **`89.36%`** | `0.01%` | `0.52%` | `0.28%` | `152.91` | `0.29%` |
+| `write` | `19.01` | `0.26%` | `0.26%` (`0.15 – 0.47%`) | `0.00%` | `1.33%` | `0.18%` | `0.30%` | `154.64` | `0.29%` |
+| `cleaning` | `5.50` | `0.07%` | `0.06%` (`0.03 – 0.09%`) | `0.00%` | `0.26%` | `0.04%` | `0.09%` | `51.34` | `0.10%` |
+| `prune-escapes` / `result` / `length matching` / `set-up` / `merge-escapes` | `1.94` | `0.03%` | `<0.02%` | `0.00%` | `0.46%` | `0.05%` | `0.03%` | `15.46` | `0.03%` |
 
-*(Note: `islands`, `planes`, `first`, `nudge`, and `corridors` were gated off by `Stage::enabled` across default `--strip-all --recipe default` PCBench runs; `pair-escapes` and `prune-escapes` were `< 0.25%` in archived `.report.json` runs.)*
+#### By hardware-timed sub-operation bucket
+| Sub-Operation Bucket | Measured `raw_214` CPU (s) | `raw_214` Total % | `raw_214` Mean % | `raw_214` Median % (IQR) | `smoke` % | `focus` % | `rest100` % | ESTIMATED `HT-1182` CPU (s) | `HT-1182` Total % |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `astar` (`grid::search`) | `3,145.20` | **`42.50%`** | `37.88%` | **`38.03%`** (`22.72 – 52.56%`) | `38.92%` | `37.26%` | `45.49%` | `23,738.61` | `45.07%` |
+| `map_patch` (grid & price patching) | `1,450.59` | **`19.60%`** | `19.97%` | **`15.90%`** (`10.84 – 24.28%`) | `17.55%` | `20.21%` | `19.34%` | `10,207.22` | `19.38%` |
+| `geometry` (polygons, escape room, pull-tight) | `713.36` | **`9.64%`** | `10.01%` | **`5.48%`** (`2.58 – 12.26%`) | `10.66%` | `7.03%` | `11.11%` | `5,744.93` | `10.91%` |
+| `map_build` (`ObstacleMap` construction) | `602.76` | **`8.15%`** | `6.96%` | **`5.60%`** (`3.80 – 8.90%`) | `4.94%` | `9.58%` | `7.39%` | `3,948.38` | `7.50%` |
+| `terminals` (pad/cluster entry lookup) | `573.78` | **`7.75%`** | `12.65%` | **`7.05%`** (`3.89 – 17.49%`) | `16.75%` | `9.90%` | `6.35%` | `3,449.78` | `6.55%` |
+| `connectivity` (union-find & Prim MST) | `273.90` | **`3.70%`** | `2.32%` | **`1.43%`** (`0.60 – 3.17%`) | `1.18%` | `4.72%` | `3.18%` | `1,713.27` | `3.25%` |
+| `zones` (congestion disc claims) | `250.14` | **`3.38%`** | `4.53%` | **`3.89%`** (`1.92 – 5.94%`) | `5.19%` | `3.93%` | `3.04%` | `1,627.11` | `3.09%` |
+| `checks` (`board::check` DRC) | `236.56` | **`3.20%`** | `3.64%` | **`2.35%`** (`1.33 – 4.00%`) | `3.41%` | `4.03%` | `2.72%` | `1,467.65` | `2.79%` |
+| `other` (unattributed stage work) | `153.75` | **`2.08%`** | `2.04%` | **`1.47%`** (`0.88 – 2.60%`) | `1.39%` | `3.35%` | `1.37%` | `773.67` | `1.47%` |
 
-#### By sub-operation bucket (calibrated post-`explore/speed`)
-| Sub-Operation Bucket | Full-1182 CPU (s) | Full-1182 Total % | Full-1182 Mean % | Full-1182 Median % (IQR) | HEAD-331 CPU (s) | HEAD-331 Total % | HEAD-331 Median % (IQR) |
-| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `astar` (A* & field search) | 21,025.92 | **59.28%** | 60.38% | **63.44%** (57.54 - 65.49%) | 3,331.70 | **55.27%** | **61.08%** (53.89 - 64.82%) |
-| `map_build` (Obstacle map build) | 3,203.25 | **9.03%** | 7.27% | **6.91%** (4.62 - 8.97%) | 658.77 | **10.93%** | **7.86%** (5.17 - 9.92%) |
-| `zones` (Congestion discs) | 2,980.63 | **8.40%** | 9.00% | **9.32%** (7.42 - 10.92%) | 519.30 | **8.61%** | **8.70%** (6.47 - 10.54%) |
-| `map_patch` (Incremental grid patch) | 2,923.57 | **8.24%** | 8.30% | **8.54%** (7.38 - 9.67%) | 490.78 | **8.14%** | **8.16%** (6.55 - 9.38%) |
-| `other` (Trace-back, sort, I/O) | 1,987.57 | **5.60%** | 5.24% | **3.72%** (2.99 - 5.80%) | 362.87 | **6.02%** | **4.45%** (3.34 - 6.68%) |
-| `connectivity` (Union-find & MST) | 1,062.60 | **3.00%** | 2.77% | **2.23%** (1.78 - 3.03%) | 252.50 | **4.19%** | **2.71%** (1.97 - 3.57%) |
-| `checks` (Exact DRC geometry) | 1,019.70 | **2.87%** | 4.08% | **3.27%** (2.43 - 4.37%) | 189.12 | **3.14%** | **3.65%** (2.57 - 5.23%) |
-| `terminals` (Pad/cluster entry lookup) | 696.54 | **1.96%** | 1.63% | **1.55%** (1.19 - 1.90%) | 130.33 | **2.16%** | **1.71%** (1.27 - 2.04%) |
-| `geometry` (Polygons & morph) | 569.38 | **1.61%** | 1.34% | **0.42%** (0.15 - 1.36%) | 92.88 | **1.54%** | **0.56%** (0.23 - 1.65%) |
+### 4.3 Splits by routing outcome and board size (`raw_214` measured, with `HT-1182` notes)
 
----
-
-### 4.3 Splits by Outcome and Board Size
-
-#### Split by routing outcome (4-way exact)
-| Group (Dataset) | Boards | Total CPU (s) | Median CPU (s) | Useful % | Wasted % | Top Stages (% of group CPU) |
+| Dimension & Group (`raw_214` Measured) | Boards (Clean) | Stage CPU (s) | Median CPU (s) | Useful % | Wasted % | Top Stages (% of group CPU) |
 | :--- | ---: | ---: | ---: | ---: | ---: | :--- |
-| `clean_untimed` (1,182) | 923 | 12,044.08 | 5.40 | 63.2% | 22.5% | `negotiation` 64.5%, `vias` 18.7%, `shove` 7.0%, `prefanout` 3.9% |
-| `clean_time_limited` (1,182) | 55 | 5,409.69 | 90.80 | 62.9% | 21.0% | `negotiation` 59.2%, `vias` 14.7%, `shove` 7.9%, `prefanout` 6.4% |
-| `failed_with_time` (1,182) | 67 | 1,858.29 | 19.86 | 24.5% | **54.1%** | `negotiation` 38.9%, `shove` 34.8%, `vias` 12.1%, `prefanout` 5.7% |
-| `failed_time_limited` (1,182) | 137 | 16,157.11 | 118.10 | 50.0% | 30.9% | `negotiation` 44.5%, `shove` 17.8%, `finishing` 10.5%, `prefanout` 7.8% |
-| `clean_untimed` (`HEAD-331`) | 256 | 2,915.18 | 4.87 | 57.9% | 25.9% | `negotiation` 58.4%, `vias` 22.8%, `prefanout` 6.6%, `pairs` 6.0% |
-| `clean_time_limited` (`HEAD-331`) | 4 | 294.39 | 60.63 | 59.0% | 20.0% | `negotiation` 43.3%, `pairs` 21.0%, `prefanout` 12.7%, `shove` 11.5% |
-| `failed_with_time` (`HEAD-331`) | 58 | 1,319.79 | 18.66 | 26.5% | **54.6%** | `negotiation` 40.0%, `shove` 34.7%, `vias` 10.3%, `prefanout` 4.3% |
-| `failed_time_limited` (`HEAD-331`) | 13 | 1,498.91 | 108.45 | 22.6% | **39.4%** | **`shove` 69.9%**, `negotiation` 15.2%, `vias` 4.4%, `prefanout` 3.8% |
+| **Outcome:** `clean_untimed` | `129` (`129`) | `1,735.90` | `3.80` | `48.5%` | `29.7%` | `negotiation` `42.3%`, `vias` `21.1%`, `shove` `17.5%`, `prefanout` `11.0%` |
+| **Outcome:** `clean_time_limited` | `9` (`9`) | `864.74` | `104.26` | `28.3%` | `31.5%` | `shove` `40.7%`, `negotiation` `28.6%`, `prefanout` `12.7%`, `vias` `9.7%` |
+| **Outcome:** `failed_with_time` | `47` (`0`) | `1,526.03` | `23.77` | `28.8%` | **`52.1%`** | **`shove` `41.9%`**, `negotiation` `30.0%`, `vias` `10.5%`, `prefanout` `8.3%` |
+| **Outcome:** `failed_time_limited` | `29` (`0`) | `3,273.38` | `117.75` | `38.9%` | **`44.9%`** | `negotiation` `36.7%`, `shove` `22.7%`, `prefanout` `8.4%`, `pairs` `7.7%` |
+| **Connections:** `1 – 50` | `54` (`44`) | `600.73` | `1.29` | `15.4%` | `39.7%` | **`shove` `68.6%`**, `negotiation` `17.7%`, `vias` `5.0%`, `prefanout` `2.6%` |
+| **Connections:** `51 – 150` | `75` (`53`) | `1,532.41` | `5.36` | `31.2%` | **`49.8%`** | **`shove` `48.1%`**, `negotiation` `28.2%`, `vias` `10.0%`, `prefanout` `6.3%` |
+| **Connections:** `151 – 400` | `61` (`35`) | `3,031.26` | `38.28` | `37.0%` | `41.2%` | `negotiation` `35.9%`, `shove` `24.8%`, `vias` `14.3%`, `prefanout` `11.3%` |
+| **Connections:** `401+` | `24` (`6`) | `2,235.65` | `117.80` | `49.5%` | `35.8%` | `negotiation` `45.4%`, `prefanout` `10.9%`, `vias` `9.9%`, `pairs` `8.7%` |
+| **Layers:** `2 copper layers` | `156` (`99`) | `4,671.23` | `7.54` | `37.5%` | **`44.8%`** | `negotiation` `37.1%`, `shove` `32.9%`, `vias` `9.4%`, `prefanout` `5.5%` |
+| **Layers:** `4+ copper layers` | `58` (`39`) | `2,728.81` | `30.62` | `38.3%` | `35.1%` | `negotiation` `33.3%`, `shove` `18.3%`, `prefanout` `16.2%`, `vias` `14.6%` |
+| **Fine-pitch (`<=0.5 mm`):** `0 parts` | `118` (`94`) | `2,245.21` | `3.82` | `42.4%` | `39.4%` | `negotiation` `41.5%`, `shove` `31.1%`, `vias` `11.1%`, `finishing` `6.0%` |
+| **Fine-pitch (`<=0.5 mm`):** `1 – 2 parts` | `68` (`32`) | `3,505.51` | `37.96` | `34.2%` | **`43.9%`** | `negotiation` `32.7%`, `shove` `29.5%`, `prefanout` `12.2%`, `vias` `11.0%` |
+| **Fine-pitch (`<=0.5 mm`):** `3+ parts` | `28` (`12`) | `1,649.32` | `46.71` | `39.3%` | `38.2%` | `negotiation` `34.2%`, `shove` `18.6%`, `prefanout` `14.5%`, `vias` `12.3%` |
 
-Notice the dramatic contrast between pre-speed `Full-1182` time-limited failures and post-speed `HEAD-331` time-limited failures: after `explore/speed` sped up `negotiation` ~1.6-2.9x, `negotiation` rarely consumes the 60 s cap on medium boards, so failing `HEAD` runs spend **69.9%** of their budget churning inside **`shove`** (`map_build` rises to **15.4%** and `connectivity` rises to **6.5%** on those boards).
+Just **96 of the 214 measured boards (`44.86%`)** have `>= 1` fine-pitch (`<= 0.5 mm`) IC, yet they consume **69.66%** (`5,154.83 s`) of all measured CPU (`72.46%` / `38,166.80 s` HT-estimated across `599.4` of `1,182` boards).
 
-#### Split by board size (connections, copper layers, fine-pitch parts; Full-1182)
-| Dimension & Bin | Boards | Total CPU (s) | Median CPU (s) | Useful % | Wasted % | Top Stages (% of group CPU) |
-| :--- | ---: | ---: | ---: | ---: | ---: | :--- |
-| **Connections:** `1 - 50` | 397 | 1,845.45 | 1.30 | 45.0% | 22.6% | `negotiation` 44.8%, `shove` 29.7%, `prefanout` 10.3%, `vias` 8.5% |
-| **Connections:** `51 - 150` | 449 | 9,385.40 | 9.40 | 52.2% | 31.7% | `negotiation` 50.6%, `shove` 20.3%, `vias` 12.8%, `rip-up` 4.7% |
-| **Connections:** `151 - 400` | 261 | 16,171.78 | 50.60 | 56.2% | 28.2% | `negotiation` 55.1%, `vias` 14.4%, `shove` 11.8%, `prefanout` 5.6% |
-| **Connections:** `401+` | 75 | 8,066.55 | 118.20 | 58.7% | 23.6% | `negotiation` 54.6%, `finishing` 11.4%, `prefanout` 9.2%, `vias` 9.1% |
-| **Layers:** `2 copper layers` | 1,059 | 27,376.82 | 6.97 | 56.6% | 27.5% | `negotiation` 55.1%, `shove` 14.2%, `vias` 11.4%, `finishing` 6.0% |
-| **Layers:** `4+ copper layers` | 123 | 8,092.36 | 52.73 | 50.1% | 28.7% | `negotiation` 47.1%, `vias` 15.8%, `prefanout` 11.3%, `shove` 11.1% |
-| **Fine-pitch (`<=0.5 mm`):** `0 parts` | 865 | 16,013.49 | 5.20 | 63.5% | 24.4% | `negotiation` 64.3%, `vias` 14.3%, `shove` 7.7%, `finishing` 7.4% |
-| **Fine-pitch (`<=0.5 mm`):** `1 - 2 parts` | 261 | 15,988.19 | 45.47 | 48.0% | 30.4% | `negotiation` 45.0%, `shove` 17.9%, `prefanout` 11.6%, `vias` 11.1% |
-| **Fine-pitch (`<=0.5 mm`):** `3+ parts` | 56 | 3,467.49 | 43.49 | 49.8% | 31.5% | `negotiation` 39.9%, `shove` 20.1%, `vias` 9.9%, `pairs` 9.5% |
+### 4.4 Per-move-kind effort breakdown & failing boards' second half `[0.5×T, T]`
 
-Just **317 boards** (`26.8%` of PCBench) have one or more fine-pitch (`<= 0.5 mm`) parts, yet they account for **54.85%** (`19,455.68 s`) of all corpus CPU (`8.7x` higher median runtime than non-fine-pitch boards: `45.47 s` vs `5.20 s`).
+| Move / Stage Kind | Provenance | Volume | Kept / Succeeded | Useful Closing (s) | Kept Non-Closing (s) | Wasted (s) | Stage Waste % | Where Wasted CPU Goes |
+| :--- | :--- | :--- | :--- | ---: | ---: | ---: | ---: | :--- |
+| **Negotiation** | `raw_214` (meas) | `1,749` rounds (`266` passes) | `1,296` conv + `16/107` rescues | `1,991.41` | `0.00` | **`645.74`** | **`24.45%`** | `453` stalled rounds (`569.52 s`) + `91` failed walled rescues (`66.25 s`) + setup (`9.86 s`) |
+| **Negotiation** | `HT-1182` (est) | `9,261` rounds (`1,428` passes) | `7,201` conv + `55/494` rescues | `16,559.48` | `0.00` | `5,396.98` | `24.54%` | `2,060` stalled rounds (`4,998.19 s`) + `439` failed rescues (`346.50 s`) |
+| **Shove / Plough** | `raw_214` (meas) | **`3,918` tries** (`707` passes) | `118` closed + `324` tie | `245.83` | **`709.39`** | **`1,054.76`** | **`51.75%`** | `308` `reverted_routed` (`759.45 s`), `3,134` `walled` (`244.25 s`), `34` `reverted_unrouted` (`51.05 s`) — split: wasted repair `448.29 s`, plough `434.04 s`, reroute `154.02 s` |
+| **Shove / Plough** | `HT-1182` (est) | `11,914` tries (`1,994` passes) | `515` closed + `934` tie | `1,439.97` | `2,765.77` | `3,954.08` | `47.38%` | Wasted repair `1,686.36 s`, plough `1,344.72 s`, reroute `840.23 s` |
+| **Via reduction** (`vias`) | `raw_214` (meas) | `61,012` subwindow tries | `6,342` kept (`10.39%`) | `0.00` | `67.44` | **`766.68`** | **`91.51%`** | `54,670` failed 6 mm subwindow obstacle-map builds + A* detours (`5,874.98 s` HT wasted) |
+| **Rip-Up + Corridors** | `raw_214` (meas) | `1,224` tries | `115` kept (`9.40%`) | `75.40` | `0.00` | **`321.95`** | **`80.58%`** | `256` `no_better` 10 s reroutes (`211.76 s`) + `838` `no_path` (`109.03 s`) + `8` `hard_conflict` (`1.16 s`) |
+| **Single-net A*** (`finishing`+`refinish`) | `raw_214` (meas) | `3,324` tries | `959` routed (`28.85%`) | `112.24` | `0.00` | **`172.75`** | **`58.16%`** | `1,549` `no_path` exhaustive A* + `cell/2` fine-window floods (`151.59 s`) + `813` `no_terminal` (`21.12 s`) |
 
----
+**What the 76 failing boards do in their second half `[0.5×T, T]` (`2,399.71 s` measured):**
+- **All 76 failing boards:** **66.80% wasted** (`1,602.94 s`), `20.89%` useful (`501.23 s`), `9.81%` `kept_other` (`235.38 s`), led by `shove` (`38.24%` / `917.54 s`), `negotiation` (`22.53%` / `540.57 s`), `vias` (`16.20%` / `388.76 s`), `rip-up` (`9.34%` / `224.23 s`), and `finishing` (`8.91%` / `213.91 s`).
+- **47 `failed_with_time` boards (`763.02 s` in `[0.5×T, T]`):** **72.43% wasted** (`552.66 s`), only `13.27%` useful (`101.22 s`) — **`shove` takes `56.09%`** (`427.96 s`) and **`vias` reduction on an incomplete board takes `20.94%`** (`159.79 s`; across all 76 failing second halves, `vias` consumes **`388.76 s` (`2,499.98 s` HT) with zero chance of closing an open connection**).
+- **29 `failed_time_limited` boards (`1,636.69 s` in `[0.5×T, T]`):** **64.17% wasted** (`1,050.27 s`), `24.44%` useful (`400.01 s`), split across `shove` (`29.91%`), `negotiation` (`27.12%`), `vias` (`13.99%` / `228.97 s`), `finishing` (`12.73%`), and `rip-up` (`12.16%`).
 
-### 4.4 Useful vs Wasted Work and What Failing Boards Do in `[0.5*T, T]`
+### 4.5 When open count last drops, and what a causal stop rule saves vs loses
 
-#### Per-stage and per-move-kind effort breakdown
-| Move / Stage Kind | Dataset | Volume | Kept / Succeeded | Useful Closing (s) | Kept Non-Closing (s) | Wasted (s) | Waste % | Primary Source of Wasted CPU |
-| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- |
-| **Negotiation rounds** | Full-1182 | 7,577 rounds (1,181 passes) | 6,554 conv rounds | 15,365.04 | 0.00 | 2,382.69 | **12.6%** | 1,029 stalled plateau rounds (`1,739.08 s`) + uncommitted net routes |
-| **Negotiation rounds** | `HEAD-331` | 2,316 rounds (331 passes) | 1,852 conv rounds | 1,990.15 | 0.00 | 440.39 | **17.0%** | 461 stalled plateau rounds (`440.39 s`) |
-| **Single-net A*** (`finishing`) | Full-1182 | 14,318 tries | 10,606 routed | 1,179.29 | 0.00 | 813.87 | **39.0%** | 3,712 `no_path` exhaustive A* + `cell/2` 4M-node fine-window floods |
-| **Single-net A*** (`finishing`) | `HEAD-331` | 674 tries | 93 routed | 6.83 | 0.00 | 40.47 | **78.1%** | 581 `no_path` exhaustive flood-fills |
-| **Rip-Up** (`rip-up`) | Full-1182 | 2,314 tries | 171 kept (`7.39%`) | 82.91 | 0.00 | 914.55 | **85.3%** | 630 `no_better` 10 s reroutes (`738.93 s`) + 1,490 `no_path` (`174.66 s`) |
-| **Rip-Up** (`rip-up`) | `HEAD-331` | 642 tries | 42 kept (`6.54%`) | 4.92 | 0.00 | 79.44 | **87.6%** | 119 `no_better` reroutes (`48.60 s`) + 470 `no_path` (`30.72 s`) |
-| **Shove / Plough** (`shove`) | Full-1182 | 4,945 tries (1,059 passes) | 382 closed + 497 tie | 1,246.01 | 1,363.35 | 1,882.71 | **39.4%** | 246 reverted repairs (`1,280.24 s` repair + `150.62 s` reroute) + 3,820 walled (`830.55 s`) |
-| **Shove / Plough** (`shove`) | `HEAD-331` | 3,426 tries (650 passes) | 140 closed + 227 tie | 240.12 | 563.42 | 778.21 | **46.7%** | 143 reverted repairs (`529.18 s` repair + `62.26 s` reroute) + 2,916 walled (`271.92 s`) |
-| **Via reduction** (`vias`) | Full-1182 | ~210k subwindow tries | ~12.6% kept | 0.00 | 264.83 | 3,707.57 | **84.0%** | Failed 6 mm subwindow obstacle-map builds + A* replacement attempts |
-
-Two waste concentrations stand out immediately:
-1. **`Rip-Up` wastes 85.3% - 87.6% of its CPU**, keeping only `6.5% - 7.4%` of attempts; **80.8%** of its wasted time (`738.93 s` of `914.55 s`) is spent inside `no_better` 10-second `route_open` reroutes where ripping a uniform-price (`rip_cost = 400`) soft track broke a congested victim net that could not re-close.
-2. **`Vias` wastes 84.0% of its CPU (`3,707.57 s` across 1,182 boards)** testing candidate via pairs/singles/clusters whose 6 mm subwindow A* fails to find a legal fewer-via detour (and **runs even when the board still has open connections!**).
-
-#### What failing boards do in their second half `[0.5*T, T]`
-- **`HEAD-331` failing boards (`n = 71`, `1,409.35 s` in `[0.5*T, T]`):**
-  - **58.81%** wasted (`828.84 s`), **24.64%** `kept_other` (`shove` tie swaps & dropped vias), and only **8.16%** (`114.99 s`) useful connection-closing work!
-  - On the **58 `failed_with_time` boards** (`659.90 s` in `[0.5*T, T]`): **71.81% is wasted**, split across `shove` (**51.25%**, `338.17 s`), **`vias` reduction on an incomplete board** (**20.57%**, `135.77 s`), stalled `negotiation` tail (**16.77%**, `110.65 s`), `result` (`4.18%`), and `rip-up` (`3.84%`).
-  - On the **13 `failed_time_limited` boards** (`749.46 s` in `[0.5*T, T]`): **`shove` consumes 89.34%** (`669.56 s`) and `vias` consumes **8.84%** (`66.23 s`), with only **8.95%** useful closing work vs **47.36%** wasted and **37.45%** `shove` tie-swap churn.
-- **`Full-1182` failing boards (`n = 204`, `9,007.70 s` in `[0.5*T, T]`):**
-  - On `failed_with_time` (`n = 67`, `929.15 s` in `[0.5*T, T]`): **73.10% wasted**, **5.16% useful** (`shove` `51.00%`, `vias` `24.19%`, `negotiation` `15.23%`).
-  - On `failed_time_limited` (`n = 137`, `8,078.56 s` in `[0.5*T, T]`): **45.21% wasted**, **37.10% useful**, **8.43% `kept_other`** (`negotiation` `28.35%`, `shove` `26.09%`, `finishing` `19.35%` on huge boards where `negotiation` hit its 60 s cap, `vias` `14.16%`, `rip-up` `8.39%`).
-
-*(Quick classical win uncovered here: skipping `Vias` reduction or capping it tightly whenever `open > 0` saves `202.00 s` on `HEAD-331` and `1,368.54 s` across `Full-1182` failing second halves with zero effect on completion rate!)*
-
----
-
-### 4.5 When Open Count Last Drops, and What a Stop Rule Saves vs Loses
-
-#### Oracle zero-progress tail (`last_open_drop_cpu_seconds`)
-| Outcome Group | Dataset | Boards | Median Last Drop (s) | Median Drop (% of Run) | Zero-Progress Routing CPU (s) | Share of Group CPU | Stage of Last Open-Count Drop |
+#### Oracle zero-progress tail (`raw_214` measured & `HT-1182` estimated)
+| Outcome Group | Provenance | Boards | Median Last Drop (s) | Median Drop (% of Run) | Zero-Progress Routing CPU (s) | Share of Group CPU | Stage of Last Open-Count Drop |
 | :--- | :--- | ---: | ---: | ---: | ---: | ---: | :--- |
-| **All boards** | `HEAD-331` | 331 | 4.40 s | 74.11% | **915.05 s** | **15.18%** (`18.12%` of routing) | `negotiation` 242, `shove` 56, `rip-up` 15, `finishing` 14, `refinishing` 3, never 1 |
-| `clean` | `HEAD-331` | 260 | 3.80 s | 76.11% | 1.20 s | 0.04% | `negotiation` 210, `shove` 29, `rip-up` 10, `finishing` 9, `refinishing` 1 |
-| `failed_with_time` | `HEAD-331` | 58 | 5.49 s | 45.19% | **485.45 s** | **36.78%** | `negotiation` 31, `shove` 17, `finishing` 5, `rip-up` 3, `refinishing` 2 |
-| `failed_time_limited` | `HEAD-331` | 13 | 66.80 s | 79.83% | **428.40 s** | **28.58%** | `shove` 10, `rip-up` 2, `negotiation` 1 |
-| **All boards** | Full-1182 | 1,182 | 6.30 s | 80.59% | **2,403.09 s** | **6.78%** (`7.83%` of routing) | `negotiation` 853, `shove` 159, `finishing` 84, `rip-up` 52, `refinishing` 20, `cleaning` 10 |
-| `clean` | Full-1182 | 978 | 4.60 s | 79.60% | 121.88 s | 0.70% | `negotiation` 804, `shove` 108, `finishing` 34, `rip-up` 23 |
-| `failed_with_time` | Full-1182 | 67 | 5.80 s | 43.64% | **765.52 s** | **41.20%** | `negotiation` 35, `shove` 19, `finishing` 7, `rip-up` 4, `refinishing` 2 |
-| `failed_time_limited` | Full-1182 | 137 | 105.64 s | 89.53% | **1,515.68 s** | **9.38%** | `finishing` 43, `shove` 32, `rip-up` 25, `refinishing` 16, `negotiation` 14 |
+| **All boards** | **`raw_214` (meas)** | **`214`** | `8.43 s` | `72.60%` | **`977.39 s`** | **`13.21%`** (`15.04%` of routing) | `negotiation` `122`, `shove` `45`, `rip-up` `15`, `finishing` `14`, `corridors` `14`, `refinishing` `4` |
+| `clean` | `raw_214` (meas) | `138` | `2.89 s` | `75.05%` | `2.10 s` | `0.08%` | — |
+| `failed_with_time` | `raw_214` (meas) | `47` | `13.33 s` | `58.50%` | **`481.85 s`** | **`31.58%`** | — |
+| `failed_time_limited` | `raw_214` (meas) | `29` | `104.23 s` | `88.24%` | **`493.44 s`** | **`15.07%`** | — |
+| **All boards** | `HT-1182` (est) | `1,182.0` | `16.31 s` | `76.70%` | `4,231.85 s` | `8.03%` (`9.26%` of routing) | `negotiation` `673.8`, `shove` `248.3`, `finishing` `101.1`, `rip-up` `82.8`, `corridors` `43.0`, `refinishing` `33.0` |
 
-#### Causal post-negotiation patience stop-rule simulation (wins AND regressions)
-Because `Negotiation` holds tentative routes in memory and updates `Board` `open` count only once at `commit` (while running its own internal `patience = 4/8` shared-cell round rule), an open-count stop rule must start **after `Negotiation` commits**, watching post-negotiation repair CPU (`finishing`, `rip-up`, `shove`, `nudge`, `refinishing`, `corridors`). Stopping repair as soon as `Delta_t` repair CPU seconds elapse with `open > 0` and no new record-low `min_open` yields:
+#### Causal post-negotiation patience stop rule (savings AND regressions prominent)
+Simulated directly from each run's hardware-timed `open_curve` starting once `negotiation` commits (stopping `finishing`/`rip-up`/`shove`/`refinishing`/`corridors` as soon as `Δt` repair CPU seconds pass with `open > 0` and no new record-low `min_open`):
 
-| Patience `Delta_t` | `HEAD-331` Triggered | `HEAD-331` CPU Saved | `HEAD-331` Clean Lost | `HEAD-331` Extra Opens | Full-1182 Triggered | Full-1182 CPU Saved | Full-1182 Clean Lost (Regression!) | Full-1182 Extra Opens |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `3 s` | 52 / 331 | 1,554.07 s (**25.78%**) | **13** | +106 | 187 / 1,182 | 5,402.59 s (**15.23%**) | **69** | +1,070 |
-| `5 s` | 46 / 331 | 1,439.78 s (**23.88%**) | **10** | +96 | 167 / 1,182 | 4,941.08 s (**13.93%**) | **57** | +922 |
-| `8 s` | 35 / 331 | 1,282.88 s (**21.28%**) | **6** | +72 | 133 / 1,182 | 4,302.12 s (**12.13%**) | **38** | +820 |
-| `10 s` | 33 / 331 | 1,204.38 s (**19.98%**) | **5** | +64 | 126 / 1,182 | 3,987.41 s (**11.24%**) | **36** | +798 |
-| `15 s` | 22 / 331 | 1,039.14 s (**17.24%**) | **1** | +40 | 94 / 1,182 | 3,289.60 s (**9.27%**) | **24** | +187 |
-| **`20 s`** | **20 / 331** | **934.54 s (15.50%)** | **0** | +38 | 79 / 1,182 | 2,805.76 s (**7.91%**) | **18** | +163 |
-| **`30 s`** | **17 / 331** | **732.91 s (12.16%)** | **0** | +36 | 60 / 1,182 | 1,989.09 s (**5.61%**) | **9** | +123 |
-| `45 s` | 8 / 331 | 377.47 s (**6.26%**) | **0** | +5 | 31 / 1,182 | 1,103.79 s (**3.11%**) | **5** | +60 |
-| `60 s` | 6 / 331 | 223.37 s (**3.71%**) | **0** | +3 | 21 / 1,182 | 602.86 s (**1.70%**) | **3** | +42 |
+| Patience `Δt` | `raw_214` Triggered | `raw_214` CPU Saved | `raw_214` Clean Lost (REGRESSION!) | `raw_214` Extra Opens | `HT-1182` Est. Saved | `HT-1182` Est. Clean Lost | `HT-1182` Est. Extra Opens |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `3 s` | `71 / 214` | `2,278.69 s` (**`30.79%`**) | **`19`** | `+273` | `11,268.59 s` (`21.39%`) | **`115.8`** | `+2,083.2` |
+| `5 s` | `57 / 214` | `2,050.82 s` (**`27.71%`**) | **`16`** | `+129` | `10,009.59 s` (`19.00%`) | **`93.4`** | `+748.5` |
+| `8 s` | `47 / 214` | `1,774.53 s` (**`23.98%`**) | **`15`** | `+90` | `8,415.15 s` (`15.98%`) | **`92.4`** | `+438.5` |
+| `10 s` | `45 / 214` | `1,660.59 s` (**`22.44%`**) | **`14`** | `+81` | `7,811.99 s` (`14.83%`) | **`91.4`** | `+400.4` |
+| `15 s` | `39 / 214` | `1,397.11 s` (**`18.88%`**) | **`12`** | `+69` | `6,418.81 s` (`12.19%`) | **`70.1`** | `+311.0` |
+| **`20 s`** | **`35 / 214`** | **`1,134.85 s` (`15.34%`)** | **`11`** | **`+59`** | `4,731.07 s` (`8.98%`) | **`59.4`** | `+204.2` |
+| **`30 s`** | **`19 / 214`** | **`752.60 s` (`10.17%`)** | **`5`** | **`+18`** | `3,112.25 s` (`5.91%`) | **`24.4`** | `+85.8` |
+| `45 s` | `12 / 214` | `337.20 s` (`4.56%`) | **`4`** | `+8` | `1,503.52 s` (`2.85%`) | **`13.7`** | `+27.4` |
+| `60 s` | `9 / 214` | `185.94 s` (`2.51%`) | **`3`** | `+7` | `900.58 s` (`1.71%`) | **`12.7`** | `+26.4` |
 
-**Critical lesson from the regression column:** On `HEAD-331`, `Delta_t = 20 s` saves **15.50%** of all CPU with **0 clean boards lost**. Across all 1,182 boards, however, **108 clean boards** closed their final open connection inside `Shove`, and **18** of them endured a `> 20 s` dry spell across early narrow-radius (`0.5 - 1.0 mm`) passes + tie swaps before a wider `2.0 - 4.0 mm` pass broke the jam! Therefore a stop rule should **never** prematurely terminate a run that still has timeout budget without using the freed time to **restart with a fresh seed / reach / via-cost** (keeping the checkpoint with minimum `open`).
+**Regression verdict:** On post-`8b71912` `main`, **11 clean boards in `raw_214`** (`Hardware_Playground_sd_wav_pcm5100`, `MicroMaple_MicroMaple`, `Shift-in-32-HC165_shift-in`, `kitspace_CA3306E`, `nunchuk_rf_hw_NunchukRF_V3`, `roomba-ESP12E_roomba-esp`, `medusa_medusa_cape`, `minima-hardware_FrontPanel`, `rxadc_14_rxadc_14`, `wavegen_rev3`, `wt-rpm_rasp_side`) spend **> 20 s of flat-`open` repair CPU** traversing guarded tie swaps (`--guard-ties`) and expanding `0.5 → 4.0 mm` plough radii (and in some cases closing their final neck in `corridors` at the end of the run) before reaching `0` opens. Stopping without restarting is a major completion regression at every threshold up to `60 s`.
 
 ---
 
-## 5. Part 3: Every Heuristic Decision Point, Measured Variance, and Ranked RL Assessment
+## 5. Step 5: Side-by-Side Audit of Earlier Log-Reconstructed Estimates vs Live Measurements
 
-### 5.1 Multi-seed and single-choice variance evidence on disk
+To separate **(a) pure formula error in the previous agent's log reconstructor** from **(b) corpus and route changes between pre-`8b71912` runs (`HEAD-331` on `c521114` / `Full-1182` on `cd0a82a`) and post-`8b71912` `main` (`feat/order-free` + `explore/boxed`)**, [`compare_reconstructed.py`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/runs/compare_reconstructed.py) also ran the old log-reconstruction function directly on the `log.txt` files of the **exact same 214 live runs** and compared its output against the hardware `report.json` files of those 214 runs.
 
-#### Multi-seed spread (identical binary)
-1. **200 spread-sampled PCBench boards (`remed-0-base-{s0,s1,s2,s0b}`, commit `184f640`):**
-   - Individual seeds: `s0` = **161 / 200** clean, `s1` = **160 / 200** clean (`1,320` total unconnected, `8,090.70 s`), `s2` = **160 / 200** clean, repeat `s0b` = **160 / 200** clean (`3` boards flipped on wall-clock timeout jitter between `s0` and `s0b`: `Hardware_Playground_heater_actuator_node`, `Wifi-Play-Board_Wifi_PB`, `timecircuits-hardware_BTTF-TimeCircuits`).
-   - **Best of 3 seeds (`s0, s1, s2`):** **164 / 200 clean (+4 over `s1`)**, cutting total unconnected `1,320 -> 1,186` (`-134` opens); **worst of 3 seeds:** **156 / 200** (`1,414` opens). **8 boards** (`4.0%`) flip clean/failed across 3 seeds, and **28 / 200 boards** (`14.0%`, or **70% of the 40 failing boards**) vary in final open count across seeds!
-   - **Sequential restart baseline (`s1`, then `s2` & `s0` only when failed):** Achieves the full **164 / 200** clean at `16,638.00 s` (`2.06x` `s1` CPU, vs `24,661.80 s` = `3.05x` for naive 3-seed parallel).
-2. **34 time-limited near-miss boards (`explore-nearmiss`, seeds `1, 2, 3` at `120 s` + `s1` at `240 s` / `480 s`):**
-   - Individual seeds at `120 s`: `s1` = **12 / 34** clean (`52` open), `s2` = **14 / 34** clean, `s3` = **18 / 34** clean.
-   - **Best of 3 seeds at `120 s`:** **23 / 34 clean (67.6%, +11 boards over `s1`)**, cutting total open connections from **52 -> 18** (`-65.4%`); worst of 3 seeds is **5 / 34** (`68` open).
-   - **More time on seed 1 (`240 s` / `480 s`):** `21 / 34` clean at `240 s`, `24 / 34` (`70.6%`) clean at `<= 480 s`; union of 3 seeds or `480 s` reaches **26 / 34 (76.5%)** clean.
+### 5.1 Sub-operation shares: how far off the reconstruction was, and why
 
-#### Single-choice heuristic A/B experiments on PCBench
-| Experiment (On-Disk Runs) | Boards | Base Clean | Alt Clean | `Delta` Clean (Gained / Lost) | Base -> Alt Open (`Delta`) | Base -> Alt Vias | CPU `Delta` |
-| :--- | ---: | ---: | ---: | :--- | :--- | ---: | ---: |
-| **Plane via cost `1.0/0.4 mm` vs `5.0 mm`** (`mergepv-sample-b` vs `-oldcost`) | 100 | 100 | 100 | **0** (`+0 / -0`) | `0 -> 0` (`0`) | `1,250 -> 1,438` (**+15.0%**) | `-3.89%` |
-| **Disable via reduction `--no-reduce-vias`** (`mergepv-sample-b` vs `-noreduce`) | 100 | 100 | 100 | **0** (`+0 / -0`) | `0 -> 0` (`0`) | `1,250 -> 1,818` (**+45.4%**) | **-5.18%** |
-| **`--prefanout-mode same --via-cost 5` vs default** (`pb-budget` vs `pb-svc5`) | 240 | 194 | 190 | **-4** (`+1 / -5`) | `1,251 -> 1,560` (**+309**) | `10,615 -> 8,992` (`-15.3%`) | **+6.66%** |
-| **Seed 0 (Pass-0 unshuffled Prim MST) vs Seed 1** (`remed-0-base-s1` vs `-s0`) | 200 | 160 | 161 | **+1** (`+4 / -3`) | `1,320 -> 1,297` (`-23`) | `8,954 -> 8,982` | `+0.95%` |
-| **Seed 2 vs Seed 1** (`remed-0-base-s1` vs `-s2`) | 200 | 160 | 160 | **0** (`+3 / -3`) | `1,320 -> 1,304` (`-16`) | `8,954 -> 8,971` | `+0.89%` |
-| **Stage share reshuffle `--elastic-budget`** (`explore-nearmiss` paired A/B) | 34 | 12 | 11 | **-1** (`+0 / -1`) | `52 -> 48` (`-4`) | n/a | `-0.84%` |
-| **`Negotiation` net-priority rules** (`explore-priority`, 4 variants on 200 boards) | 200 | 158 | 157 - 159 | **-1 to +1** | washes out under history | n/a | `~0%` |
-| **`Prefanout` order (`inner`/`round`/`trapped`) & ring/inner** (`explore-prefanout`) | 51 | 30 | 29 - 30 | **-1 to 0** | minor local shifts | n/a | `~0%` |
+| Sub-Operation Bucket | Same-214 Log Formula % | **Measured `raw_214` %** | **Pure Formula Error (pp / rel)** | Earlier Published `HEAD-331` % | Earlier Published `Full-1182` % | **Measured `HT-1182` %** | **Published `1182` Error (pp / rel)** |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `astar` | `55.25%` | **`42.50%`** | **`+12.75 pp` (`+30.0%`)** | `55.27%` | `59.28%` | **`45.07%`** | **`+14.21 pp` (`+31.5%`)** |
+| `map_patch` | `8.21%` | **`19.60%`** | **`-11.40 pp` (`-58.1%`)** | `8.14%` | `8.24%` | **`19.38%`** | **`-11.14 pp` (`-57.5%`)** |
+| `geometry` | `1.82%` | **`9.64%`** | **`-7.82 pp` (`-81.1%`)** | `1.54%` | `1.61%` | **`10.91%`** | **`-9.30 pp` (`-85.3%`)** |
+| `map_build` | `11.04%` | **`8.15%`** | `+2.90 pp` (`+35.6%`) | `10.93%` | `9.03%` | **`7.50%`** | `+1.53 pp` (`+20.5%`) |
+| `terminals` | `2.23%` | **`7.75%`** | **`-5.52 pp` (`-71.2%`)** | `2.16%` | `1.96%` | **`6.55%`** | **`-4.59 pp` (`-70.0%`)** |
+| `connectivity` | `4.10%` | **`3.70%`** | `+0.40 pp` (`+10.8%`) | `4.19%` | `3.00%` | **`3.25%`** | `-0.26 pp` (`-7.9%`) |
+| `zones` | `8.09%` | **`3.38%`** | **`+4.71 pp` (`+139.3%`)** | `8.61%` | `8.40%` | **`3.09%`** | **`+5.31 pp` (`+172.0%`)** |
+| `checks` | `2.89%` | **`3.20%`** | `-0.31 pp` (`-9.6%`) | `3.14%` | `2.87%` | **`2.79%`** | `+0.09 pp` (`+3.2%`) |
+| `other` | `6.37%` | **`2.08%`** | **`+4.29 pp` (`+206.5%`)** | `6.02%` | `5.60%` | **`1.47%`** | **`+4.13 pp` (`+281.5%`)** |
 
-**Audit discovery on `--seed` coverage:** In `core/crates/grid/src/jitter.rs:13-18`, `if seed == 0 { return; }` makes `--seed 0` a complete no-op on `Negotiation` Pass 0 and `route_open`. Furthermore, `Prefanout`, `Planes`, `Islands`, `Pairs`, `RipUp`, `Tightening`, `Vias`, `Cleaning`, `Corridors`, and `LengthMatching` **ignore `--seed` completely**, and `route_open` inside `ripup.rs`, `shove.rs`, and `nudge.rs` hardcodes `seed: 0`! Thus **100% of measured seed variance comes from just two places:** `Negotiation` connection order (`negotiate.rs:784`) and `Shove` target order (`shove.rs:221`).
+**Why the sub-operation reconstruction was badly wrong on 6 of 9 buckets (`L1` total variation error = `24.85 pp` on the exact same 214 runs):**
+1. **Calibrated on `negotiation`, blind to rescue/fanout stages:** The previous agent calibrated fixed per-stage weights on a handful of `negotiation`-heavy profiles (`negotiation` `astar` was `68.0%` guessed vs `68.05%` measured), then guessed `astar` shares for the remaining stages that were `12–23 pp` too high: `shove` (`43.0%` guessed vs **`28.29%` measured**), `rip-up` (`52.0%` vs **`28.82%`**), `vias` (`62.0%` vs **`38.77%`**), `finishing` (`76.0%` vs **`58.36%`**), `pairs` (`46.0%` vs **`29.26%`**), and `prefanout` (`21.0%` vs **`9.45%`**).
+2. **`map_patch` (#2 overall, not #4) was missed inside non-negotiation stages:** Stamping items and soft-copper rip penalties onto `RouteGrid` consumes **`23.18%`** of `shove` (guessed `10.0%`), **`30.81%`** of `rip-up` (guessed `10.0%`), **`30.00%`** of `finishing` (guessed `5.0%`), **`37.59%`** of `pairs` (guessed `0.0%`), and **`16.30%`** of `prefanout` (guessed `3.0%`), plus **`17.86%`** of `negotiation` (guessed `11.0%`, while `zones` was only `6.97%` vs `13.0%` guessed).
+3. **`geometry` (#3 overall, not #9) and `terminals` (#5 overall, not #8) were off by 3.5× to 6.8×:** `Bucket::Geometry` accounts for **`65.42%`** of `prefanout` (guessed `23.0%`, with `38.0%` dumped into `other` vs `0.08%` actual), **`44.78%`** of `tightening` (guessed `4.0%`), and **`81.75%`** of `cleaning` (guessed `0.0%`). `Bucket::Terminals` accounts for **`13.76%`** of `shove`, **`12.26%`** of `vias`, and **`10.17%`** of `rip-up` (all guessed at `3–4%`).
 
----
+### 5.2 Useful/wasted split, last-progress tail, and stop-rule savings & losses
 
-### 5.2 Complete Ranked Decision Inventory & RL Feasibility Analysis
+| Metric | Same-214 Log Formula | **Measured `raw_214`** | **Formula Error** | Earlier Published (`HEAD-331` / `Full-1182`) | **Measured `HT-1182`** | **Published `1182` Error** |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| **Overall `useful` share** | `40.63%` | **`37.83%`** | `+2.80 pp` | `55.14%` (`Full-1182`) | **`43.84%`** | **`+11.30 pp`** |
+| **Overall `kept_other` share** | `13.45%` | **`19.17%`** | **`-5.72 pp`** | `8.18%` (`Full-1182`) | **`16.50%`** | **`-8.31 pp`** |
+| **Overall `wasted` share** | `37.47%` | **`41.24%`** | `-3.77 pp` | `35.26%` (`331`) / `27.77%` (`1182`) | **`37.70%`** | **`-9.93 pp`** |
+| **Overall `other` (unattributed effort)** | `8.44%` | **`1.76%`** | **`+6.69 pp`** | `8.90%` (`Full-1182`) | **`1.97%`** | **`+6.94 pp`** |
+| **`negotiation` wasted %** | `16.12%` | **`24.45%`** | **`-8.32 pp`** | `17.0%` (`331`) / `12.62%` (`1182`) | **`24.54%`** | **`-11.92 pp`** |
+| **`prefanout` wasted %** | `2.52%` | **`12.14%`** | **`-9.62 pp`** | `4.53%` (`Full-1182`) | **`11.81%`** | **`-7.29 pp`** |
+| **`vias` wasted %** | `84.38%` | **`91.51%`** | **`-7.14 pp`** | `83.98%` (`Full-1182`) | **`91.50%`** | **`-7.52 pp`** |
+| **`tightening` wasted %** | `19.54%` | **`0.48%`** | **`+19.06 pp` (`40×`!)** | `19.34%` (`Full-1182`) | **`0.44%`** | **`+18.90 pp`** |
+| **Failing `[0.5×T, T]` wasted %** | `58.59%` | **`66.80%`** | **`-8.21 pp`** | `58.81%` (`331`) / `48.09%` (`1182`) | **`63.45%`** | **`-15.37 pp`** |
+| **Zero-progress routing share of total CPU** | `12.07%` (`892.7 s`) | **`13.21%` (`977.4 s`)** | `-1.14 pp` (`-84.7 s`) | `15.18%` (`331`) / `6.78%` (`1182`) | **`8.03%` (`4,231.8 s`)** | `-1.26 pp` (`-1,828.8 s`) |
+| **Median `last_open_drop` (% of run)** | `73.39%` (`7.80 s`) | **`72.60%` (`8.43 s`)** | `+0.79 pp` (`-0.63 s`) | `74.11%` (`331`) / `80.59%` (`1182`) | **`76.70%` (`16.31 s`)** | `+3.89 pp` (`-10.01 s`) |
+| **Stop rule `Δt = 20 s` CPU saved %** | `17.80%` | **`15.34%`** | `+2.46 pp` | `15.50%` (`331`) / `7.91%` (`1182`) | **`8.98%`** | `-1.07 pp` |
+| **Stop rule `Δt = 20 s` clean boards lost** | `11` | **`11 / 214`** | `0` boards | **`0 / 331` (!)** / `18 / 1182` | **`59.4 / 1182`** | **`-41.4` boards (`3.3×` worse!)** |
+| **Stop rule `Δt = 20 s` extra opens** | **`+630`** | **`+59`** | **`+571` (`10.7×`!)** | `+38` (`331`) / `+163` (`1182`) | **`+204.2`** | `-41.2` opens |
 
-| Rank | Decision Point | Exact Source Location (`file:line`, symbol) | Governed CPU (1,182 / `HEAD-331`) | Corpus Decisions (1,182 boards) | Upper Bound on Gain | Simplest Non-Learned Baseline | Verdict |
-| ---: | :--- | :--- | ---: | ---: | :--- | :--- | :--- |
-| **1** | **Run-level stall stop & seed/parameter restart** | `ultraroute/src/lib.rs:909-1039` (`Budget`, `RunClock::deadline`, `STAGES`); `stages.rs:656-686` (`Shove::run`) | **75.82%** (`26,891.2 s`) / **72.88%** (`4,393.6 s`) | `1,059` shove passes (`1,182` runs) | `+4` clean / 200 spread (`+11` / 34 near-miss); `915 s` (`15.2%`) `HEAD-331` zero-prog CPU | Post-negotiation patience (`20-30 s`) -> checkpoint + restart with `seed+1` & `via_cost=2` | **Do NOT use RL** (15-line classical rule wins; too few episodes) |
-| **2** | **`Shove` target order, region radius, repair cap & tie swaps** | `grid/src/shove.rs:203-404` (`shove_escape`, `TIES`), `455-522` (`repair`), `628-745` (`plough_round`), `898-1076` (`renegotiate`) | **13.49%** (`4,783.3 s`) / **27.62%** (`1,665.1 s`; **69.9%** of `HEAD` TL fails) | **4,945 tries** (~20k across 4 seeds) | `+11/34` near-miss seed rescues + cut `1,882.7 s` wasted `shove` CPU by ~70% | Score open airlines by `soft_path` blocker count + `mouth_room`; abort `repair` if `open` balloons | **#1 RL / Contextual Bandit Candidate** |
-| **3** | **`Negotiation` net order, weights, pricing (`1.6x`, `+10`), patience & commit** | `grid/src/negotiate.rs:680-802` (`route_negotiated_rounds`), `849-1228` (`run_pass`), `1230-1307` (`commit_order`), `1356-1537` (`rescue_walled_off`) | **53.23%** (`18,880.6 s`) / **42.89%** (`2,585.7 s`) | **7,577 rounds** (`~1.2M` net reroutes) | Cut `1,739.1 s` stalled rounds + part of 28/200 seed-open spread | Fix `seed=0` no-op; sort Pass 0 by `(mouth_room, span)`; adaptive collision slope stop | **Marginal for RL** (history pricing washes out static net order) |
-| **4** | **`Rip-Up` & `Corridors` airline order, `rip_cost=400` & victim filter** | `grid/src/ripup.rs:118-295` (`rip_up_watch`, `via_penalty` bug at `281`), `350-450` (10 s reroute), `594-678` (`try_corridor`) | **3.02%** (`1,072.5 s`) / **1.50%** (`90.7 s`) | **2,314 tries** (`max 122`/board) | Reclaim `914.5 s` (**85.3%**) wasted Rip-Up CPU + unlock multi-victim traps | Tabu victim pricing (`rip_cost += 400` per failed rip) + fix `via_penalty` at `ripup.rs:281` | **Tabu heuristic first**; optional tiny skip-classifier |
-| **5** | **Stage-wise & board-level `via_cost` (`5.0/6.0/4.0 mm`) & 2L bias** | `ultraroute/src/lib.rs:858-897` (`ViaCosts`, `via_costs`); `grid/src/search.rs:32-55` (`via_cost_mm`, `step_cost`) | **75.82%** (`26,891.2 s`, shapes all A*) | **1,182** (`1` per board) | `-13.1%` vias on plane boards; flips `-4` to `+2` clean on dense 2L/4L boards | 2-feature rule `(layers, via_diam / pad_pitch)` or try `via_cost=2.0` on restart | **Do NOT use RL** (`1` decision/board = 1D/2D tuning) |
-| **6** | **`Prefanout` fine-pitch selection (`<=0.5 mm`), pad order & escape mode** | `morph/src/escape.rs:108-137` (`fine_pitch`); `grid/src/prefanout.rs:314-675` (`prefanout`, `order_groups`), `1374-1614` (`lay_grid_escape`) | **6.12%** (`2,170.4 s`) / **5.68%** (`342.4 s`) | **12,982 pads** (on 317 boards) | `<= 1` board across `inner`/`round`/`trapped` on 51 fine-pitch boards | Add dot-product toward net airline centroid in `lay_grid_escape` target cost | **Do NOT use RL** (5-line geometric bias suffices) |
-| **7** | **Multi-pin MST topology & `route_open` fallback ladder (`cell/2` fine grid)** | `board/src/connect.rs:219-345` (`connectivity`); `negotiate.rs:1539-1663` (`reachable_airlines`); `route.rs:189-335, 519-665, 785-995` | **6.08%** (`2,154.8 s`) / **0.86%** (`52.1 s`) | **14,318 tries** (`3,712` `no_path`) | Save part of `813.9 s` `no_path` flood-fills in `Finishing` | Gate `cell/2` fine-window A* on local neck check (`soft_path` blocked near pad) | **Do NOT use RL** (geometric gate suffices) |
-| **8** | **`Vias` reduction candidate order & `Tightening` chain order** | `grid/src/vias.rs:200-366` (`try_replace`), `404-665` (`reduce_vias_all`); `cleanup.rs:41-128, 1282-1468` (`pull_tight_watch`) | **12.71%** (`4,509.5 s`) / **15.20%** (`916.5 s`) | **~236,759** subwindow/chain tries | **0 clean boards** (runtime & via count only: up to `3,707.6 s` wasted `vias` tries) | Skip `Vias` when `open > 0`; cheap same-layer reachability check before `try_replace` | **Do NOT use RL** (zero routability gain) |
-| **9** | **Part nudging (`blame` soft-wall A* vs 144-step blind search)** | `grid/src/nudge.rs:197-420` (`try_step`, `nudge_watch`); `blame.rs:120-366` (`blame`, `satisfy`); `push.rs:128-207`; `morph/src/flow.rs:36` | **0.00%** in default recipe (`--nudge` off) | `0` in default PCBench | Only applies when footprints may move | Disable 144-step blind loop (`blind: false`); step along `blame` vector only | **Out of scope** for fixed-placement PCBench |
-| **10** | **Diff-pair stretch score & inner A* `NodeHeap` tie-breaking** | `grid/src/pairs.rs:556-780, 1016-1366`; `tune.rs:212-355`; `search.rs:187-205` (`NodeHeap::push`), `310-360` (`trace_back`), `442-615` | **4.59%** (`pairs`) / **59.28%** (`astar` inner loop) | `622` pair runs / `~10^9` heap pops | Faster open-space A* via fewer equal-`f` plateau pops | Break equal-`f` ties in `NodeHeap` by smaller `h` (higher `g`) in `search.rs:189` | **NEVER use RL** inside A* inner loop |
+**Why the effort and stop-rule reconstructions missed:**
+- **Count-proportional effort is biased toward successful tries:** Failed tries in `vias` (`91.51%` time wasted vs `89.61%` count failed), `prefanout` (`12.14%` time wasted vs `2.52%` count), and late stalled `negotiation` rounds (`24.45%` time wasted vs `16.12%` round-count proxy, plus `66.25 s` in `91/107` failed walled-off rescues) flood-fill much larger search spaces per attempt than fast successful routes. Conversely, `tightening` (`0.48%` wasted vs `19.54%` guessed) performs cheap geometric line-of-sight DRC checks rather than expensive discarded searches.
+- **Stop-rule clean-board regressions tripled (`18 → 59.4` HT; `0/331 → 11/214` raw) and extra opens were 10.7× off on logs:** Merging `explore/boxed` (`8b71912`) enabled `--guard-ties` and `--rip-boxed`, allowing `shove` and `corridors` to rescue dense boards after `20–75 s` of flat-`open` tie swaps — turning `Δt = 20 s` from "0 boards lost on `HEAD-331`" into **11 clean boards lost on `raw_214`**. Meanwhile, text logs omitted post-negotiation `open` counts whenever a stage ended without printing an `open=` summary, causing the log parser to mistake `bare_unconnected` (`400+` opens) for `stopped_open` (`+630` vs `+59` actual extra opens).
 
-*(Additional minor deterministic heuristics audited in code: `SetUp` cgroup/grid auto-coarsening in `ultraroute/src/lib.rs:1081-1178`, `Islands::run` strip-end stitching in `grid/src/islands.rs`, `Planes::run` short plane-via fanout in `grid/src/planes.rs`, and `Cleaning` jag/staircase thresholds in `grid/src/cleanup.rs:1332-1405` together consume `< 0.25%` of corpus CPU and show near-zero routability variance.)*
-
----
-
-### 5.3 Deep-Dive Formulation for the Top Three Decisions
-
-#### Top Candidate (#2 overall, #1 for ML/RL): `Shove` Target, Radius, and Repair-Budget Policy
-- **Why this is the right place to learn:** In `shove.rs:221`, `shove_escape` shuffles open airlines uniformly at random each pass, tries a fixed `0.5 -> 1.0 -> 2.0 -> 4.0 mm` reach ladder, and gives every breached wall up to **20.0 seconds** of two-phase `rip_up` repair (`55%` locked / `45%` unlocked) plus up to `6` tie swaps (`open_after == open_before`). When it picks the wrong pin first or triggers a 20-second repair in an un-repackable 12-net snarl, it burns tens of seconds and reverts (`1,280.24 s` wasted in reverted repairs alone across 1,182 boards) while starving solvable pins of timeout budget.
-- **Observation (`s_t`, ~24 floats per open airline, `< 50 us` to extract from existing `PassCache`):**
-  1. `soft_path` length, soft-copper crossing count, via count, and bottleneck clearance shortfall (`shove.rs:764`),
-  2. Distinct blocker-net counts and copper density within `0.5 mm`, `1.0 mm`, `2.0 mm`, and `4.0 mm` of both endpoints,
-  3. Endpoint pad `mouth_room`, layer count, SMD vs PTH flag, and net wire-length slack,
-  4. History on this net/pin in the current run: prior `walled_no_path` count, prior `reverted_routed` count, tie swaps already spent (`<= 2/net`, `<= 6` total), current pass number, and remaining run timeout.
-- **Action (`a_t`):** Rank/select the next `(airline, endpoint)` and choose `(reach_mm in {0.5, 1.0, 2.0, 4.0}, repair_cap_s in {0, 3, 8, 20}, allow_tie in {0, 1})`.
-- **Reward (`r_t`):** `+10 * max(0, open_before - open_after) + 1.5 * I(tie_kept_and_board_later_drops_open) - 0.15 * try_cpu_seconds`.
-- **Corpus training volume:** **4,945 tries** per single-seed 1,182-board run (`3,426` tries on `HEAD-331` alone), yielding **~20,000 - 30,000 counterfactual `(s_t, a_t, outcome, cpu_s)` tuples** across 4-6 seeds on PCBench. Every try is an isolated checkpoint/revert transaction (`Board` clone), so **offline contextual bandit / cost-sensitive GBDT or MLP scoring** trains cleanly without long-horizon credit-assignment instability!
-- **Upper bound on gain:** Capturing the 3-seed near-miss rescue gap (**+11 / 34 boards**, `12 -> 23` clean at 120 s) plus reclaiming ~70% of `Shove`'s `1,882.71 s` wasted CPU.
-- **Simplest non-learned baseline it must beat:** Sort open airlines ascending by `(prior_failures_on_net, soft_path_distinct_blocker_nets, -pad_mouth_room)` instead of uniform Fisher-Yates shuffle, and abort `repair()` early if `open_now > open_before + 3` after Phase 1 (`55%` budget). Build and benchmark that 25-line classical baseline first; train a contextual bandit only if its offline top-1 accuracy on logged `ShoveTry` outcomes beats that heuristic.
-
-#### Runner-Up (#1 by governed time, NOT worth RL): Run-Level Stop & Multi-Seed Restart Controller
-- **Observation:** `(stage, open_now, min_open, repair_cpu_since_min_open, shove_pass, consecutive_reverted_repairs, remaining_timeout)`.
-- **Action:** `{continue, abort_to_polish, revert_to_best_checkpoint_and_restart(seed + 1, via_cost_alt)}`.
-- **Corpus training volume:** Only `1,182` board runs (`204` failing boards -> `~1,000 - 3,000` pass-level transitions).
-- **Why RL is NOT worth it here:** Sample size is tiny, and the exact causal simulation in Section 4.5 shows that a deterministic two-clause rule (`if open > 0 and repair_cpu_since_min_open >= 20 s: if remaining_budget >= 1.2 * neg_cpu: restart(seed + 1) else: stop_repair()`) directly targets both the **15.50% CPU savings** on `HEAD-331` and the **+4 / 200** (`remed-0`) and **+11 / 34** (`explore-nearmiss`) multi-seed rescue gains.
-
-#### Third (#3 overall, marginal for RL): `Negotiation` Pricing & Priority Adaptation
-- **Observation:** Per-net `(airline_span, pin_count, min_mouth_room, last_round_collisions, path_history_sum)` + global `(round, colliding_nets, shared_cells, delta_shared_3_rounds)`.
-- **Action:** Per-net weight `w_i in [0.5, 2.0]` and per-round `{continue, stop_and_commit, boost_present_growth}`.
-- **Corpus training volume:** `7,577` rounds across 1,182 boards (`~1.2M` individual net reroutes).
-- **Why RL is marginal here:** `explore-priority` proved empirically on 200 PCBench boards that static net-priority heuristics (`--first`, `--first-weight`, congestion ordering) shift clean count by at most `-1` to `+1` board because PathFinder's accumulated `history += 10` pricing quickly overrides initial net order. Meanwhile, stalled plateau rounds take only `1,739.08 s` (`4.90%` of total corpus CPU). Fix `jitter::shuffle` (`seed == 0`) first.
 
 ---
 
-## 6. What Did Not Work, Costs/Regressions Found, and What Could Not Be Verified
+## 6. Heuristic Decision Inventory, Live Multi-Seed & Ablation Measurements, and RL Feasibility
 
-1. **`loaf` `reserve` queue deadlock prevented live binary execution:** Five stale reservations held 20/22 cores on `loaf` throughout the session (`0.0%` actual CPU pressure), blocking `cargo test`, `cargo build --release`, the 48-board `1e6` byte-identical test, the 3x interleaved overhead test, and live 214-board / 4-seed router runs. Everything required to run them cleanly in ~45-60 minutes once `reserve` is cleared is ready in `./runs/run_when_unblocked.sh`.
-2. **Naive open-count stop rules fail catastrophically if started before `Negotiation` commits, and still lose slow `Shove` rescues if they abort without restarting:**
-   - Because `Negotiation` commits routes only at the end of its multi-round pass, starting an open-count patience timer at `t = 0` aborts `Negotiation` mid-pass on medium/large boards (`> 20 s` negotiation), losing hundreds of clean boards.
-   - Even when started strictly post-negotiation, `Delta_t = 20 s` saves `15.50%` CPU with `0` clean boards lost on `HEAD-331`, **but loses 18 clean boards across `Full-1182`** (`9` lost at `Delta_t = 30 s`, `5` lost at `Delta_t = 45 s`) where `Shove` needed wider `2.0 - 4.0 mm` passes after early passes stalled.
-3. **Static budget reshuffling (`--elastic-budget`) and static `Negotiation` priority heuristics did not improve clean count:** `--elastic-budget` regressed `12 -> 11 / 34` on near-miss boards (`explore-nearmiss`), `--prefanout-mode same --via-cost 5` regressed `194 -> 190 / 240` (`pb-svc5`), and four `Negotiation` net-ordering heuristics moved clean count by `-1` to `+1` on 200 boards (`explore-priority`).
+### 6.1 Live 4-seed variance across 20 stratified PCBench boards (`seeds 1..4`)
+Routed on `sequoia-server` with `358a016` (`--strip-all --recipe default --threads 1 --timeout 120 --cpu-clock --timing --report --uuid-seed 1`) and KiCad 9.0.8 DRC judging across the 20 stratified boards in [`runs/seeds20.json`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/runs/seeds20.json) (`5` clean untimed, `5` `focus`/`noisy` benchmark boards, `5` failed-with-time, `5` time-limited):
+
+| Seed / Strategy | Clean Boards (`/ 20`) | Total Unconnected | Total Vias | Total Stage CPU (s) | Notes |
+| :--- | ---: | ---: | ---: | ---: | :--- |
+| `seed = 1` (default) | **`14 / 20`** (`70.0%`) | `48` | `1,142` | `988.12 s` | Baseline single-seed run |
+| `seed = 2` | `13 / 20` (`65.0%`) | **`42`** | `1,172` | `1,122.77 s` | Lowest single-seed open count (`MonApollo` `30` vs `37` on `s1`), loses `minima` (`221.4 s`) |
+| `seed = 3` | `13 / 20` (`65.0%`) | `55` | `1,101` | `1,027.77 s` | Loses `MicroMaple` (`221.5 s`), fastest on `minima` (`37.5 s`) & `sd_wav` (`49.7 s`) |
+| `seed = 4` | `12 / 20` (`60.0%`) | `64` | `1,054` | `946.51 s` | Loses both `sd_wav_pcm5100` and `MicroMaple`, `MonApollo` `50` opens |
+| **Worst of 4 seeds** | **`11 / 20`** (`55.0%`) | **`65`** | — | — | Lower bound of single-seed luck |
+| **Best of 4 seeds (oracle)** | **`14 / 20`** (`70.0%`) | **`40`** | — | `4,085.18 s` (`4×`) | `-8` open vs `s1`, **`-25` open & `+3` clean vs worst seed** |
+| **Sequential-until-`router_opens == 0`** | **`14 / 20`** (`70.0%`) | — | — | **`2,257.38 s`** (`2.28×`) | Observable without KiCad DRC (`router_opens == unconnected` on all `80 / 80` runs) |
+
+**Board-by-board variance highlights (`6 / 20` vary in open count; `3 / 20` flip clean/failed; every board varies in CPU):**
+- **`minima-hardware_FrontPanel` (`126` conns, `focus`):** Clean on `3 / 4` seeds (`s1=115.4 s`, `s3=37.5 s`, `s4=64.1 s`), **fails on `s2` (`1` open, `221.4 s` CPU — `5.91×` slower than `s3`!)**.
+- **`Hardware_Playground_sd_wav_pcm5100` (`396` conns):** Clean on `3 / 4` seeds (`s1=91.3 s`, `s2=77.0 s`, `s3=49.7 s`), **fails on `s4` (`1` open, `67.5 s`)**.
+- **`MicroMaple_MicroMaple` (`111` conns, `focus`):** Clean on `2 / 4` seeds (`s1=67.3 s`, `s2=116.1 s`), **fails on `s3` (`1` open, `221.5 s`, `3.29×` slower) and `s4` (`1` open, `134.3 s`)**.
+- **`MonApollo_analog-board` (`1,190` conns, time-limited):** Open count swings by **`20` connections** across seeds (`s2=30`, `s1=37`, `s3=42`, `s4=50`).
+- **Stages that ignore `--seed` completely today:** `Prefanout`, `Pairs`, `RipUp`, `Corridors`, `Tightening`, `Vias`, and `Cleaning` are 100% deterministic; moreover, internal `route_open` calls inside `ripup.rs`, `shove.rs`, and `nudge.rs` hardcode `seed: 0` (no 8-airline chunk jitter), whereas [`jitter::shuffle`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/jitter.rs#L13-L16) returning unchanged order on `seed == 0` is **by design** so `--seed 0` tests canonical Pass-0 ordering.
+
+### 6.2 Live single-choice heuristic ablations on the same 20 boards (wins AND regressions)
+
+| Single-Choice Change (vs `seed = 1` default: `14/20` clean, `48` open, `1,142` vias, `988.12 s`) | Clean (`/ 20`) | `Δ` Clean | Total Open (`Δ`) | Vias (`Δ`) | Stage CPU (`Δ %`) | Boards Gained / Lost & Key Per-Board Effects |
+| :--- | ---: | ---: | ---: | ---: | ---: | :--- |
+| **`--via-cost 2.0`** (default `5.0 mm`) | **`14 / 20`** | `0` | **`43` (`-5`)** | `1,320` (`+178`) | **`934.15 s` (`-5.46%`)** | **Win on opens & hard-board CPU:** `MonApollo` `37 → 32` open; **`minima` `115.4 → 30.2 s` (`3.8×` faster)**; **`sd_wav_pcm5100` `91.3 → 30.3 s` (`3.0×` faster)**; cost: `MicroMaple` `67.3 → 141.4 s` and `+15.6%` vias |
+| **`--via-cost 8.0`** (default `5.0 mm`) | `14 / 20` | `0` | **`67` (`+19`)** | `994` (`-148`) | `938.20 s` (`-5.05%`) | **Open-count regression:** `MonApollo` `37 → 55` open (`+18`), `phone_amp` `1 → 3` open (`kitspace_tomu` `5 → 4`); cuts vias `-13.0%` |
+| **`--seed 0`** (unshuffled Pass-0 Prim MST) | `14 / 20` | `0` | `53` (`+5`) | `1,096` (`-46`) | **`1,103.21 s` (`+11.65%`)** | **CPU & open regression:** `MonApollo` `37 → 42` open; `MicroMaple` `67.3 → 187.9 s`, `minima` `115.4 → 152.9 s` (`sd_wav` `91.3 → 45.4 s`) |
+| **`--nudge`** (enable part nudge, default off) | `14 / 20` | `0` | `52` (`+4`) | `1,137` (`-5`) | **`1,065.48 s` (`+7.83%`)** | **Zero clean wins, slower & more opens:** `MonApollo` `37 → 41` open; `avr-divecomputer_dc` **`25.4 → 94.4 s` (`3.7×` slower)** |
+| **`--shove-repair 5`** (default `20 s`) | **`13 / 20`** | **`-1`** | `48` (`0`) | `1,153` (`+11`) | `945.61 s` (`-4.30%`) | **Clean-board regression:** **loses `kitspace_CA3306E` (`0 → 1` open)** (`MonApollo` `37 → 36` open); `5 s` uniform repair cap is too blunt |
+| **`--prefanout-order round`** (default `inner`) | **`12 / 20`** | **`-2`** | `52` (`+4`) | `1,086` (`-56`) | `955.85 s` (`-3.27%`) | **Clean-board regression:** **loses `Hardware_Playground_sd_wav_pcm5100` (`0 → 2` open) and `kitspace_CA3306E` (`0 → 1` open)**; confirms `InnerFirst` is critical |
+| **`--no-shove-ties`** (default `--shove-ties`) | **`12 / 20`** | **`-2`** | `55` (`+7`) | `1,065` (`-77`) | **`1,061.95 s` (`+7.47%`)** | **Clean-board & CPU regression:** **loses `sd_wav_pcm5100` (`0 → 1` open) and `MicroMaple` (`0 → 2` open, `67.3 → 219.8 s`)**; guarded tie swaps are essential |
+| **`--negotiate-patience 8`** (default `4`) | **`12 / 20`** | **`-2`** | **`57` (`+9`)** | `1,105` (`-37`) | **`1,196.68 s` (`+21.11%`)** | **Worst regression on both clean boards & CPU:** **loses `sd_wav_pcm5100` (`0 → 1`) and `MicroMaple` (`0 → 1`, `67.3 → 219.3 s`)** by starving downstream `Shove` of timeout budget |
+
+### 6.3 Re-ranked inventory of all 10 heuristic decision points (updated from live measurements)
+Live post-`8b71912` measurements changed **8 of the 10 rank positions** relative to the previous log-reconstructed report (`#2 ↔ #1`, `#7 → #4`, `#4 → #5`, `#5 → #6`, `#8 → #7`, `#6 → #8`, `#10 → #9`, `#9 → #10`):
+
+| Rank (Was) | Decision Point & Exact Code Location | Current Heuristic | Governed CPU (`raw_214` / `HT-1182` est.) | Wasted / Saveable CPU (`raw_214` / `HT`) | Measured `214` Volume (`HT` est.) | RL / ML Verdict |
+| ---: | :--- | :--- | ---: | ---: | ---: | :--- |
+| **`#1`** (`#2`) | **Shove target order, reach radius, repair cap & tie swaps** — [`shove.rs:206-412`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/shove.rs#L206-L412), [`693-760`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/shove.rs#L693-L760), [`866-985`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/shove.rs#L866-L985), [`1158-1360`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/shove.rs#L1158-L1360); [`stages.rs:843-877`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/ultraroute/src/stages.rs#L843-L877), [`1417-1527`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/ultraroute/src/stages.rs#L1417-L1527) | Random shuffle per pass; `0.5→1→2→4 mm` reach doubling (resetting `patience=8` on any new `(net, reach)`); `20 s` 2-phase repair; `<=6` guarded tie swaps (`2/net`) | **`2,038.24 s` (`27.54%`)** / `8,344.84 s` (`15.84%`) | **`1,054.76 s` (`51.75%`)** / `3,954.08 s` | **`3,918` tries** (`11,914` HT) | **BEST ML candidate (contextual bandit / offline RL)** |
+| **`#2`** (`#1`) | **Run-level stall detection, skip-`Vias`-when-open & multi-seed/`via_cost` restart** — [`lib.rs:937-1055`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/ultraroute/src/lib.rs#L937-L1055); [`stages.rs:1417-1527`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/ultraroute/src/stages.rs#L1417-L1527); [`negotiate.rs:686-855`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/negotiate.rs#L686-L855) | Fixed stage shares (`15%`, `25%`, `50%`, `KeepBack 10%`); runs `Vias` even when `open > 0`; single seed | **`5,376.08 s` (`72.65%`)** / `36,005.83 s` (`68.36%`) | **`977.39 s` tail + `388.76 s` open-`Vias`** / `4,231.85 + 2,499.98 s` | `707` passes (`1,994` HT) | **NOT worth RL** (skip `Vias` on `open > 0` + checkpoint restart) |
+| **`#3`** (`#3`) | **Negotiation order, per-net weights, pricing growth & commit** — [`negotiate.rs:686-808`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/negotiate.rs#L686-L808), [`855-1234`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/negotiate.rs#L855-L1234), [`1236-1313`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/negotiate.rs#L1236-L1313), [`1362-1543`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/negotiate.rs#L1362-L1543) | Seeded shuffle, weight `0.5`/`1.0`, Gauss-Seidel skip, `present = 20 × 1.6^r`, `history += 10`, `patience = 4`, `<=2` repasses + `6` rescues | **`2,641.27 s` (`35.69%`)** / `21,990.18 s` (`41.75%`) | **`645.74 s` (`24.45%`)** / `5,396.98 s` | **`1,749` rounds** (`9,261` HT) | **MARGINAL for RL** (collision-slope stopping + mouth-room weight heuristic first) |
+| **`#4`** (`#7`) | **Pre-fanout `--escape-room` part selection, pad order & landing** — [`escape.rs:108-137`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/morph/src/escape.rs#L108-L137); [`prefanout.rs:317-680`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/prefanout.rs#L317-L680), [`1340-1630`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/prefanout.rs#L1340-L1630) | Deterministic `InnerFirst` + `--escape-room` mouth guards, `10 µm` local grid escapes (`-2` clean when reverted to `round`!) | **`745.58 s` (`10.08%`)** / `6,243.15 s` (`11.85%`) | `87.53 s` / `711.73 s` (`+458.1 s` geometry) | **`4,473` pads** (`31,935` HT) | **NOT worth RL** (analytical airline-centroid bias + bbox prefilter) |
+| **`#5`** (`#4`) | **Rip-up, `--rip-boxed` & Corridors ordering and victim pricing** — [`ripup.rs:137-545`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/ripup.rs#L137-L545), [`654-740`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/ripup.rs#L654-L740) | Deterministic shortest-first, uniform `rip_cost = 400`, lifted boxed-end fine windows, `10 s` repair (`via_penalty` empty in `RipUp`) | `399.56 s` (`5.40%`) / `2,963.60 s` (`5.63%`) | **`321.95 s` (`80.58%`)** / `2,467.63 s` | **`1,224` tries** (`8,038` HT) | **Tabu victim pricing first**; supervised skip-classifier optional |
+| **`#6`** (`#5`) | **Stage-wise / per-board `via_cost` & 2-layer anisotropy** — [`lib.rs:886-925`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/ultraroute/src/lib.rs#L886-L925); [`search.rs:32-55`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/search.rs#L32-L55) | Global `5.0 / 6.0 / 4.0 mm` (`1.0 / 0.4 / 0.4` with planes); `10:12` 2-layer directional penalty in `Negotiation` | `5,376.08 s` (`72.65%`) / `36,005.83 s` (`68.36%`) | `24`-open swing (`43..67`) on 20 boards | `214` runs (`1,182` HT) | **NOT worth RL** (`1` scalar/board; 2-feature rule or `2.0 mm` restart) |
+| **`#7`** (`#8`) | **Post-routing `Vias` candidate filtering & `Tightening` order** — [`vias.rs:200-366`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/vias.rs#L200-L366), [`404-665`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/vias.rs#L404-L665); [`cleanup.rs:41-128`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/cleanup.rs#L41-L128), [`1282-1468`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/cleanup.rs#L1282-L1468) | Deterministic `via_count` sort, `6 mm` subwindow map build per pair/single/cluster (`54,670 / 61,012` fail!) | **`873.01 s` (`11.80%`)** / `6,724.28 s` (`12.77%`) | **`766.85 s` (`91.51%` of `vias`)** / `5,876.30 s` | **`92,767` tries** (`699,671` HT) | **NOT worth RL** (skip when `open > 0` + bbox/layer precheck) |
+| **`#8`** (`#6`) | **Multi-pin MST topology & `route_open` fine-window gate** — [`connect.rs:219-345`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/board/src/connect.rs#L219-L345); [`negotiate.rs:1545-1663`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/negotiate.rs#L1545-L1663); [`route.rs:189-335`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/route.rs#L189-L335), [`517-665`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/route.rs#L517-L665) | Prim MST + Kruskal reachable tree; full-width → `narrow_run` → `cell/2` fine window (`<=4M` nodes) | `297.01 s` (`4.01%`) / `2,707.21 s` (`5.14%`) | `172.75 s` (`58.16%`) / `1,436.64 s` | `3,324` tries (`28,741` HT) | **NOT worth RL** (gate `fine_window` on local neck cut) |
+| **`#9`** (`#10`) | **Diff-pair stretch scoring & inner `NodeHeap` equal-`f` tie-break** — [`pairs.rs:556-780`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/pairs.rs#L556-L780); [`search.rs:187-205`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/search.rs#L187-L205), [`453-615`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/search.rs#L453-L615) | Kruskal shortest-inter-IC pairs; `NodeHeap::push` packs `(f << 32) | node` (ties broken by raw `node` index instead of smaller `h`!) | `379.28 s` (`5.13%`) / `3,477.86 s` (`6.60%`) + `42.50%` `astar` | `1.97 s` in `pairs` + open-space A* plateau pops | `187` pair runs (`1,639` HT) | **NEVER use RL in inner A\*** (test classical `(f, h)` tie-breaking) |
+| **`#10`** (`#9`) | **Part nudging (`blame` vs 144-step blind search)** — [`nudge.rs:197-426`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/nudge.rs#L197-L426); [`blame.rs:120-366`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/blame.rs#L120-L366) | Off by default; `blame` soft-wall A* + `6 × 3 × 8 = 144` blind steps (`0` clean delta, `+4` opens, `+7.83%` CPU on 20 boards) | `0.00 s` default | `0.00 s` default | `0` default | **Out of scope** for fixed-placement PCBench |
+
+### 6.4 Detailed RL design for the top 3 decisions
+
+1. **Rank `#1` — `Shove` contextual bandit / offline RL scorer (ONLY strong ML candidate):**
+   - **Why learning fits here and nowhere else:** Across `raw_214`, `Shove` executes **`3,918` self-contained `shove_escape` transactions** (`~11,914` HT across PCBench; `3,134` `walled` burning `244.25 s`, `308` `reverted_routed` burning `759.45 s`, `34` `reverted_unrouted` burning `51.05 s`, `324` kept guarded tie swaps taking `709.39 s`, and `118` connection-closing wins taking `245.83 s`). Every single try saves a board checkpoint before mutating copper, so an offline dataset of `(local_state, action, Δopen, try_cpu_s, tie_later_resolved)` tuples can be logged directly from `report.json` / `ShoveTry` with clean per-try credit assignment and `< 10 µs` inference cost against a `0.52 s` mean try runtime (`50,000×` headroom).
+   - **Observation (`~24` scalar features, no GNN/CNN needed):** Airline Euclidean length, endpoint pad `mouth_room`, layer mask, `soft_path` length & soft/cross cell counts, distinct movable vs locked blocker nets within `0.5 / 1.0 / 2.0 mm` capsules, historical `reverted_routed` count on those blocker nets, net reach history, and remaining stage budget.
+   - **Action:** Score `(airline, endpoint)` priority + select `(initial_reach ∈ {0.5, 1.0, 2.0, 4.0} mm, repair_cap ∈ {0, 4, 10, 20} s, allow_tie ∈ {0, 1})`.
+   - **Non-learned baseline it must beat first:** Skip `walled` endpoints whose pad mouth is blocked solely by locked copper, abort [`shove::repair`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/grid/src/shove.rs#L693-L760) early when `open_after > open_before + 3` after Phase 1 (`55%` budget), and stop resetting `shove_pass` `stalled = 0` on futile `widened` reaches when `routed == 0`.
+2. **Rank `#2` — Run-level stall / skip-`Vias` / restart controller (solve classically, NOT RL):**
+   - Skipping `Vias` whenever `open > 0` immediately recovers **`388.76 s` on `raw_214` (`5.25%` of total CPU; `2,499.98 s` HT)** with **zero** risk to clean boards (`Vias` cannot close open connections). Reinvesting saved budget into a checkpoint restart with `(seed + 1, via_cost = 2.0 mm)` directly targets both the 4-seed variance (`11..14 / 20` clean, `40..65` opens) and the `--via-cost 2.0` wins (`-5` opens, `3×` faster on `minima` & `sd_wav_pcm5100`) without losing any of the `11` clean boards that a pure abort rule drops.
+3. **Rank `#3` — `Negotiation` round stopping & net weights (analytical rule first, RL marginal):**
+   - Doubling `--negotiate-patience` `4 → 8` lost `2` clean boards and burned `+21.11%` CPU (`+208.56 s` on 20 boards) because stalled PathFinder rounds (`569.52 s` raw / `4,998.19 s` HT) starve `Shove`. Adapting `patience` to the collision-count slope and weighting `Pass 0` nets by pad `mouth_room` tests the entire upside in ~20 lines of Rust.
 
 ---
 
-## 7. What To Try Next (Concrete Order of Attack)
+## 7. Costs, Failures, Regressions, and Corrected Statement of What Was Run
 
-1. **Run `./runs/run_when_unblocked.sh` once `loaf`'s stale `reserve` slots are cleared** to execute the 48-board Rule-6 byte-identical proof, measure exact TLS timer overhead (`--report` vs `--no-timing` vs `main`), and refresh `~/Software/ultraroute-lab/timing/data.json` with live sub-stage hardware CPU timers.
-2. **Three zero-ML classical wins (~50 lines of Rust total, high confidence):**
-   - **Skip `Vias` reduction when `open > 0`** (`stages.rs:753`): immediately reclaims `202 s` on `HEAD-331` (`1,369 s` on `Full-1182`) wasted polishing incomplete boards, with zero possible loss of clean boards.
-   - **Fix standalone `RipUp` missing `grid.via_penalty` (`ripup.rs:281-285`) + add tabu victim pricing (`rip_cost += 400` per failed rip of a victim net):** directly attacks `RipUp`'s **85.3% wasted CPU** (`738.9 s` in `no_better` reroutes).
-   - **Break equal-`f` ties in `NodeHeap::push` (`search.rs:189`) by smaller `h` instead of `node` index**, and fix `jitter::shuffle` (`jitter.rs:15`) so `seed == 0` is not an accidental no-op.
-3. **Build the 20-line classical `Shove` scorer + post-negotiation restart baseline, then benchmark a contextual bandit on `ShoveTry` logs:**
-   - Log `(soft_path features, blocker-net counts, mouth_room, reach, repair_cap) -> (delta_open, try_cpu_s)` across PCBench seeds 1..4 (~20,000 `Shove` tries).
-   - Compare (a) uniform shuffle (today), (b) analytical blocker-count + `mouth_room` ranking with early `repair` abort, and (c) an offline-trained contextual bandit (`< 2 KB` weights, `< 5 us` per `Shove` try) evaluated on held-out PCBench boards.
+### 7.1 Costs, failures, and regressions surfaced in this continuation (reported prominently)
+1. **6 Clippy errors in the original instrumentation (`fac5cc2` / `5981f74`):** `cargo clippy --workspace --all-targets -- -D warnings` on `sequoia-server` failed on 6 `clippy::needless_range_loop` lints in `board/src/work.rs` and `ultraroute/src/lib.rs` because the previous session never ran workspace clippy. Fixed in `2b6734b`.
+2. **CPU overhead failed the `~1%` gate before opt-in (`2b6734b`):** On 48 `smoke` boards (5× interleaved), default-on fine timing added **`+3.96%`** CPU (`+4.58%` per-board median) and `--no-timing` still added **`+1.62%`** due to cross-crate TLS reads and `Drop` unwind landing pads in hot loops. Fixed in `358a016` (`+0.13%` default median / `+0.0007%` mean, `-0.01%` `--no-timing`, **`+1.89%`** when opt-in `--timing --report` is enabled).
+3. **Post-negotiation patience stop rule causes severe clean-board regressions on post-`8b71912` `main`:** Unlike the previous report's log-reconstructed claim of "`0` clean boards lost at `Δt = 20 s` on `HEAD-331`", live measurement on post-`8b71912` `main` (`--guard-ties` + `--rip-boxed`) shows `Δt = 20 s` **loses `11 / 138` clean boards on `raw_214` (`59.4` HT-estimated clean boards lost)**, `Δt = 30 s` loses **`5` clean boards**, and even `Δt = 60 s` loses **`3` clean boards**.
+4. **4 of the 8 single-choice ablations regressed clean-board count and 3 others regressed open count:** `--negotiate-patience 8` (`-2` clean, `+9` open, `+21.11%` CPU), `--no-shove-ties` (`-2` clean, `+7` open, `+7.47%` CPU), `--prefanout-order round` (`-2` clean, `+4` open), and `--shove-repair 5` (`-1` clean) all lost clean boards; `--via-cost 8.0` (`+19` open), `--seed 0` (`+5` open, `+11.65%` CPU), and `--nudge` (`+4` open, `+7.83%` CPU) all worsened total unconnected count. Even `--via-cost 2.0` (`0` clean lost, `-5` open, `-5.46%` CPU) increased total vias by `+15.6%` (`1,142 → 1,320`) and slowed `MicroMaple` (`67.3 → 141.4 s`).
+
+### 7.2 Honest, corrected statement of what was and was not run
+- **Correction of the previous report:** The previous agent's `REPORT.md` did not compile a release binary or route a single board with this instrumentation; every sub-operation share, effort split, and per-move figure in that report was reconstructed from pre-`8b71912` text logs and calibrated on a few profiles, with `24.85 pp` L1 sub-operation error on the same runs and wrong stop-rule loss counts. Its claim that `loaf` core reservations were "stale" was also false — those reservations were other projects' real jobs, and `loaf` had only been used because the earlier brief mistakenly restricted runs to `loaf`.
+- **What WAS built and run for real in this continuation (all on `sequoia-server` via `~/.claude/bin/reserve -m sequoia-server -c 12`, capped per router/test process with `systemd-run --user --scope -q -p MemoryMax=8G -p MemorySwapMax=0`):**
+  1. Merged `main` `8b71912` into `explore/timing` (`5981f74`), fixed clippy (`2b6734b`), implemented opt-in `--timing` (`358a016`), and passed full `cargo clippy --workspace --all-targets -- -D warnings` + `cargo test --release --workspace --no-fail-fast`.
+  2. Built isolated detached worktrees (`~/ab/8b71912`, `~/ab/358a016`, `~/ab/8b71912_1e6`, `~/ab/358a016_1e6`) with distinct `CARGO_BUILD_BUILD_DIR`s (verified distinct inodes & SHA-256s), ran the **192-run (`48 × 4`) Rule-6 `1e6` exactness suite** (`48 / 48` byte-identical) and **two interleaved overhead suites** (`48 × 5 × 3 = 720` runs before opt-in + `48 × 5 × 4 = 960` runs after opt-in).
+  3. Routed and KiCad-9.0.8-DRC-judged **214 unique PCBench boards** (`48` `smoke`, `74` `focus`, `100` spread-sampled `rest100`) on `358a016` with `--seed 1 --cpu-clock --timing --report`, **60 additional multi-seed runs** (`20` boards × `seeds 2..4`), and **160 single-choice ablation runs** (`20` boards × `8` flags) — **2,306 live router runs in total**.
+  4. Rebuilt [`~/Software/ultraroute-lab/timing/data.json`](file:///home/sequoia/Software/ultraroute-lab/timing/data.json) and [`index.html`](file:///home/sequoia/Software/ultraroute-lab/timing/index.html) solely from those live `report.json` and `result.json` files.
+- **What was NOT run (and is explicitly labelled as estimated where shown):**
+  1. The remaining `968` unsampled PCBench boards (`1,068 - 100`) were not re-routed on `358a016`; `HT-1182` figures are Horvitz-Thompson survey-weighted estimates from the `214` measured boards and are labelled `ESTIMATED (HT)` in every table and UI banner.
+  2. Multi-seed (`seeds 1..4`) and the 8 single-choice ablations were measured on the `20`-board stratified subset (`runs/seeds20.json`), not all `214` or `1,182` boards.
+  3. Liao, Pan & Chiang (*Expert Systems with Applications* 311, 131424, 2026) remains **unread (paywalled)**.
+
+---
+
+## 8. Recommended Concrete Order of Attack (Classical Heuristics First, Targeted Bandit Second)
+
+1. **Skip `Vias` on incomplete boards (`open > 0`) and reinvest into a checkpoint restart (`Rank #2` + `#6` + `#7`, ~25 lines, zero ML):**
+   - Gate [`stages::Vias`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/ultraroute/src/stages.rs#L943-L980) on `open == 0` by default (immediately saving **`388.76 s` on `raw_214` / `2,499.98 s` HT** with **0 clean-board regressions**), and when a run finishes `Shove`/`Corridors` with `open > 0` and remaining budget, checkpoint-restart from `(seed + 1, via_cost = 2.0 mm)` keeping the lowest-`open` board.
+2. **Prune futile `Vias::try_replace` 6 mm subwindow map builds on clean boards (`Rank #7`, ~20 lines, zero ML):**
+   - `54,670` of `61,012` `try_replace` calls (`91.51%` of `vias` CPU = `766.68 s` raw) fail; add a cheap same-layer obstacle/pad-entry reachability precheck before constructing the subwindow `ObstacleMap`.
+3. **Cap doomed `Shove` repairs & stop resetting `shove_pass` patience on zero-route widenings (`Rank #1` classical baseline, ~30 lines):**
+   - Abort `shove::repair` after Phase 1 (`55%` budget) when `open_after > open_before + 3`, and do not reset `stalled = 0` in [`shove_pass`](file:///home/sequoia/Software/ultraroute/.claude/worktrees/explore-timing/core/crates/ultraroute/src/stages.rs#L1505-L1524) when a widened reach fails to route out (`routed == 0`).
+4. **Speed up `map_patch` (`19.60%` CPU, #2 sub-op) and `prefanout` polygon `geometry` (`9.64%` CPU, #3 sub-op):**
+   - Live hardware timing revealed that `map_patch` (`1,450.59 s` raw) and `geometry` (`713.36 s` raw, `65.42%` of `prefanout`) together consume **29.24% of all router CPU** (vs `10.0%` guessed previously) — making incremental bbox/dirty-tile `RouteGrid` patching and spatial prefiltering in `prefanout` `--escape-room` top systems-engineering targets alongside `NodeHeap` `(f, h)` tie-breaking (`search.rs:189`).
+5. **Train an offline contextual bandit for `Shove` target/radius/repair scoring (`Rank #1`, ONLY if step 3 leaves substantial `Shove` waste):**
+   - Log per-try features and counterfactual outcomes across `shove_escape` (`3,918` tries on `214` boards) and fit a lightweight linear / small MLP scorer (< `10 µs`/try in pure Rust) benchmarked strictly against step 3 under identical `--timeout 120` CPU budgets.
 
 ---
 
 ## For the project memory
 
-- **`~/.claude/bin/reserve` waiting-slot leak under `timeout`:** In `~/.claude/bin/reserve` lines 267-292, `SIGTERM` is not trapped while a client is polling in `"waiting"` state (`trap ... EXIT` in bash does not run on unhandled `SIGTERM` unless `SIGTERM` is trapped). Wrapping `reserve` in `timeout` (default `SIGTERM`) kills the waiting bash client, after which the daemon promotes the orphaned request to `"running"` and holds its cores forever (`timeout -s INT` avoids this because `SIGINT` is trapped, or `reserve` itself should trap `TERM HUP` before the wait loop).
-- **Post-`explore/speed` (`8c5c1b9`) profiler reality:** `negotiate::patch_grid` (`SipHash`) is **no longer** a 70% bottleneck; `FxHash` + in-place `patch_grid` (`hs3`) shrank `map_patch` to ~8.2% of corpus CPU, stamp/spoke caching (`hs1`) shrank `map_build` to ~9-11%, and `astar` (`search.rs`) is now #1 at ~55-59% of corpus CPU.
-- **Seed coverage blind spots in `HEAD` (`947d08c`):** `jitter::shuffle` (`core/crates/grid/src/jitter.rs:15`) returns early when `seed == 0`; `route_open` calls inside `ripup.rs`, `shove.rs`, and `nudge.rs` hardcode `seed: 0`; and `Prefanout`, `Pairs`, `RipUp`, `Tightening`, and `Vias` ignore `--seed` completely. All multi-seed variance comes from `Negotiation` connection order and `Shove` target order.
-- **Two subtle router bugs found during the heuristic audit:**
-  1. `core/crates/grid/src/ripup.rs:281-285`: soft-via penalties (`grid.via_penalty`) are populated only when `options.region_repair == true` (`Shove`'s internal repair), leaving soft vias free to cross in standalone `RipUp`.
-  2. `core/crates/grid/src/search.rs:189`: `NodeHeap::push` packs `(u64::from(priority) << 32) | node as u64`, breaking equal-`f` ties in `self.top` by raw `node` index (`layer * nx * ny + j * nx + i`) rather than smaller `h` (larger `g`).
+- **Opt-in `--timing` instrumentation (`explore/timing`, `358a016`):** Coarse per-stage thread CPU (`CLOCK_THREAD_CPUTIME_ID`) is on by default at `+0.13%` median / `+0.0007%` mean overhead vs `main` `8b71912` (`48/48` `1e6` byte-identical); fine-grained 8-bucket sub-operation (`astar`, `map_build`, `map_patch`, `zones`, `checks`, `connectivity`, `terminals`, `geometry`) and `useful`/`kept_other`/`wasted` effort accounting is opt-in via `--timing` (`+1.89%` CPU overhead), using `SINK_COUNT: AtomicUsize` + closure `board::work::in_bucket` so hot loops incur zero TLS lookups or `Drop` landing pads when `--timing` is off.
+- **Actual post-`8b71912` CPU profile (`214` measured PCBench boards: `48` `smoke` + `74` `focus` + `100` `rest100`):**
+  - Sub-operations (`raw_214` / `HT-1182` est.): `astar` `42.50% / 45.07%` (not `59%`), `map_patch` `19.60% / 19.38%` (#2 overall), `geometry` `9.64% / 10.91%` (#3 overall, `65.42%` of `prefanout` under `--escape-room`), `map_build` `8.15% / 7.50%`, `terminals` `7.75% / 6.55%`, `connectivity` `3.70% / 3.25%`, `zones` `3.38% / 3.09%`, `checks` `3.20% / 2.79%`, `other` `2.08% / 1.47%`.
+  - Effort & regressions: `41.24%` of `raw_214` CPU is wasted (`shove` `1,054.76 s` = `51.75%`, `vias` `766.68 s` = `91.51%`, `negotiation` `645.74 s` = `24.45%`, `rip-up` `279.62 s` = `83.42%`); `vias` burns `388.76 s` (`2,499.98 s` HT) on incomplete `open > 0` boards. Post-negotiation patience stopping without restart is **unsafe** on post-`8b71912` `main`: `Δt = 20 s` loses `11 / 138` clean boards (`3` lost even at `Δt = 60 s`) because `--guard-ties` + `--rip-boxed` rescue boards after long flat-`open` plateaus.
