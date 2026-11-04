@@ -1694,13 +1694,13 @@ fn reconcile_stage_events(
     }
     let mut ev_buckets = [0u64; board::work::BUCKET_COUNT];
     for ev in &events[ev_before..] {
-        for b in 0..board::work::BUCKET_COUNT {
-            ev_buckets[b] = ev_buckets[b].saturating_add(ev.buckets_ns[b]);
+        for (dst, &src) in ev_buckets.iter_mut().zip(&ev.buckets_ns) {
+            *dst = dst.saturating_add(src);
         }
     }
     let mut rem_buckets = [0u64; board::work::BUCKET_COUNT];
-    for b in 0..board::work::BUCKET_COUNT {
-        rem_buckets[b] = delta.buckets_ns[b].saturating_sub(ev_buckets[b]);
+    for ((dst, &tot), &ev_b) in rem_buckets.iter_mut().zip(&delta.buckets_ns).zip(&ev_buckets) {
+        *dst = tot.saturating_sub(ev_b);
     }
     let sub: Vec<board::work::RawEvent> = events.drain(ev_before..).collect();
     let mut cursor = start_snap.run_cpu_ns;
@@ -1719,14 +1719,14 @@ fn reconcile_stage_events(
         }
         used_gap = used_gap.saturating_add(dur);
         let mut out = [0u64; board::work::BUCKET_COUNT];
-        for b in 0..board::work::BUCKET_COUNT {
+        for ((dst, used), &rem) in out.iter_mut().zip(&mut used_buckets).zip(&rem_buckets) {
             let target = if used_gap >= gap_total {
-                rem_buckets[b]
+                rem
             } else {
-                ((rem_buckets[b] as u128) * (used_gap as u128) / (gap_total as u128)) as u64
+                ((rem as u128) * (used_gap as u128) / (gap_total as u128)) as u64
             };
-            out[b] = target.saturating_sub(used_buckets[b]);
-            used_buckets[b] = target;
+            *dst = target.saturating_sub(*used);
+            *used = target;
         }
         out
     };
@@ -1762,8 +1762,8 @@ fn reconcile_stage_events(
             buckets_ns: alloc_gap(dur),
         });
     } else if let Some(last) = events.last_mut() {
-        for b in 0..board::work::BUCKET_COUNT {
-            last.buckets_ns[b] = last.buckets_ns[b].saturating_add(rem_buckets[b].saturating_sub(used_buckets[b]));
+        for ((dst, &rem), &used) in last.buckets_ns.iter_mut().zip(&rem_buckets).zip(&used_buckets) {
+            *dst = dst.saturating_add(rem.saturating_sub(used));
         }
         if last.open_after.is_none() {
             last.open_after = Some(open_after);
@@ -1864,9 +1864,9 @@ fn build_progress(
         }
         let ov = e - s;
         let dur = ev.end_ns.saturating_sub(ev.start_ns).max(1);
-        for b in 0..board::work::BUCKET_COUNT {
-            let share = ((ev.buckets_ns[b] as u128) * (ov as u128) / (dur as u128)) as u64;
-            half_buckets[b] = half_buckets[b].saturating_add(share);
+        for (dst, &src) in half_buckets.iter_mut().zip(&ev.buckets_ns) {
+            let share = ((src as u128) * (ov as u128) / (dur as u128)) as u64;
+            *dst = dst.saturating_add(share);
         }
         let (u, k, w) = if ev.kind == "stage" {
             if let Some(st) = stages.iter().find(|st| st.name == ev.stage && st.cpu_seconds > 0.0) {

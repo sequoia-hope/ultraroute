@@ -178,8 +178,8 @@ impl CpuSink {
 impl CpuSnap {
     pub fn since(&self, earlier: &CpuSnap) -> CpuSnap {
         let mut buckets_ns = [0u64; BUCKET_COUNT];
-        for i in 0..BUCKET_COUNT {
-            buckets_ns[i] = self.buckets_ns[i].saturating_sub(earlier.buckets_ns[i]);
+        for ((dst, cur), old) in buckets_ns.iter_mut().zip(&self.buckets_ns).zip(&earlier.buckets_ns) {
+            *dst = cur.saturating_sub(*old);
         }
         CpuSnap {
             run_cpu_ns: self.run_cpu_ns.saturating_sub(earlier.run_cpu_ns),
