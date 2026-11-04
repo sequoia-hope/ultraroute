@@ -176,9 +176,18 @@ nets numbered by name, footprints by reference, library and place, pads by numbe
 zones by net name, layer and geometry; no file position or uuid decides anything. The output keeps
 the file's own items where they stand, with their uuids, and writes new copper at the end in the
 router's order under the file's net numbers, so `--uuid-seed` gives each new piece the same uuid
-whatever the order. What a zone's saved fill says counts as part of the board: two files whose
-fills differ (KiCad filled them from other copper) are two boards to `--pour-cost`, which prices
-crossing a fill by its polygons. Time is what is still outside this: `--timeout`, and each try's
+whatever the order.
+
+A zone's saved fill is input, though, not something the router works out. `--pour-cost` prices
+crossing a pour by the polygons saved in the file, so with it a file whose fills are stale is a
+different input from the same board freshly filled, and routes differently until refilled (the
+earring repro: the same items in two orders, one with stale GND fills, differ with `--pour-cost 3`
+and agree with `--pour-cost 0`). Refilling is not perfectly repeatable either: two KiCad refills
+of one file have been seen to differ in one zone, so even refilled files can differ under
+`--pour-cost`. Other uses of saved fills (`--auto-planes`, planes joining their nets, kept islands,
+which fills the writer drops) read them too.
+
+Time is what is still outside this: `--timeout`, and each try's
 cap in rip-up, shove and nudge, stop work where the clock says; `--cpu-clock` makes that a matter of
 CPU seconds, not of what else the machine is doing.
 

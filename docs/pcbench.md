@@ -80,6 +80,10 @@ noise allows or any board gains an error type. `--json` writes the per-board tab
 
 `tools/shuffle_check.py BOARD ...` routes boards as their files stand and with the items, nets and
 pads shuffled, the nets renumbered and the uuids new, and says whether copper and log still agree.
+A shuffle keeps each zone's saved fills, so it does not test them: with `--pour-cost`, which prices
+the saved polygons, two files of one board whose fills differ (one stale; KiCad's refill is not
+perfectly repeatable either) are different inputs and may route differently. The default recipe
+has no `--pour-cost`.
 
 **Noise floor.** Until the router is deterministic under a wall-clock budget, the same binary and
 seed disagree with themselves on a few boards. `--noise auto` counts the boards whose verdict
