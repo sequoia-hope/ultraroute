@@ -60,6 +60,8 @@ pub struct PrefanoutOptions {
     pub order: EscapeOrder,
     /// Join pads locally to same-net kept pours, exposed pads, and nearby sibling pads first.
     pub inward: bool,
+    /// Guard held-back sibling pads too and refuse bridges or escapes that seal a sibling's mouth.
+    pub guard_mouths: bool,
     /// Footprints to fan out, by index into `Board::footprints`.
     pub parts: Vec<usize>,
     /// Nets whose pads are left for routing of their own, such as a differential pair's.
@@ -81,6 +83,7 @@ impl Default for PrefanoutOptions {
             mode: EscapeMode::GridInner,
             order: EscapeOrder::InnerFirst,
             inward: true,
+            guard_mouths: false,
             parts: Vec::new(),
             skip_nets: HashSet::new(),
             pours_block: false,
@@ -486,6 +489,7 @@ pub fn prefanout(board: &mut Board, options: &PrefanoutOptions, watch: &mut dyn 
             .collect();
 
         let mut by_cluster: BTreeMap<usize, Vec<PadInfo>> = BTreeMap::new();
+        let mut held_back: Vec<PadInfo> = Vec::new();
         for mut p in raw_pads {
             if !open_nets.contains(&p.net) {
                 stats.skipped_escaped += 1;
@@ -493,6 +497,15 @@ pub fn prefanout(board: &mut Board, options: &PrefanoutOptions, watch: &mut dyn 
             }
             if options.skip_nets.contains(&p.net) {
                 stats.skipped_nets += 1;
+                if options.guard_mouths && conn.cluster.get(&p.id).is_some_and(|&cid| !cluster_escaped(cid)) {
+                    let mut local_profile = Profile::for_net(board, p.net);
+                    local_profile.half_width = local_profile.neck_into(board.item(p.id));
+                    let key = (local_profile.class.clone(), local_profile.half_width);
+                    local_maps
+                        .entry(key)
+                        .or_insert_with(|| ObstacleMap::window(board, local_profile, options.local_cell, win_bounds, options.pours_block));
+                    held_back.push(p);
+                }
                 continue;
             }
             let Some(&cid) = conn.cluster.get(&p.id) else { continue };
@@ -536,7 +549,10 @@ pub fn prefanout(board: &mut Board, options: &PrefanoutOptions, watch: &mut dyn 
             if cancelled() {
                 break;
             }
-            let siblings: Vec<PadInfo> = groups[g_idx + 1..].iter().map(|g| g[0].clone()).collect();
+            let mut siblings: Vec<PadInfo> = groups[g_idx + 1..].iter().map(|g| g[0].clone()).collect();
+            if options.guard_mouths {
+                siblings.extend(held_back.iter().cloned());
+            }
             let extra_in_group = groups[g_idx].len().saturating_sub(1);
             let mut group_ok = false;
             for pad in groups[g_idx].clone() {
@@ -674,6 +690,10 @@ fn bridge_inward(
     let mut maps: HashMap<(String, Nm), ObstacleMap> = HashMap::new();
     let mut bridged = 0;
 
+    if options.guard_mouths {
+        sibling_maps(board, pads, &mut maps, options.local_cell, bounds, options.pours_block);
+    }
+
     for pad in pads {
         let conn = board_connectivity(board, options.pours_block);
         let Some(&pad_cid) = conn.cluster.get(&pad.id) else { continue };
@@ -705,6 +725,12 @@ fn bridge_inward(
             continue;
         }
 
+        let other_pads: Vec<PadInfo> = if options.guard_mouths {
+            pads.iter().filter(|o| o.net != pad.net && o.layer == pad.layer).cloned().collect()
+        } else {
+            Vec::new()
+        };
+
         let mut widths = vec![profile.half_width];
         let neck = profile.neck_into(board.item(pad.id));
         if neck < profile.half_width {
@@ -717,7 +743,10 @@ fn bridge_inward(
             let map = maps
                 .entry(key)
                 .or_insert_with(|| ObstacleMap::window(board, p, options.local_cell, bounds, options.pours_block));
-            let grid = single_layer_view(map, pad.net, pad.layer);
+            let mut grid = single_layer_view(map, pad.net, pad.layer);
+            if options.guard_mouths {
+                guard_sibling_lanes(board, &mut grid, pad, hw, neck, options.ring, map, &other_pads);
+            }
             let sources = item_terminals(board, &grid, pad.id, hw, 6, 16);
             if sources.is_empty() {
                 continue;
@@ -736,6 +765,12 @@ fn bridge_inward(
                 continue;
             }
             let Some(items) = lay(board, &grid, &path, &sources, &targets) else { continue };
+            if options.guard_mouths && !preserves_sibling_exits(board, &items, pad.net, &other_pads, &maps) {
+                for id in items {
+                    board.remove(id);
+                }
+                continue;
+            }
             for m in maps.values_mut() {
                 for &id in &items {
                     m.stamp(board, id);
@@ -850,6 +885,175 @@ fn preserves_handoffs(
         }
     }
     true
+}
+
+/// The local maps [`preserves_sibling_exits`] reads for `siblings`, each at its pad's neck, made
+/// over `bounds` where `maps` has none.
+fn sibling_maps(board: &Board, siblings: &[PadInfo], maps: &mut HashMap<(String, Nm), ObstacleMap>, cell: Nm, bounds: BBox, pours_block: bool) {
+    for sib in siblings {
+        let mut sp = Profile::for_net(board, sib.net);
+        sp.half_width = sp.neck_into(board.item(sib.id));
+        let key = (sp.class.clone(), sp.half_width);
+        maps.entry(key).or_insert_with(|| ObstacleMap::window(board, sp, cell, bounds, pours_block));
+    }
+}
+
+/// Checks that stamping `items` of `net` does not seal the local mouth of any nearby unescaped
+/// sibling pad that could previously escape past its package edge or drop a via. The siblings'
+/// maps are [`sibling_maps`]'.
+fn preserves_sibling_exits(
+    board: &Board,
+    items: &[ItemId],
+    net: u32,
+    siblings: &[PadInfo],
+    local_maps: &HashMap<(String, Nm), ObstacleMap>,
+) -> bool {
+    let Some(items_bb) = items.iter().filter_map(|&id| board.bbox(id)).reduce(BBox::union) else { return true };
+    let near_bb = items_bb.grow(500_000);
+    for sib in siblings {
+        if sib.net == net || !near_bb.overlaps(BBox::of([sib.centre])) {
+            continue;
+        }
+        let mut sp = Profile::for_net(board, sib.net);
+        sp.half_width = sp.neck_into(board.item(sib.id));
+        let lmap = &local_maps[&(sp.class, sp.half_width)];
+        if !pad_can_escape_mouth(board, sib, lmap, &[], net) {
+            continue;
+        }
+        if !pad_can_escape_mouth(board, sib, lmap, items, net) {
+            return false;
+        }
+    }
+    true
+}
+
+fn pad_can_escape_mouth(
+    board: &Board,
+    sib: &PadInfo,
+    lmap: &ObstacleMap,
+    extra_items: &[ItemId],
+    extra_net: u32,
+) -> bool {
+    let Some(pad_item) = board.item(sib.id) else { return false };
+    let cells = lmap.nx * lmap.ny;
+    let hole_clr = nm(board.rules.min_hole_clearance);
+    let clr = lmap.clearance_to(board, extra_net);
+    let reach = lmap.reach();
+    let trace_lim = (lmap.profile.half_width + clr + reach) as f64;
+    let via_lim = (lmap.profile.via_radius + clr + reach) as f64;
+    let multi = lmap.layers >= 2 && (0..lmap.layers).any(|l| l != sib.layer && board.planes & (1 << l) == 0);
+
+    let win = BBox::of([sib.centre]).grow(650_000);
+    let i0 = ((win.min.x - lmap.x0).div_euclid(lmap.h)).max(0) as usize;
+    let i1 = (((win.max.x - lmap.x0).div_euclid(lmap.h)).max(0) as usize).min(lmap.nx.saturating_sub(1));
+    let j0 = ((win.min.y - lmap.y0).div_euclid(lmap.h)).max(0) as usize;
+    let j1 = (((win.max.y - lmap.y0).div_euclid(lmap.h)).max(0) as usize).min(lmap.ny.saturating_sub(1));
+    if i0 > i1 || j0 > j1 {
+        return false;
+    }
+    let wnx = i1 - i0 + 1;
+    let wny = j1 - j0 + 1;
+
+    let extra_blocks_trace = |p: Point, layer: usize| -> bool {
+        if extra_items.is_empty() {
+            return false;
+        }
+        let dot = Shape::Capsule { a: p, b: p, r: 0 };
+        extra_items.iter().any(|&id| {
+            let Some(it) = board.item(id) else { return false };
+            if it.on(layer) && it.shape.gap_within(&dot, trace_lim) < trace_lim {
+                return true;
+            }
+            if let Some((hc, hr)) = it.hole {
+                let hlim = (hr + lmap.profile.half_width + hole_clr + reach) as f64;
+                if p.distance(hc) < hlim {
+                    return true;
+                }
+            }
+            false
+        })
+    };
+    let extra_blocks_via = |p: Point| -> bool {
+        if extra_items.is_empty() {
+            return false;
+        }
+        let dot = Shape::Capsule { a: p, b: p, r: 0 };
+        extra_items.iter().any(|&id| {
+            let Some(it) = board.item(id) else { return false };
+            if it.shape.gap_within(&dot, via_lim) < via_lim {
+                return true;
+            }
+            if let Some((hc, hr)) = it.hole {
+                let hlim = (hr + lmap.profile.via_radius + hole_clr + reach) as f64;
+                if p.distance(hc) < hlim {
+                    return true;
+                }
+            }
+            false
+        })
+    };
+
+    let mut seen = vec![false; wnx * wny];
+    let mut queue = std::collections::VecDeque::new();
+    let pad_bb = pad_item.shape.bbox();
+    let pi0 = ((pad_bb.min.x - lmap.x0).div_euclid(lmap.h)).max(i0 as Nm) as usize;
+    let pi1 = (((pad_bb.max.x - lmap.x0).div_euclid(lmap.h)).max(0) as usize).min(i1);
+    let pj0 = ((pad_bb.min.y - lmap.y0).div_euclid(lmap.h)).max(j0 as Nm) as usize;
+    let pj1 = (((pad_bb.max.y - lmap.y0).div_euclid(lmap.h)).max(0) as usize).min(j1);
+    for j in pj0..=pj1 {
+        for i in pi0..=pi1 {
+            let p = Point::new(lmap.x0 + (2 * i as Nm + 1) * lmap.h / 2, lmap.y0 + (2 * j as Nm + 1) * lmap.h / 2);
+            let idx = sib.layer * cells + j * lmap.nx + i;
+            if !lmap.blocked_at(sib.net, idx) && pad_item.shape.contains(p) && !extra_blocks_trace(p, sib.layer) {
+                let w = (j - j0) * wnx + (i - i0);
+                seen[w] = true;
+                queue.push_back((i, j));
+            }
+        }
+    }
+    let goal_fwd = sib.edge_gap + 260_000.0;
+    while let Some((i, j)) = queue.pop_front() {
+        let p = Point::new(lmap.x0 + (2 * i as Nm + 1) * lmap.h / 2, lmap.y0 + (2 * j as Nm + 1) * lmap.h / 2);
+        let dx = (p.x - sib.centre.x) as f64;
+        let dy = (p.y - sib.centre.y) as f64;
+        if dx * sib.out.0 + dy * sib.out.1 >= goal_fwd || p.distance(sib.centre) >= 440_000.0 {
+            return true;
+        }
+        let cell2d = j * lmap.nx + i;
+        if multi && !lmap.via_blocked_at(sib.net, cell2d) && !extra_blocks_via(p) {
+            let other_free = (0..lmap.layers).any(|l| {
+                l != sib.layer
+                    && board.planes & (1 << l) == 0
+                    && !lmap.blocked_at(sib.net, l * cells + cell2d)
+                    && !extra_blocks_trace(p, l)
+            });
+            if other_free {
+                return true;
+            }
+        }
+        for (di, dj) in [(-1isize, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)] {
+            let (ni, nj) = (i as isize + di, j as isize + dj);
+            if ni < i0 as isize || ni > i1 as isize || nj < j0 as isize || nj > j1 as isize {
+                continue;
+            }
+            let (ni, nj) = (ni as usize, nj as usize);
+            let w = (nj - j0) * wnx + (ni - i0);
+            if seen[w] {
+                continue;
+            }
+            let idx = sib.layer * cells + nj * lmap.nx + ni;
+            if lmap.blocked_at(sib.net, idx) {
+                continue;
+            }
+            let np = Point::new(lmap.x0 + (2 * ni as Nm + 1) * lmap.h / 2, lmap.y0 + (2 * nj as Nm + 1) * lmap.h / 2);
+            if extra_blocks_trace(np, sib.layer) {
+                continue;
+            }
+            seen[w] = true;
+            queue.push_back((ni, nj));
+        }
+    }
+    false
 }
 
 /// Marks the forbidden halo around each earlier escape's outermost global handoff cell (plus all
@@ -1000,6 +1204,9 @@ fn lay_pour_escape(
     handoffs: &[EscapedHandoff],
 ) -> Option<(Vec<ItemId>, Vec<usize>)> {
     let max_steps = ((options.ring + 1_400_000) / options.local_cell.max(1)) as usize;
+    if options.guard_mouths {
+        sibling_maps(board, siblings, local_maps, options.local_cell, win_bounds, options.pours_block);
+    }
     let mut widths = vec![narrow_hw.min(profile.half_width)];
     if !widths.contains(&profile.half_width) {
         widths.push(profile.half_width);
@@ -1008,9 +1215,10 @@ fn lay_pour_escape(
         let mut local_profile = profile.clone();
         local_profile.half_width = hw;
         let key = (profile.class.clone(), hw);
-        let lmap = local_maps
-            .entry(key)
+        local_maps
+            .entry(key.clone())
             .or_insert_with(|| ObstacleMap::window(board, local_profile, options.local_cell, win_bounds, options.pours_block));
+        let lmap = &local_maps[&key];
         let mut base_grid = single_layer_view(lmap, pad.net, pad.layer);
         protect_vital_handoffs(board, &mut base_grid, pad.net, hw, global_maps, handoffs);
         base_grid.penalty = vec![0; base_grid.blocked.len()];
@@ -1043,6 +1251,7 @@ fn lay_pour_escape(
             pour_tiers.push(sib_grid);
         }
         pour_tiers.push(base_grid);
+        let sib_guard = options.guard_mouths.then_some((siblings, &*local_maps));
 
         for grid in pour_tiers {
             let targets: Vec<Terminal> = pour_targets.iter().copied().filter(|t| !grid.blocked[t.0]).collect();
@@ -1054,7 +1263,7 @@ fn lay_pour_escape(
             if path.len() > max_steps {
                 continue;
             }
-            if let Some(ok) = commit_grid_path(board, &grid, &path, &sources, &targets, &profile.class, true, global_maps, handoffs) {
+            if let Some(ok) = commit_grid_path(board, &grid, &path, &sources, &targets, &profile.class, true, global_maps, handoffs, sib_guard) {
                 return Some(ok);
             }
         }
@@ -1402,14 +1611,18 @@ fn lay_grid_escape(
         inner_layers = vec![pad.layer];
     }
     let preferred_inner = inner_layers[pad.seq_index % inner_layers.len()];
+    if options.guard_mouths {
+        sibling_maps(board, siblings, local_maps, options.local_cell, win_bounds, options.pours_block);
+    }
 
     for hw in widths {
         let mut local_profile = profile.clone();
         local_profile.half_width = hw;
         let key = (profile.class.clone(), hw);
-        let lmap = local_maps
-            .entry(key)
+        local_maps
+            .entry(key.clone())
             .or_insert_with(|| ObstacleMap::window(board, local_profile, options.local_cell, win_bounds, options.pours_block));
+        let lmap = &local_maps[&key];
 
         let mut base_grid = if multi_layer { lmap.view(pad.net) } else { single_layer_view(lmap, pad.net, pad.layer) };
         base_grid.deadline = options.deadline.clone();
@@ -1552,6 +1765,8 @@ fn lay_grid_escape(
         }
         tiers.push(base_grid);
 
+        let sib_guard = options.guard_mouths.then_some((siblings, &*local_maps));
+
         for mut grid in tiers {
             for (b_idx, &(r_lo, r_hi)) in ring_bands.iter().enumerate() {
                 for (s_idx, layers) in target_sets.iter().enumerate() {
@@ -1577,6 +1792,7 @@ fn lay_grid_escape(
                             landed_on_pour,
                             global_maps,
                             handoffs,
+                            sib_guard,
                         ) {
                             return Some(ok);
                         }
@@ -1595,6 +1811,8 @@ fn lay_grid_escape(
     None
 }
 
+type SiblingGuard<'a> = (&'a [PadInfo], &'a HashMap<(String, Nm), ObstacleMap>);
+
 #[allow(clippy::too_many_arguments)]
 fn commit_grid_path(
     board: &mut Board,
@@ -1606,13 +1824,17 @@ fn commit_grid_path(
     landed_on_pour: bool,
     global_maps: &HashMap<String, ObstacleMap>,
     handoffs: &[EscapedHandoff],
+    sib_guard: Option<SiblingGuard<'_>>,
 ) -> Option<(Vec<ItemId>, Vec<usize>)> {
+    let sibs_ok = |board: &Board, ids: &[ItemId]| {
+        sib_guard.is_none_or(|(sibs, lmaps)| preserves_sibling_exits(board, ids, grid.net, sibs, lmaps))
+    };
     let mut ids = lay(board, grid, path, sources, targets)?;
     if !grid.pours_block {
         let saved: Vec<Item> = ids.iter().filter_map(|&id| board.item(id).cloned()).collect();
         pull_tight(board, &mut ids, &Default::default());
         let cells = handoff_cells_of(board, &ids, grid.net, &global_maps[class]);
-        if (!cells.is_empty() || landed_on_pour) && preserves_handoffs(board, &ids, grid.net, global_maps, handoffs) {
+        if (!cells.is_empty() || landed_on_pour) && preserves_handoffs(board, &ids, grid.net, global_maps, handoffs) && sibs_ok(board, &ids) {
             return Some((ids, cells));
         }
         for id in ids {
@@ -1621,7 +1843,7 @@ fn commit_grid_path(
         ids = saved.into_iter().map(|it| board.insert(it)).collect();
     }
     let cells = handoff_cells_of(board, &ids, grid.net, &global_maps[class]);
-    if (cells.is_empty() && !landed_on_pour) || !preserves_handoffs(board, &ids, grid.net, global_maps, handoffs) {
+    if (cells.is_empty() && !landed_on_pour) || !preserves_handoffs(board, &ids, grid.net, global_maps, handoffs) || !sibs_ok(board, &ids) {
         for id in ids {
             board.remove(id);
         }

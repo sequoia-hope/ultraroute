@@ -54,8 +54,9 @@ Run the tests with `cargo test --workspace` (about 240 tests), and `cargo clippy
 
 A route command that names no stage runs the default recipe, `ultraroute::RECIPE`:
 
-    --negotiate --rip-up --tighten --prefanout --diff-pairs --shove-plough region --shove-reach 0.5
-    --shove-repair 20 --shove-ties --shove-passes 60 --shove-patience 8
+    --negotiate --rip-up --rip-boxed --tighten --prefanout --escape-room --diff-pairs
+    --shove-plough region --shove-reach 0.5 --shove-repair 20 --shove-ties --guard-ties
+    --shove-passes 60 --shove-patience 8
 
 It is the benchmark's recipe (`docs/pcbench.md`), measured as the best the router has.
 `--recipe default` (or `bench`, the same) puts it first and lets later flags override it.
@@ -115,6 +116,7 @@ lengths, the deadline, and, of kind `rule`, every project or custom rule left ou
 | `--adopt` | treat the board's unlocked tracks and vias as the router's own: free to rip, move and rewrite |
 | `--no-route` | only load, strip and place, then write |
 | `--prefanout` | escape every fine-pitch part's pads before routing |
+| `--escape-room`, `--no-escape-room` | choose the parts to escape by their pins' room against neighbours and the board edge rather than a fixed 0.5 mm pitch, and keep sibling and held-back pad mouths open; the parts so chosen are also those the pair escapes and `--shove-plough rip` work at |
 | `--prefanout-mode stub\|dogbone\|grid\|inner\|same` | how the escapes are laid; default `inner` (a fine-grid route across layers). `same` first tries an escape without a via for a pad whose net meets no other layer; measured as no better than the default (`docs/pcbench.md`), kept as an option |
 | `--prefanout-order round\|inner\|trapped` | the order a part's pads claim escapes; default `inner` |
 | `--prefanout-ring MM` | how far past the part's pads the escapes end (0.2 to 5 mm; default 1.1) |
@@ -127,6 +129,7 @@ lengths, the deadline, and, of kind `rule`, every project or custom rule left ou
 | `--negotiate-jacobi` | each round routes against the last on `--threads` threads, instead of one connection after another; slower to converge on the fixtures (Stage 4 notes) |
 | `--negotiate-reroute-all` | every round reroutes every connection, not only those that collided (the old way; slower) |
 | `--rip-up` | let blocked connections cross the router's own copper, rerouting what they rip |
+| `--rip-boxed`, `--no-rip-boxed` | in rip-up, a connection boxed in by the router's copper (an end with no way out until that copper is lifted, or no way even ripping) is tried with the copper round its ends lifted, then on half-size cells in a window round it, where vias are priced as ripping; one so laid is held while what it ripped is rerouted, negotiated and given one more short rip-up, all counted in attempts and rounds rather than seconds. Other connections are tried as without it |
 | `--shove` | plough a way out for connections trapped at fine-pitch pads |
 | `--shove-plough rip\|region` | how the plough clears the copper in its way (implies `--shove`); `region` rips round the pinch and negotiates it again |
 | `--shove-reach MM` | how far the plough clears (default 2) |
@@ -134,6 +137,7 @@ lengths, the deadline, and, of kind `rule`, every project or custom rule left ou
 | `--shove-passes N` | plough passes, each in another order (default 1) |
 | `--shove-patience N` | passes in a row that free nothing before it stops (default 1) |
 | `--shove-ties` | keep a try that frees its connection without losing ground elsewhere |
+| `--guard-ties`, `--no-guard-ties` | refuse a shove tie move that leaves a newly opened connection boxed in around its end |
 | `--shove-cascade N` | connections a try knocked loose that are ploughed in turn (default 0) |
 | `--nudge` | move unlocked parts aside for connections nothing else could route; not in the default (it moves the designer's parts) |
 | `--tighten` | straighten the routed copper |

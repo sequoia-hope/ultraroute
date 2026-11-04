@@ -341,11 +341,9 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
                     match missed {
                         Missed::Start | Missed::End => stats.no_terminal += 1,
                         Missed::Path => stats.no_path += 1,
-                        _ => stats.refused += 1,
+                        Missed::Refused => stats.refused += 1,
                     }
-                    if why != "refused" {
-                        stats.failures.push((airline.from_item, airline.to_item, why));
-                    }
+                    stats.failures.push((airline.from_item, airline.to_item, why));
                     None
                 }
             };
