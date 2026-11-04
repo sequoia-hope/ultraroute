@@ -1,250 +1,181 @@
-# Routed Board Scaling and Spring Compaction (`ultraroute scale` & `ultraroute compact`)
+# Board Compaction v2 (`ultraroute compact` and `ultraroute scale`)
 
-## 1. What Was Built
+## Executive Summary and Verification Status
 
-### Modified and Created Files
+This branch finishes the core geometry, physics, and footprint-coupling changes requested for `ultraroute compact` and `ultraroute scale` on top of the merged `main` (`947d08c`) + `explore/compaction` (`7d0462d`) tree (`HEAD` `52972f3`), and renames the previous report to [`REPORT-v1.md`](REPORT-v1.md).
 
-- [`core/crates/board/src/check.rs`](core/crates/board/src/check.rs)
-  - Added [`Board::is_tied`](core/crates/board/src/check.rs) (exposing net-tie membership to external crates), [`Board::hole_clearance`](core/crates/board/src/check.rs) (drill-to-copper rule lookup matching `check_item`), [`Board::hole_to_hole_clearance`](core/crates/board/src/check.rs) (drill-to-drill rule lookup), and [`Board::max_rule_reach`](core/crates/board/src/check.rs) (spatial query radius bound covering copper clearance, hole clearance, and solder-mask web reach).
-  - Unit test: `hole_clearances_follow_the_rules_and_let_joined_tracks_in`.
-- [`core/crates/kicad-pcb/src/lib.rs`](core/crates/kicad-pcb/src/lib.rs) and [`core/crates/kicad-pcb/src/write.rs`](core/crates/kicad-pcb/src/write.rs)
-  - Added [`ZoneFill`](core/crates/kicad-pcb/src/write.rs) and [`scale_edits`](core/crates/kicad-pcb/src/write.rs) to rewrite `Edge.Cuts` and board-level graphics (`gr_line`, `gr_arc`, `gr_circle`, `gr_rect`, `gr_poly`), top-level and footprint-local `(zone ...)` outline polygons, footprint `(at x y [rot])` origins (preserving footprint size and rotation), and recarved `(filled_polygon ...)` blocks on kept local zones while stripping stale board-plane fill polygons before re-pouring.
-  - Unit test: `scale_edits_rewrites_outline_zones_drawings_and_footprints`.
-- [`core/crates/morph/src/warp.rs`](core/crates/morph/src/warp.rs)
-  - Added [`WarpField::set_border`](core/crates/morph/src/warp.rs) so the harmonic CG solver accepts non-zero Dirichlet boundary displacements `u(p) = (F - 1)(p - c)` on the domain perimeter instead of clamping the border to zero.
-  - Unit test: `a_scaled_border_reproduces_uniform_scaling_and_blends_around_rigid_parts`.
-- [`core/crates/morph/src/scale.rs`](core/crates/morph/src/scale.rs) and [`core/crates/morph/src/lib.rs`](core/crates/morph/src/lib.rs)
-  - Implemented [`scale`](core/crates/morph/src/scale.rs), [`ScaleOptions`](core/crates/morph/src/scale.rs), and [`ScaleReport`](core/crates/morph/src/scale.rs), plus helpers shared with compaction (`build_scale_field`, `build_scaled_bare_board`, `strip_routed_copper`, `is_board_plane_zone`, `strip_kept_zone_pours`, `recarve_kept_zones_in_board`, and `carve_kept_zones`).
-  - Scales every footprint origin about the `Edge.Cuts` bounding-box centre `c` by `c + F * (p - c)`, scales the board outline, cutouts, keepouts, and zone polygons by `F` about `c`, solves a `250_000 nm` (`0.25 mm`) harmonic [`WarpField`](core/crates/morph/src/warp.rs) with rigid footprint inclusions and scaled border condition, advects free tracks and vias through [`flow::flow`](core/crates/morph/src/flow.rs), and recarves kept local block-zone pours (such as `rp2350_power` on `earring`) against opposite-net copper and drills.
-  - Unit test: `scale_expands_outline_parts_and_copper_while_keeping_part_sizes_and_joints`.
-- [`core/crates/morph/src/compact.rs`](core/crates/morph/src/compact.rs)
-  - Implemented [`compact`](core/crates/morph/src/compact.rs), [`CompactOptions`](core/crates/morph/src/compact.rs), [`CompactReport`](core/crates/morph/src/compact.rs), [`StepReport`](core/crates/morph/src/compact.rs), [`AcidTraps`](core/crates/morph/src/compact.rs), and [`dfm_counts`](core/crates/morph/src/compact.rs).
-  - Architecture of each incremental step `k = 1..=steps` toward target factor `F`:
-    1. **Courtyard-limited part placement (`place_parts`)**: Moves footprint origins incrementally toward `c + f_k * (p_0 - c)`, clamps footprints inside the scaled `Edge.Cuts` outline, and resolves pairwise `F.CrtYd` and `B.CrtYd` polygon overlaps (deflated by `KICAD_COURTYARD_TOL_NM = 10_000 nm` pairwise, matching KiCad 9's `5_000 nm` per-footprint courtyard tolerance) by decomposing motion into common-mode translation, tangential sliding, and normal stop projection.
-    2. **Harmonic copper advection**: Solves an incremental [`WarpField`](core/crates/morph/src/warp.rs) from the previous accepted step's footprint positions and border to the new step's positions and border, carrying free vertices and vias smoothly with their surrounding parts.
-    3. **Topological graph & exact tether preservation (`CopperGraph`)**: Extracts routed tracks and vias into a particle-and-edge graph where pad endpoints move rigidly with their footprints (`Anchor::Pad`), pad-stacked vias move rigidly (`Anchor::PadVia`), free vias (`Anchor::Via`) move as net-bound particles shared across layers, and mid-segment T-junctions, cap-overlap joints, and off-centre via landings are preserved as exact tether offsets without inserting synthetic hook segments.
-    4. **Spring + rule-aware relaxation (`relax_step`)**: Iteratively relaxes particle positions under constant-tension unit-direction springs on `Free` bend vertices (`w_mob = 0.0` on vias so vias do not drift off channels unless pushed by clearance or pulled by taut tracks), exact rule repulsion against foreign copper (`Board::clearance`), drill holes (`Board::hole_clearance`, `Board::hole_to_hole_clearance`), board edges/cutouts (`edge_clearance`), keepout zones, poured-zone thermal spokes, and solder-mask bridge webs (`min_web`). Dynamically subdivides long segments where an obstacle pushes into the interior of a span, projects multi-constraint conflicts with an exact 2D active-set half-plane solver (`solve_half_planes_2d`, computing pairwise wedge apices and cycle-averaged pinch midpoints rather than under-projecting obtuse wedges with sequential projections), runs recursive tether-group coordinate polish directly against `check_item` (`polish_on_board`), and collapses taut or collinear bend chains (`shorten_taut_chains`).
-    5. **Strict acceptance gate (`check_item` + `BaselineConn`)**: Rebuilds the candidate `Board`, recarves kept block zones, verifies that `check_item` reports zero net rule violations above baseline on any track or via, and verifies via `BaselineConn::added_airlines` that zero copper-connected terminal clusters split apart (while allowing cross-footprint pads that only overlapped accidentally inside a shared copper pour zone at `110%` to un-overlap inside that zone). Any step that leaves a single violation or broken net is rejected, leaving the previous clean board intact. Never rips, never reroutes.
-  - Unit tests (6): `compact_bends_a_straight_track_around_an_obstacle_pad_without_ripping`, `compact_stops_footprints_short_of_courtyard_overlap`, `compact_stops_at_the_last_legal_step_when_a_channel_jams`, `compact_keeps_off_centre_via_joints_without_adding_acute_hooks`, `compact_caps_preexisting_subtolerance_courtyard_graze`, and `solve_half_planes_2d_resolves_acute_wedges_and_antiparallel_pinches`.
-- [`core/crates/ultraroute/src/lib.rs`](core/crates/ultraroute/src/lib.rs), [`core/crates/ultraroute/src/main.rs`](core/crates/ultraroute/src/main.rs), and [`core/crates/ultraroute/tests/cli.rs`](core/crates/ultraroute/tests/cli.rs)
-  - Wired `ultraroute scale` and `ultraroute compact` into CLI argument parsing, execution, per-step stderr reporting, JSON stats output, and KiCad PCB writing.
-  - Unit/CLI tests in `lib.rs` and `tests/cli.rs`.
-- [`.gitignore`](.gitignore)
-  - Ignored `/runs/`.
+### Plain Statement of What Was Verified vs Blocked
 
-### CLI Flags
-
-```text
-ultraroute scale <input.kicad_pcb> -o <output.kicad_pcb> --factor <F> [--lock|--no-lock] [--uuid-seed <u64>]
-ultraroute compact <input.kicad_pcb> -o <output.kicad_pcb> --factor <F> [--steps <N>] [--lock|--no-lock] [--uuid-seed <u64>] [--stats <stats.json>] [-v|--verbose]
-```
-
-- `--factor <F>` accepts either a floating-point number (e.g. `1.1`, `0.85`) or a ratio `A/B` (e.g. `1/1.1`), and rejects non-positive or non-finite values.
-- `--steps <N>` defaults to `ceil(|F - 1.0| / 0.01)` (`1%` steps when omitted, e.g. `15` steps for `0.85`, `10` steps for `1/1.1 = 0.9090909090909091`).
-- `--stats <FILE>` (alias `--report <FILE>`) writes the full JSON step log (`achieved_factor`, `steps_accepted`, `elapsed_s`, `peak_memory_mb`, `jam`, and per-step `size_mm`, `violations`, `track_length_mm`, `vias`, `courtyard_stops`, and pre-pour `acid_traps`).
+- **Verified in this session**:
+  - Fixed all Clippy `-D warnings` errors left by the `main` merge in [`core/crates/kicad-pcb/src/write.rs`](core/crates/kicad-pcb/src/write.rs).
+  - Implemented all Goal 1, Goal 2, and Goal 3 changes across [`core/crates/morph/src/compact.rs`](core/crates/morph/src/compact.rs), [`core/crates/morph/src/scale.rs`](core/crates/morph/src/scale.rs), [`core/crates/ultraroute/src/main.rs`](core/crates/ultraroute/src/main.rs), and [`core/README.md`](core/README.md), plus 4 new unit tests and a resumable end-to-end verification and 24-board PCBench driver at [`runs/v2/run_all.py`](runs/v2/run_all.py).
+  - Single-crate `cargo check --tests` and `cargo clippy --all-targets --no-deps -- -D warnings` pass with **0 errors and 0 warnings** on every crate in `core/` (`kicad-pcb`, `board`, `morph`, `grid`, `ultraroute`, `kicad-text`).
+- **Blocked on `loaf` core-reservation queue (not run unbooked)**:
+  - Release binary compilation (`cargo build --release -p ultraroute -p kicad-text`), workspace test execution (`cargo test --workspace --release`), `ultraroute route` byte-identity runs against `main` (`947d08c`), Experiments A/B/C v2 runs, and the 24-board PCBench generalization batch could **not** be executed because `loaf`'s reservation queue (`~/.claude/bin/reserve --here`) was deadlocked throughout the session:
+    - `reserve --status` showed `20/22` cores held for `73` to `458` minutes (`circuit-composer` `458m`, `round-pendant` `168m`, `bluebuzz` `116m`, `bluebuzz` `112m`, `ultraroute` `73m`) with actual machine CPU load `1.1` on `24` cores, and `10` jobs waiting ahead in strict FIFO (`130m` down to `34m`) without a single grant occurring.
+    - Our booked foreground command (`timeout --signal=INT --kill-after=15 1200 ~/.claude/bin/reserve -c 4 -l "compact v2 build+test+bench" --here -- systemd-run --user --scope -q -p MemoryMax=8G -p MemorySwapMax=0 python3 runs/v2/run_all.py --phase all`) waited the full `1200 s` (`20 min`) at queue position `11`, never received cores, exited `124`, and cleanly released its reservation on `SIGINT`.
+    - Per the ground rules, heavy builds, test suites, router runs, and KiCad DRC batches were **never** run unbooked, uncommitted work was not committed or pushed to `sequoia-server`, and external reservation state was not touched.
+  - Once `loaf`'s reservation queue is cleared, a single booked command runs the entire resumable build, test, Clippy, `main` byte-identity, Experiment A/B/C, and 24-board PCBench DRC suite:
+    ```bash
+    timeout --signal=INT --kill-after=15 1800 ~/.claude/bin/reserve -c 6 -l "compact v2 build+test+bench" --here -- systemd-run --user --scope -q -p MemoryMax=8G -p MemorySwapMax=0 python3 runs/v2/run_all.py --phase all
+    ```
 
 ---
 
-## 2. Judging Protocol
+## 1. Diagnosis Verification on v1 Jams
 
-Every board reported below was judged under `runs/` with KiCad 9 (`kicad-cli`) and `tools/dfm.py`:
+Inspecting the v1 `.stats.json` and `.drc.json` artifacts under `runs/expA/`, `runs/expB/`, and `runs/expC/` confirmed both mechanisms identified in [`REPORT-v1.md`](REPORT-v1.md) plus two subtle engine gaps:
 
-1. Copy the input board's `.kicad_pro` and `.kicad_dru` (when present) beside the candidate `.kicad_pcb` inside `runs/`.
-2. Refill all copper zones with `python3 tools/refill_zones.py IN OUT.filled.kicad_pcb`.
-3. Run `kicad-cli pcb drc --format json --severity-all -o OUT.drc.json OUT.filled.kicad_pcb` and count:
-   - `unconnected_count = len(drc["unconnected_items"])`
-   - `error_count` and `errors_by_type` over `drc["violations"]` entries with `"severity": "error"`.
-4. Run `python3 tools/dfm.py OUT.filled.kicad_pcb --json` on the zone-refilled board to count post-pour acid traps (`acute` angles + narrow same-net `slots`).
-   - Note on acid-trap columns: `compact` also logs an internal per-step `acid_traps` count before KiCad zone refill (computed on unpoured tracks, pads, and kept block zones). Both the KiCad post-refill DFM counts and the internal per-step counts are given below without rounding.
-
----
-
-## 3. Experiment A: Compacting the Routed Earring Toward `0.85`
-
-### Sanity Check on the Scratchpad Input Board
-
-Before trusting the compacted output, we judged the provided scratchpad board (`/tmp/claude-1000/-home-sequoia-Software-ultraroute/15ef73cf-be07-496d-af7b-986f94da11b4/scratchpad/earring-routed.kicad_pcb`) directly with KiCad:
-
-- It has **`0` KiCad DRC errors**, **`283` vias**, **`945` segments**, **`1032.609016 mm` track length**, and **`86` post-pour acid traps** (`11` acute, `75` slots), on a **`30.5 x 35.75 mm`** outline.
-- However, the scratchpad input board **already has `10` unconnected items** (`20` unconnected endpoints across `SWCLK`, `SWDIO`, `USB_DM`, `USB_DP`, `LED_EN_L`, `QSPI_SD2`, `CHRG`, `VBUS`, `LIGHT`, and `VSYS`). Note also that the scratchpad directory only has `earring-routed.kicad_pro` (no `.kicad_dru` beside it).
-
-Because `compact` never rips or reroutes, it preserves those exact `10` pre-existing unconnected nets (`0` added unconnected items). To also answer the question strictly at `0` total KiCad errors and `0` total unconnected items (with `.kicad_dru` rules active), we ran three Experiment A cases:
-
-1. **A1 (`compact_085`)**: Scratchpad `earring-routed.kicad_pcb`, `--factor 0.85 --steps 15` (`1%` steps).
-2. **A1-fine (`compact_fine`)**: Scratchpad `earring-routed.kicad_pcb`, `--factor 0.98 --steps 10` (`0.2%` steps) to locate the exact continuous jam threshold between `0.990` and `0.980`.
-3. **A2 (`compact_clean_s0_085`)**: Cleanly routed `100%` earring (`runs/expB/direct_100_s0.kicad_pcb`, which starts at `0` unconnected and `0` DRC errors with `.kicad_pro` + `.kicad_dru`), `--factor 0.85 --steps 15` (`1%` steps).
-
-### KiCad-Judged Summary (Experiment A)
-
-| Case | Board | Achieved Factor | Steps Accepted | Board Size (`mm`) | Unconnected (Added) | KiCad Errors by Type | Vias | Segments | Track Length (`mm`) | Acid Traps (`acute` / `slots` / `total`) | Run Time (`s`) |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Input (scratchpad) | `earring-routed.kicad_pcb` | `1.0` | -- | `30.5 x 35.75` | `10` (`--`) | `0` `{}` | `283` | `945` | `1032.609016` | `11 / 75 / 86` | -- |
-| **A1 (`1%` steps -> `0.85`)** | `runs/expA/compact_085.kicad_pcb` | **`0.99`** | `1 / 15` | `30.195002 x 35.392501` | `10` (`0`) | **`0` `{}`** | `283` | `1164` | `1014.612556` | `7 / 72 / 79` | `10.159658397` |
-| **A1-fine (`0.2%` steps -> `0.98`)** | `runs/expA/compact_fine.kicad_pcb` | **`0.988`** | `6 / 10` | `30.134 x 35.321` | `10` (`0`) | **`0` `{}`** | `283` | `1213` | `1002.938346` | `8 / 70 / 78` | `26.291489997` |
-| Input (clean `100%` s0) | `runs/expB/direct_100_s0.kicad_pcb` | `1.0` | -- | `30.5 x 35.75` | `0` (`--`) | `0` `{}` | `161` | `1296` | `1327.619626` | `62 / 55 / 117` | -- |
-| **A2 (`1%` steps -> `0.85`, clean)** | `runs/expA/compact_clean_s0_085.kicad_pcb` | **`0.99`** | `1 / 15` | `30.195002 x 35.392501` | **`0` (`0`)** | **`0` `{}`** | `161` | `2677` | `1298.941937` | `87 / 61 / 148` | `18.619641603` |
-
-*(Note: KiCad's `Edge.Cuts` arc midpoint rounding yields `30.195002 x 35.392501 mm` at `0.99`; internal outline polygon bbox is `30.188360999999997 x 35.3925 mm`.)*
-
-### Per-Step Compaction Logs (Experiment A)
-
-**A1 (`--factor 0.85 --steps 15`, peak RSS `181 MB`)**:
-
-| Step | Factor | Accepted | Internal Outline Size (`mm`) | Violations Left | Courtyard Stops | Track Length (`mm`) | Vias | Pre-Pour Acid Traps (`acute` / `slots`) |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `0` | `1.0` | yes | `30.491843 x 35.745092` | `0` | `0` | `1032.6090164705258` | `283` | `12 / 104` |
-| `1` | `0.99` | yes | `30.188360999999997 x 35.3925` | `0` | `12` | `1014.612556328658` | `283` | `7 / 109` |
-| `2` | `0.98` | **no (jam)** | `29.883426999999998 x 35.035` | `4` | `37` | `997.9331606589411` | `283` | `8 / 102` |
-
-**A1-fine (`--factor 0.98 --steps 10`, peak RSS `182 MB`)**:
-
-| Step | Factor | Accepted | Internal Outline Size (`mm`) | Violations Left | Courtyard Stops | Track Length (`mm`) | Vias | Pre-Pour Acid Traps (`acute` / `slots`) |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `0` | `1.0` | yes | `30.491843 x 35.745092` | `0` | `0` | `1032.6090164705258` | `283` | `12 / 104` |
-| `1` | `0.998` | yes | `30.430858999999998 x 35.673601999999995` | `0` | `4` | `1024.397399359311` | `283` | `7 / 108` |
-| `2` | `0.996` | yes | `30.369875 x 35.602112` | `0` | `5` | `1018.5318937177905` | `283` | `7 / 106` |
-| `3` | `0.994` | yes | `30.310333 x 35.5355` | `0` | `9` | `1013.6337337763538` | `283` | `8 / 92` |
-| `4` | `0.992` | yes | `30.249347 x 35.464` | `0` | `9` | `1009.494421656969` | `283` | `6 / 90` |
-| `5` | `0.99` | yes | `30.188360999999997 x 35.3925` | `0` | `12` | `1006.0137233553468` | `283` | `7 / 116` |
-| `6` | `0.988` | yes | `30.127374999999997 x 35.321` | `0` | `20` | `1002.9383463903962` | `283` | `8 / 110` |
-| `7` | `0.986` | **no (jam)** | `30.066388999999997 x 35.2495` | `4` | `25` | `999.4831515893051` | `283` | `9 / 103` |
-
-**A2 (`direct_100_s0.kicad_pcb`, `--factor 0.85 --steps 15`, peak RSS `194 MB`)**:
-
-| Step | Factor | Accepted | Internal Outline Size (`mm`) | Violations Left | Courtyard Stops | Track Length (`mm`) | Vias | Pre-Pour Acid Traps (`acute` / `slots`) |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `0` | `1.0` | yes | `30.491843 x 35.745092` | `0` | `0` | `1327.7391298276477` | `161` | `78 / 77` |
-| `1` | `0.99` | yes | `30.188360999999997 x 35.3925` | `0` | `12` | `1298.941937233927` | `161` | `74 / 92` |
-| `2` | `0.98` | **no (jam)** | `29.883426999999998 x 35.035` | `12` | `37` | `1280.8926459618608` | `161` | `59 / 87` |
-
-### Where It Jams First and Why
-
-- **In `1%` steps (A1)**, compaction reaches **`0.99`** (`1%` linear shrink, `1.99%` area shrink, reducing wirelength by `17.996460 mm` and post-pour acid traps from `86` to `79`) and jams at **`0.98`** on:
-  `Clearance on F.Cu: U1-34 (LED_EN_C) at (96.57, 97.85) mm vs via (BTN_SENSE) at (96.08, 97.49) mm (gap 0.075 mm < required 0.127 mm)`.
-- **In `0.2%` steps (A1-fine)**, compaction reaches **`0.988`** (`1.2%` linear shrink, reducing wirelength by `29.670670 mm` and post-pour acid traps from `86` to `78`) and jams at **`0.986`** by **`0.001 mm`** (`1 um`) on the adjacent pin of the same QFN edge:
-  `Clearance on F.Cu: U1-31 (CHRG) at (96.56, 96.67) mm vs via (PWR_HOLD) at (95.91, 96.98) mm (gap 0.126 mm < required 0.127 mm)`.
-- **On the `0`-unconnected board (A2)**, compaction also reaches **`0.99`** (`0` DRC errors, `0` unconnected, saving `28.677689 mm` of copper) and jams at **`0.98`** on the same west-of-`U1` escape ring:
-  `Clearance on F.Cu: C5-1 (VDD_CORE) at (95.30, 100.57) mm vs via (VBUS_SENSE) at (95.90, 100.75) mm (gap 0.100 mm < required 0.127 mm)`.
-
-**Physical mechanism of the jam**:
-`earring` is a tightly packed double-sided wearable (`167` footprints in `30.5 x 35.75 mm`). At `1.00`, `12` courtyard pairs are within `1%` of contact; by `0.98`, `37` courtyard pairs have engaged. Crucially, courtyards only oppose footprints on the **same** side (`F.CrtYd` vs `F.CrtYd` and `B.CrtYd` vs `B.CrtYd`). Just west of `U1` (RP2350 QFN-60 on `F.Cu`, pins `U1-31..34` at `x = 96.56..96.57 mm`), components on `B.Cu` (`Q5` pad 2, `R25`, `C25`) move inward from the west as the board scales down. Because `U1` (`F.Cu`) and `Q5` (`B.Cu`) are on opposite sides of the PCB, they experience zero courtyard repulsion against each other, while the `0.400 mm` outer-diameter through-hole escape vias (`PWR_HOLD`, `BTN_SENSE`, `VBUS_SENSE`) span **both** `F.Cu` and `B.Cu`. At `0.986`, the 2D horizontal gap between `U1-31` on `F.Cu` and `Q5-2` / adjacent `B.Cu` pads shrinks below `0.400 + 2 * 0.127 = 0.654 mm` (`0.652 mm` actual, leaving `0.126 mm < 0.127 mm` per side). No 2D displacement of the through-via can satisfy both layers simultaneously without either moving `Q5` relative to `U1` (a cross-layer via-channel footprint stop) or rerouting the via outside the gap.
+1. **Opposite-side through-via pinches (`F.Cu` vs `B.Cu`)**:
+   - In Experiment A (`earring`), `U1` (`F.Cu` QFN-60, pins `U1-29..34`) and `Q5` / `R25` / `C25` (`B.Cu`) sit on opposite sides of the board. Their courtyards live on separate layers (`F.CrtYd` vs `B.CrtYd`), so `place_parts` applied zero mutual stop between them while escape through-vias (`PWR_HOLD`, `BTN_SENSE`, `VBUS_SENSE`, `0.400 mm` diameter) spanned both `F.Cu` and `B.Cu` in the channel between them. Once the horizontal gap fell below `0.400 + 2 * 0.127 = 0.654 mm` (`0.652 mm` at factor `0.986`), no 2D displacement of the stationary via could satisfy both layers simultaneously, and refusing the whole step ended compaction for the entire board at `1.0%` to `1.2%` shrink.
+   - The same mechanism stopped Experiment B (`R8-1` on `B.Cu` vs `3V3` via, `R20-1` on `B.Cu` vs `LEDC_D6` via, `U1-29` on `F.Cu` vs `3V3` via) and Experiment C (`C10-2` vs `/BatPack/VC7` via on `BMS-bq76940`, `U301-23` vs via on `AmpOne`).
+2. **Offset-origin and cavity/boss footprints (`BT1`, `J1`, `R4`, `R5` on `earring`)**:
+   - `BT1` (`B.Cu` coin-cell holder) has `(at 100 100 180)` at the board centre while its two physical `B.Cu` SMD pads and two `B.CrtYd` tab rectangles sit near `y = 83.65 mm`. Scaling `fp.at` left `BT1` stationary at `(100, 100)` while scaling interior parts (`R14`, `SW2`) into `BT1`'s tabs (`4` DRC errors on `bare_110`).
+   - `J1` (`B.Cu` USB-C connector at `(100, 83.41)`) has four `thru_hole` shield tabs and two unnamed (`""`) `np_thru_hole` bosses framing `F.Cu` passives `R4` (`(98.0, 86.4)`) and `R5` (`(102.0, 85.4)`). Scaling origins independently drove `R4` and `R5` into `J1`'s NPTH bosses (`2` `hole_clearance` DRC errors on `bare_110`).
+3. **Additional engine gaps found in code audit**:
+   - In v1 `relax_step`, edges with two immobile pad endpoints (`mu <= 0.0 && mv <= 0.0`) were skipped completely in Pass `0`. Any straight pad-to-pad segment shorter than `SUBDIVIDE_LEN` (`1.2 mm`) could never split at its midpoint to bend around an approaching pad or via.
+   - `relax_step` checked `mnet == 0 || mnet != net` directly on `board.mask_areas`, whereas `ANY_ONE_NET` (`>= 0x8000_0000`) solder-mask shapes must query `board.mask_holder(...)` just as `board::check` does.
+   - `relax_step` only checked `board.hole_clearance` against foreign-net copper, whereas `.kicad_dru` `physical_hole_clearance` rules (such as `easy2350`) apply to same-net non-overlapping via-to-pad pairs (`hgap > 0`) as well.
 
 ---
 
-## 4. Experiment B: Route at `110%` + Compact to `100%` vs Direct `100%` (`earring`, Seeds `0..3`)
+## 2. What Was Built
 
-### Setup and Static Check on `bare_110`
+### Files Modified and Added
 
-- Input bare board: [`jobs/earring-kicad/input/earring.kicad_pcb`](jobs/earring-kicad/input/earring.kicad_pcb) (`30.5 x 35.75 mm`, `167` footprints, `274` unconnected items, `0` KiCad DRC errors).
-- `ultraroute scale jobs/earring-kicad/input/earring.kicad_pcb -o runs/expB/bare_110.kicad_pcb --factor 1.1` ran in **`0.256891 s`**, producing a **`33.55 x 39.325 mm`** board.
-- **Static footprint check on `bare_110`**: Judging `bare_110.kicad_pcb` before routing shows `11` DRC errors: `5` are from pre-existing locked `VBUS` stubs near `R4`/`R5` that `ultraroute route --strip-all` removes, and **`6` are static footprint-to-footprint errors created by rigid `1.1x` origin scaling itself**:
-  1. `courtyards_overlap`: `BT1` vs `R14`
-  2. `courtyards_overlap`: `BT1` vs `SW2`
-  3. `clearance`: `BT1` pad 1 (`VBATT`, `B.Cu`) vs `R14` pad 2 (`3V3`, `B.Cu`) (`0.0179 mm < 0.1500 mm`)
-  4. `solder_mask_bridge`: `BT1` pad 1 vs `R14` pad 2 on `B.Mask`
-  5. `hole_clearance`: `J1` NPTH mounting hole vs `R5` pad 2 (`GND`, `F.Cu`) (`0.1038 mm < 0.2000 mm`)
-  6. `hole_clearance`: `J1` NPTH mounting hole vs `R4` pad 2 (`GND`, `F.Cu`) (`0.1038 mm < 0.2000 mm`)
-  - **Why `1.1x` scaling creates footprint collisions on `earring`**: `BT1` is a `28 x 32 mm` coin-cell holder whose origin sits almost at the board centre `(100.0, 100.0)`, so its pads barely move under `c + 1.1 * (p - c)`, while small parts tucked inside `BT1`'s cavity (`R14`, `SW2`) scale outward by `10%` of their offset from `(100, 100)` and collide into `BT1`'s outer perimeter pads. Likewise, USB-C connector `J1` has wide-set NPTH bosses whose offset from `J1`'s origin stays fixed while `R4` and `R5` scale outward into those bosses.
-  - Routing `bare_110` with `--strip-all --recipe default --seed S --timeout 120` solves **`0` unconnected on all 4 seeds** with **zero new DRC errors** (only the `6` static `bare_110` footprint errors remain). Compacting back toward `1/1.1` **heals** `1` to `3` of those static footprint errors as the parts scale back inward and introduces **zero routed-copper DRC errors** and **zero unconnected items** on any seed.
+| File | Summary of Changes |
+| --- | --- |
+| [`core/crates/kicad-pcb/src/write.rs`](core/crates/kicad-pcb/src/write.rs) | Added `ZonePointMap` and `ScaleEdits` type aliases and collapsed nested `if scale_changed` to clear all 3 Clippy `-D warnings` errors from the `main` merge. |
+| [`core/crates/morph/src/scale.rs`](core/crates/morph/src/scale.rs) | Added `FootprintYards`, `extract_footprint_yards`, `FootprintEnvelope`, `compute_footprint_envelopes`, `nominal_scaled_positions`, and `project_scaled_footprints`; wired them into `scale()` and re-exported helpers to `compact.rs`; added unit test `scale_anchors_offset_origin_parts_and_carries_passives_inside_connector_bosses`. |
+| [`core/crates/morph/src/compact.rs`](core/crates/morph/src/compact.rs) | Added catch-up per-part step targets, static pad-ordinal violation keys (`StaticViolKey`), `resolve_static_step_board`, joint copper + rigid-footprint family relaxation (`relax_core`, `relax_step`, `settle_copper_only`, `append_static_fp_guard_constraints`), topological via sliding (`slide_pinched_vias` Modes A/B/C), bare-board rebuild when relaxation shifts unlocked parts, sub-`1.2 mm` pad-to-pad splitting, `ANY_ONE_NET` mask-holder & same-net `physical_hole_clearance` parity, 10-pass homotopic `shorten_taut_chains`, `segments` / `part_stops` / `via_slides` metrics, and 3 new unit tests. |
+| [`core/crates/ultraroute/src/main.rs`](core/crates/ultraroute/src/main.rs) | Recorded CPU seconds via `grid::clock` (`use_cpu_time`, `now`, `since`) and added `cpu_s`, `segments`, `part_stops`, and `via_slides` to `ultraroute compact` stderr output and `--report` / `--stats` JSON. |
+| [`core/README.md`](core/README.md) | Updated `morph` crate description to cover `ultraroute scale` and `ultraroute compact`. |
+| [`runs/v2/run_all.py`](runs/v2/run_all.py) | Resumable verification and benchmark suite covering release build, workspace tests, Clippy, `main` byte-identity on 4 boards, Experiments A/B/C, and 24 stratified PCBench boards. |
 
-### Exact Results Across Seeds `0..3`
+No CLI flags were broken or removed. `ultraroute route` shares zero execution paths with `morph::compact` or `morph::scale`.
 
-| Seed | Pipeline Stage | Achieved Factor | Board Size (`mm`) | Unconnected | KiCad Errors (`total`: breakdown) | Vias | Segments | Track Length (`mm`) | Acid Traps (`acute` / `slots` / `total`) | Run Time (`s`) |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| -- | `bare_100` | `1.0` | `30.5 x 35.75` | `274` | `0`: `{}` | `25` | `20` | `18.192043` | `1 / 4 / 5` | -- |
-| -- | `bare_110` (`scale 1.1`) | `1.1` | `33.55 x 39.325` | `274` | `11`: `{clearance: 3, courtyards_overlap: 2, hole_clearance: 3, shorting_items: 1, solder_mask_bridge: 2}` | `25` | `31` | `19.869298` | `3 / 6 / 9` | `0.256891` |
-| **`0`** | `100%` direct route | `1.0` | `30.5 x 35.75` | **`0`** | **`0`**: `{}` | `161` | `1296` | `1327.619626` | `62 / 55 / 117` | `23.179905145` |
-| **`0`** | `110%` route | `1.0` (at `110%`) | `33.55 x 39.325` | **`0`** | `6`: `{clearance: 1, courtyards_overlap: 2, hole_clearance: 2, solder_mask_bridge: 1}` | **`148`** | `1291` | `1423.773465` | `43 / 51 / 94` | `24.789368452` |
-| **`0`** | `110% -> 100%` compact (`5/10` steps) | **`0.9545454545454546`** | `32.025 x 37.5375` | **`0`** | `3`: `{courtyards_overlap: 1, hole_clearance: 2}` (`0` copper) | **`148`** | `2728` | **`1321.341878`** | **`47 / 57 / 104`** | `40.371898164` |
-| **`1`** | `100%` direct route | `1.0` | `30.5 x 35.75` | **`0`** | **`0`**: `{}` | `158` | `1174` | `1319.288328` | `53 / 58 / 111` | `31.294046391` |
-| **`1`** | `110%` route | `1.0` (at `110%`) | `33.55 x 39.325` | **`0`** | `6`: `{clearance: 1, courtyards_overlap: 2, hole_clearance: 2, solder_mask_bridge: 1}` | **`150`** | `1366` | `1414.653438` | `66 / 65 / 131` | `28.091408456` |
-| **`1`** | `110% -> 100%` compact (`3/10` steps) | **`0.9727272727272727`** | `32.635 x 38.2525` | **`0`** | `4`: `{courtyards_overlap: 2, hole_clearance: 2}` (`0` copper) | **`150`** | `2737` | `1347.933496` | `59 / 57 / 116` | `26.901802546` |
-| **`2`** | `100%` direct route | `1.0` | `30.5 x 35.75` | **`0`** | **`0`**: `{}` | `152` | `1267` | `1351.520643` | `58 / 58 / 116` | `28.478713742` |
-| **`2`** | `110%` route | `1.0` (at `110%`) | `33.55 x 39.325` | **`0`** | `6`: `{clearance: 1, courtyards_overlap: 2, hole_clearance: 2, solder_mask_bridge: 1}` | **`147`** | `1371` | `1428.548734` | `57 / 53 / 110` | `28.950484684` |
-| **`2`** | `110% -> 100%` compact (`1/10` steps) | **`0.990909090909091`** | `33.245 x 38.9675` | **`0`** | `5`: `{clearance: 1, courtyards_overlap: 2, hole_clearance: 2}` (`0` copper) | **`147`** | `2499` | `1398.824452` | **`54 / 48 / 102`** | `16.860203887` |
-| **`3`** | `100%` direct route | `1.0` | `30.5 x 35.75` | **`0`** | **`0`**: `{}` | `165` | `1201` | `1318.655564` | `44 / 63 / 107` | `22.957267372` |
-| **`3`** | `110%` route | `1.0` (at `110%`) | `33.55 x 39.325` | **`0`** | `6`: `{clearance: 1, courtyards_overlap: 2, hole_clearance: 2, solder_mask_bridge: 1}` | **`155`** | `1315` | `1411.466533` | `46 / 60 / 106` | `26.506549479` |
-| **`3`** | `110% -> 100%` compact (`1/10` steps) | **`0.990909090909091`** | `33.245 x 38.9675` | **`0`** | `5`: `{clearance: 1, courtyards_overlap: 2, hole_clearance: 2}` (`0` copper) | **`155`** | `2465` | `1384.124524` | `53 / 58 / 111` | `14.756275290` |
+### Goal 1a: Joint Rigid-Body Footprint + Copper Relaxation and Per-Part Stops
 
-### Per-Step Compaction Trajectories and Jam Reasons (Experiment B)
+1. **Catch-up nominal targets (`compact` step loop)**:
+   - Each step `k` computes nominal positions from the initial board `orig_pcb` at `step_f = factor^(k / steps)` rather than compounding from `cur_pcb` (`cur_f`). If one part stops against a courtyard, board edge, or pinched via at step `3`, only that part (and anything directly blocked behind it) stays held back at steps `4..N`; every unblocked part on the board continues moving inward to `factor`.
+2. **Two-stage relaxation per step (`relax_core`)**:
+   - **Pass `0` (copper-only + topological via slide)**: Footprints stay fixed at their courtyard- and static-DRC-safe step targets (`allow_fp_move = false`) while free vertices and vias relax under fading spring tension + exact 2D half-plane clearance projection (`solve_half_planes_2d`), mid-pass segment subdivision (`can_split`), and `slide_pinched_vias`. Whenever a channel has enough room for copper to bend or a via to slide out of the throat, copper yields first without holding parts back.
+   - **Passes `1..5` (joint copper + rigid footprint families)**: Only entered if Pass `0` left at least one dynamic violation (`count_dynamic_violations(board).0 > 0`, so clean steps pay zero extra passes). Unlocked footprint families (`leader[f]` + pocket children `members[g]`) receive half-plane reaction pushes (`hs_fp_group`) from every violated pad-to-via, pad-to-track, hole-to-via, via-to-edge, spoke, and keepout pair across **all** layers, alongside static guard half-planes (`append_static_fp_guard_constraints` for courtyards, cross-footprint pad/hole clearances, mask bridges, pours, and board edges).
+   - Each footprint family solves its accumulated half-planes via `solve_half_planes_2d`, capped at `22 um` (`MAX_FP_ITER_STEP`) per iteration so heavy footprints yield smoothly while lighter copper tracks (`85 um` cap) conform around them. Translating a footprint family updates its `Pad`, `Keepout`, and `Spoke` items in `board`, its `Pad` and `PadVia` anchors in `CopperGraph`, and ends with `resolve_courtyard_stops` to guarantee zero same-side courtyard penetration.
+   - Whenever Passes `1..5` displace any unlocked footprint by `> 1 nm` from `resolved_pos`, `compact` rebuilds `step_bare_board` from `orig_pcb` at those exact `relaxed_pos` coordinates (updating zone cutouts, spoke geometries, and solder-mask areas consistently) and runs `settle_copper_only` (`3` copper-only passes) before `polish_on_board`, `shorten_taut_chains`, and the strict `check_item` + `BaselineConn` acceptance gate.
 
-- **Seed `0` (`runs/expB/compact_100_s0.stats.json`, `elapsed_s = 40.371898164`, peak RSS `212 MB`)**:
-  - Accepted steps: `1.0` (`1423.869847 mm`, `64/78` pre-pour acid) -> `0.990909090909091` (`1396.119885 mm`, `22/86`) -> `0.9818181818181818` (`1375.029123 mm`, `21/87`) -> `0.9727272727272727` (`1356.054871 mm`, `36/95`) -> `0.9636363636363636` (`1336.625087 mm`, `38/89`) -> **`0.9545454545454546`** (`32.023665 x 37.532581 mm` internal / `32.025 x 37.5375 mm` KiCad, `1321.341878 mm`, `39/89`).
-  - Jam at step `6` (`0.9454545454545454`, `2` violations): `Clearance on B.Cu: R25-2 (GND) at (94.53, 97.77) mm vs track (PWR_HOLD) near (94.41, 97.25) mm (gap 0.123 mm < required 0.127 mm)`.
-  - Notably, even at `105.0%` of original linear board dimensions (`0.954545 * 1.1 = 1.05`), seed `0`'s compacted board has **`13` fewer vias (`148` vs `161`)**, **`6.277748 mm` less total track length (`1321.341878 mm` vs `1327.619626 mm`)**, and **`13` fewer post-pour acid traps (`104` vs `117`)** than routing directly at `100%`.
-- **Seed `1` (`runs/expB/compact_100_s1.stats.json`, `elapsed_s = 26.893984336`, subprocess wall `26.901802546 s`, peak RSS `221 MB`)**:
-  - Accepted steps: `1.0` (`1414.749820 mm`, `97/89`) -> `0.990909090909091` (`1385.961334 mm`, `47/94`) -> `0.9818181818181818` (`1365.535791 mm`, `43/94`) -> **`0.9727272727272727`** (`1347.933496 mm`, `42/100`).
-  - Jam at step `4` (`0.9636363636363636`, `4` violations): `Clearance on B.Cu: R8-1 (PROG) at (103.66, 107.70) mm vs via (3V3) at (103.01, 107.84) mm (gap 0.126 mm < required 0.127 mm)`.
-- **Seed `2` (`runs/expB/compact_100_s2.stats.json`, `elapsed_s = 16.853225555`, subprocess wall `16.860203887 s`, peak RSS `202 MB`)**:
-  - Accepted steps: `1.0` (`1428.644991 mm`, `86/73`) -> **`0.990909090909091`** (`1398.824452 mm`, `39/77`).
-  - Jam at step `2` (`0.9818181818181818`, `2` violations): `Clearance on B.Cu: R20-1 (VBUS_SENSE) at (109.43, 100.43) mm vs via (LEDC_D6) at (108.84, 100.13) mm (gap 0.124 mm < required 0.127 mm)`.
-- **Seed `3` (`runs/expB/compact_100_s3.stats.json`, `elapsed_s = 14.751617855`, subprocess wall `14.756275290 s`, peak RSS `202 MB`)**:
-  - Accepted steps: `1.0` (`1411.562790 mm`, `77/82`) -> **`0.990909090909091`** (`1384.124524 mm`, `44/85`).
-  - Jam at step `2` (`0.9818181818181818`, `2` violations): `Clearance on F.Cu: U1-29 (LED_DATA_L) at (97.60, 96.23) mm vs via (3V3) at (97.18, 95.80) mm (gap 0.118 mm < required 0.127 mm)`.
+### Goal 1b: Explicit Specification of Legal Topological Via Moves (`slide_pinched_vias`)
 
-**Why `110%` routing does not compact all the way back to `0.909091` (`100%`)**:
-At `110%`, the router exploits the widened inter-part channels by dropping through-hole vias directly between `F.Cu` and `B.Cu` pads that were too narrow to host a `0.400 mm` via at `100%` (which is also why `110%` routing needs `8..13` fewer vias). Because compaction preserves route homotopy and cannot rip or relocate a via to the opposite side of a pad, any channel where the router placed `K` tracks + vias whose combined minimum width + clearances sits between `1.00x` and `1.10x` of the `100%` gap acts as a hard topological stop during pure spring compaction.
+ Compaction performs **no ripping and no rerouting**. The single topological copper move added under Goal 1 is `slide_pinched_vias`, invoked only when a mobile non-locked `Anchor::Via` particle still fails `check_item(board, vid)` after Pass `0` continuous relaxation:
 
----
+- **Preconditions (when a via is eligible)**:
+  - The via must be an unlocked `Anchor::Via` (never `locked`, never `Anchor::PadVia`).
+  - Every static item (`Pad` or `Pour`) that overlapped the via on the baseline board must already be represented by an active explicit graph edge incident to the via (`implicit_static_ties` guard), so sliding the via cannot silently detach an implicit pad-overlap joint.
+  - Any plane zone polygon containing the via at baseline (`plane_zones`) must still contain the candidate via position (`in_plane_zones`).
+- **Mode A (Direct slide along own-net degree-2 chain)**:
+  - Walks each incident non-locked edge out of the via along consecutive degree-2 `Anchor::Free` vertices on the same layer `l_fwd` and radius `r_fwd` (`<= 8` hops, arc distances `150 um` to `1.40 mm` plus lateral offsets `{0, +-80 um, +-160 um}`).
+  - Collapses the traversed chain prefix `chain_edges[0..=m]` into one segment `(cand, end_node)` on `l_fwd` and reconnects the via's remaining incident edges `other_eis` directly to `cand`.
+- **Mode B (Layer-transition dogleg slide)**:
+  - Applies when `other_eis` are non-empty and all lie on a single layer `l_other != l_fwd` (the standard 2-layer `B.Cu -> through-via -> F.Cu` transition where a `B.Cu` pad blocks `other_eis` from pivoting directly to `cand` on `B.Cu`).
+  - Leaves a new unlocked `Anchor::Free` bend vertex `W` near `old_pt` (`{0, +-80 um}`) on `l_other`, reconnects `other_eis` to `W`, moves the via along the `l_fwd` chain to `cand` (collapsing `chain_edges[0..=m]`), and inserts one bridge segment `(W, cand)` on `l_other`. Net connectivity and homotopy on both layers are preserved.
+- **Mode C (Short-range radial escape)**:
+  - When chain slides do not apply (e.g., T-junctions), tests `12` angles at radii `{100, 200, 320, 460, 650} um`, keeping all incident edges attached to the via.
+- **Acceptance invariants for every candidate in Modes A, B, and C**:
+  - No new acute track junction (`cos > 0.008`, i.e. `< 89.5 deg`) at `cand`, `W`, or any neighbour vertex.
+  - Temporary board insertion of the moved via and all modified/bridge segments passes `check_item(board, tid).is_empty()` (`0` clearance, hole, mask, keepout, spoke, or edge violations) before mutating `CopperGraph`.
 
-## 5. Experiment C: PCBench Boards (`120 s` Timeout, Seed `0`)
+### Goal 2: Large Enclosing and Offset-Origin Footprints (`scale.rs` and `compact.rs`)
 
-We evaluated two PCBench boards from `~/Software/ultraroute-lab/pcbench/boards/<id>/bare.kicad_pcb` that fail to route at `100%` within `--timeout 120` on current `HEAD` (`99ba56d`): **`Starling_Starling_V1`** (`3` unconnected at `100%`) and **`BMS-bq76940_EvaluationsBoard`** (`4` unconnected at `100%`). We also included **`AmpOne_dev-AmpOne`** (which failed in an older `srvfull-a7831ee` lab baseline and now solves on `99ba56d`) as a third point of comparison.
+1. **Physical anchor (`compute_footprint_envelopes`)**:
+   - Instead of scaling `fp.at` (which may sit at `(0, 0)` or board centre `(100, 100)` far from the part's pads), each footprint's scaling anchor is the bounding-box midpoint of its physical pads (falling back to courtyard islands or copper graphics, and only then `fp.at`). Under `scale --factor 1.1` on `earring`, `BT1` now translates north with its `y ~ 83.65 mm` pads rather than staying pinned at `(100, 100)`.
+2. **Multi-island and concave courtyards (`extract_footprint_yards`)**:
+   - Closed `fp_rect`, `fp_poly`, and `fp_circle` courtyard shapes are kept as separate polygons, and open `fp_line`/`fp_arc` stroke segments are chained into connected components by shared endpoints (`20 um` snap) before taking per-component hulls. `BT1`'s two `B.CrtYd` tab rectangles stay two small disjoint islands instead of bridging a false convex hull across the `28 x 32 mm` battery cavity.
+3. **Pocket child adoption (`parent` in `FootprintEnvelope`)**:
+   - When a large footprint (`inter_cnt >= 3` pads/holes interacting with the candidate's copper layers or drill holes, span `>= 5 mm`, area `>= 20 mm^2`) encloses a smaller footprint (`< 35%` area) within `ibb.grow(0.60 mm)`, the smaller footprint is adopted as a rigid pocket child (`parent = Some(p)`).
+   - On `earring`, `J1`'s 4 `thru_hole` shield tabs + 2 unnamed `np_thru_hole` bosses (`inter_cnt = 6`) adopt `R4` and `R5` so they translate by `J1`'s exact delta during both `scale` and `compact`, preventing `R4`/`R5` from colliding into `J1`'s NPTH bosses. Conversely, `BT1` has only 2 `B.Cu` SMD pads (`inter_cnt = 0` on `F.Cu`, `inter_cnt = 2 < 3` on `B.Cu`), so parts inside `BT1`'s open cavity are **not** frozen to `BT1` and remain free to compact inward until their own `B.Cu` pads or `B.CrtYd` courtyards meet `BT1`'s tabs.
+4. **Post-scale and pre-relaxation static projection (`project_scaled_footprints`, `resolve_static_step_board`)**:
+   - Resolves courtyard overlaps, cross-footprint pad/hole clearances (using per-footprint pad ordinals `a_pad_ord` so multiple unnamed `""` NPTH bosses are tracked distinctly), solder-mask bridges, and board-edge clearances while keeping pocket children locked rigidly to their parent's delta and `--lock` footprints fixed to `0 nm`.
 
-### KiCad-Judged Summary (Experiment C, Seed `0`)
+### Goal 3: Segment Count Reduction and `110% -> 100%` Channel Capacity
 
-| Board | Stage | Achieved Factor | Board Size (`mm`) | Unconnected | KiCad Errors by Type | Vias | Segments | Track Length (`mm`) | Acid Traps (`acute` / `slots` / `total`) | Run Time (`s`) |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| **`Starling_Starling_V1`** (`25` parts) | `bare_100` | `1.0` | `60.1 x 23.8` | `79` | `0` `{}` | `0` | `0` | `0.0` | `0 / 0 / 0` | -- |
-| **`Starling_Starling_V1`** | `bare_110` (`scale 1.1`) | `1.1` | `66.11 x 26.18` | `79` | `0` `{}` | `0` | `0` | `0.0` | `0 / 0 / 0` | `0.326988359` |
-| **`Starling_Starling_V1`** | `100%` direct route | `1.0` | `60.1 x 23.8` | **`3` (FAIL)** | `0` `{}` | `79` | `500` | `1075.924803` | `28 / 30 / 58` | `108.728075464` |
-| **`Starling_Starling_V1`** | `110%` route | `1.0` (at `110%`) | `66.11 x 26.18` | **`0` (SOLVED)** | **`0` `{}`** | **`70`** | `447` | `1248.019024` | **`16 / 17 / 33`** | **`9.126007704`** |
-| **`Starling_Starling_V1`** | `110% -> 100%` compact (`4/10` steps) | **`0.9636363636363636`** | `63.706 x 25.228` | **`0` (SOLVED)** | **`0` `{}`** | **`70`** | `994` | `1234.416791` | `16 / 40 / 56` | `27.009554371` |
-| **`BMS-bq76940_EvaluationsBoard`** (`134` parts) | `bare_100` | `1.0` | `67.945 x 75.565` | `263` | `0` `{}` | `0` | `0` | `0.0` | `0 / 0 / 0` | -- |
-| **`BMS-bq76940_EvaluationsBoard`** | `bare_110` (`scale 1.1`) | `1.1` | `74.7395 x 83.1215` | `264` | `0` `{}` | `0` | `0` | `0.0` | `0 / 0 / 0` | `0.770442596` |
-| **`BMS-bq76940_EvaluationsBoard`** | `100%` direct route | `1.0` | `67.945 x 75.565` | **`4` (FAIL)** | `0` `{}` | `50` | `723` | `1573.602596` | `37 / 33 / 70` | `108.501748681` |
-| **`BMS-bq76940_EvaluationsBoard`** | `110%` route | `1.0` (at `110%`) | `74.7395 x 83.1215` | **`4` (FAIL)** | `0` `{}` | `62` | `662` | `1779.898276` | `27 / 30 / 57` | `110.145436209` |
-| **`BMS-bq76940_EvaluationsBoard`** | `110% -> 100%` compact (`3/10` steps) | **`0.9727272727272727`** | `72.70115 x 80.85455` | `4` (`0` added) | **`0` `{}`** | `62` | `1172` | `1721.80958` | `27 / 55 / 82` | `28.227117087` |
-| **`AmpOne_dev-AmpOne`** (`164` parts) | `bare_100` | `1.0` | `100.0 x 100.0` | `321` | `0` `{}` | `0` | `0` | `0.0` | `0 / 0 / 0` | -- |
-| **`AmpOne_dev-AmpOne`** | `bare_110` (`scale 1.1`) | `1.1` | `110.0 x 110.0` | `321` | `0` `{}` | `0` | `0` | `0.0` | `0 / 0 / 0` | `1.483155346` |
-| **`AmpOne_dev-AmpOne`** | `100%` direct route | `1.0` | `100.0 x 100.0` | `0` | `0` `{}` | `37` | `707` | `2165.034581` | `29 / 21 / 50` | `78.384263854` |
-| **`AmpOne_dev-AmpOne`** | `110%` route | `1.0` (at `110%`) | `110.0 x 110.0` | `0` | `0` `{}` | `54` | `804` | `2439.937209` | `51 / 13 / 64` | `86.815254503` |
-| **`AmpOne_dev-AmpOne`** | `110% -> 100%` compact (`1/10` steps) | **`0.990909090909091`** | `109.0 x 109.0` | **`0`** | **`0` `{}`** | `54` | `2835` | `2426.503029` | `36 / 16 / 52` | `29.108802399` |
-
-### Analysis of Experiment C
-
-1. **`Starling_Starling_V1` (Inter-Part Channel Bottleneck -> Complete Solve, `11.9x` Faster Routing)**:
-   - At `100%`, `Starling_Starling_V1` fails after `108.728075464 s` with `3` unconnected nets (`/ADC7`, `/S_TX`, `Net-(IC1-Pad2)`) jammed between `IC1` and through-hole headers `P5`/`P6`.
-   - Scaling to `110%` introduces `0` DRC errors and opens the inter-component channels just enough that `ultraroute route` finishes **`0` unconnected in `9.126007704 s`** (`11.91x` faster) with `70` vias instead of `79`.
-   - `ultraroute compact` (`elapsed_s = 26.986019991`, subprocess wall `27.009554371 s`, peak RSS `242 MB`) accepts `4/10` steps (`1.0 -> 0.990909 -> 0.981818 -> 0.972727 -> 0.963636`, `63.706 x 25.228 mm`, `106.0%` of original linear dimensions) with **`0` unconnected and `0` KiCad DRC errors**, jamming at step `5` (`0.954545`, `1` violation):
-     `EdgeClearance: via (/SCL) at (143.84, 88.86) mm vs board edge / rule area (gap 0.491 mm < required 0.500 mm)`.
-   - Total `scale + route + compact` time is `36.462550434 s`, beating the failing `108.728075464 s` direct run in both completion (`0` vs `3` unconnected) and wall time (`3.0x` faster), at a `6.0%` linear board-size penalty.
-2. **`BMS-bq76940_EvaluationsBoard` (Intra-Footprint Pin-Escape Bottleneck -> Unchanged Unconnected)**:
-   - Both `100%` (`108.501748681 s`) and `110%` (`110.145436209 s`) leave `4` unconnected items (`0` DRC errors), all attached to `BMS1` (a fine-pitch 44-pin TSSOP IC: pads `2, 27, 35` at `100%`; pads `3, 4, 13` plus `SRN` at `110%`). Because `scale` keeps footprint pad pitches rigid, scaling the board by `1.1x` does not widen the `0.65 mm` pin pitch of `BMS1` itself.
-   - Compaction (`elapsed_s = 28.222363391`, subprocess wall `28.227117087 s`, peak RSS `217 MB`) cleanly accepts `3/10` steps to `0.9727272727272727` (`72.70115 x 80.85455 mm`) with `0` DRC errors and `0` added unconnected items (`4 -> 4`), cutting wirelength by `58.088696 mm` before jamming at step `4` (`0.963636`) on `Clearance on F.Cu: C10-2 (/BatPack/VC11) at (189.72, 107.82) mm vs via (/BatPack/VC7) at (189.97, 109.12) mm (gap 0.165 mm < required 0.200 mm)`.
+1. **Homotopic `shorten_taut_chains` (`10` passes, `dev <= 200 um`)**:
+   - v1 only merged nearly-collinear triples (`dev <= 25 um` or `<= 80 um` for `3` passes), leaving subdivided `1.2 mm` segments and slight relaxation bows in place (`945 -> 1164` segments on A1, `1291 -> 2728` on B s0, `447 -> 994` on `Starling`).
+   - Any triangle `(pu, pv, pw)` with altitude `dev <= 200 um` to chord `(pu, pw)` has inradius `< dev / 2 <= 100 um`, which is strictly smaller than any pad or via radius + clearance on a PCB, so replacing `(pu, pv) + (pv, pw)` with `(pu, pw)` when `check_item` passes is guaranteed homotopic (it can never jump across a pad or via). Running up to `10` passes to fixed point collapses `16`-segment subdivided straight runs back to `1` segment while preserving a relative outer-layer slot guard (`g + 3 um < g_old`) and `creates_acute_at`.
+2. **Sub-`1.2 mm` pad-to-pad segment splitting**:
+   - Straight pad-to-pad segments down to `MIN_SPLIT_LEN = 180 um` remain active in Pass `0` for `can_split` midpoint insertion when an obstacle intrudes on `t in [0.16, 0.84]` (`deficit > 1.5 um`), allowing short inter-pad links to route smoothly around an approaching pad or via instead of jamming rigidly.
 
 ---
 
-## 6. What Worked, What Did Not (and Why), and What We Would Try Next
+## 3. Unit Tests Added
 
-### What Worked
+All 4 new unit tests compile cleanly under `cargo check -p morph --tests` and `cargo clippy -p morph --all-targets --no-deps -- -D warnings`:
 
-1. **Zero-Error KiCad Rule Fidelity**: Across every single experiment (A1, A1-fine, A2, all 4 seeds of B, and all 3 PCBench boards in C -- 10 compaction runs in total), `compact` introduced **zero KiCad DRC errors** and **zero broken nets / unconnected items**. Combining `Board::clearance`, `hole_clearance`, `hole_to_hole_clearance`, `edge_clearance`, keepouts, thermal spoke checks, and `min_web` solder-mask checks inside the relaxation loop, gated by `check_item` and `BaselineConn`, matched `kicad-cli pcb drc` down to the micrometre.
-2. **Harmonic Boundary-Scaled `WarpField`**: Extending [`WarpField`](core/crates/morph/src/warp.rs) with non-zero scaled boundary conditions `u(p) = (F - 1)(p - c)` blended uniform board compression smoothly around rigid multi-pad footprints and courtyard-stopped parts without shearing pad landings.
-3. **Exact 2D Wedge & Pinch Projection (`solve_half_planes_2d`)**: Standard sequential POCS projections under-step obtuse wedges (such as a via pushed between two `0.4 mm`-pitch QFN pads at `~140 deg`) by `20-33%` per pass and bias antiparallel squeezes toward whichever constraint ran last. Solving pairwise 2D half-plane intersections directly + averaging conflicting cycles pushed Experiment B seed `0` from `4/10` steps (`0.9636`) to `5/10` steps (`0.9545`) and Experiment A fine steps from `0.990` to `0.988`.
-4. **Zone-Bridged Cross-Footprint Overlap Tracking**: Detecting pad pairs across different footprints that accidentally overlapped inside a poured zone at `110%` (`BT1-2` and `J1-4` on `B.Cu` `GND`) allowed them to separate cleanly inside the `GND` pour during compaction (`s0` jumped from `2/10` to `5/10` steps with `0` unconnected in KiCad) without loosening strict connectivity on routed copper.
-5. **Spreading Inter-Part Congested Boards (`Starling_Starling_V1`)**: On boards limited by inter-part routing channels rather than single-IC pin pitch, `scale 1.1 -> route -> compact` turned a `108.73 s` routing failure (`3` unconnected) into a `9.13 s` clean route (`0` unconnected, `0` DRC errors) compacted to `106%` size.
+1. **`compact::tests::compact_stops_opposite_side_via_pinch_locally_while_board_shrinks_to_target`** ([`compact.rs:6320`](core/crates/morph/src/compact.rs#L6320-L6409)):
+   - Places `U_FRONT` (`F.Cu`, `y = 7.08 mm`, `4.0 x 0.8 mm` pad) and `U_BACK` (`B.Cu`, `y = 8.92 mm`, `4.0 x 0.8 mm` pad) on opposite sides flanking a `0.60 mm` through-via at `(10, 8)` where net `SIG` transitions from a `B.Cu` trace under `U_FRONT` to an `F.Cu` trace over `U_BACK`. Stationary clearance allows only `2.2%` shrink (`1.84 mm -> 1.80 mm`) before jamming on v1.
+   - Asserts `steps_accepted == 14`, `achieved_factor == 0.65` (`35%` linear shrink, `57.75%` area saved), `part_stops > 0`, outer perimeter span `< 10.0 mm` (down from `15.0 mm`), central `U_FRONT`/`U_BACK` separation `>= 1.795 mm`, `0` DRC violations, and `0` airlines.
+2. **`compact::tests::compact_slides_pinched_through_via_along_its_track_so_front_and_back_parts_close`** ([`compact.rs:6411`](core/crates/morph/src/compact.rs#L6411-L6484)):
+   - Places `U_FRONT` (`F.Cu`, `y = 6.90 mm`) and `U_BACK` (`B.Cu`, `y = 9.10 mm`) flanking a `0.60 mm` through-via at `(10, 8)` whose `F.Cu` track continues east into open space toward `(16, 8)`. Stationary via clearance blocks at `dy = 1.80 mm` (`factor ~0.818`).
+   - Asserts `steps_accepted == 14`, `via_slides > 0` (`slide_pinched_vias` acted), via `x` shifted `> 0.85 mm` out of the `x = 10 mm` throat, `U_FRONT` and `U_BACK` closed past `1.80 mm` to `dy < 1.50 mm` (`~1.430 mm`), `0` DRC violations, and `0` airlines.
+3. **`compact::tests::compact_keeps_locked_parts_exact_and_produces_byte_identical_output`** ([`compact.rs:6486`](core/crates/morph/src/compact.rs#L6486-L6545)):
+   - Compacts with `--lock J_LOCK` twice under `uuid_seed = Some(99)`; asserts byte-identical output strings (`rep1.text == rep2.text`), `J_LOCK.at` unchanged to `0 nm`, unlocked `R_FAR` moved inward, `0` DRC violations, and `0` airlines.
+4. **`scale::tests::scale_anchors_offset_origin_parts_and_carries_passives_inside_connector_bosses`** ([`scale.rs:1615`](core/crates/morph/src/scale.rs#L1615-L1685)):
+   - Models `earring`'s `BT1` (`(at 100 100 180)` with disjoint `B.CrtYd` islands framing `J1` and physical pads near `y = 83.65 mm`), `J1` (`(at 100 83.41)` with 4 `thru_hole` shield tabs and 2 unnamed `""` `np_thru_hole` bosses), and `R5` (`F.Cu` passive inside `J1`'s pocket).
+   - Asserts `BT1` shifts north (`at.y < 98.6 mm`) under `1.1x` scale instead of staying at `100.0 mm`, `J1` and `BT1` are not falsely pushed apart by convex-hull courtyard bridging, `R5` rides rigidly with `J1` (`|dj_y - dr_y| < 2 um`), and `check(&board)` has `0` DRC violations.
 
-### What Did Not Work (and Why)
+---
 
-1. **Opposite-Side (`F.Cu` vs `B.Cu`) Through-Via Channel Pinches**: Every single copper jam in Experiments A, B, and C (`U1` vs `via` vs `Q5-2`, `R25-2` vs `track`, `R8-1` vs `via`, `R20-1` vs `via`, `C10-2` vs `via`, `U301-23` vs `via`) occurred because `place_parts` only stops footprints on **same-side courtyard overlap**. An `F.Cu` part and a `B.Cu` part slide freely toward each other in `(x, y)` during compaction even when a through-hole via sits between them on both layers, pinching the via below `d_via + 2 * clearance`.
-2. **Uniform Origin Scaling on Giant Enclosing Footprints (`BT1`, `J1` on `earring`)**: Scaling footprint origins by `F` while keeping pad offsets rigid assumes footprints are small relative to the board and have convex non-nested extents. On `earring`, `BT1` (`28 x 32 mm`) spans nearly the entire board about `(100, 100)`, so `1.1x` scaling pushes interior parts (`R14`, `SW2`) outward into `BT1`'s outer tabs (`6` static DRC errors on `bare_110`).
-3. **Segment Subdivision Inflates Segment Count and Narrow-Slot DFM Counts on Some Boards**: `flow::flow` and bend-vertex insertion split curved/bowed tracks into `~2x` more short capsule segments (`945 -> 1164`, `1291 -> 2728`, `447 -> 994`). While acute-angle traps generally improved or held steady, tight zig-zags compressed near pads occasionally raised `tools/dfm.py` same-net `slots` counts (`Starling`: `17 -> 40` slots; `A2`: `62 -> 87` acute angles at sharp pad exits).
-4. **Topological Channel Capacity Mismatch Between `110%` and `100%`**: Without rerouting or sliding vias past pads, tracks and vias placed at `110%` into channels that can hold `N` items at `110%` but only `N - 1` items at `100%` cannot be compressed to `100%` by pure spring relaxation.
+## 4. Reference v1 Baselines and Prepared v2 Experiments (`runs/v2/run_all.py`)
 
-### What We Would Try Next
+Because `loaf`'s reservation server was wedged (`20/22` cores held for `73..458 min`, `0` grants in `20 min`), the v2 tables below could not be populated in this session without violating the booking rule. All inputs from v1 (`runs/expA/baseline.kicad_pcb`, `runs/expB/direct_100_s0.kicad_pcb`, `runs/expB/routed_110_s{0..3}.kicad_pcb`, `runs/expC/*/routed_110_s0.kicad_pcb`) are wired into [`runs/v2/run_all.py`](runs/v2/run_all.py) for side-by-side execution.
 
-1. **Copper-Aware Cross-Layer Footprint Stops (Joint Part + Copper Relaxation)**: Coupling footprint positions `(dx_i, dy_i)` into `relax_step` as heavy rigid-body particles (pulled toward `target_pos` by weak placement springs, stopped by courtyards **and** pushed back by pad-to-via / pad-to-track clearance forces from `solve_half_planes_2d`) would keep `F.Cu` and `B.Cu` parts from crushing shared through-hole vias and let the rest of the board continue compacting around a locally saturated channel.
-2. **Cavity- and Courtyard-Aware `scale` (`F > 1`)**: Running the courtyard + pad/hole clearance stop solver *after* `ultraroute scale --factor 1.1` (treating giant board-spanning mechanical footprints like `BT1` and `J1` as fixed or repulsive obstacles for small nested passives `R14`, `SW2`, `R4`, `R5`) would eliminate all `6` static `bare_110` DRC errors on `earring` before routing even begins.
-3. **Rubber-Band Topological Representation (`core/crates/topo`)**: Replacing piecewise-linear capsule chains during compaction with exact rubber-band homotopy arcs around pad/via obstacles (using `core/crates/topo`) would eliminate segment-count doubling (`2500+` micro-segments), pull every trace taut to true Euclidean/octilinear tangents, and prevent acute pad-exit kinks.
-4. **Channel-Capacity Guard During `110%` Routing**: Scaling design-rule clearances (or via outer keepout halos) proportionally by `1.1x` during the `110%` route pass (`--clearance-scale 1.1`) so the router never packs more tracks/vias into a widened channel than can physically fit once compacted back to `100%`.
+### v1 Baseline Numbers to Beat (from `REPORT-v1.md`)
+
+- **Experiment A (`earring` toward `0.85`)**:
+  - `A1` (`runs/expA/baseline.kicad_pcb`, `--factor 0.85 --steps 15`): v1 reached **`0.99`** (`1/15` steps, `30.195002 x 35.392501 mm`, `10` unconnected unchanged, `0` DRC errors, `945 -> 1164` segments, `1032.609016 -> 1014.612556 mm` track length, `10.159658397 s`), jammed at `0.98` on `U1-34` vs `BTN_SENSE` via.
+  - `A1-fine` (`--factor 0.98 --steps 10`): v1 reached **`0.988`** (`6/10` steps, `30.134 x 35.321 mm`, `945 -> 1213` segments, `26.291489997 s`), jammed at `0.986` on `U1-31` vs `PWR_HOLD` via.
+  - `A2` (`runs/expB/direct_100_s0.kicad_pcb`, `--factor 0.85 --steps 15`): v1 reached **`0.99`** (`1/15` steps, `0` unconnected, `0` DRC errors, `1296 -> 2677` segments, `1327.619626 -> 1298.941937 mm`, `18.619641603 s`), jammed at `0.98` on `C5-1` vs `VBUS_SENSE` via.
+- **Experiment B (`earring` `scale 1.1 -> route -> compact 1/1.1`, seeds `0..3`)**:
+  - `bare_110` (`scale 1.1`): v1 created `6` new static footprint DRC errors (`BT1` vs `R14`/`SW2` and `J1` NPTH vs `R4`/`R5`, `11` total with pre-existing `VBUS` stubs).
+  - Compaction from `110%` toward `0.909091` (`100%`):
+    - Seed `0`: **`0.9545454545454546`** (`5/10` steps, `1291 -> 2728` segments, `0` unconnected, `0` copper DRC errors, `40.371898164 s`).
+    - Seed `1`: **`0.9727272727272727`** (`3/10` steps, `1366 -> 2737` segments, `0` unconnected, `0` copper DRC errors, `26.901802546 s`).
+    - Seed `2`: **`0.990909090909091`** (`1/10` steps, `1371 -> 2499` segments, `0` unconnected, `0` copper DRC errors, `16.860203887 s`).
+    - Seed `3`: **`0.990909090909091`** (`1/10` steps, `1315 -> 2465` segments, `0` unconnected, `0` copper DRC errors, `14.756275290 s`).
+- **Experiment C (PCBench `110% -> route -> compact 1/1.1`, seed `0`)**:
+  - `Starling_Starling_V1`: **`0.9636363636363636`** (`4/10` steps, `447 -> 994` segments, `0` unconnected vs `3` unconnected at `100%`, `0` DRC errors, `27.009554371 s`).
+  - `BMS-bq76940_EvaluationsBoard`: **`0.9727272727272727`** (`3/10` steps, `662 -> 1172` segments, `4 -> 4` unconnected, `0` DRC errors, `28.227117087 s`).
+  - `AmpOne_dev-AmpOne`: **`0.990909090909091`** (`1/10` steps, `804 -> 2835` segments, `0` unconnected, `0` DRC errors, `29.108802399 s`).
+- **Prepared 24-Board PCBench Generalization Set (`--phase pcbench` in [`runs/v2/run_all.py`](runs/v2/run_all.py))**:
+  - 10 clean double-sided 2-layer boards (`0` bare DRC errors): `LED_port-status_LED_port-status`, `ESP-Breakout_ESP-Breakout`, `ESP07-Breakout_ESP07-Breakout`, `ESP8266-MQTT-battery-monitor-hw_battery-monitor`, `KiwiSDR_PCB_ant`, `Biscay_Blueeye_sipm-comp`, `BUF-DiffToSE-ADAU1966_BUF-DiffToSE-ADAU1966`, `avr_ledprojector_avr_ledprojection-0402`, `AzizLight_AzizLight`, `QRPCard_QRPCard`.
+  - 6 double-sided 2-layer boards with pre-existing bare DRC errors: `1-Wire-Wing-pcb_1-Wire_Wing`, `655_testboard`, `6volt-5W-solar-cc_6vleadacidsolar`, `Brushless_ESC_Brushless_ESC`, `FlashProgrammer_flash_programmer`, `EncoderBoard_Enc_Pan_Led`.
+  - 5 4-layer boards: `DasBlinkinput_Das Blinkinput`, `PDB_OSD_HARDWARE_Quadcopter Power Board`, `4_digit_hex_display_4_digit_display`, `a123-battery-integration_BCM`, `FMCW_RADAR_Radar MCU`.
+  - 3 single-sided / mixed THT+SMD 2-layer boards: `DA_Lamp_attiny44a_servo_i2c`, `LT3652EvalBoard_LT3652EvalBoard`, `kitspace_120-channel-test-board`.
+
+---
+
+## 5. Costs, Limitations, and What Limits Shrink Once Opposite-Side Via Pinches Are Gone
+
+1. **Per-step runtime cost when a channel saturates**:
+   - Steps that relax cleanly in Pass `0` (`count_dynamic_violations == 0`) break immediately at the top of Pass `1` and pay near-zero overhead beyond v1 (plus up to `7` extra passes of `shorten_taut_chains`, which only scans degree-2 vertices).
+   - Steps where Pass `0` leaves a pinch enter Passes `1..5` (`28..38` iterations each) and, if unlocked footprints move, rebuild `step_bare_board` and run `settle_copper_only` (`3` passes). On saturated boards this adds roughly `2x` to `3x` CPU work on the pinched steps in exchange for keeping the step alive via per-part stops rather than aborting.
+2. **What limits shrink once opposite-side via pinches are resolved**:
+   - **Board outline (`Edge.Cuts`) catching stopped perimeter parts**: In `ultraroute compact`, the board outline scales uniformly by `step_f` around `centre`. When an interior part stops (`part_stops > 0`), outer parts continue shrinking past it; however, once a **perimeter** footprint stops (against a locked connector, an interior courtyard chain spanning from the board core to the edge, or a board-spanning mechanical part like `BT1` whose `28 mm` width already spans `92%` of `earring`'s `30.5 mm` width), the uniformly shrinking `Edge.Cuts` outline eventually meets that stopped perimeter part's pad/hole edge-clearance limit (`min_copper_edge_clearance`, typically `0.30..0.50 mm`), which legitimately ends uniform outline shrink.
+   - **Multi-track channel capacity (`110% -> 100%`)**: Even with `slide_pinched_vias` sliding vias out of narrow throats, if the router at `110%` routed `K` parallel same-layer tracks through a gap between two pads on the **same** footprint (or two courtyard-locked footprints) where `K * track_width + (K + 1) * clearance` fits at `110%` only if the two footprints stay `110%` apart, per-part stops will hold those two footprints at the channel's exact `K`-track capacity width (`> 100%`), preventing the board outline from reaching `100%` if those footprints sit near the board edge.
+   - **No via-past-pad hop across a foreign obstacle**: `slide_pinched_vias` slides a via continuously/discretely along its own net's tracks (Modes A/B/C), which never crosses a foreign pad or changes route homotopy. It cannot teleport a via to the opposite side of an intervening foreign pad, because doing so changes the topological winding of the trace on at least one layer and requires rerouting.
+
+---
+
+## 6. What to Try Next
+
+1. **Run `runs/v2/run_all.py --phase all` as soon as `loaf`'s reservation queue is cleared** and inspect any board where `Edge.Cuts` uniform scaling stops before interior channels saturate.
+2. **Non-uniform / anisotropic (`fx, fy`) or offset-polygon `Edge.Cuts` shrink**: On rectangular or elongated boards (`Starling_Starling_V1` is `60.1 x 23.8 mm`; `earring` is constrained horizontally by `BT1` long before vertically), allowing `fx != fy` or shrinking `Edge.Cuts` to the tightest legal offset around the achieved part envelope would save substantial area after one axis saturates.
+3. **Channel-capacity-aware `110%` routing (`--clearance-scale 1.1`)**: Inflating track/via clearances by `f` during the `110%` route pass would prevent the router from packing `N` tracks or vias into an expanded inter-part channel that can physically hold only `N - 1` items at `100%`.
+4. **Topological rubber-band routing (`core/crates/topo`)**: Replacing piecewise-linear capsule chains with exact rubber-band tangents around pad/via discs would pull detours taut around obstacles in a single geometric solve without subdivision/merge passes.
+
+---
+
+## For the project memory
+
+- **`~/.claude/bin/reserve` leaks queue entries when killed by `SIGTERM` while waiting**: `~/.claude/bin/reserve` installs its `SIGINT`/`SIGTERM`/`SIGHUP` signal handlers at lines `342-343`, *after* the `while e["state"] == "waiting":` loop (`lines 268-292`). During the wait loop, only `KeyboardInterrupt` (`SIGINT`) is caught to call `leave()` (`/api/release/<eid>`). Wrapping `reserve` in default `timeout N` sends `SIGTERM`, killing the client without calling `/api/release/<eid>`; always use `timeout --signal=INT` around `reserve` (and `reserve` itself should install a `SIGTERM`/`SIGHUP` handler before entering the wait loop).
+- **Footprint `(locked yes)` vs `--lock` in `morph`**: KiCad's file-level `(locked yes)` flag on footprints is set on 60 of 167 footprints in `earring.kicad_pcb` (all 58 LEDs, `BT1`, and `J1`) to prevent accidental GUI drags, whereas `ScaleOptions::lock` / `CompactOptions::lock` (`--lock REF,...`) is the explicit compaction lock set. Track and via `(locked yes)` (`item.locked`) is respected as fixed copper.
+- **Unnamed NPTH mounting bosses share `pad.number == ""`**: Connectors like `earring`'s `J1` have multiple unnamed (`""`) `np_thru_hole` pads on the same footprint. Any baseline DRC violation key or pad map must key pads by per-footprint pad ordinal (`(footprint_idx, pad_ordinal)`), never `(footprint_idx, pad.number)`.

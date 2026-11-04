@@ -6,9 +6,10 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use board::{arc_chords, nm, point_segment, BBox, Block, Board, Item, Kind, Nm, Point, Shape};
+use kicad_pcb::sexpr::Node;
 use kicad_pcb::{
-    apply, mm, parse_board, scale_edits, Copper, Edit, NewTrack, NewVia, Pcb, Rules, Span, Zone,
-    ZoneFill,
+    apply, mm, parse_board, scale_edits, Copper, Edit, Footprint, NewTrack, NewVia, Pcb, Rules,
+    Span, Zone, ZoneFill,
 };
 
 use crate::flow::{cut, layer_of};
@@ -42,6 +43,30 @@ pub struct ScaleReport {
     pub vias: usize,
 }
 
+/// Per-side courtyard polygons of one footprint at its original board position (`factor = 1.0`).
+/// Disjoint courtyard islands (such as the two solder tabs of a coin-cell holder) and concave
+/// closed courtyard loops stay separate instead of collapsing into one board-spanning convex hull.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct FootprintYards {
+    pub front: Vec<Vec<Point>>,
+    pub back: Vec<Vec<Point>>,
+}
+
+/// Physical placement envelope of one footprint at `factor = 1.0`.
+#[derive(Debug, Clone)]
+pub(crate) struct FootprintEnvelope {
+    /// Physical anchor `(x_nm, y_nm)` about which uniform scaling translates the footprint.
+    pub anchor: (f64, f64),
+    /// Optional parent footprint `e` when this small part sits right next to `e`'s rigid pins/holes
+    /// inside `e`'s pad/hole bounding box (for example passives nestled between a connector's bosses).
+    pub parent: Option<usize>,
+    /// True when the footprint draws `Edge.Cuts` primitives directly.
+    pub owns_outline: bool,
+    /// True when the footprint contains copper graphics (such as a net-tie bridge) that only move
+    /// when text is rewritten.
+    pub has_copper_graphic: bool,
+}
+
 /// Scales `text` by `opts.factor` about the board outline's centre.
 pub fn scale(text: &str, rules: Rules, opts: &ScaleOptions) -> Result<ScaleReport, String> {
     if !opts.factor.is_finite() || opts.factor <= 0.0 {
@@ -53,16 +78,33 @@ pub fn scale(text: &str, rules: Rules, opts: &ScaleOptions) -> Result<ScaleRepor
     let before_mm = bbox_size_mm(orig_bb);
     let centre = bbox_centre(orig_bb);
 
-    let fp_shifts: Vec<(usize, Point)> = (0..orig_board.footprints.len())
-        .map(|f| {
-            if opts.lock.contains(&orig_board.footprints[f].reference) {
-                return (f, Point::new(0, 0));
-            }
-            let orig_at = Point::from_m(orig_pcb.footprints[f].at);
-            let dx = ((opts.factor - 1.0) * (orig_at.x as f64 - centre.0)).round() as Nm;
-            let dy = ((opts.factor - 1.0) * (orig_at.y as f64 - centre.1)).round() as Nm;
-            (f, Point::new(dx, dy))
-        })
+    let orig_fp_at: Vec<Point> =
+        orig_pcb.footprints.iter().map(|f| Point::from_m(f.at)).collect();
+    let fp_locked: Vec<bool> = orig_board
+        .footprints
+        .iter()
+        .map(|f| opts.lock.contains(&f.reference))
+        .collect();
+    let orig_yards = extract_footprint_yards(text, &orig_pcb);
+    let fp_envs = compute_footprint_envelopes(&orig_pcb, &orig_copper, &orig_board, &orig_yards);
+
+    let mut cand_pos =
+        nominal_scaled_positions(&orig_fp_at, &fp_envs, &fp_locked, centre, opts.factor);
+    if (opts.factor - 1.0).abs() > 1e-12 {
+        crate::compact::project_scaled_footprints(
+            &orig_board,
+            &orig_yards,
+            &fp_envs,
+            &fp_locked,
+            centre,
+            opts.factor,
+            &orig_fp_at,
+            &mut cand_pos,
+        );
+    }
+
+    let fp_shifts: Vec<(usize, Point)> = (0..orig_fp_at.len())
+        .map(|f| (f, Point::new(cand_pos[f].x - orig_fp_at[f].x, cand_pos[f].y - orig_fp_at[f].y)))
         .collect();
     let shift_map: HashMap<usize, Point> = fp_shifts.iter().copied().collect();
     let moved_footprints = fp_shifts.iter().filter(|(_, d)| *d != Point::new(0, 0)).count();
@@ -105,6 +147,625 @@ pub fn scale(text: &str, rules: Rules, opts: &ScaleOptions) -> Result<ScaleRepor
         tracks: tracks.len(),
         vias: vias.len(),
     })
+}
+
+pub(crate) fn nominal_scaled_positions(
+    orig_fp_at: &[Point],
+    envs: &[FootprintEnvelope],
+    fp_locked: &[bool],
+    centre: (f64, f64),
+    factor: f64,
+) -> Vec<Point> {
+    (0..orig_fp_at.len())
+        .map(|f| {
+            if fp_locked[f] {
+                return orig_fp_at[f];
+            }
+            let eff = envs[f].parent.unwrap_or(f);
+            if fp_locked[eff] {
+                return orig_fp_at[f];
+            }
+            let anch = envs[eff].anchor;
+            let dx = ((factor - 1.0) * (anch.0 - centre.0)).round() as Nm;
+            let dy = ((factor - 1.0) * (anch.1 - centre.1)).round() as Nm;
+            Point::new(orig_fp_at[f].x + dx, orig_fp_at[f].y + dy)
+        })
+        .collect()
+}
+
+pub(crate) fn compute_footprint_envelopes(
+    pcb: &Pcb,
+    copper: &Copper,
+    board: &Board,
+    yards: &[FootprintYards],
+) -> Vec<FootprintEnvelope> {
+    let n = board.footprints.len();
+    let mut shapes_by_fp: Vec<Vec<(Shape, u64, bool)>> = vec![Vec::new(); n];
+    let mut fp_layers = vec![0u64; n];
+    let mut pad_hole_bb: Vec<Option<BBox>> = vec![None; n];
+    let union_opt = |acc: Option<BBox>, b: BBox| Some(acc.map_or(b, |x| x.union(b)));
+
+    for (id, it) in board.items() {
+        if let Kind::Pad { footprint: f, .. } = it.kind {
+            if f < n {
+                fp_layers[f] |= it.layers;
+                pad_hole_bb[f] = union_opt(pad_hole_bb[f], it.shape.bbox());
+                if it.layers != 0 {
+                    shapes_by_fp[f].push((it.shape.clone(), it.layers, false));
+                }
+                if let Some(hs) = board.hole_shape(id, it) {
+                    pad_hole_bb[f] = union_opt(pad_hole_bb[f], hs.bbox());
+                    shapes_by_fp[f].push((hs, u64::MAX, true));
+                }
+            }
+        }
+    }
+
+    let mut has_copper_graphic = vec![false; n];
+    let mut graphic_bb: Vec<Option<BBox>> = vec![None; n];
+    for g in &copper.graphics {
+        if let Some(f) = g.footprint.filter(|&f| f < n) {
+            has_copper_graphic[f] = true;
+            for poly in &g.polygons {
+                if !poly.is_empty() {
+                    let bb = BBox::of(poly.iter().copied().map(Point::from_m));
+                    graphic_bb[f] = union_opt(graphic_bb[f], bb);
+                }
+            }
+        }
+    }
+
+    let outline_uuids: HashSet<&str> = pcb
+        .outline
+        .iter()
+        .filter_map(|p| p.footprint.as_deref())
+        .collect();
+
+    let mut env_bb: Vec<Option<BBox>> = vec![None; n];
+    let mut anchors: Vec<(f64, f64)> = Vec::with_capacity(n);
+    let mut owns_outline = vec![false; n];
+
+    for f in 0..n {
+        owns_outline[f] = pcb
+            .footprints
+            .get(f)
+            .is_some_and(|fp| outline_uuids.contains(fp.uuid.as_str()));
+        let mut ebb = pad_hole_bb[f];
+        if let Some(y) = yards.get(f) {
+            for poly in y.front.iter().chain(&y.back) {
+                if !poly.is_empty() {
+                    ebb = union_opt(ebb, BBox::of(poly.iter().copied()));
+                }
+            }
+        }
+        if ebb.is_none() {
+            ebb = graphic_bb[f];
+        }
+        env_bb[f] = ebb;
+        let anchor = match ebb {
+            Some(b) => bbox_centre(b),
+            None => {
+                let p = board.footprints[f].at;
+                (p.x as f64, p.y as f64)
+            }
+        };
+        anchors.push(anchor);
+    }
+
+    let bbox_area = |b: Option<BBox>| -> f64 {
+        b.map_or(0.0, |x| {
+            (x.max.x - x.min.x).max(1) as f64 * (x.max.y - x.min.y).max(1) as f64
+        })
+    };
+
+    let mut raw_parent: Vec<Option<usize>> = vec![None; n];
+    for s in 0..n {
+        if owns_outline[s] || shapes_by_fp[s].is_empty() {
+            continue;
+        }
+        let area_s = bbox_area(env_bb[s]).max(1.0);
+        let layers_s = fp_layers[s];
+        let s_has_hole = shapes_by_fp[s].iter().any(|x| x.2);
+        let anch_pt = Point::new(anchors[s].0.round() as Nm, anchors[s].1.round() as Nm);
+        let mut best: Option<(f64, usize)> = None;
+        for e in 0..n {
+            if e == s || bbox_area(env_bb[e]) <= 4.0 * area_s {
+                continue;
+            }
+            let mut inter_bb: Option<BBox> = None;
+            let mut inter_cnt = 0usize;
+            for (sh_e, l_e, hole_e) in &shapes_by_fp[e] {
+                if *hole_e || s_has_hole || (*l_e & layers_s) != 0 {
+                    inter_bb = union_opt(inter_bb, sh_e.bbox());
+                    inter_cnt += 1;
+                }
+            }
+            let Some(ibb) = inter_bb else { continue };
+            if inter_cnt < 3 || !ibb.grow(600_000).contains(anch_pt) {
+                continue;
+            }
+            let mut min_gap = f64::INFINITY;
+            for (sh_s, l_s, hole_s) in &shapes_by_fp[s] {
+                let s_reach = sh_s.bbox().grow(1_400_000);
+                for (sh_e, l_e, hole_e) in &shapes_by_fp[e] {
+                    if !(*hole_e || *hole_s || (*l_e & *l_s) != 0) || !s_reach.overlaps(sh_e.bbox())
+                    {
+                        continue;
+                    }
+                    let g = sh_s.gap_within(sh_e, 1_400_000.0);
+                    if g < min_gap {
+                        min_gap = g;
+                    }
+                }
+            }
+            if min_gap <= 1_400_000.0 && best.is_none_or(|(bg, _)| min_gap < bg) {
+                best = Some((min_gap, e));
+            }
+        }
+        raw_parent[s] = best.map(|(_, e)| e);
+    }
+
+    (0..n)
+        .map(|f| {
+            let mut p = raw_parent[f];
+            let mut depth = 0;
+            while let Some(cur) = p {
+                if depth >= 4 || raw_parent[cur].is_none() || raw_parent[cur] == Some(f) {
+                    break;
+                }
+                p = raw_parent[cur];
+                depth += 1;
+            }
+            FootprintEnvelope {
+                anchor: anchors[f],
+                parent: p,
+                owns_outline: owns_outline[f],
+                has_copper_graphic: has_copper_graphic[f],
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn extract_footprint_yards(text: &str, pcb: &Pcb) -> Vec<FootprintYards> {
+    let mut out = vec![FootprintYards::default(); pcb.footprints.len()];
+    let Ok(root) = kicad_pcb::sexpr::parse(text) else {
+        return out;
+    };
+    let mut fp_idx = 0usize;
+    for child in root.args() {
+        if child.head() != Some("footprint") {
+            continue;
+        }
+        let Some(fp) = pcb.footprints.get(fp_idx) else {
+            break;
+        };
+        out[fp_idx] = parse_one_footprint_yards(child, fp);
+        fp_idx += 1;
+    }
+    out
+}
+
+fn parse_one_footprint_yards(fp_node: &Node, fp: &Footprint) -> FootprintYards {
+    const MM: f64 = 1e-3;
+    let pt_of = |n: &Node| -> Option<[f64; 2]> {
+        Some([n.number_arg(0, "pt").ok()? * MM, n.number_arg(1, "pt").ok()? * MM])
+    };
+    let named_pt = |g: &Node, tag: &str| -> Option<[f64; 2]> { g.find(tag).and_then(pt_of) };
+
+    let mut closed_front: Vec<Vec<Point>> = Vec::new();
+    let mut closed_back: Vec<Vec<Point>> = Vec::new();
+    let mut chains_front: Vec<Vec<Point>> = Vec::new();
+    let mut chains_back: Vec<Vec<Point>> = Vec::new();
+
+    for g in fp_node.args() {
+        let Some(layer) = g.find("layer").and_then(|l| l.args().first()).and_then(Node::text)
+        else {
+            continue;
+        };
+        let (on_f, on_b) = match layer {
+            "F.CrtYd" => (true, false),
+            "B.CrtYd" => (false, true),
+            "*.CrtYd" | "F&B.CrtYd" => (true, true),
+            _ => continue,
+        };
+        match g.head() {
+            Some("fp_rect") => {
+                let (Some(a), Some(b)) = (named_pt(g, "start"), named_pt(g, "end")) else {
+                    continue;
+                };
+                let corners = [a, [b[0], a[1]], b, [a[0], b[1]]];
+                let poly = clean_yard_poly(
+                    &corners.into_iter().map(|p| Point::from_m(fp.place(p))).collect::<Vec<_>>(),
+                );
+                if poly.len() >= 3 {
+                    if on_f {
+                        closed_front.push(poly.clone());
+                    }
+                    if on_b {
+                        closed_back.push(poly);
+                    }
+                }
+            }
+            Some("fp_poly") => {
+                let Some(pts_node) = g.find("pts") else { continue };
+                let mut raw: Vec<Point> = Vec::new();
+                for item in pts_node.args() {
+                    match item.head() {
+                        Some("xy") => {
+                            if let Some(p) = pt_of(item) {
+                                raw.push(Point::from_m(fp.place(p)));
+                            }
+                        }
+                        Some("arc") => {
+                            if let (Some(s), Some(m), Some(e)) = (
+                                named_pt(item, "start"),
+                                named_pt(item, "mid"),
+                                named_pt(item, "end"),
+                            ) {
+                                let (ch, _) =
+                                    arc_chords(fp.place(s), fp.place(m), fp.place(e), 0.0);
+                                raw.extend(ch);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                let cleaned = clean_yard_poly(&raw);
+                let poly = if cleaned.len() >= 3 && !poly_self_intersects(&cleaned) {
+                    cleaned
+                } else {
+                    convex_hull_points(raw)
+                };
+                if poly.len() >= 3 && polygon_abs_area2(&poly) >= 2_000_000.0 {
+                    if on_f {
+                        closed_front.push(poly.clone());
+                    }
+                    if on_b {
+                        closed_back.push(poly);
+                    }
+                }
+            }
+            Some("fp_circle") => {
+                let (Some(c), Some(e)) = (named_pt(g, "center"), named_pt(g, "end")) else {
+                    continue;
+                };
+                let r = (e[0] - c[0]).hypot(e[1] - c[1]);
+                if r <= 0.0 {
+                    continue;
+                }
+                let n = 24usize;
+                let ro = r / (std::f64::consts::PI / n as f64).cos();
+                let poly: Vec<Point> = (0..n)
+                    .map(|k| {
+                        let ang = std::f64::consts::TAU * k as f64 / n as f64;
+                        Point::from_m(fp.place([c[0] + ro * ang.cos(), c[1] + ro * ang.sin()]))
+                    })
+                    .collect();
+                if on_f {
+                    closed_front.push(poly.clone());
+                }
+                if on_b {
+                    closed_back.push(poly);
+                }
+            }
+            Some("fp_line") => {
+                let (Some(a), Some(b)) = (named_pt(g, "start"), named_pt(g, "end")) else {
+                    continue;
+                };
+                let (pa, pb) = (Point::from_m(fp.place(a)), Point::from_m(fp.place(b)));
+                if pa != pb {
+                    let ch = vec![pa, pb];
+                    if on_f {
+                        chains_front.push(ch.clone());
+                    }
+                    if on_b {
+                        chains_back.push(ch);
+                    }
+                }
+            }
+            Some("fp_arc") => {
+                let (Some(s), Some(m), Some(e)) =
+                    (named_pt(g, "start"), named_pt(g, "mid"), named_pt(g, "end"))
+                else {
+                    continue;
+                };
+                let (mut ch, _) = arc_chords(fp.place(s), fp.place(m), fp.place(e), 0.0);
+                ch.dedup();
+                if ch.len() >= 2 {
+                    if on_f {
+                        chains_front.push(ch.clone());
+                    }
+                    if on_b {
+                        chains_back.push(ch);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    closed_front.extend(assemble_yard_chains(chains_front));
+    closed_back.extend(assemble_yard_chains(chains_back));
+    FootprintYards { front: closed_front, back: closed_back }
+}
+
+fn assemble_yard_chains(mut chains: Vec<Vec<Point>>) -> Vec<Vec<Point>> {
+    const WELD_NM: f64 = 15_000.0;
+    let nc = chains.len();
+    if nc == 0 {
+        return Vec::new();
+    }
+
+    let mut ep_pts: Vec<Point> = Vec::with_capacity(2 * nc);
+    for c in &chains {
+        ep_pts.push(c[0]);
+        ep_pts.push(*c.last().unwrap());
+    }
+    let mut uf: Vec<usize> = (0..2 * nc).collect();
+    fn find(uf: &mut [usize], mut x: usize) -> usize {
+        while uf[x] != x {
+            uf[x] = uf[uf[x]];
+            x = uf[x];
+        }
+        x
+    }
+    for i in 0..2 * nc {
+        for j in (i + 1)..2 * nc {
+            if ep_pts[i].distance(ep_pts[j]) <= WELD_NM {
+                let (ri, rj) = (find(&mut uf, i), find(&mut uf, j));
+                if ri != rj {
+                    uf[rj] = ri;
+                }
+            }
+        }
+    }
+
+    let mut root_to_vid: HashMap<usize, usize> = HashMap::new();
+    let mut v_sum: Vec<(i128, i128, usize)> = Vec::new();
+    let mut ep_vid = vec![0usize; 2 * nc];
+    for i in 0..2 * nc {
+        let r = find(&mut uf, i);
+        let vid = *root_to_vid.entry(r).or_insert_with(|| {
+            let id = v_sum.len();
+            v_sum.push((0, 0, 0));
+            id
+        });
+        ep_vid[i] = vid;
+        v_sum[vid].0 += ep_pts[i].x as i128;
+        v_sum[vid].1 += ep_pts[i].y as i128;
+        v_sum[vid].2 += 1;
+    }
+    let v_pos: Vec<Point> = v_sum
+        .into_iter()
+        .map(|(sx, sy, cnt)| Point::new((sx / cnt as i128) as Nm, (sy / cnt as i128) as Nm))
+        .collect();
+
+    let mut ch_ends: Vec<(usize, usize)> = Vec::with_capacity(nc);
+    for (ci, c) in chains.iter_mut().enumerate() {
+        let u = ep_vid[2 * ci];
+        let v = ep_vid[2 * ci + 1];
+        c[0] = v_pos[u];
+        *c.last_mut().unwrap() = v_pos[v];
+        ch_ends.push((u, v));
+    }
+
+    let mut c_uf: Vec<usize> = (0..nc).collect();
+    let mut first_chain_at_v: Vec<Option<usize>> = vec![None; v_pos.len()];
+    for (ci, &(u, v)) in ch_ends.iter().enumerate() {
+        for vid in [u, v] {
+            if let Some(prev) = first_chain_at_v[vid] {
+                let (ra, rb) = (find(&mut c_uf, prev), find(&mut c_uf, ci));
+                if ra != rb {
+                    c_uf[rb] = ra;
+                }
+            } else {
+                first_chain_at_v[vid] = Some(ci);
+            }
+        }
+    }
+
+    let mut comps: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut comp_order: Vec<usize> = Vec::new();
+    for ci in 0..nc {
+        let r = find(&mut c_uf, ci);
+        let entry = comps.entry(r).or_insert_with(|| {
+            comp_order.push(r);
+            Vec::new()
+        });
+        entry.push(ci);
+    }
+
+    let mut out = Vec::new();
+    for r in comp_order {
+        let comp = &comps[&r];
+        if comp.len() == 1 {
+            let c0 = comp[0];
+            if ch_ends[c0].0 == ch_ends[c0].1 && chains[c0].len() >= 4 {
+                let poly = clean_yard_poly(&chains[c0][..chains[c0].len() - 1]);
+                let fin = if poly.len() >= 3 && !poly_self_intersects(&poly) {
+                    poly
+                } else {
+                    convex_hull_points(chains[c0].clone())
+                };
+                if fin.len() >= 3 && polygon_abs_area2(&fin) >= 2_000_000.0 {
+                    out.push(fin);
+                }
+                continue;
+            }
+        }
+
+        let mut deg: HashMap<usize, usize> = HashMap::new();
+        let mut all_open = true;
+        for &ci in comp {
+            let (u, v) = ch_ends[ci];
+            if u == v {
+                all_open = false;
+                break;
+            }
+            *deg.entry(u).or_insert(0) += 1;
+            *deg.entry(v).or_insert(0) += 1;
+        }
+
+        if all_open && deg.values().all(|&d| d == 2) {
+            let mut visited = vec![false; comp.len()];
+            let mut cycles = Vec::new();
+            let mut ok = true;
+            for start_idx in 0..comp.len() {
+                if visited[start_idx] {
+                    continue;
+                }
+                visited[start_idx] = true;
+                let c0 = comp[start_idx];
+                let start_v = ch_ends[c0].0;
+                let mut cur_v = ch_ends[c0].1;
+                let mut pts: Vec<Point> = chains[c0][..chains[c0].len() - 1].to_vec();
+                for _ in 0..=comp.len() {
+                    if cur_v == start_v {
+                        break;
+                    }
+                    let Some(next_idx) = (0..comp.len()).find(|&k| {
+                        !visited[k]
+                            && (ch_ends[comp[k]].0 == cur_v || ch_ends[comp[k]].1 == cur_v)
+                    }) else {
+                        ok = false;
+                        break;
+                    };
+                    visited[next_idx] = true;
+                    let ck = comp[next_idx];
+                    if ch_ends[ck].0 == cur_v {
+                        pts.extend_from_slice(&chains[ck][..chains[ck].len() - 1]);
+                        cur_v = ch_ends[ck].1;
+                    } else {
+                        pts.extend(chains[ck][1..].iter().rev().copied());
+                        cur_v = ch_ends[ck].0;
+                    }
+                }
+                if !ok || cur_v != start_v {
+                    ok = false;
+                    break;
+                }
+                let poly = clean_yard_poly(&pts);
+                if poly.len() >= 3
+                    && polygon_abs_area2(&poly) >= 2_000_000.0
+                    && !poly_self_intersects(&poly)
+                {
+                    cycles.push(poly);
+                } else {
+                    ok = false;
+                    break;
+                }
+            }
+            if ok && !cycles.is_empty() {
+                out.extend(cycles);
+                continue;
+            }
+        }
+
+        let all_pts: Vec<Point> = comp.iter().flat_map(|&ci| chains[ci].iter().copied()).collect();
+        let hull = convex_hull_points(all_pts);
+        if hull.len() >= 3 && polygon_abs_area2(&hull) >= 2_000_000.0 {
+            out.push(hull);
+        }
+    }
+    out
+}
+
+fn clean_yard_poly(pts: &[Point]) -> Vec<Point> {
+    let mut out: Vec<Point> = Vec::with_capacity(pts.len());
+    for &p in pts {
+        if out.last().is_none_or(|&q| q.distance(p) > 500.0) {
+            out.push(p);
+        }
+    }
+    while out.len() >= 2 && out.first().unwrap().distance(*out.last().unwrap()) <= 500.0 {
+        out.pop();
+    }
+    out
+}
+
+fn polygon_abs_area2(poly: &[Point]) -> f64 {
+    if poly.len() < 3 {
+        return 0.0;
+    }
+    let mut s = 0.0f64;
+    for i in 0..poly.len() {
+        let a = poly[i];
+        let b = poly[(i + 1) % poly.len()];
+        s += a.x as f64 * b.y as f64 - b.x as f64 * a.y as f64;
+    }
+    s.abs()
+}
+
+fn poly_self_intersects(poly: &[Point]) -> bool {
+    let n = poly.len();
+    if n < 3 {
+        return true;
+    }
+    if n == 3 {
+        return polygon_abs_area2(poly) < 2_000_000.0;
+    }
+    let cross = |o: Point, a: Point, b: Point| -> f64 {
+        (a.x - o.x) as f64 * (b.y - o.y) as f64 - (a.y - o.y) as f64 * (b.x - o.x) as f64
+    };
+    let on_seg = |p: Point, a: Point, b: Point| -> bool {
+        point_segment(p, a, b) <= 250.0
+    };
+    for i in 0..n {
+        let (a0, a1) = (poly[i], poly[(i + 1) % n]);
+        let bba = BBox::of([a0, a1]);
+        for j in (i + 2)..n {
+            if i == 0 && j + 1 == n {
+                continue;
+            }
+            let (b0, b1) = (poly[j], poly[(j + 1) % n]);
+            if !bba.overlaps(BBox::of([b0, b1])) {
+                continue;
+            }
+            let d1 = cross(a0, a1, b0);
+            let d2 = cross(a0, a1, b1);
+            let d3 = cross(b0, b1, a0);
+            let d4 = cross(b0, b1, a1);
+            if ((d1 > 0.0 && d2 < 0.0) || (d1 < 0.0 && d2 > 0.0))
+                && ((d3 > 0.0 && d4 < 0.0) || (d3 < 0.0 && d4 > 0.0))
+            {
+                return true;
+            }
+            if on_seg(b0, a0, a1) || on_seg(b1, a0, a1) || on_seg(a0, b0, b1) || on_seg(a1, b0, b1)
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn convex_hull_points(mut pts: Vec<Point>) -> Vec<Point> {
+    pts.sort_by_key(|p| (p.x, p.y));
+    pts.dedup();
+    if pts.len() < 3 {
+        return pts;
+    }
+    let cross = |o: Point, a: Point, b: Point| -> i128 {
+        (a.x - o.x) as i128 * (b.y - o.y) as i128 - (a.y - o.y) as i128 * (b.x - o.x) as i128
+    };
+    let mut lower: Vec<Point> = Vec::new();
+    for &p in &pts {
+        while lower.len() >= 2 && cross(lower[lower.len() - 2], lower[lower.len() - 1], p) <= 0 {
+            lower.pop();
+        }
+        lower.push(p);
+    }
+    let mut upper: Vec<Point> = Vec::new();
+    for &p in pts.iter().rev() {
+        while upper.len() >= 2 && cross(upper[upper.len() - 2], upper[upper.len() - 1], p) <= 0 {
+            upper.pop();
+        }
+        upper.push(p);
+    }
+    lower.pop();
+    upper.pop();
+    lower.extend(upper);
+    lower
 }
 
 /// Bounding box of the board outline, falling back to outline edges or copper items when a board
@@ -948,5 +1609,77 @@ mod tests {
         let board = Board::new(&pcb, &copper, rules);
         assert!(check(&board).is_empty(), "zero DRC violations after 1.1x scale");
         assert!(connectivity_without_pours(&board).airlines.is_empty(), "SIG stayed connected");
+    }
+
+    #[test]
+    fn scale_anchors_offset_origin_parts_and_carries_passives_inside_connector_bosses() {
+        // Mirrors earring's BT1 (origin at board centre (100, 100), two disjoint B.Cu tabs and
+        // B.CrtYd islands near y = 83.65) and J1 (connector at (100, 83.41) with four thru_hole
+        // shield tabs and two unnamed "" np_thru_hole bosses framing an F.Cu passive R5 at
+        // (102, 85.4)). Under 1.1x expansion about centre (100, 100), BT1 must move north (-y,
+        // away from 100) rather than south, and R5 must ride rigidly with J1 without hitting J1's
+        // unnamed NPTH boss.
+        let text = "(kicad_pcb
+\t(version 20241229)
+\t(general (thickness 1.6))
+\t(layers (0 \"F.Cu\" signal) (2 \"B.Cu\" signal) (44 \"Edge.Cuts\" user) (46 \"B.CrtYd\" user) (47 \"F.CrtYd\" user))
+\t(net 0 \"\")
+\t(net 1 \"VBAT\")
+\t(net 2 \"GND\")
+\t(net 3 \"CC1\")
+\t(gr_line (start 80 75) (end 120 75) (stroke (width 0.1)) (layer \"Edge.Cuts\") (uuid \"e1\"))
+\t(gr_line (start 120 75) (end 120 125) (stroke (width 0.1)) (layer \"Edge.Cuts\") (uuid \"e2\"))
+\t(gr_line (start 120 125) (end 80 125) (stroke (width 0.1)) (layer \"Edge.Cuts\") (uuid \"e3\"))
+\t(gr_line (start 80 125) (end 80 75) (stroke (width 0.1)) (layer \"Edge.Cuts\") (uuid \"e4\"))
+\t(footprint \"BT\" (layer \"B.Cu\") (uuid \"fbt\") (at 100 100 180)
+\t\t(property \"Reference\" \"BT1\" (at 0 0 0) (layer \"B.SilkS\") (uuid \"rbt\"))
+\t\t(fp_rect (start -9.5 14.5) (end -6.5 17.5) (stroke (width 0.05)) (layer \"B.CrtYd\") (uuid \"cbt1\"))
+\t\t(fp_rect (start 6.5 15.0) (end 9.5 18.0) (stroke (width 0.05)) (layer \"B.CrtYd\") (uuid \"cbt2\"))
+\t\t(pad \"1\" smd rect (at -8.0 16.0 180) (size 2.0 2.0) (layers \"B.Cu\") (net 1 \"VBAT\") (uuid \"pbt1\"))
+\t\t(pad \"2\" smd rect (at 8.0 16.7 180) (size 2.0 2.0) (layers \"B.Cu\") (net 2 \"GND\") (uuid \"pbt2\"))
+\t)
+\t(footprint \"USB\" (layer \"B.Cu\") (uuid \"fj1\") (at 100 83.41)
+\t\t(property \"Reference\" \"J1\" (at 0 0 0) (layer \"B.SilkS\") (uuid \"rj1\"))
+\t\t(fp_rect (start -4.8 -3.2) (end 4.8 2.8) (stroke (width 0.05)) (layer \"B.CrtYd\") (uuid \"cj1\"))
+\t\t(pad \"\" np_thru_hole circle (at -2.9 1.21) (size 1.2 1.2) (drill 1.2) (layers \"*.Cu\" \"*.Mask\") (uuid \"pj_np1\"))
+\t\t(pad \"\" np_thru_hole circle (at 2.9 1.21) (size 1.2 1.2) (drill 1.2) (layers \"*.Cu\" \"*.Mask\") (uuid \"pj_np2\"))
+\t\t(pad \"S1\" thru_hole oval (at -4.33 -2.47) (size 1.0 1.8) (drill oval 0.6 1.4) (layers \"*.Cu\" \"*.Mask\") (net 2 \"GND\") (uuid \"pjs1\"))
+\t\t(pad \"S2\" thru_hole oval (at 4.33 -2.47) (size 1.0 1.8) (drill oval 0.6 1.4) (layers \"*.Cu\" \"*.Mask\") (net 2 \"GND\") (uuid \"pjs2\"))
+\t\t(pad \"S3\" thru_hole oval (at -4.33 2.00) (size 1.0 1.8) (drill oval 0.6 1.4) (layers \"*.Cu\" \"*.Mask\") (net 2 \"GND\") (uuid \"pjs3\"))
+\t\t(pad \"S4\" thru_hole oval (at 4.33 2.00) (size 1.0 1.8) (drill oval 0.6 1.4) (layers \"*.Cu\" \"*.Mask\") (net 2 \"GND\") (uuid \"pjs4\"))
+\t\t(pad \"A5\" smd rect (at 0.5 2.4) (size 0.3 0.9) (layers \"B.Cu\" \"B.Mask\") (net 3 \"CC1\") (uuid \"pja5\"))
+\t)
+\t(footprint \"R0402\" (layer \"F.Cu\") (uuid \"fr5\") (at 101.65 85.10 90)
+\t\t(property \"Reference\" \"R5\" (at 0 0 90) (layer \"F.SilkS\") (uuid \"rr5\"))
+\t\t(fp_rect (start -0.75 -0.45) (end 0.75 0.45) (stroke (width 0.05)) (layer \"F.CrtYd\") (uuid \"cr5\"))
+\t\t(pad \"1\" smd rect (at -0.48 0 90) (size 0.5 0.6) (layers \"F.Cu\" \"F.Mask\") (net 3 \"CC1\") (uuid \"pr51\"))
+\t\t(pad \"2\" smd rect (at 0.48 0 90) (size 0.5 0.6) (layers \"F.Cu\" \"F.Mask\") (net 2 \"GND\") (uuid \"pr52\"))
+\t)
+)\n";
+        let rules = Rules::parse("{}").unwrap();
+        let rep = scale(
+            text,
+            rules.clone(),
+            &ScaleOptions { factor: 1.1, lock: HashSet::new(), uuid_seed: Some(21) },
+        )
+        .unwrap();
+        let (pcb, copper) = parse_board(&rep.text).unwrap();
+        // BT1's physical pads sit near y = 83.65 mm (< centre y = 100 mm), so 1.1x expansion must
+        // shift BT1 north (at.y < 100 mm), whereas origin-based scaling left it at y = 100 mm.
+        assert!(
+            pcb.footprints[0].at[1] < 98.6e-3,
+            "BT1 shifted north with its physical pads: y={}",
+            pcb.footprints[0].at[1]
+        );
+        // R5 sits inside J1's through-hole/NPTH pocket, so R5 translates by the exact same delta
+        // as J1 instead of colliding with J1's +2.9 mm NPTH boss.
+        let dj_y = pcb.footprints[1].at[1] - 83.41e-3;
+        let dr_y = pcb.footprints[2].at[1] - 85.10e-3;
+        assert!(
+            (dj_y - dr_y).abs() < 2e-6,
+            "R5 rode rigidly with enclosing J1: dj_y={dj_y}, dr_y={dr_y}"
+        );
+        let board = Board::new(&pcb, &copper, rules);
+        assert!(check(&board).is_empty(), "zero DRC violations after 1.1x scale: {:?}", check(&board));
     }
 }

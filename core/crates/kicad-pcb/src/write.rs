@@ -158,6 +158,12 @@ pub struct ZoneFill {
     pub rects: Vec<[f64; 4]>,
 }
 
+/// Per-zone point warp `(zone_index, point_m) -> new_point_m`.
+pub type ZonePointMap<'a> = dyn Fn(usize, [f64; 2]) -> [f64; 2] + 'a;
+
+/// Spans to remove and `(span, replacement)` edits produced by [`scale_edits`].
+pub type ScaleEdits = (Vec<Span>, Vec<(Span, String)>);
+
 /// Spans to drop and replace in `text` so the board outline, board-level drawings and board-level
 /// zone outlines scale by `factor` about `centre` (metres, or by `zone_map` per top-level zone
 /// index when given), each footprint `(fp, orig_at, new_at)` moves to `new_at` (carrying any zones
@@ -167,9 +173,9 @@ pub fn scale_edits(
     centre: [f64; 2],
     factor: f64,
     footprints: &[(usize, [f64; 2], [f64; 2])],
-    zone_map: Option<&dyn Fn(usize, [f64; 2]) -> [f64; 2]>,
+    zone_map: Option<&ZonePointMap<'_>>,
     zone_fills: &[ZoneFill],
-) -> Result<(Vec<Span>, Vec<(Span, String)>), KicadParse> {
+) -> Result<ScaleEdits, KicadParse> {
     let root = crate::sexpr::parse(text)?;
     let scale_pt = |p: [f64; 2]| [centre[0] + factor * (p[0] - centre[0]), centre[1] + factor * (p[1] - centre[1])];
     let mut fp_moves = std::collections::HashMap::new();
@@ -186,20 +192,18 @@ pub fn scale_edits(
 
     for child in root.args() {
         match child.head() {
-            Some("gr_line" | "gr_arc" | "gr_circle" | "gr_rect" | "gr_poly" | "gr_curve") => {
-                if scale_changed {
-                    rewrite_graphic_points(child, &scale_pt, &mut replace)?;
-                }
+            Some("gr_line" | "gr_arc" | "gr_circle" | "gr_rect" | "gr_poly" | "gr_curve")
+                if scale_changed =>
+            {
+                rewrite_graphic_points(child, &scale_pt, &mut replace)?;
             }
-            Some("gr_text" | "gr_text_box") => {
-                if scale_changed {
-                    if let Some(at) = child.find("at") {
-                        replace_xy(at, &scale_pt, &mut replace)?;
-                    }
-                    for tag in ["start", "end"] {
-                        if let Some(pt) = child.find(tag) {
-                            replace_xy(pt, &scale_pt, &mut replace)?;
-                        }
+            Some("gr_text" | "gr_text_box") if scale_changed => {
+                if let Some(at) = child.find("at") {
+                    replace_xy(at, &scale_pt, &mut replace)?;
+                }
+                for tag in ["start", "end"] {
+                    if let Some(pt) = child.find(tag) {
+                        replace_xy(pt, &scale_pt, &mut replace)?;
                     }
                 }
             }

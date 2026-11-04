@@ -225,6 +225,8 @@ fn run_compact(args: &[String]) {
         }
     };
     let started = Instant::now();
+    grid::clock::use_cpu_time();
+    let cpu_started = grid::clock::now();
     let (board, text) = match Board::load(a.input.as_ref()) {
         Ok(b) => b,
         Err(e) => {
@@ -254,6 +256,7 @@ fn run_compact(args: &[String]) {
         }
     };
     let elapsed = started.elapsed().as_secs_f64();
+    let cpu_s = grid::clock::since(cpu_started).as_secs_f64();
     if !a.verbose {
         for s in &rep.steps {
             let status = if s.step == 0 {
@@ -264,7 +267,7 @@ fn run_compact(args: &[String]) {
                 "jam "
             };
             eprintln!(
-                "step {:>2}/{} [{}] factor {:.4}: {:.3} x {:.3} mm | violations {} | length {:.2} mm | vias {} | acid traps {} ({} acute, {} slots){}",
+                "step {:>2}/{} [{}] factor {:.4}: {:.3} x {:.3} mm | violations {} | length {:.2} mm ({} segs) | vias {} | stops {} | slides {} | acid traps {} ({} acute, {} slots){}",
                 s.step,
                 rep.steps_requested,
                 status,
@@ -273,7 +276,10 @@ fn run_compact(args: &[String]) {
                 s.size_mm[1],
                 s.violations,
                 s.track_length_mm,
+                s.segments,
                 s.vias,
+                s.part_stops,
+                s.via_slides,
                 s.acid_traps.acute + s.acid_traps.slots,
                 s.acid_traps.acute,
                 s.acid_traps.slots,
@@ -284,24 +290,28 @@ fn run_compact(args: &[String]) {
     let last_kept = rep.steps.iter().rev().find(|s| s.accepted).unwrap();
     match &rep.jam {
         None => eprintln!(
-            "compact done: reached factor {:.4} ({}/{} steps), {:.3} x {:.3} mm, {:.2} mm track, {:.2} s",
+            "compact done: reached factor {:.4} ({}/{} steps), {:.3} x {:.3} mm, {:.2} mm track ({} segs), {:.2} s ({:.2} cpu s)",
             rep.achieved_factor,
             rep.steps_accepted,
             rep.steps_requested,
             last_kept.size_mm[0],
             last_kept.size_mm[1],
             last_kept.track_length_mm,
-            elapsed
+            last_kept.segments,
+            elapsed,
+            cpu_s
         ),
         Some(reason) => eprintln!(
-            "compact stopped at factor {:.4} ({}/{} steps toward {:.4}), {:.3} x {:.3} mm, {:.2} s: {reason}",
+            "compact stopped at factor {:.4} ({}/{} steps toward {:.4}), {:.3} x {:.3} mm, {} segs, {:.2} s ({:.2} cpu s): {reason}",
             rep.achieved_factor,
             rep.steps_accepted,
             rep.steps_requested,
             rep.target_factor,
             last_kept.size_mm[0],
             last_kept.size_mm[1],
-            elapsed
+            last_kept.segments,
+            elapsed,
+            cpu_s
         ),
     }
 
@@ -317,9 +327,12 @@ fn run_compact(args: &[String]) {
                     "size_mm": s.size_mm,
                     "violations": s.violations,
                     "track_length_mm": s.track_length_mm,
+                    "segments": s.segments,
                     "vias": s.vias,
                     "acid_traps": { "acute": s.acid_traps.acute, "slots": s.acid_traps.slots },
                     "courtyard_stops": s.courtyard_stops,
+                    "part_stops": s.part_stops,
+                    "via_slides": s.via_slides,
                     "jam": s.jam,
                 })
             })
@@ -332,6 +345,7 @@ fn run_compact(args: &[String]) {
             "steps_requested": rep.steps_requested,
             "steps_accepted": rep.steps_accepted,
             "elapsed_s": elapsed,
+            "cpu_s": cpu_s,
             "peak_memory_mb": peak_memory_mb(),
             "jam": rep.jam,
             "steps": steps_json,
