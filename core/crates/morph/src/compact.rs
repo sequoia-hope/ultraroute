@@ -240,7 +240,7 @@ pub fn compact(text: &str, rules: Rules, opts: &CompactOptions) -> Result<Compac
         &zero_field,
         &orig_locked_items,
     )?;
-    let baseline_static_viols = collect_static_violations(&cur_board, &HashSet::new()).0;
+    let baseline_static_viols = collect_static_violations(&cur_board, &HashMap::new()).0;
     let (_, _) = graph.sync_to_board(&mut cur_board);
     recarve_kept_zones_in_board(&mut cur_board, &zero_copper);
     let baseline_airlines = baseline_connectivity(&cur_board);
@@ -884,36 +884,40 @@ impl CopperGraph {
         }
 
         let mut node_map: HashMap<(u32, usize, Point), usize> = HashMap::new();
-        let mut get_node =
-            |particles: &mut Vec<Particle>, net: u32, layer: usize, p: Point| -> usize {
-                if let Some(&vpid) = via_map.get(&(net, p)) {
-                    if let Some((_, _, mask, _, _)) = particles[vpid].is_via() {
-                        if mask & (1u64 << layer) != 0 {
-                            return vpid;
-                        }
+        let get_node = |particles: &mut Vec<Particle>,
+                        node_map: &mut HashMap<(u32, usize, Point), usize>,
+                        net: u32,
+                        layer: usize,
+                        p: Point|
+         -> usize {
+            if let Some(&vpid) = via_map.get(&(net, p)) {
+                if let Some((_, _, mask, _, _)) = particles[vpid].is_via() {
+                    if mask & (1u64 << layer) != 0 {
+                        return vpid;
                     }
                 }
-                if let Some(&id) = node_map.get(&(net, layer, p)) {
-                    return id;
-                }
-                let anchor = match find_pad(p, net, 1u64 << layer) {
-                    Some((fp, _)) => Anchor::Pad {
-                        footprint: fp,
-                        offset: ((p.x - fp_at[fp].x) as f64, (p.y - fp_at[fp].y) as f64),
-                    },
-                    None => Anchor::Free,
-                };
-                let id = particles.len();
-                particles.push(Particle {
-                    pos: (p.x as f64, p.y as f64),
-                    anchor,
-                    locked: false,
-                    via_tether: None,
-                    plane_zones: Vec::new(),
-                });
-                node_map.insert((net, layer, p), id);
-                id
+            }
+            if let Some(&id) = node_map.get(&(net, layer, p)) {
+                return id;
+            }
+            let anchor = match find_pad(p, net, 1u64 << layer) {
+                Some((fp, _)) => Anchor::Pad {
+                    footprint: fp,
+                    offset: ((p.x - fp_at[fp].x) as f64, (p.y - fp_at[fp].y) as f64),
+                },
+                None => Anchor::Free,
             };
+            let id = particles.len();
+            particles.push(Particle {
+                pos: (p.x as f64, p.y as f64),
+                anchor,
+                locked: false,
+                via_tether: None,
+                plane_zones: Vec::new(),
+            });
+            node_map.insert((net, layer, p), id);
+            id
+        };
 
         // Pass 1: split raw segments ONLY at exact collinear junctions (`d <= 2_000 nm`) so 45-degree
         // staircase bends and dogbone fanouts are not shattered by nearby vertices of the same trace.
@@ -952,8 +956,8 @@ impl CopperGraph {
                 }
             }
             for w in pts.windows(2) {
-                let u = get_node(&mut particles, net, l, w[0]);
-                let v = get_node(&mut particles, net, l, w[1]);
+                let u = get_node(&mut particles, &mut node_map, net, l, w[0]);
+                let v = get_node(&mut particles, &mut node_map, net, l, w[1]);
                 if u != v {
                     if locked {
                         particles[u].locked = true;
@@ -1059,8 +1063,8 @@ impl CopperGraph {
                     }
                 }
                 for w in pts.windows(2) {
-                    let su = get_node(&mut particles, net, l, w[0]);
-                    let sv = get_node(&mut particles, net, l, w[1]);
+                    let su = get_node(&mut particles, &mut node_map, net, l, w[0]);
+                    let sv = get_node(&mut particles, &mut node_map, net, l, w[1]);
                     if su != sv {
                         if locked {
                             particles[su].locked = true;
@@ -1276,7 +1280,7 @@ impl CopperGraph {
                 }
             }
             if let Some((fp, pad_shape, ov0)) = best_pad {
-                let min_overlap = (ov0 - 300.0).max(500.0).min(35_000.0).min(ov0);
+                let min_overlap = (ov0 - 300.0).clamp(500.0, 35_000.0).min(ov0);
                 particles[vpid].anchor = Anchor::PadVia {
                     footprint: fp,
                     fp_ref: fp_at[fp],
@@ -2250,7 +2254,7 @@ pub(crate) fn project_scaled_footprints(
     for id in drop_ids {
         bare.remove(id);
     }
-    let baseline_static = collect_static_violations(&bare, &HashSet::new()).0;
+    let baseline_static = collect_static_violations(&bare, &HashMap::new()).0;
 
     let scale_pt = |p: Point| -> Point {
         Point::new(
@@ -2321,7 +2325,7 @@ fn resolve_static_step_board(
     envs: &[FootprintEnvelope],
     fp_locked: &[bool],
     allowed_yards: &HashMap<(usize, usize, u8), f64>,
-    baseline_static: &HashSet<StaticViolKey>,
+    baseline_static: &HashMap<StaticViolKey, f64>,
     orig_locked_items: &[Item],
 ) -> Result<Option<StaticStepBoard>, String> {
     let orig_had_outline = !orig_board.outline.is_empty();
@@ -2384,7 +2388,7 @@ fn project_footprints_on_board(
     prev_pos: &[Point],
     cand_pos: &mut [Point],
     allowed_yards: &HashMap<(usize, usize, u8), f64>,
-    baseline_static: &HashSet<StaticViolKey>,
+    baseline_static: &HashMap<StaticViolKey, f64>,
 ) {
     let n = orig_at.len();
     if n == 0 {
@@ -2468,7 +2472,7 @@ fn append_static_fp_guard_constraints(
     orig_at: &[Point],
     cur_fp_pos: &[Point],
     allowed_yards: &HashMap<(usize, usize, u8), f64>,
-    baseline_static: &HashSet<StaticViolKey>,
+    baseline_static: &HashMap<StaticViolKey, f64>,
     hs_group: &mut [Vec<HalfPlane>],
 ) {
     let n = orig_at.len();
@@ -2477,6 +2481,22 @@ fn append_static_fp_guard_constraints(
     let rule_reach = board.max_rule_reach();
     let hole_edge_req = nm(board.rules.min_hole_clearance);
     const BUF: f64 = 2_000.0;
+
+    let eff_static_req = |key: StaticViolKey, full_req: Nm| -> f64 {
+        if full_req <= 0 {
+            return 0.0;
+        }
+        match baseline_static.get(&key) {
+            None => full_req as f64 + BUF,
+            Some(&gap0) => {
+                if gap0 <= 500.0 {
+                    0.0
+                } else {
+                    (gap0 + BUF).min(full_req as f64 + BUF)
+                }
+            }
+        }
+    };
 
     let push_pair = |ga: usize,
                      gb: usize,
@@ -2587,23 +2607,25 @@ fn append_static_fp_guard_constraints(
             let bb_a = board.bbox(id_a).unwrap_or_else(|| it_a.shape.bbox());
 
             if !group_immob[lf] {
-                if it_a.is_copper()
-                    && !baseline_static.contains(&StaticViolKey {
+                if it_a.is_copper() {
+                    let edge_key = StaticViolKey {
                         kind: StaticCheckKind::BoardRule(Rule::EdgeClearance),
                         a_fp: f,
                         a_pad_ord: ord_a,
                         b_fp: None,
                         b_pad_ord: None,
-                    })
-                {
+                    };
                     let qedge = it_a.shape.bbox().grow(rule_reach);
                     for &(ea, eb, ebb, eclr) in &board.outline_edges {
                         if !ebb.overlaps(qedge) {
                             continue;
                         }
+                        let req = eff_static_req(edge_key.clone(), eclr);
+                        if req <= 0.0 {
+                            continue;
+                        }
                         let eshape = Shape::Capsule { a: ea, b: eb, r: 0 };
                         let (gap, nx, ny) = closest_shape_shape(&it_a.shape, &eshape);
-                        let req = eclr as f64 + BUF;
                         if gap < req {
                             hs_group[lf].push(HalfPlane { nx, ny, need: req - gap });
                         }
@@ -2611,13 +2633,17 @@ fn append_static_fp_guard_constraints(
                 }
                 if hole_edge_req > 0 {
                     if let Some(hs_a) = board.hole_shape(id_a, it_a) {
-                        if !baseline_static.contains(&StaticViolKey {
-                            kind: StaticCheckKind::HoleEdge,
-                            a_fp: f,
-                            a_pad_ord: ord_a,
-                            b_fp: None,
-                            b_pad_ord: None,
-                        }) {
+                        let req = eff_static_req(
+                            StaticViolKey {
+                                kind: StaticCheckKind::HoleEdge,
+                                a_fp: f,
+                                a_pad_ord: ord_a,
+                                b_fp: None,
+                                b_pad_ord: None,
+                            },
+                            hole_edge_req,
+                        );
+                        if req > 0.0 {
                             let qedge = hs_a.bbox().grow(hole_edge_req + BUF as Nm);
                             for &(ea, eb, ebb, _) in &board.outline_edges {
                                 if !ebb.overlaps(qedge) {
@@ -2625,7 +2651,6 @@ fn append_static_fp_guard_constraints(
                                 }
                                 let eshape = Shape::Capsule { a: ea, b: eb, r: 0 };
                                 let (gap, nx, ny) = closest_shape_shape(&hs_a, &eshape);
-                                let req = hole_edge_req as f64 + BUF;
                                 if gap < req {
                                     hs_group[lf].push(HalfPlane { nx, ny, need: req - gap });
                                 }
@@ -2658,7 +2683,7 @@ fn append_static_fp_guard_constraints(
                                 let (b_fp, b_ord) = pad_ords
                                     .get(&id_b)
                                     .map_or((None, None), |&(bf, bo)| (Some(bf), Some(bo)));
-                                if baseline_static.contains(&StaticViolKey {
+                                if baseline_static.contains_key(&StaticViolKey {
                                     kind: StaticCheckKind::BoardRule(Rule::Keepout),
                                     a_fp: f,
                                     a_pad_ord: ord_a,
@@ -2690,39 +2715,44 @@ fn append_static_fp_guard_constraints(
                                 if (it_a.net != it_b.net || it_a.net == 0)
                                     && !board.is_tied(id_a, it_a, id_b, it_b)
                                 {
-                                    let mut req = 0i64;
-                                    if !baseline_static.contains(&StaticViolKey {
-                                        kind: StaticCheckKind::BoardRule(Rule::Clearance),
-                                        a_fp: f,
-                                        a_pad_ord: ord_a,
-                                        b_fp: Some(*g),
-                                        b_pad_ord: Some(ord_b),
-                                    }) {
-                                        req = req.max(board.clearance_kept(
-                                            &Thing::Item(board, id_a, it_a),
-                                            &Thing::Item(board, id_b, it_b),
-                                            l,
-                                        ));
-                                    }
-                                    if !baseline_static.contains(&StaticViolKey {
-                                        kind: StaticCheckKind::PadMaskBridge,
-                                        a_fp: f,
-                                        a_pad_ord: ord_a,
-                                        b_fp: Some(*g),
-                                        b_pad_ord: Some(ord_b),
-                                    }) {
-                                        req = req.max(cross_fp_pad_mask_gap(
-                                            board, id_a, it_a, id_b, it_b, l,
-                                        ));
-                                    }
-                                    if req > 0 {
-                                        let req_f = req as f64 + BUF;
-                                        if it_a.shape.bbox().grow(req + BUF as Nm).overlaps(it_b.shape.bbox()) {
-                                            let (gap, nx, ny) =
-                                                closest_shape_shape(&it_a.shape, &it_b.shape);
-                                            if gap < req_f {
-                                                push_pair(lf, lg, nx, ny, req_f - gap, hs_group);
-                                            }
+                                    let clr_full = board.clearance_kept(
+                                        &Thing::Item(board, id_a, it_a),
+                                        &Thing::Item(board, id_b, it_b),
+                                        l,
+                                    );
+                                    let mask_full =
+                                        cross_fp_pad_mask_gap(board, id_a, it_a, id_b, it_b, l);
+                                    let req_f = eff_static_req(
+                                        StaticViolKey {
+                                            kind: StaticCheckKind::BoardRule(Rule::Clearance),
+                                            a_fp: f,
+                                            a_pad_ord: ord_a,
+                                            b_fp: Some(*g),
+                                            b_pad_ord: Some(ord_b),
+                                        },
+                                        clr_full,
+                                    )
+                                    .max(eff_static_req(
+                                        StaticViolKey {
+                                            kind: StaticCheckKind::PadMaskBridge,
+                                            a_fp: f,
+                                            a_pad_ord: ord_a,
+                                            b_fp: Some(*g),
+                                            b_pad_ord: Some(ord_b),
+                                        },
+                                        mask_full,
+                                    ));
+                                    if req_f > 0.0
+                                        && it_a
+                                            .shape
+                                            .bbox()
+                                            .grow(req_f.ceil() as Nm)
+                                            .overlaps(it_b.shape.bbox())
+                                    {
+                                        let (gap, nx, ny) =
+                                            closest_shape_shape(&it_a.shape, &it_b.shape);
+                                        if gap < req_f {
+                                            push_pair(lf, lg, nx, ny, req_f - gap, hs_group);
                                         }
                                     }
                                 }
@@ -2730,22 +2760,30 @@ fn append_static_fp_guard_constraints(
                             Kind::Pour { .. }
                                 if !group_immob[lf]
                                     && (it_a.net != it_b.net || it_a.net == 0)
-                                    && !board.is_tied(id_a, it_a, id_b, it_b)
-                                    && !baseline_static.contains(&StaticViolKey {
+                                    && !board.is_tied(id_a, it_a, id_b, it_b) =>
+                            {
+                                let pour_full = board.clearance_kept(
+                                    &Thing::Item(board, id_a, it_a),
+                                    &Thing::Item(board, id_b, it_b),
+                                    l,
+                                );
+                                let req = eff_static_req(
+                                    StaticViolKey {
                                         kind: StaticCheckKind::BoardRule(Rule::Clearance),
                                         a_fp: f,
                                         a_pad_ord: ord_a,
                                         b_fp: None,
                                         b_pad_ord: None,
-                                    }) =>
-                            {
-                                let req = board.clearance_kept(
-                                    &Thing::Item(board, id_a, it_a),
-                                    &Thing::Item(board, id_b, it_b),
-                                    l,
-                                ) as f64
-                                    + BUF;
-                                if it_a.shape.bbox().grow(req as Nm).overlaps(it_b.shape.bbox()) {
+                                    },
+                                    pour_full,
+                                );
+                                if req > 0.0
+                                    && it_a
+                                        .shape
+                                        .bbox()
+                                        .grow(req.ceil() as Nm)
+                                        .overlaps(it_b.shape.bbox())
+                                {
                                     let (gap, nx, ny) =
                                         closest_shape_shape(&it_a.shape, &it_b.shape);
                                     if gap < req {
@@ -2780,20 +2818,22 @@ fn append_static_fp_guard_constraints(
                         continue;
                     }
                     let ord_b = pad_ords[&id_b].1;
-                    if baseline_static.contains(&StaticViolKey {
-                        kind: StaticCheckKind::BoardRule(Rule::HoleToHole),
-                        a_fp: f,
-                        a_pad_ord: ord_a,
-                        b_fp: Some(g),
-                        b_pad_ord: Some(ord_b),
-                    }) {
-                        continue;
-                    }
                     if let Some(hs_b) = board.hole_shape(id_b, it_b) {
-                        let req = board.hole_to_hole_clearance(id_a, it_a, id_b, it_b) as f64 + BUF;
-                        let (gap, nx, ny) = closest_shape_shape(&hs_a, &hs_b);
-                        if gap < req {
-                            push_pair(lf, lg, nx, ny, req - gap, hs_group);
+                        let req = eff_static_req(
+                            StaticViolKey {
+                                kind: StaticCheckKind::BoardRule(Rule::HoleToHole),
+                                a_fp: f,
+                                a_pad_ord: ord_a,
+                                b_fp: Some(g),
+                                b_pad_ord: Some(ord_b),
+                            },
+                            board.hole_to_hole_clearance(id_a, it_a, id_b, it_b),
+                        );
+                        if req > 0.0 {
+                            let (gap, nx, ny) = closest_shape_shape(&hs_a, &hs_b);
+                            if gap < req {
+                                push_pair(lf, lg, nx, ny, req - gap, hs_group);
+                            }
                         }
                     }
                 }
@@ -2812,18 +2852,19 @@ fn append_static_fp_guard_constraints(
                             continue;
                         }
                         let ord_b = pad_ords[&id_b].1;
-                        if baseline_static.contains(&StaticViolKey {
-                            kind: StaticCheckKind::BoardRule(Rule::HoleClearance),
-                            a_fp: f,
-                            a_pad_ord: ord_a,
-                            b_fp: Some(g),
-                            b_pad_ord: Some(ord_b),
-                        }) {
-                            continue;
-                        }
-                        let hc = board.hole_clearance(id_a, it_a, id_b, it_b);
-                        if hc > 0 {
-                            let req = hc as f64 + BUF;
+                        let npth_hc = if !it_a.plated_hole() { hole_edge_req } else { 0 };
+                        let hc = board.hole_clearance(id_a, it_a, id_b, it_b).max(npth_hc);
+                        let req = eff_static_req(
+                            StaticViolKey {
+                                kind: StaticCheckKind::BoardRule(Rule::HoleClearance),
+                                a_fp: f,
+                                a_pad_ord: ord_a,
+                                b_fp: Some(g),
+                                b_pad_ord: Some(ord_b),
+                            },
+                            hc,
+                        );
+                        if req > 0.0 {
                             let (gap, nx, ny) = closest_shape_shape(&hs_a, &it_b.shape);
                             if gap < req {
                                 push_pair(lf, lg, nx, ny, req - gap, hs_group);
@@ -3038,14 +3079,48 @@ fn added_airlines(board: &Board, baseline: &BaselineConn) -> (usize, Option<Stri
 
 fn collect_static_violations(
     board: &Board,
-    baseline: &HashSet<StaticViolKey>,
-) -> (HashSet<StaticViolKey>, Option<String>) {
+    baseline: &HashMap<StaticViolKey, f64>,
+) -> (HashMap<StaticViolKey, f64>, Option<String>) {
     let pad_ords = pad_ordinals_on_board(board);
     let num_layers = board.layers.len();
     let rule_reach = board.max_rule_reach();
     let hole_edge_req = nm(board.rules.min_hole_clearance);
-    let mut out = HashSet::new();
+    let mut out: HashMap<StaticViolKey, f64> = HashMap::new();
     let mut first_desc = None;
+
+    let record_viol = |out: &mut HashMap<StaticViolKey, f64>,
+                       first_desc: &mut Option<String>,
+                       key: StaticViolKey,
+                       gap: f64,
+                       desc: &dyn Fn() -> String| {
+        let exempt = match baseline.get(&key) {
+            None => false,
+            Some(&gap0) => {
+                if key.kind == StaticCheckKind::BoardRule(Rule::Keepout) || gap0 <= 500.0 {
+                    true
+                } else {
+                    gap > 500.0 && gap + 1_500.0 >= gap0
+                }
+            }
+        };
+        if exempt {
+            return;
+        }
+        if first_desc.is_none() {
+            *first_desc = Some(desc());
+        }
+        if let (Some(bf), Some(bo)) = (key.b_fp, key.b_pad_ord) {
+            let rev = StaticViolKey {
+                kind: key.kind,
+                a_fp: bf,
+                a_pad_ord: bo,
+                b_fp: Some(key.a_fp),
+                b_pad_ord: Some(key.a_pad_ord),
+            };
+            out.entry(rev).and_modify(|g| *g = g.min(gap)).or_insert(gap);
+        }
+        out.entry(key).and_modify(|g| *g = g.min(gap)).or_insert(gap);
+    };
 
     for (id, it) in board.items() {
         let Kind::Pad { footprint: fp_a, number: ref pad_a, .. } = it.kind else { continue };
@@ -3063,13 +3138,51 @@ fn collect_static_violations(
                 b_fp,
                 b_pad_ord,
             };
-            if baseline.contains(&key) {
-                continue;
+            record_viol(&mut out, &mut first_desc, key, v.gap, &|| describe_violation(board, &v));
+        }
+
+        // Cross-footprint unplated NPTH hole vs other footprints' copper pads (KiCad DRC hole_clearance).
+        if hole_edge_req > 0 && !it.plated_hole() {
+            if let Some(hs_a) = board.hole_shape(id, it) {
+                let qh = hs_a.bbox().grow(hole_edge_req);
+                for l in 0..num_layers {
+                    for id_b in board.near(l, qh) {
+                        if id_b == id {
+                            continue;
+                        }
+                        let Some(it_b) = board.item(id_b) else { continue };
+                        let Kind::Pad { footprint: fp_b, number: ref pad_b, .. } = it_b.kind else {
+                            continue;
+                        };
+                        if fp_b == fp_a || !it_b.is_copper() || !it_b.on(l) {
+                            continue;
+                        }
+                        let gap = hs_a.gap_within(&it_b.shape, hole_edge_req as f64);
+                        if gap + 500.0 < hole_edge_req as f64 {
+                            let ord_b = pad_ords[&id_b].1;
+                            let key = StaticViolKey {
+                                kind: StaticCheckKind::BoardRule(Rule::HoleClearance),
+                                a_fp: fp_a,
+                                a_pad_ord: ord_a,
+                                b_fp: Some(fp_b),
+                                b_pad_ord: Some(ord_b),
+                            };
+                            record_viol(&mut out, &mut first_desc, key, gap, &|| {
+                                format!(
+                                    "HoleClearance on {}: {}-{} NPTH vs {}-{} (gap {:.3} mm < required {:.3} mm)",
+                                    board.layers[l],
+                                    board.footprints[fp_a].reference,
+                                    pad_a,
+                                    board.footprints[fp_b].reference,
+                                    pad_b,
+                                    gap * 1e-6,
+                                    hole_edge_req as f64 * 1e-6
+                                )
+                            });
+                        }
+                    }
+                }
             }
-            if first_desc.is_none() {
-                first_desc = Some(describe_violation(board, &v));
-            }
-            out.insert(key);
         }
 
         // Cross-footprint pad-to-pad solder-mask bridge check.
@@ -3101,21 +3214,18 @@ fn collect_static_violations(
                             b_fp: Some(fp_b),
                             b_pad_ord: Some(ord_b),
                         };
-                        if !baseline.contains(&key) {
-                            if first_desc.is_none() {
-                                first_desc = Some(format!(
-                                    "SolderMaskBridge on {}: {}-{} vs {}-{} (gap {:.3} mm < required {:.3} mm)",
-                                    board.layers[l],
-                                    board.footprints[fp_a].reference,
-                                    pad_a,
-                                    board.footprints[fp_b].reference,
-                                    pad_b,
-                                    gap * 1e-6,
-                                    req as f64 * 1e-6
-                                ));
-                            }
-                            out.insert(key);
-                        }
+                        record_viol(&mut out, &mut first_desc, key, gap, &|| {
+                            format!(
+                                "SolderMaskBridge on {}: {}-{} vs {}-{} (gap {:.3} mm < required {:.3} mm)",
+                                board.layers[l],
+                                board.footprints[fp_a].reference,
+                                pad_a,
+                                board.footprints[fp_b].reference,
+                                pad_b,
+                                gap * 1e-6,
+                                req as f64 * 1e-6
+                            )
+                        });
                     }
                 }
             }
@@ -3141,18 +3251,15 @@ fn collect_static_violations(
                         b_fp: None,
                         b_pad_ord: None,
                     };
-                    if !baseline.contains(&key) {
-                        if first_desc.is_none() {
-                            first_desc = Some(format!(
-                                "HoleEdgeClearance: {}-{} hole vs board edge (gap {:.3} mm < required {:.3} mm)",
-                                board.footprints[fp_a].reference,
-                                pad_a,
-                                worst_gap * 1e-6,
-                                hole_edge_req as f64 * 1e-6
-                            ));
-                        }
-                        out.insert(key);
-                    }
+                    record_viol(&mut out, &mut first_desc, key, worst_gap, &|| {
+                        format!(
+                            "HoleEdgeClearance: {}-{} hole vs board edge (gap {:.3} mm < required {:.3} mm)",
+                            board.footprints[fp_a].reference,
+                            pad_a,
+                            worst_gap * 1e-6,
+                            hole_edge_req as f64 * 1e-6
+                        )
+                    });
                 }
             }
         }
@@ -3478,7 +3585,7 @@ fn slide_pinched_vias(graph: &mut CopperGraph, board: &mut Board) -> usize {
         }
 
         let in_plane_zones = |cand: Point, b: &Board, g: &CopperGraph| -> bool {
-            g.particles[pv].plane_zones.iter().all(|&(z, _)| {
+            g.particles[pv].plane_zones.iter().all(|&(z, _, _)| {
                 b.unfilled
                     .iter()
                     .find(|u| u.0 == z)
@@ -4012,7 +4119,7 @@ fn settle_copper_only(graph: &mut CopperGraph, board: &mut Board) -> usize {
     let empty_envs: [FootprintEnvelope; 0] = [];
     let empty_yards: [FootprintYards; 0] = [];
     let empty_allowed = HashMap::new();
-    let empty_base = HashSet::new();
+    let empty_base = HashMap::new();
     relax_core(
         graph,
         board,
@@ -4039,7 +4146,7 @@ fn relax_step(
     fp_envs: &[FootprintEnvelope],
     orig_yards: &[FootprintYards],
     allowed_yards: &HashMap<(usize, usize, u8), f64>,
-    baseline_static: &HashSet<StaticViolKey>,
+    baseline_static: &HashMap<StaticViolKey, f64>,
 ) -> (Vec<Point>, usize) {
     relax_core(
         graph,
@@ -4066,7 +4173,7 @@ fn relax_core(
     fp_envs: &[FootprintEnvelope],
     orig_yards: &[FootprintYards],
     allowed_yards: &HashMap<(usize, usize, u8), f64>,
-    baseline_static: &HashSet<StaticViolKey>,
+    baseline_static: &HashMap<StaticViolKey, f64>,
     enable_fp_coupling: bool,
     num_passes: usize,
 ) -> (Vec<Point>, usize) {
