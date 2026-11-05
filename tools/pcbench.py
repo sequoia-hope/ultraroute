@@ -642,8 +642,9 @@ def escalate(a, runs, workers):
 def escalated(name):
     """A run's verdicts with its escalations folded in: each board's last attempt, and the limit
     it was clean within (None if never)."""
-    results, _ = load(name)
-    final = {b: dict(r, clean_within=r.get("timeout_s") if r.get("success") else None) for b, r in results.items()}
+    results, meta = load(name)
+    first = lambda b: meta.get("board_timeouts", {}).get(b, meta.get("timeout"))
+    final = {b: dict(r, clean_within=first(b) if r.get("success") else None) for b, r in results.items()}
     for d in sorted((HOME / "runs").glob(f"{name}@*"), key=lambda p: float(p.name.split("@")[1])):
         limit = float(d.name.split("@")[1])
         for b, r in load(d.name)[0].items():
