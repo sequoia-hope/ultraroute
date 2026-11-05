@@ -26,6 +26,10 @@ pub struct RunStats {
     /// Each connection a stage gave up on, and why.
     pub failures: Vec<Failure>,
     pub settings: Settings,
+    /// Every attempt the run made when it routed again with another recipe, in order; empty
+    /// when it routed once. The rest of the stats are the kept attempt's.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub attempts: Vec<Attempt>,
     pub memory: Memory,
     /// Process CPU seconds spent loading and parsing the input board before `route` began.
     pub load_cpu_seconds: f64,
@@ -33,6 +37,20 @@ pub struct RunStats {
     pub stats_seconds: f64,
     /// Main-thread CPU seconds spent inside `Mark::take` while stage timing was paused.
     pub stats_cpu_seconds: f64,
+}
+
+/// One attempt of a run that routed again ([`crate::RETRIES`]).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Attempt {
+    /// What the attempt changed from the run as asked; "as asked" for the first.
+    pub change: String,
+    pub opens: usize,
+    pub vias: usize,
+    /// Seconds on the deadlines' clock (the CPU's under `--cpu-clock`).
+    pub seconds: f64,
+    /// Whether the clock cut any of its stages short.
+    pub time_limited: bool,
+    pub kept: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize)]

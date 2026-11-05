@@ -16,7 +16,7 @@ use std::time::Instant;
 use board::Board;
 use serde_json::json;
 use ultraroute::{
-    fit_memory, parse, parse_compact, parse_scale, peak_memory_mb, route, Finding, Live, RunStats,
+    fit_memory, parse, parse_compact, parse_scale, peak_memory_mb, route_retrying, Finding, Live, RunStats,
     COMPACT_USAGE, SCALE_USAGE, USAGE,
 };
 
@@ -122,7 +122,7 @@ fn main() {
         (path, guard)
     });
     // A crash still leaves the caller a board: the input as it came, and a failing exit.
-    let routed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| route(&a, board, &text, live, cancel, None, None)));
+    let routed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| route_retrying(&a, board, &text, live, cancel)));
     let (out, stats, code) = match routed {
         Ok(routed) => (routed.text, routed.stats, 0),
         Err(_) => {

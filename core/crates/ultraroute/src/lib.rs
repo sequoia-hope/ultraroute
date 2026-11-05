@@ -39,12 +39,13 @@ pub use stats::{Finding, RunStats, StageStats};
 pub use watch::{Cleaned, Flow, StageEvent, Unwatched, Watch};
 
 pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--plane-via-reach MM] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--negotiate-jacobi] [--negotiate-reroute-all] [--diff-pairs] [--prefanout] [--escape-room|--no-escape-room] [--prefanout-mode stub|dogbone|grid|inner|same] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--negotiate] [--rip-up] [--rip-boxed|--no-rip-boxed] [--nudge] [--tighten] [--arcs MM] [--via-cost MM[,OPEN_MM]] [--gpu] \
-[--timeout SECONDS] [--cpu-clock] [--cell MM] [--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--guard-ties|--no-guard-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--uuid-seed N] [--adopt] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
+[--timeout SECONDS] [--cpu-clock] [--cell MM] [--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--guard-ties|--no-guard-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--retries N|--no-retries] [--uuid-seed N] [--adopt] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
 [--recipe default|bench|minimal] [--live PATH|-] [--live-fps N] [--live-step MS] [--blame] [--stats|--report FILE] [--timing|--no-timing] [-h|--help]
 --place takes millimetres with y pointing up: give KiCad's y negated (KiCad y 127.5 is -127.5).
 Copper and mask text is stroked by the kicad-text program ($ULTRAROUTE_TEXT_HELPER, else next to this one, else on PATH; none: boxes);
 ultraroute text-helper prints the one a route would run.";
 
+#[derive(Clone)]
 pub struct Args {
     pub input: String,
     pub output: String,
@@ -158,12 +159,15 @@ pub struct Args {
     /// Skip all CPU timing, including coarse per-stage timers (`--no-timing`).
     pub no_timing: bool,
     /// The command line as read, the recipe's flags put in.
+    /// Attempts at most after the first, each a different recipe, while connections stay open
+    /// and time is left ([`RETRIES`]).
+    pub retries: usize,
     pub line: Vec<String>,
 }
 
 /// The stages and settings the router runs with unless told otherwise: the benchmark's recipe
 /// (`docs/pcbench.md`), measured as the best of what the router has.
-pub const RECIPE: &str = "--negotiate --rip-up --rip-boxed --tighten --prefanout --escape-room --diff-pairs --shove-plough region --shove-reach 0.5 --shove-repair 20 --shove-ties --guard-ties --shove-passes 60 --shove-patience 8";
+pub const RECIPE: &str = "--negotiate --rip-up --rip-boxed --tighten --prefanout --escape-room --diff-pairs --shove-plough region --shove-reach 0.5 --shove-repair 20 --shove-ties --guard-ties --shove-passes 60 --shove-patience 8 --retries 4";
 
 /// Flags that name a stage to run. A run naming none gets [`RECIPE`]; one naming its own stages
 /// gets those alone, as before there was a default.
@@ -250,6 +254,7 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
         shove_ties: false,
         guard_ties: false,
         seed: 0,
+        retries: 0,
         uuid_seed: None,
         shove_cascade: None,
         shove_patience: 1,
@@ -388,6 +393,8 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
             "--no-guard-ties" => a.guard_ties = false,
             "--shove-cascade" => a.shove_cascade = Some(value()?.parse().map_err(|e| format!("--shove-cascade: {e}"))?),
             "--shove-patience" => a.shove_patience = value()?.parse().map_err(|e| format!("--shove-patience: {e}"))?,
+            "--retries" => a.retries = value()?.parse::<usize>().map_err(|e| format!("--retries: {e}"))?.min(RETRIES.len()),
+            "--no-retries" => a.retries = 0,
             "--seed" => a.seed = value()?.parse().map_err(|e| format!("--seed: {e}"))?,
             "--uuid-seed" => a.uuid_seed = Some(value()?.parse().map_err(|e| format!("--uuid-seed: {e}"))?),
             "--adopt" => a.adopt = true,
@@ -1453,6 +1460,101 @@ pub fn route(
     trace.write(&board);
     timeline.enter(&clock.run, "done");
     finish(a, &board, &mut ledger, &live, sink.as_deref(), stats, &timeline, (begun, started), &cancel)
+}
+
+/// What a run changes when it routes the board again, having left connections open: each
+/// attempt starts from the board as it came, with one thing changed from the run as asked.
+#[derive(Clone, Copy, Debug)]
+pub enum Retry {
+    /// The seed this much further on: the nets in another order.
+    Seed(u64),
+    /// No fan-out of fine-pitch pads before routing.
+    NoPrefanout,
+    /// Vias this dear, in millimetres of track (`--via-cost`).
+    ViaCost(f64),
+}
+
+/// The attempts `--retries N` makes, the first N in turn, while connections stay open. Another
+/// order of the nets wins boards left one or two open, chiefly those the clock cut short (the
+/// seed-restarts study of 2026-11, explore/restarts); a route without the fan-out, and one with
+/// dearer vias, are what m2r and FreeSmartEEG needed, two boards FreeRouting routes clean.
+pub const RETRIES: [Retry; 4] = [Retry::Seed(1), Retry::NoPrefanout, Retry::ViaCost(20.0), Retry::Seed(2)];
+
+impl Retry {
+    /// Makes the change to `a`, and says what it was; nothing when it would change nothing.
+    fn apply(self, a: &mut Args) -> Option<String> {
+        match self {
+            Retry::Seed(k) => {
+                a.seed += k;
+                Some(format!("--seed {}", a.seed))
+            }
+            Retry::NoPrefanout if a.prefanout => {
+                a.prefanout = false;
+                Some("without --prefanout".into())
+            }
+            Retry::NoPrefanout => None,
+            Retry::ViaCost(mm) if a.via_cost != Some((mm, None)) => {
+                a.via_cost = Some((mm, None));
+                Some(format!("--via-cost {mm}"))
+            }
+            Retry::ViaCost(_) => None,
+        }
+    }
+}
+
+/// [`route`], and while connections stay open, routes the board again from the start with each
+/// of the first `--retries` changes of [`RETRIES`] in turn, keeping the attempt that leaves the
+/// fewest open (the earliest of equals). Every attempt keeps the run's `--timeout`: one starts only
+/// while at least as long as the first attempt took is left. `live` sees the first attempt only.
+pub fn route_retrying(a: &Args, board: Board, text: &str, live: Option<Live>, cancel: Arc<AtomicBool>) -> Routed {
+    if a.retries == 0 || a.no_route {
+        return route(a, board, text, live, cancel, None, None);
+    }
+    if a.cpu_clock {
+        grid::clock::use_cpu_time();
+    }
+    let started = grid::clock::now();
+    let fresh = board.clone();
+    let mut best = route(a, board, text, live, cancel.clone(), None, None);
+    let first = grid::clock::since(started).as_secs_f64();
+    let mut attempts = vec![attempt("as asked".into(), &best, first)];
+    let mut kept = 0;
+    for retry in RETRIES.iter().take(a.retries) {
+        if best.stats.summary.opens == 0 || cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        let mut b = a.clone();
+        let Some(change) = retry.apply(&mut b) else { continue };
+        if let Some(t) = a.timeout {
+            let left = t - grid::clock::since(started).as_secs_f64();
+            if left < first {
+                eprintln!("retry: {left:.0} s left of --timeout, less than the first attempt took ({first:.0} s): no more attempts");
+                break;
+            }
+            b.timeout = Some(left);
+        }
+        eprintln!("retry: {} open; routing again {change}", best.stats.summary.opens);
+        let at = grid::clock::now();
+        let r = route(&b, fresh.clone(), text, None, cancel.clone(), None, None);
+        let seconds = grid::clock::since(at).as_secs_f64();
+        eprintln!("retry: {change}: {} open, {} vias in {seconds:.1} s", r.stats.summary.opens, r.stats.summary.vias);
+        attempts.push(attempt(change, &r, seconds));
+        if r.stats.summary.opens < best.stats.summary.opens {
+            kept = attempts.len() - 1;
+            best = r;
+        }
+    }
+    attempts[kept].kept = true;
+    if attempts.len() > 1 {
+        eprintln!("retry: kept {} ({} open)", attempts[kept].change, attempts[kept].opens);
+        best.stats.attempts = attempts;
+    }
+    best
+}
+
+fn attempt(change: String, r: &Routed, seconds: f64) -> stats::Attempt {
+    let s = &r.stats;
+    stats::Attempt { change, opens: s.summary.opens, vias: s.summary.vias, seconds, time_limited: !s.deadline.limited.is_empty() || s.deadline.hard_passed_in.is_some(), kept: false }
 }
 
 /// The run's live frames, which its log writes to as well.

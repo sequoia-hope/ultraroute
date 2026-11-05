@@ -158,6 +158,7 @@ lengths, the deadline, and, of kind `rule`, every project or custom rule left ou
 | `--timeout SECONDS` | the run's time; the board routed so far is written when it runs out |
 | `--cpu-clock` | `--timeout` and every stage's share count the process's CPU seconds (all threads together), not the wall's, so a loaded machine gets as far as an idle one; the benchmark runs with it |
 | `--seed N` | reorders connections of nearly equal length, for a search over runs (default 0) |
+| `--retries N`, `--no-retries` | while connections stay open, routes the board again from the start, up to N times, each with one change: the seed one on, no `--prefanout`, `--via-cost 20`, the seed two on; keeps the attempt with fewest open. An attempt starts only while at least the first attempt's time is left of `--timeout`. The recipe has `--retries 4`; `--stats` lists the attempts |
 | `--uuid-seed N` | draw the new copper's uuids from this seed, so the output is the same every time |
 | `--threads N` | threads for pre-fanout and Jacobi negotiation (default half the machine's) |
 | `--max-memory MB` | the most memory the run may take; default the cgroup's `memory.max`, else 60% of available memory. Over it, the run first gives up Jacobi threads, then routes on a coarser cell, up to 0.1 mm; a board that still does not fit is refused (exit 1) and the input is written as the output |
