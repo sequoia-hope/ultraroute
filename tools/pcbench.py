@@ -8,6 +8,9 @@ baselines (FreeRouting, PcbRouter, RL-MCTS; PCBench/Baselines/Results_all.csv).
                                              route every prepared board (wrap in reserve: it
                                              runs $RESERVED_CORES routes at once); the boards in
                                              tools/pcbench_timeouts.json get their own time
+                                             --escalate S,S...: then each board that failed for want
+                                             of time again at each longer limit, in RUN@S (the
+                                             gate is clean within 30 minutes; 120 s is the fast pass)
     pcbench.py ab BASE NEW --base-bin BIN [--tier T] [run's options]
                                              route the same boards with BIN and this router in
                                              one pool, each board's two routes together, then
@@ -597,6 +600,57 @@ def run(a):
     run_dir, info = start(a.run, ids, a, ROUTER, workers)
     ok = route_all([(a.run, run_dir, info, ROUTER, b) for b in ids], a, workers)
     print(f"{ok.get(a.run, 0)} of {len(ids)} succeeded")
+    escalate(a, [(a.run, ROUTER)], workers)
+
+
+def out_of_time(r):
+    """Whether a board failed for want of time: not clean, and the clock cut a stage or the run."""
+    return not r.get("success") and not router_failed(r) and bool(r.get("time_limited") or r.get("hard_deadline"))
+
+
+def escalate(a, runs, workers):
+    """Each board a run failed for want of time, routed again at each longer `--escalate` limit
+    into RUN@SECONDS, until it is clean or the clock no longer cuts it short: 120 s is the fast
+    pass, and a board clean within the longest limit routes (the user's gate is 30 minutes).
+    Two runs (ab) escalate the boards either one ran out of time on, so both see them."""
+    limits = sorted(float(t) for t in (a.escalate or "").split(",") if t)
+    if not limits:
+        return
+    last = {name: load(name)[0] for name, _ in runs}
+    for limit in limits:
+        ids = sorted({b for results in last.values() for b, r in results.items() if out_of_time(r)})
+        if not ids:
+            break
+        print(f"== escalating {len(ids)} boards to {limit:g} s", flush=True)
+        a.timeout, saved = limit, a.no_board_timeouts
+        a.no_board_timeouts = True
+        jobs = []
+        for name, router in runs:
+            sub = f"{name}@{limit:g}"
+            d, info = start(sub, ids, a, router, workers, commit=router == ROUTER)
+            jobs += [(sub, d, info, router, b) for b in ids]
+        a.no_board_timeouts = saved
+        # Interleaved, as in ab, so a board's routes start together.
+        jobs.sort(key=lambda j: (j[4], j[0]))
+        ok = route_all(jobs, a, workers)
+        print(" ".join(f"{name}@{limit:g}: {ok.get(f'{name}@{limit:g}', 0)} of {len(ids)} clean" for name, _ in runs))
+        for name, _ in runs:
+            later = load(f"{name}@{limit:g}")[0]
+            last[name] = {b: r for b, r in later.items()}
+
+
+def escalated(name):
+    """A run's verdicts with its escalations folded in: each board's last attempt, and the limit
+    it was clean within (None if never)."""
+    results, meta = load(name)
+    first = lambda b: meta.get("board_timeouts", {}).get(b, meta.get("timeout"))
+    final = {b: dict(r, clean_within=first(b) if r.get("success") else None) for b, r in results.items()}
+    for d in sorted((HOME / "runs").glob(f"{name}@*"), key=lambda p: float(p.name.split("@")[1])):
+        limit = float(d.name.split("@")[1])
+        for b, r in load(d.name)[0].items():
+            if b in final and not final[b].get("success"):
+                final[b] = dict(r, clean_within=limit if r.get("success") else None)
+    return final
 
 
 def text_helper(binary):
@@ -627,6 +681,7 @@ def ab(a):
     # Interleaved so each board's two routes start together.
     ok = route_all([(name, d, info, router, b) for b in ids for name, d, info, router in runs], a, workers)
     print(" ".join(f"{name}: {ok.get(name, 0)} of {len(ids)} succeeded" for name, *_ in runs))
+    escalate(a, [(a.base, base), (a.new, ROUTER)], workers)
     a.runs, a.noise_from, a.json, a.exact = [a.base, a.new], None, None, False
     compare(a)
 
@@ -696,6 +751,14 @@ def compare(a):
         print(f"== {a.runs[0]} -> {name}: {len(common)} boards in both" + (f" ({len(base) - len(common)} only in {a.runs[0]}, {len(new) - len(common)} only in {name})" if len(common) != max(len(base), len(new)) else ""))
         clean = lambda rs: [i for i in common if rs[i].get("success")]
         print(f"   clean {len(clean(base))} -> {len(clean(new))}")
+        if any((HOME / "runs").glob(f"{name}@*")) or any((HOME / "runs").glob(f"{a.runs[0]}@*")):
+            eb, en = escalated(a.runs[0]), escalated(name)
+            within = lambda rs: [i for i in common if rs.get(i, {}).get("success")]
+            gained = [i for i in common if en.get(i, {}).get("success") and not eb.get(i, {}).get("success")]
+            dropped = [i for i in common if eb.get(i, {}).get("success") and not en.get(i, {}).get("success")]
+            print(f"   clean with more time where it ran out: {len(within(eb))} -> {len(within(en))} (won {len(gained)}, lost {len(dropped)})")
+            for i in dropped:
+                print(f"      lost {i}")
         lost = [i for i in common if base[i].get("success") and not new[i].get("success")]
         won = [i for i in common if new[i].get("success") and not base[i].get("success")]
 
@@ -840,6 +903,7 @@ def main():
     s.add_argument("--sample-seed", type=int, default=1)
     s.add_argument("--resume-anyway", action="store_true", help="resume a run started with another commit or binary")
     s.add_argument("--note", help="a note for run.json")
+    s.add_argument("--escalate", help="seconds, comma-separated: route again at each longer limit the boards that failed for want of time (e.g. 600,1800)")
     s.add_argument("--tier", help="only the boards of this tier (tools/pcbench_tiers.json)")
     s = sub.add_parser("ab", help="route with two routers side by side, then compare")
     s.add_argument("base", help="the run of --base-bin's routes")
@@ -856,6 +920,7 @@ def main():
     s.add_argument("--sample-seed", type=int, default=1)
     s.add_argument("--resume-anyway", action="store_true")
     s.add_argument("--note")
+    s.add_argument("--escalate", help="seconds, comma-separated: route again at each longer limit the boards that failed for want of time (e.g. 600,1800)")
     s.add_argument("--noise", default="0", help="boards the new run may lose and still pass")
     s = sub.add_parser("tiers", help="sort the boards into tiers by their history in these runs")
     s.add_argument("runs", nargs="+", help="full runs, same seed and recipe, oldest first")
