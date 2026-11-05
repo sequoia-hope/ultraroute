@@ -8,7 +8,7 @@ It reads and writes `.kicad_pcb` boards directly.
 | `kicad-pcb` | `.kicad_pcb` reader (from waffle-iron's, same author) and writer: copper layers, tracks, vias, zones, keepouts, pads with their exact shapes, courtyards, and `.kicad_pro`/`.kicad_dru` rules and net classes. The writer replaces routed copper and moved parts and keeps every other byte. |
 | `board` | The board in integer nanometres: shapes per layer in a grid index, connectivity as KiCad joins copper, and the clearance, edge, hole and keepout checks, pinned by tests to KiCad 9's DRC. |
 | `grid` | Routing: a conservative grid per net class, A* on the CPU (a GPU field solver, experimental, behind `--features gpu`), pre-fanout, differential pairs, negotiated congestion, a rip-up finisher, the plough, part nudging, via reduction and pulling copper tight. |
-| `morph` | Moving copper smoothly: a harmonic warp field, copper carried along with moving parts, and finding the fine-pitch parts whose pads are hard to escape. |
+| `morph` | Moving copper smoothly: a harmonic warp field, scaling a board (`ultraroute scale`), compacting a routed board without ripping routes (`ultraroute compact`), and finding the fine-pitch parts whose pads are hard to escape. |
 | `topo` | Topological routing: a Delaunay triangulation of the copper per layer, a search for a channel wide enough, and the taut rubber band through it. An experiment: the command does not link it; it is built and tested with the workspace. |
 | `ultraroute` | The command, and the same pipeline as a library (`parse`, `route`, `run_with_solver`). |
 | `web` | `ultraroute` compiled to WebAssembly for the studio's router in the browser tab. |

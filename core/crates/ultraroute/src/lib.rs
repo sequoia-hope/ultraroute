@@ -442,6 +442,137 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
     Ok(a)
 }
 
+pub const SCALE_USAGE: &str = "usage: ultraroute scale IN.kicad_pcb -o OUT.kicad_pcb --factor F [--lock REF,...] [--uuid-seed N] [-h|--help]";
+
+pub const COMPACT_USAGE: &str = "usage: ultraroute compact IN.kicad_pcb -o OUT.kicad_pcb --factor F [--steps N] [--lock REF,...] [--uuid-seed N] [--stats|--report FILE] [--verbose] [-h|--help]";
+
+#[derive(Debug, Clone)]
+pub struct ScaleArgs {
+    pub input: String,
+    pub output: String,
+    pub factor: f64,
+    pub lock: Vec<String>,
+    pub uuid_seed: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompactArgs {
+    pub input: String,
+    pub output: String,
+    pub factor: f64,
+    pub steps: Option<usize>,
+    pub lock: Vec<String>,
+    pub uuid_seed: Option<u64>,
+    pub stats: Option<String>,
+    pub verbose: bool,
+}
+
+/// Parses a positive scale factor such as `0.85`, `1.1`, or a ratio like `1/1.1`.
+pub fn parse_factor(raw: &str) -> Result<f64, String> {
+    let val = match raw.split_once('/') {
+        Some((num, den)) => {
+            let n: f64 = num.parse().map_err(|_| format!("--factor {raw}: bad numerator"))?;
+            let d: f64 = den.parse().map_err(|_| format!("--factor {raw}: bad denominator"))?;
+            if d == 0.0 {
+                return Err(format!("--factor {raw}: division by zero"));
+            }
+            n / d
+        }
+        None => raw.parse::<f64>().map_err(|_| format!("--factor {raw}: expected a number or A/B"))?,
+    };
+    if !val.is_finite() || val <= 0.0 {
+        return Err(format!("--factor {raw}: must be positive"));
+    }
+    Ok(val)
+}
+
+pub fn parse_scale(args: &[String]) -> Result<ScaleArgs, String> {
+    if args.first().map(String::as_str) != Some("scale") {
+        return Err(SCALE_USAGE.to_string());
+    }
+    let mut input = String::new();
+    let mut output = String::new();
+    let mut factor: Option<f64> = None;
+    let mut lock = Vec::new();
+    let mut uuid_seed = None;
+    let mut it = args[1..].iter();
+    while let Some(arg) = it.next() {
+        let (flag, inline) = match arg.split_once('=') {
+            Some((f, v)) if f.starts_with("--") => (f, Some(v.to_string())),
+            _ => (arg.as_str(), None),
+        };
+        let mut value = || inline.clone().or_else(|| it.next().cloned()).ok_or(format!("{flag} needs a value"));
+        match flag {
+            "-o" | "--output" => output = value()?,
+            "--factor" => factor = Some(parse_factor(&value()?)?),
+            "--lock" => lock.extend(value()?.split(',').filter(|s| !s.is_empty()).map(String::from)),
+            "--uuid-seed" => {
+                let v = value()?;
+                uuid_seed = Some(v.parse().map_err(|_| format!("--uuid-seed {v}: expected an integer"))?);
+            }
+            _ if !arg.starts_with('-') && input.is_empty() => input = arg.clone(),
+            _ => return Err(format!("unknown option `{arg}`\n{SCALE_USAGE}")),
+        }
+    }
+    let Some(factor) = factor else {
+        return Err(format!("--factor is required\n{SCALE_USAGE}"));
+    };
+    if input.is_empty() || output.is_empty() {
+        return Err(SCALE_USAGE.to_string());
+    }
+    Ok(ScaleArgs { input, output, factor, lock, uuid_seed })
+}
+
+pub fn parse_compact(args: &[String]) -> Result<CompactArgs, String> {
+    if args.first().map(String::as_str) != Some("compact") {
+        return Err(COMPACT_USAGE.to_string());
+    }
+    let mut input = String::new();
+    let mut output = String::new();
+    let mut factor: Option<f64> = None;
+    let mut steps: Option<usize> = None;
+    let mut lock = Vec::new();
+    let mut uuid_seed = None;
+    let mut stats = None;
+    let mut verbose = false;
+    let mut it = args[1..].iter();
+    while let Some(arg) = it.next() {
+        let (flag, inline) = match arg.split_once('=') {
+            Some((f, v)) if f.starts_with("--") => (f, Some(v.to_string())),
+            _ => (arg.as_str(), None),
+        };
+        let mut value = || inline.clone().or_else(|| it.next().cloned()).ok_or(format!("{flag} needs a value"));
+        match flag {
+            "-o" | "--output" => output = value()?,
+            "--factor" => factor = Some(parse_factor(&value()?)?),
+            "--steps" => {
+                let v = value()?;
+                let n: usize = v.parse().map_err(|_| format!("--steps {v}: expected a positive integer"))?;
+                if n == 0 {
+                    return Err("--steps 0: must be at least 1".to_string());
+                }
+                steps = Some(n);
+            }
+            "--lock" => lock.extend(value()?.split(',').filter(|s| !s.is_empty()).map(String::from)),
+            "--uuid-seed" => {
+                let v = value()?;
+                uuid_seed = Some(v.parse().map_err(|_| format!("--uuid-seed {v}: expected an integer"))?);
+            }
+            "--stats" | "--report" => stats = Some(value()?),
+            "--verbose" => verbose = true,
+            _ if !arg.starts_with('-') && input.is_empty() => input = arg.clone(),
+            _ => return Err(format!("unknown option `{arg}`\n{COMPACT_USAGE}")),
+        }
+    }
+    let Some(factor) = factor else {
+        return Err(format!("--factor is required\n{COMPACT_USAGE}"));
+    };
+    if input.is_empty() || output.is_empty() {
+        return Err(COMPACT_USAGE.to_string());
+    }
+    Ok(CompactArgs { input, output, factor, steps, lock, uuid_seed, stats, verbose })
+}
+
 /// The studio draws Y up; a KiCad board runs Y down.
 fn mm_xy(p: Point) -> [f64; 2] {
     [round(p.x as f64 * 1e-6), round(-p.y as f64 * 1e-6)]
