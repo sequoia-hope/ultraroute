@@ -116,6 +116,7 @@ def pcbworld_env(pcbworld_root: Path, data_root: Path, python_bin: Path) -> dict
         py_parts.append(env["PYTHONPATH"])
     env["PYTHONPATH"] = ":".join(py_parts)
     env["PCBWORLD_DATA_ROOT"] = str(data_root)
+    env["PCBNEW_PYTHON"] = str(python_bin)
     cli = build_rl / "kicad" / "kicad-cli"
     if cli.is_file():
         env["KICAD_CLI"] = str(cli)
@@ -207,33 +208,59 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     stamp_dir.mkdir(parents=True, exist_ok=True)
 
     env = pcbworld_env(pcbworld_root, data_root, python_bin)
-    if args.pcbench_pcbs_root:
-        env["PCBENCH_PCBS_ROOT"] = str(args.pcbench_pcbs_root.resolve())
+    pcbs_root = (
+        args.pcbench_pcbs_root.resolve()
+        if args.pcbench_pcbs_root
+        else (data_root / "PCBench" / "PCBs")
+    )
+    if not pcbs_root.is_dir():
+        print("[prepare] cloning official https://github.com/PCBench/PCBench.git ...", flush=True)
+        subprocess.run(
+            ["git", "clone", "--depth", "1", "https://github.com/PCBench/PCBench.git", str(pcbs_root.parent)],
+            check=True,
+        )
+    env["PCBENCH_PCBS_ROOT"] = str(pcbs_root)
     env["PCBENCH_V9_ROOT"] = str(data_root / "pcbench_work" / "v9")
     env["PCBENCH_NEWDRC_OUT"] = str(data_root / "pcbench_work" / "newdrc")
     env["PCBENCH_SORTED_OUT"] = str(data_root / "pcbench" / "exacad_sorted")
     env["PCBENCH_DSN_ROOT"] = str(data_root / "pcbench" / "exacad_sorted_dsn")
 
     pp = pcbworld_root / "tools" / "datagen" / "pcbench_prep"
+    guide_cmd = [
+        str(python_bin),
+        str(pp / "make_guide.py"),
+        "--base-dir",
+        env["PCBENCH_NEWDRC_OUT"],
+        "--stem",
+        "processed_v9",
+        "--suffix",
+        "_guide_v3",
+        "--workers",
+        str(workers),
+    ]
+    newdrc_dir = Path(env["PCBENCH_NEWDRC_OUT"])
+    if newdrc_dir.is_dir() and not (stamp_dir / "03_make_guide.done").is_file():
+        all_dirs = sorted(d for d in newdrc_dir.iterdir() if d.is_dir())
+        done_dirs = [
+            d
+            for d in all_dirs
+            if (d / "processed_v9_guide_v3.kicad_pcb").is_file()
+            and (d / "processed_v9_guide_v3.kicad_pro").is_file()
+            and (d / "processed_v9_guide_v3_unrouted.kicad_pcb").is_file()
+        ]
+        if done_dirs and len(done_dirs) <= len(all_dirs):
+            # Re-process the 5 most recently written folders as well in case an earlier
+            # bounded slice was interrupted mid-write on one of them.
+            recent = sorted(done_dirs, key=lambda d: (d / "processed_v9_guide_v3_unrouted.kicad_pcb").stat().st_mtime)[-5:]
+            done_safe = set(done_dirs) - set(recent)
+            targets = [d.name for d in all_dirs if d not in done_safe]
+            if targets:
+                guide_cmd.extend(["--targets", *targets])
+
     steps: list[tuple[str, list[str], set[int]]] = [
         ("01_convert_v9", [str(python_bin), str(pp / "convert_v9.py"), "--workers", str(workers)], {0}),
         ("02_drc_fix_v9", [str(python_bin), str(pp / "drc_fix_v9.py"), "--workers", str(workers)], {0}),
-        (
-            "03_make_guide",
-            [
-                str(python_bin),
-                str(pp / "make_guide.py"),
-                "--base-dir",
-                env["PCBENCH_NEWDRC_OUT"],
-                "--stem",
-                "processed_v9",
-                "--suffix",
-                "_guide_v3",
-                "--workers",
-                str(workers),
-            ],
-            {0},
-        ),
+        ("03_make_guide", guide_cmd, {0}),
         ("04_sort_prefix", [str(python_bin), str(pp / "sort_prefix.py")], {0}),
         ("05_make_dsn_orp", [str(python_bin), str(pp / "make_dsn_orp.py")], {0, 3}),
     ]
@@ -403,17 +430,18 @@ def cmd_freerouting(args: argparse.Namespace) -> int:
     out_root.mkdir(parents=True, exist_ok=True)
     runner = pcbworld_root / "methods" / "baselines" / "rule_based" / "run_rule_based_routers.py"
     expected_n = len(load_d3_boards(pcbworld_root, args.tier, args.split))
+    ds_tag = f"PCBench_{args.tier}_{args.split}"
 
     # Run each rollout into its own subdirectory `rollout_<k>` with `--seeds 1` so an
     # interrupted 20-minute slice preserves every completed rollout pass cleanly.
-    for k in range(args.seeds):
+    for k in range(args.rollout_start, args.rollout_start + args.seeds):
         r_root = out_root / f"rollout_{k}"
-        existing_manifests = list(r_root.glob("*/*/seed0/manifest.json"))
-        if existing_manifests:
+        mpath = r_root / ds_tag / "freerouting" / "seed0" / "manifest.json"
+        if mpath.is_file():
             try:
-                mdata = json.loads(existing_manifests[0].read_text())
+                mdata = json.loads(mpath.read_text())
                 if len(mdata.get("results", [])) == expected_n:
-                    print(f"[freerouting] rollout_{k} already complete ({existing_manifests[0]})")
+                    print(f"[freerouting] rollout_{k} ({ds_tag}) already complete ({mpath})")
                     continue
             except (OSError, ValueError):
                 pass
@@ -445,12 +473,11 @@ def cmd_freerouting(args: argparse.Namespace) -> int:
         ]
         if args.no_eval:
             cmd.append("--no-eval")
-        print(f"[freerouting] rollout_{k}: {' '.join(cmd)}", flush=True)
+        print(f"[freerouting] rollout_{k} ({ds_tag}): {' '.join(cmd)}", flush=True)
         proc = subprocess.run(cmd, cwd=str(pcbworld_root), env=env)
         # Note: run_rule_based_routers returns 1 if ANY board timed out or errored,
         # which is a valid per-board benchmark outcome when manifest.json was written.
-        wrote = list(r_root.glob("*/*/seed0/manifest.json"))
-        if not wrote:
+        if not mpath.is_file():
             return proc.returncode or 1
     return 0
 
@@ -796,12 +823,17 @@ def cmd_pcbench_judge(args: argparse.Namespace) -> int:
     boards = load_d3_boards(pcbworld_root, args.tier, args.split)
     seeds = [int(s) for s in args.seeds.split(",") if s.strip()]
 
-    # Use stock /usr/bin/kicad-cli (what tools/pcbench.py uses!) unless overridden,
-    # while pcbnew comes from python_bin's environment (or /usr/bin/python3).
+    # Use stock /usr/bin/kicad-cli + /usr/bin/python3 (exact match to tools/pcbench.py)
+    # when available; otherwise fall back to python_bin's pcbnew environment.
     kicad_cli = args.kicad_cli
-    judge_env = pcbworld_env(pcbworld_root, data_root, python_bin)
-    if kicad_cli == "/usr/bin/kicad-cli":
-        judge_env.pop("KICAD_RUN_FROM_BUILD_DIR", None)
+    if kicad_cli == "/usr/bin/kicad-cli" and Path("/usr/bin/python3").is_file():
+        judge_py = Path("/usr/bin/python3")
+        judge_env = os.environ.copy()
+    else:
+        judge_py = python_bin
+        judge_env = pcbworld_env(pcbworld_root, data_root, python_bin)
+        if kicad_cli == "/usr/bin/kicad-cli":
+            judge_env.pop("KICAD_RUN_FROM_BUILD_DIR", None)
 
     bare_cache_dir = runs_dir / "pcbench_judge_bare"
 
@@ -819,10 +851,10 @@ def cmd_pcbench_judge(args: argparse.Namespace) -> int:
             out_json.write_text(json.dumps(res, indent=2))
             return res
         _, bare_err, bare_warn = _run_kicad_judge_on_pcb(
-            bare_pcb, src_pro, bare_cache_dir / b, "bare", kicad_cli, python_bin, judge_env
+            bare_pcb, src_pro, bare_cache_dir / b, "bare", kicad_cli, judge_py, judge_env
         )
         unconn, err, warn = _run_kicad_judge_on_pcb(
-            out_pcb, src_pro, wdir, "out", kicad_cli, python_bin, judge_env
+            out_pcb, src_pro, wdir, "out", kicad_cli, judge_py, judge_env
         )
         new_err = {t: n - bare_err.get(t, 0) for t, n in err.items() if n > bare_err.get(t, 0)}
         new_warn = {t: n - bare_warn.get(t, 0) for t, n in warn.items() if n > bare_warn.get(t, 0)}
@@ -858,12 +890,45 @@ def cmd_pcbench_judge(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
+PAPER_WL_PENALTY = 0.002
+PAPER_VIA_PENALTY = 0.1
+
+
+def _table3_wv_adjustment(ev: dict[str, Any]) -> float:
+    """Adjustment from a reward config's (wl, via) weights to paper Table 3's (0.002, 0.1)."""
+    pw = ev.get("phi_weights") or {}
+    w_cfg = float(pw.get("wirelength_penalty", 0.0) or 0.0)
+    v_cfg = float(pw.get("via_penalty", 0.0) or 0.0)
+    wl = float(ev.get("wirelength_mm", 0.0) or 0.0)
+    via = float(ev.get("via_count", 0) or 0)
+    return -((PAPER_WL_PENALTY - w_cfg) * wl + (PAPER_VIA_PENALTY - v_cfg) * via)
+
+
+def _load_bare_phi0(boards: list[str], runs_dir: Path, reward_config: str) -> dict[str, float]:
+    bare_dir = runs_dir / "bare_eval" / reward_config
+    ref_dir = runs_dir / "reference_eval" / reward_config
+    bare_phi0: dict[str, float] = {}
+    for b in boards:
+        bp = bare_dir / f"{b}.json"
+        if bp.is_file():
+            bd = json.loads(bp.read_text())
+            if bd.get("final_potential") is not None:
+                bare_phi0[b] = float(bd["final_potential"])
+                continue
+        rp = ref_dir / f"{b}.json"
+        if rp.is_file():
+            rd = json.loads(rp.read_text())
+            if rd.get("initial_potential") is not None:
+                bare_phi0[b] = float(rd["initial_potential"])
+    return bare_phi0
+
+
 def _winner_key(row: dict[str, Any]) -> tuple[float, ...]:
-    """Matches PCBWorld's selection_key(..., 'final_potential') ordering."""
-    if "error" in row or row.get("final_potential") is None:
+    """Matches PCBWorld's selection_key(..., 'final_potential') using paper Table 3 potential."""
+    if "error" in row or row.get("final_potential_table3") is None:
         return (-math.inf, -math.inf, -math.inf, -math.inf, -math.inf, -math.inf)
     return (
-        float(row["final_potential"]),
+        float(row["final_potential_table3"]),
         float(row["routability"]),
         -float(row["drv_errors_only_count"]),
         -float(row["wirelength_mm"]),
@@ -879,28 +944,20 @@ def summarize_ultraroute_split(
     reward_config: str,
     refilled: bool = False,
 ) -> dict[str, Any]:
-    bare_dir = runs_dir / "bare_eval" / reward_config
     ur_root = runs_dir / "ultraroute"
     eval_file = (
         f"pcbworld_eval_refilled_{reward_config}.json"
         if refilled
         else f"pcbworld_eval_{reward_config}.json"
     )
-
-    bare_phi0: dict[str, float] = {}
-    for b in boards:
-        bp = bare_dir / f"{b}.json"
-        if bp.is_file():
-            bd = json.loads(bp.read_text())
-            if bd.get("final_potential") is not None:
-                bare_phi0[b] = float(bd["final_potential"])
+    bare_phi0 = _load_bare_phi0(boards, runs_dir, reward_config)
 
     per_seed_summary: dict[int, dict[str, Any]] = {}
     by_board_rollouts: dict[str, list[dict[str, Any]]] = {b: [] for b in boards}
     failures: list[dict[str, Any]] = []
 
     for idx_s, seed in enumerate(seeds):
-        cp_list, pot_raw_list, pot_true_list, rout_list = [], [], [], []
+        cp_list, pot_t3_list, pot_raw_list, pot_true_list, rout_list = [], [], [], [], []
         drv_list, drv_prom_list, wl_list, via_list = [], [], [], []
         wall_list, cpu_list = [], []
         for b in boards:
@@ -922,6 +979,8 @@ def summarize_ultraroute_split(
                     "success": False,
                     "routability": 0.0,
                     "final_potential": bare_phi0.get(b),
+                    "final_potential_table3": bare_phi0.get(b),
+                    "potential_gain_table3": 0.0,
                     "potential_gain_raw": 0.0,
                     "potential_gain_true_phi0": 0.0,
                     "drv_errors_only_count": None,
@@ -934,12 +993,16 @@ def summarize_ultraroute_split(
                 }
                 cp_list.append(0.0)
                 rout_list.append(0.0)
+                pot_t3_list.append(0.0)
                 pot_raw_list.append(0.0)
                 pot_true_list.append(0.0)
             else:
                 fp = float(ev["final_potential"])
+                adj = _table3_wv_adjustment(ev)
+                fp_t3 = fp + adj
                 raw_gain = float(ev["potential_gain"])
                 true_gain = (fp - bare_phi0[b]) if b in bare_phi0 else raw_gain
+                t3_gain = true_gain + adj
                 rec = {
                     "board_id": b,
                     "seed": seed,
@@ -948,8 +1011,10 @@ def summarize_ultraroute_split(
                     "success": bool(ev["success"]),
                     "routability": float(ev["routability"]),
                     "final_potential": fp,
+                    "final_potential_table3": fp_t3,
                     "initial_potential_raw": float(ev["initial_potential"]),
                     "initial_potential_bare": bare_phi0.get(b),
+                    "potential_gain_table3": t3_gain,
                     "potential_gain_raw": raw_gain,
                     "potential_gain_true_phi0": true_gain,
                     "drv_errors_only_count": int(ev["drv_errors_only_count"]),
@@ -966,6 +1031,7 @@ def summarize_ultraroute_split(
                 }
                 cp_list.append(1.0 if rec["clean_pass"] else 0.0)
                 rout_list.append(rec["routability"])
+                pot_t3_list.append(t3_gain)
                 pot_raw_list.append(raw_gain)
                 pot_true_list.append(true_gain)
                 drv_list.append(float(rec["drv_errors_only_count"]))
@@ -981,6 +1047,7 @@ def summarize_ultraroute_split(
             "n_boards": len(boards),
             "clean_pass_count": int(sum(cp_list)),
             "clean_pass": sum(cp_list) / len(boards),
+            "potential_gain_table3": sum(pot_t3_list) / len(boards),
             "potential_gain_true_phi0": sum(pot_true_list) / len(boards),
             "potential_gain_raw": sum(pot_raw_list) / len(boards),
             "routability": sum(rout_list) / len(boards),
@@ -1018,6 +1085,7 @@ def summarize_ultraroute_split(
         "n_boards": len(boards),
         "clean_pass_count": sum(1 for w in w_list if w["clean_pass"]),
         "clean_pass": sum(1.0 if w["clean_pass"] else 0.0 for w in w_list) / len(boards),
+        "potential_gain_table3": sum(float(w["potential_gain_table3"]) for w in w_list) / len(boards),
         "potential_gain_true_phi0": sum(float(w["potential_gain_true_phi0"]) for w in w_list) / len(boards),
         "potential_gain_raw": sum(float(w["potential_gain_raw"]) for w in w_list) / len(boards),
         "routability": sum(float(w["routability"]) for w in w_list) / len(boards),
@@ -1030,11 +1098,12 @@ def summarize_ultraroute_split(
         "failed_boards_at_k": [w for w in w_list if not w["clean_pass"]],
     }
 
-    # Mean ± sample std across seeds (@1 distribution)
+    # Mean +- sample std across seeds (@1 distribution)
     at_1_mean_std: dict[str, Any] = {}
     if len(seeds) >= 2:
         for metric in (
             "clean_pass",
+            "potential_gain_table3",
             "potential_gain_true_phi0",
             "potential_gain_raw",
             "routability",
@@ -1051,13 +1120,16 @@ def summarize_ultraroute_split(
                     "std": statistics.stdev(vals),
                 }
 
-    return {
+    out_split: dict[str, Any] = {
         "seeds": seeds,
         "per_seed": per_seed_summary,
-        "at_1_mean_std": at_1_mean_std,
         "at_k": at_k,
-        "failures_per_rollout": failures,
     }
+    if at_1_mean_std:
+        out_split["at_1_mean_std"] = at_1_mean_std
+    if len(seeds) > 1:
+        out_split["failures_per_rollout"] = failures
+    return out_split
 
 
 def summarize_freerouting_split(
@@ -1069,14 +1141,7 @@ def summarize_freerouting_split(
     fr_root = runs_dir / "freerouting"
     if not fr_root.is_dir():
         return None
-    bare_dir = runs_dir / "bare_eval" / reward_config
-    bare_phi0: dict[str, float] = {}
-    for b in boards:
-        bp = bare_dir / f"{b}.json"
-        if bp.is_file():
-            bd = json.loads(bp.read_text())
-            if bd.get("final_potential") is not None:
-                bare_phi0[b] = float(bd["final_potential"])
+    bare_phi0 = _load_bare_phi0(boards, runs_dir, reward_config)
 
     rollouts: list[int] = []
     per_rollout_summary: dict[int, dict[str, Any]] = {}
@@ -1095,7 +1160,7 @@ def summarize_freerouting_split(
             continue
         rollouts.append(k)
 
-        cp_l, pot_raw_l, pot_true_l, rout_l = [], [], [], []
+        cp_l, pot_t3_l, pot_raw_l, pot_true_l, rout_l = [], [], [], [], []
         drv_l, drv_p_l, wl_l, via_l, time_l = [], [], [], [], []
         n_timeout = n_error = 0
         for b in boards:
@@ -1104,6 +1169,12 @@ def summarize_freerouting_split(
             t_s = float(r.get("elapsed_routing_s", 0.0))
             time_l.append(t_s)
             ev = r.get("eval_metrics") or {}
+            ev_log_p = Path(r["eval_log"]) if r.get("eval_log") else None
+            if ev_log_p and ev_log_p.is_file():
+                try:
+                    ev = json.loads(ev_log_p.read_text())
+                except (OSError, ValueError):
+                    pass
             if st == "timeout":
                 n_timeout += 1
             elif st != "ok":
@@ -1117,6 +1188,8 @@ def summarize_freerouting_split(
                     "success": False,
                     "routability": 0.0,
                     "final_potential": bare_phi0.get(b),
+                    "final_potential_table3": bare_phi0.get(b),
+                    "potential_gain_table3": 0.0,
                     "potential_gain_raw": 0.0,
                     "potential_gain_true_phi0": 0.0,
                     "drv_errors_only_count": None,
@@ -1128,20 +1201,31 @@ def summarize_freerouting_split(
                 }
                 cp_l.append(0.0)
                 rout_l.append(0.0)
+                pot_t3_l.append(0.0)
                 pot_raw_l.append(0.0)
                 pot_true_l.append(0.0)
             else:
                 fp = float(ev["final_potential"])
-                raw_g = float(ev["potential_gain"])
-                true_g = (fp - bare_phi0[b]) if b in bare_phi0 else raw_g
+                adj = _table3_wv_adjustment(ev)
+                fp_t3 = fp + adj
+                true_g = (fp - bare_phi0[b]) if b in bare_phi0 else float(ev.get("potential_gain", 0.0))
+                raw_g = float(ev["potential_gain"]) if "potential_gain" in ev else true_g
+                t3_g = true_g + adj
+                is_cp = (
+                    bool(ev["clean_pass"])
+                    if "clean_pass" in ev
+                    else bool(ev.get("success") and int(ev["drv_errors_only_count"]) == 0)
+                )
                 rec = {
                     "board_id": b,
                     "rollout_idx": k,
                     "status": st,
-                    "clean_pass": bool(ev["clean_pass"]),
+                    "clean_pass": is_cp,
                     "success": bool(ev["success"]),
                     "routability": float(ev["routability"]),
                     "final_potential": fp,
+                    "final_potential_table3": fp_t3,
+                    "potential_gain_table3": t3_g,
                     "potential_gain_raw": raw_g,
                     "potential_gain_true_phi0": true_g,
                     "drv_errors_only_count": int(ev["drv_errors_only_count"]),
@@ -1153,6 +1237,7 @@ def summarize_freerouting_split(
                 }
                 cp_l.append(1.0 if rec["clean_pass"] else 0.0)
                 rout_l.append(rec["routability"])
+                pot_t3_l.append(t3_g)
                 pot_raw_l.append(raw_g)
                 pot_true_l.append(true_g)
                 drv_l.append(float(rec["drv_errors_only_count"]))
@@ -1165,6 +1250,7 @@ def summarize_freerouting_split(
             "n_boards": len(boards),
             "clean_pass_count": int(sum(cp_l)),
             "clean_pass": sum(cp_l) / len(boards),
+            "potential_gain_table3": sum(pot_t3_l) / len(boards),
             "potential_gain_true_phi0": sum(pot_true_l) / len(boards),
             "potential_gain_raw": sum(pot_raw_l) / len(boards),
             "routability": sum(rout_l) / len(boards),
@@ -1182,13 +1268,23 @@ def summarize_freerouting_split(
 
     winners = [max(by_board[b], key=_winner_key) for b in boards]
     w_drv = [float(w["drv_errors_only_count"]) for w in winners if w["drv_errors_only_count"] is not None]
+    w_drv_p = [float(w["drv_errors_and_promoted_count"]) for w in winners if w["drv_errors_and_promoted_count"] is not None]
     w_wl = [float(w["wirelength_mm"]) for w in winners if w["wirelength_mm"] is not None]
     w_via = [float(w["via_count"]) for w in winners if w["via_count"] is not None]
     mean_t = [sum(r["elapsed_routing_s"] for r in by_board[b]) / len(by_board[b]) for b in boards]
 
     at_1_mean_std: dict[str, Any] = {}
     if len(rollouts) >= 2:
-        for m in ("clean_pass", "potential_gain_true_phi0", "routability", "drv_errors_only", "wirelength_mm", "via_count", "time_s_mean"):
+        for m in (
+            "clean_pass",
+            "potential_gain_table3",
+            "potential_gain_true_phi0",
+            "routability",
+            "drv_errors_only",
+            "wirelength_mm",
+            "via_count",
+            "time_s_mean",
+        ):
             vals = [per_rollout_summary[k][m] for k in rollouts if per_rollout_summary[k][m] is not None]
             if len(vals) >= 2:
                 at_1_mean_std[m] = {"mean": statistics.mean(vals), "std": statistics.stdev(vals)}
@@ -1202,13 +1298,16 @@ def summarize_freerouting_split(
             "n_boards": len(boards),
             "clean_pass_count": sum(1 for w in winners if w["clean_pass"]),
             "clean_pass": sum(1.0 if w["clean_pass"] else 0.0 for w in winners) / len(boards),
+            "potential_gain_table3": sum(float(w["potential_gain_table3"]) for w in winners) / len(boards),
             "potential_gain_true_phi0": sum(float(w["potential_gain_true_phi0"]) for w in winners) / len(boards),
             "potential_gain_raw": sum(float(w["potential_gain_raw"]) for w in winners) / len(boards),
             "routability": sum(float(w["routability"]) for w in winners) / len(boards),
             "drv_errors_only": sum(w_drv) / len(w_drv) if w_drv else None,
+            "drv_errors_and_promoted": sum(w_drv_p) / len(w_drv_p) if w_drv_p else None,
             "wirelength_mm": sum(w_wl) / len(w_wl) if w_wl else None,
             "via_count": sum(w_via) / len(w_via) if w_via else None,
             "time_s_mean": sum(mean_t) / len(boards),
+            "failed_boards_at_k": [w for w in winners if not w["clean_pass"]],
         },
     }
 
@@ -1223,7 +1322,8 @@ def summarize_reference_split(boards: list[str], runs_dir: Path, reward_config: 
         "n_boards": n,
         "clean_pass_count": sum(1 for r in recs if r.get("clean_pass")),
         "clean_pass": sum(1.0 if r.get("clean_pass") else 0.0 for r in recs) / n,
-        "potential_gain": sum(float(r["potential_gain"]) for r in recs) / n,
+        "potential_gain_table3": sum(float(r["potential_gain"]) + _table3_wv_adjustment(r) for r in recs) / n,
+        "potential_gain_no_wv": sum(float(r["potential_gain"]) for r in recs) / n,
         "routability": sum(float(r["routability"]) for r in recs) / n,
         "drv_errors_only": sum(int(r["drv_errors_only_count"]) for r in recs) / n,
         "drv_errors_and_promoted": sum(int(r["drv_errors_and_promoted_count"]) for r in recs) / n,
@@ -1298,7 +1398,6 @@ def cmd_summarize(args: argparse.Namespace) -> int:
         "reference": {},
         "freerouting": {},
         "ultraroute": {},
-        "ultraroute_refilled": {},
         "cross_judge_seed1": {},
     }
     prov_path = runs_dir / "ultraroute" / "provenance.json"
@@ -1309,17 +1408,31 @@ def cmd_summarize(args: argparse.Namespace) -> int:
         summary["d3_build_diff"] = json.loads(diff_path.read_text())
 
     for label, tier, split, ds_tag in [
-        ("D3-A", "easy", "test", "PCBench_D3_easy"),
-        ("D3-B", "medium", "test", "PCBench_D3_medium"),
-        ("D3-C", "hard", "test", "PCBench_D3_hard"),
+        ("D3-A", "easy", "test", "PCBench_easy_test"),
+        ("D3-B", "medium", "test", "PCBench_medium_test"),
+        ("D3-C", "hard", "test", "PCBench_hard_test"),
+        ("medium_all", "medium", "train", None),
+        ("hard_all", "hard", "train", None),
     ]:
         boards = load_d3_boards(pcbworld_root, tier, split)
         ref = summarize_reference_split(boards, runs_dir, args.reward_config)
         if ref:
             summary["reference"][label] = ref
-        fr = summarize_freerouting_split(boards, runs_dir, ds_tag, args.reward_config)
-        if fr:
-            summary["freerouting"][label] = fr
+            print(
+                f"[summarize] Reference {label}: CP={ref['clean_pass']:.4f} "
+                f"Pot(table3)={ref['potential_gain_table3']:.2f} "
+                f"Rout={ref['routability']:.4f} WL={ref['wirelength_mm']:.2f} Via={ref['via_count']:.2f}"
+            )
+        if ds_tag:
+            fr = summarize_freerouting_split(boards, runs_dir, ds_tag, args.reward_config)
+            if fr:
+                summary["freerouting"][label] = fr
+                print(
+                    f"[summarize] Freerouting {label} (k={fr['at_k']['k']}): "
+                    f"@k CP={fr['at_k']['clean_pass']:.4f} "
+                    f"Pot(table3)={fr['at_k']['potential_gain_table3']:.2f} "
+                    f"Rout={fr['at_k']['routability']:.4f} Time={fr['at_k']['time_s_mean']:.2f}s"
+                )
         cj = summarize_cross_judge(boards, 1, runs_dir, args.reward_config)
         if cj:
             summary["cross_judge_seed1"][label] = cj
@@ -1346,8 +1459,8 @@ def cmd_summarize(args: argparse.Namespace) -> int:
             f"[summarize] {label} (seeds={avail_seeds}): "
             f"seed1 CP={summary['ultraroute'][label]['per_seed'][avail_seeds[0]]['clean_pass']:.4f} "
             f"@{len(avail_seeds)} CP={summary['ultraroute'][label]['at_k']['clean_pass']:.4f} "
-            f"Pot(true_phi0)={summary['ultraroute'][label]['at_k']['potential_gain_true_phi0']:.2f} "
-            f"Pot(raw)={summary['ultraroute'][label]['at_k']['potential_gain_raw']:.2f} "
+            f"Pot(table3)={summary['ultraroute'][label]['at_k']['potential_gain_table3']:.2f} "
+            f"Pot(no_wv)={summary['ultraroute'][label]['at_k']['potential_gain_true_phi0']:.2f} "
             f"Rout={summary['ultraroute'][label]['at_k']['routability']:.4f}"
         )
         ref_eval = f"pcbworld_eval_refilled_{args.reward_config}.json"
@@ -1357,13 +1470,9 @@ def cmd_summarize(args: argparse.Namespace) -> int:
             if all((runs_dir / "ultraroute" / f"seed{s}" / b / ref_eval).is_file() for b in boards)
         ]
         if avail_refill:
-            summary["ultraroute_refilled"][label] = summarize_ultraroute_split(
+            summary.setdefault("ultraroute_refilled", {})[label] = summarize_ultraroute_split(
                 boards, avail_refill, runs_dir, args.reward_config, refilled=True
             )
-        if label in ("medium_all", "hard_all"):
-            cj = summarize_cross_judge(boards, 1, runs_dir, args.reward_config)
-            if cj:
-                summary["cross_judge_seed1"][label] = cj
 
     out_json.parent.mkdir(parents=True, exist_ok=True)
     out_json.write_text(json.dumps(summary, indent=2))
@@ -1427,6 +1536,7 @@ def build_parser() -> argparse.ArgumentParser:
     sf.add_argument("--reward-config", default="drc_dense_promoted")
     sf.add_argument("--check-angle", type=int, default=45)
     sf.add_argument("--active-processors", type=int, default=0)
+    sf.add_argument("--rollout-start", type=int, default=0, help="Starting rollout index (default: 0).")
     sf.add_argument("--no-eval", action="store_true")
     sf.set_defaults(func=cmd_freerouting)
 

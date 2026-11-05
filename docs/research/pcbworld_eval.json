@@ -1,0 +1,2700 @@
+{
+  "reward_config": "drc_dense_promoted",
+  "reference": {
+    "D3-A": {
+      "n_boards": 99,
+      "clean_pass_count": 99,
+      "clean_pass": 1.0,
+      "potential_gain_table3": 23.16285572453679,
+      "potential_gain_no_wv": 23.621420989127763,
+      "routability": 1.0,
+      "drv_errors_only": 0.0,
+      "drv_errors_and_promoted": 0.10101010101010101,
+      "wirelength_mm": 170.19172320457648,
+      "via_count": 1.1818181818181819
+    },
+    "D3-B": {
+      "n_boards": 10,
+      "clean_pass_count": 10,
+      "clean_pass": 1.0,
+      "potential_gain_table3": 63.95511834295204,
+      "potential_gain_no_wv": 65.76572921507439,
+      "routability": 1.0,
+      "drv_errors_only": 0.0,
+      "drv_errors_and_promoted": 0.2,
+      "wirelength_mm": 570.3054360611737,
+      "via_count": 6.7
+    },
+    "D3-C": {
+      "n_boards": 10,
+      "clean_pass_count": 9,
+      "clean_pass": 0.9,
+      "potential_gain_table3": 140.6330764254106,
+      "potential_gain_no_wv": 147.81592005725122,
+      "routability": 0.9375886524822695,
+      "drv_errors_only": 8.8,
+      "drv_errors_and_promoted": 10.7,
+      "wirelength_mm": 1391.4218159203099,
+      "via_count": 44.0
+    },
+    "medium_all": {
+      "n_boards": 286,
+      "clean_pass_count": 286,
+      "clean_pass": 1.0,
+      "potential_gain_table3": 62.01796752002668,
+      "potential_gain_no_wv": 63.73888118514621,
+      "routability": 1.0,
+      "drv_errors_only": 0.0,
+      "drv_errors_and_promoted": 0.38461538461538464,
+      "wirelength_mm": 548.3938954968293,
+      "via_count": 6.241258741258742
+    },
+    "hard_all": {
+      "n_boards": 292,
+      "clean_pass_count": 286,
+      "clean_pass": 0.9794520547945206,
+      "potential_gain_table3": 222.4217209406475,
+      "potential_gain_no_wv": 232.53483147617055,
+      "routability": 0.9976382659941412,
+      "drv_errors_only": 0.3458904109589041,
+      "drv_errors_and_promoted": 3.095890410958904,
+      "wirelength_mm": 2440.2881444738546,
+      "via_count": 52.32534246575342
+    }
+  },
+  "freerouting": {
+    "D3-A": {
+      "rollouts": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "per_rollout": {
+        "0": {
+          "n_boards": 99,
+          "clean_pass_count": 81,
+          "clean_pass": 0.8181818181818182,
+          "potential_gain_table3": 22.10510365035959,
+          "potential_gain_true_phi0": 22.497357099181887,
+          "potential_gain_raw": 22.497357099181887,
+          "routability": 0.9784511042532432,
+          "drv_errors_only": 0.3939393939393939,
+          "drv_errors_and_promoted": 0.5959595959595959,
+          "wirelength_mm": 153.19743148185404,
+          "via_count": 0.8585858585858586,
+          "time_s_mean": 22.77736363636364,
+          "timeouts": 0,
+          "errors": 0
+        },
+        "1": {
+          "n_boards": 99,
+          "clean_pass_count": 81,
+          "clean_pass": 0.8181818181818182,
+          "potential_gain_table3": 22.15603725542106,
+          "potential_gain_true_phi0": 22.54736319198266,
+          "potential_gain_raw": 22.54736319198266,
+          "routability": 0.9811997362576685,
+          "drv_errors_only": 0.3434343434343434,
+          "drv_errors_and_promoted": 0.48484848484848486,
+          "wirelength_mm": 152.22862484645708,
+          "via_count": 0.8686868686868687,
+          "time_s_mean": 9.760646464646465,
+          "timeouts": 0,
+          "errors": 0
+        },
+        "2": {
+          "n_boards": 99,
+          "clean_pass_count": 85,
+          "clean_pass": 0.8585858585858586,
+          "potential_gain_table3": 22.311720764343068,
+          "potential_gain_true_phi0": 22.717889809347948,
+          "potential_gain_raw": 22.717889809347948,
+          "routability": 0.9812412335139609,
+          "drv_errors_only": 0.35353535353535354,
+          "drv_errors_and_promoted": 0.5454545454545454,
+          "wirelength_mm": 154.09462351254166,
+          "via_count": 0.9797979797979798,
+          "time_s_mean": 13.780929292929294,
+          "timeouts": 0,
+          "errors": 0
+        },
+        "3": {
+          "n_boards": 99,
+          "clean_pass_count": 84,
+          "clean_pass": 0.8484848484848485,
+          "potential_gain_table3": 22.34640744020604,
+          "potential_gain_true_phi0": 22.743001065935744,
+          "potential_gain_raw": 22.743001065935744,
+          "routability": 0.9845209223997102,
+          "drv_errors_only": 0.30303030303030304,
+          "drv_errors_and_promoted": 0.47474747474747475,
+          "wirelength_mm": 152.84226741030676,
+          "via_count": 0.9090909090909091,
+          "time_s_mean": 9.058383838383838,
+          "timeouts": 0,
+          "errors": 0
+        },
+        "4": {
+          "n_boards": 99,
+          "clean_pass_count": 86,
+          "clean_pass": 0.8686868686868687,
+          "potential_gain_table3": 22.188226554445873,
+          "potential_gain_true_phi0": 22.580520372979425,
+          "potential_gain_raw": 22.580520372979425,
+          "routability": 0.9763571445389627,
+          "drv_errors_only": 0.41414141414141414,
+          "drv_errors_and_promoted": 0.6262626262626263,
+          "wirelength_mm": 152.71256583243206,
+          "via_count": 0.8686868686868687,
+          "time_s_mean": 8.823989898989899,
+          "timeouts": 0,
+          "errors": 0
+        }
+      },
+      "at_1_mean_std": {
+        "clean_pass": {
+          "mean": 0.8424242424242424,
+          "std": 0.023254271582265312
+        },
+        "potential_gain_table3": {
+          "mean": 22.221499132955127,
+          "std": 0.10329842478249245
+        },
+        "potential_gain_true_phi0": {
+          "mean": 22.617226307885534,
+          "std": 0.10787636222255835
+        },
+        "routability": {
+          "mean": 0.9803540281927091,
+          "std": 0.003100869281609265
+        },
+        "drv_errors_only": {
+          "mean": 0.3616161616161616,
+          "std": 0.0436802996170498
+        },
+        "wirelength_mm": {
+          "mean": 153.0151026167183,
+          "std": 0.696160358164265
+        },
+        "via_count": {
+          "mean": 0.896969696969697,
+          "std": 0.05020110561530979
+        },
+        "time_s_mean": {
+          "mean": 12.840262626262627,
+          "std": 5.906520120842264
+        }
+      },
+      "at_k": {
+        "k": 5,
+        "n_boards": 99,
+        "clean_pass_count": 91,
+        "clean_pass": 0.9191919191919192,
+        "potential_gain_table3": 22.95769595028856,
+        "potential_gain_true_phi0": 23.350849599952962,
+        "potential_gain_raw": 23.350849599952962,
+        "routability": 0.9947729459093095,
+        "drv_errors_only": 0.15151515151515152,
+        "drv_errors_and_promoted": 0.15151515151515152,
+        "wirelength_mm": 153.14248139785522,
+        "via_count": 0.8686868686868687,
+        "time_s_mean": 12.840262626262625,
+        "failed_boards_at_k": [
+          {
+            "board_id": "0021_RPi-PWM-Fan-interface_RPi PWM Fan interface",
+            "rollout_idx": 3,
+            "status": "ok",
+            "clean_pass": false,
+            "success": true,
+            "routability": 1.0,
+            "final_potential": 1.0171968971826013,
+            "final_potential_table3": 0.8784537041927802,
+            "potential_gain_table3": 17.393166395065307,
+            "potential_gain_raw": 17.53190958805513,
+            "potential_gain_true_phi0": 17.53190958805513,
+            "drv_errors_only_count": 1,
+            "drv_errors_and_promoted_count": 1,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 5,
+                "error_type": "Clearance violation",
+                "count": 1
+              }
+            ],
+            "wirelength_mm": 69.37159649491055,
+            "via_count": 0,
+            "elapsed_routing_s": 3.368
+          },
+          {
+            "board_id": "0026_PCB_constant_current_ac_hv",
+            "rollout_idx": 1,
+            "status": "ok",
+            "clean_pass": false,
+            "success": true,
+            "routability": 1.0,
+            "final_potential": -1.232143681292632,
+            "final_potential_table3": -1.504590122825896,
+            "potential_gain_table3": 14.367214091870583,
+            "potential_gain_raw": 14.639660533403847,
+            "potential_gain_true_phi0": 14.639660533403847,
+            "drv_errors_only_count": 3,
+            "drv_errors_and_promoted_count": 3,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 5,
+                "error_type": "Clearance violation",
+                "count": 2
+              },
+              {
+                "severity": "ERROR",
+                "error_code": 2,
+                "error_type": "Items shorting two nets",
+                "count": 1
+              }
+            ],
+            "wirelength_mm": 136.22322076663198,
+            "via_count": 0,
+            "elapsed_routing_s": 4.487
+          },
+          {
+            "board_id": "0034_NavigationThing_NavigationThingBacklight",
+            "rollout_idx": 1,
+            "status": "ok",
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.8571428571428571,
+            "final_potential": -4.8903717578961645,
+            "final_potential_table3": -4.989368748138529,
+            "potential_gain_table3": 16.218491123293944,
+            "potential_gain_raw": 16.31748811353631,
+            "potential_gain_true_phi0": 16.31748811353631,
+            "drv_errors_only_count": 2,
+            "drv_errors_and_promoted_count": 2,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 2
+              }
+            ],
+            "wirelength_mm": 49.498495121182266,
+            "via_count": 0,
+            "elapsed_routing_s": 38.055
+          },
+          {
+            "board_id": "0054_induction-hob_temperature-sensor",
+            "rollout_idx": 3,
+            "status": "ok",
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.8666666666666667,
+            "final_potential": -4.8903717578961645,
+            "final_potential_table3": -5.5780527534138535,
+            "potential_gain_table3": 18.30378355159029,
+            "potential_gain_raw": 18.991464547107977,
+            "potential_gain_true_phi0": 18.991464547107977,
+            "drv_errors_only_count": 2,
+            "drv_errors_and_promoted_count": 2,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 2
+              }
+            ],
+            "wirelength_mm": 43.84049775884454,
+            "via_count": 6,
+            "elapsed_routing_s": 19.132
+          },
+          {
+            "board_id": "0059_marlin-neopixel-bridge_ATtiny85_Marneo",
+            "rollout_idx": 1,
+            "status": "ok",
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.9375,
+            "final_potential": -2.6218604324326575,
+            "final_potential_table3": -2.863056922340643,
+            "potential_gain_table3": 21.97795738814325,
+            "potential_gain_raw": 22.219153878051234,
+            "potential_gain_true_phi0": 22.219153878051234,
+            "drv_errors_only_count": 1,
+            "drv_errors_and_promoted_count": 1,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 1
+              }
+            ],
+            "wirelength_mm": 120.59824495399266,
+            "via_count": 0,
+            "elapsed_routing_s": 43.514
+          },
+          {
+            "board_id": "0066_ESP8266-WS2811-LEDs_ws2811controller_panels",
+            "rollout_idx": 3,
+            "status": "ok",
+            "clean_pass": false,
+            "success": true,
+            "routability": 1.0,
+            "final_potential": 0.16989903679539786,
+            "final_potential_table3": -0.6841047108592604,
+            "potential_gain_table3": 24.03373544791333,
+            "potential_gain_raw": 24.88773919556799,
+            "potential_gain_true_phi0": 24.88773919556799,
+            "drv_errors_only_count": 3,
+            "drv_errors_and_promoted_count": 3,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 2,
+                "error_type": "Items shorting two nets",
+                "count": 2
+              },
+              {
+                "severity": "ERROR",
+                "error_code": 5,
+                "error_type": "Clearance violation",
+                "count": 1
+              }
+            ],
+            "wirelength_mm": 177.0018738273291,
+            "via_count": 5,
+            "elapsed_routing_s": 3.789
+          },
+          {
+            "board_id": "0078_Hardware_Playground_buck_led_driver",
+            "rollout_idx": 2,
+            "status": "ok",
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.8666666666666667,
+            "final_potential": -4.8903717578961645,
+            "final_potential_table3": -5.299238265090144,
+            "potential_gain_table3": 19.552133286306965,
+            "potential_gain_raw": 19.960999793500946,
+            "potential_gain_true_phi0": 19.960999793500946,
+            "drv_errors_only_count": 2,
+            "drv_errors_and_promoted_count": 2,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 2
+              }
+            ],
+            "wirelength_mm": 104.43325359699013,
+            "via_count": 2,
+            "elapsed_routing_s": 98.308
+          },
+          {
+            "board_id": "0086_BB-PWR-8009_BB-PWR-8009_revA",
+            "rollout_idx": 1,
+            "status": "ok",
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.9545454545454546,
+            "final_potential": -2.6218604324326575,
+            "final_potential_table3": -3.1642519599787255,
+            "potential_gain_table3": 28.682665241069007,
+            "potential_gain_raw": 29.225056768615076,
+            "potential_gain_true_phi0": 29.225056768615076,
+            "drv_errors_only_count": 1,
+            "drv_errors_and_promoted_count": 1,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 1
+              }
+            ],
+            "wirelength_mm": 71.19576377303392,
+            "via_count": 4,
+            "elapsed_routing_s": 25.498
+          }
+        ]
+      }
+    },
+    "D3-B": {
+      "rollouts": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "per_rollout": {
+        "0": {
+          "n_boards": 10,
+          "clean_pass_count": 6,
+          "clean_pass": 0.6,
+          "potential_gain_table3": 61.30587383661916,
+          "potential_gain_true_phi0": 62.77539220718211,
+          "potential_gain_raw": 62.77539220718211,
+          "routability": 0.9898261278195489,
+          "drv_errors_only": 0.7,
+          "drv_errors_and_promoted": 1.2,
+          "wirelength_mm": 524.7591852814752,
+          "via_count": 4.2,
+          "time_s_mean": 34.7791,
+          "timeouts": 0,
+          "errors": 0
+        },
+        "1": {
+          "n_boards": 10,
+          "clean_pass_count": 8,
+          "clean_pass": 0.8,
+          "potential_gain_table3": 62.503549354247795,
+          "potential_gain_true_phi0": 63.90534562769197,
+          "potential_gain_raw": 63.90534562769197,
+          "routability": 0.9868421052631579,
+          "drv_errors_only": 0.5,
+          "drv_errors_and_promoted": 0.8,
+          "wirelength_mm": 525.8981367220897,
+          "via_count": 3.5,
+          "time_s_mean": 10.7636,
+          "timeouts": 0,
+          "errors": 0
+        },
+        "2": {
+          "n_boards": 10,
+          "clean_pass_count": 7,
+          "clean_pass": 0.7,
+          "potential_gain_table3": 62.135567657931134,
+          "potential_gain_true_phi0": 63.53192090486566,
+          "potential_gain_raw": 63.53192090486566,
+          "routability": 0.9902870813397129,
+          "drv_errors_only": 0.4,
+          "drv_errors_and_promoted": 0.8,
+          "wirelength_mm": 533.1766234672666,
+          "via_count": 3.3,
+          "time_s_mean": 29.8859,
+          "timeouts": 0,
+          "errors": 0
+        },
+        "3": {
+          "n_boards": 10,
+          "clean_pass_count": 9,
+          "clean_pass": 0.9,
+          "potential_gain_table3": 63.62284674446401,
+          "potential_gain_true_phi0": 65.08821683485614,
+          "potential_gain_raw": 65.08821683485614,
+          "routability": 1.0,
+          "drv_errors_only": 0.2,
+          "drv_errors_and_promoted": 1.1,
+          "wirelength_mm": 532.6850451960679,
+          "via_count": 4.0,
+          "time_s_mean": 6.7039,
+          "timeouts": 0,
+          "errors": 0
+        },
+        "4": {
+          "n_boards": 10,
+          "clean_pass_count": 9,
+          "clean_pass": 0.9,
+          "potential_gain_table3": 62.91037121916802,
+          "potential_gain_true_phi0": 64.37049361265336,
+          "potential_gain_raw": 64.37049361265336,
+          "routability": 0.9921052631578947,
+          "drv_errors_only": 0.5,
+          "drv_errors_and_promoted": 1.1,
+          "wirelength_mm": 530.0611967426732,
+          "via_count": 4.0,
+          "time_s_mean": 8.0304,
+          "timeouts": 0,
+          "errors": 0
+        }
+      },
+      "at_1_mean_std": {
+        "clean_pass": {
+          "mean": 0.78,
+          "std": 0.130384048104053
+        },
+        "potential_gain_table3": {
+          "mean": 62.495641762486024,
+          "std": 0.8642706754593366
+        },
+        "potential_gain_true_phi0": {
+          "mean": 63.93427383744985,
+          "std": 0.8700005014642999
+        },
+        "routability": {
+          "mean": 0.9918121155160629,
+          "std": 0.00495222844146782
+        },
+        "drv_errors_only": {
+          "mean": 0.46,
+          "std": 0.18165902124584948
+        },
+        "wirelength_mm": {
+          "mean": 529.3160374819146,
+          "std": 3.8489137114540584
+        },
+        "via_count": {
+          "mean": 3.8,
+          "std": 0.3807886552931955
+        },
+        "time_s_mean": {
+          "mean": 18.03258,
+          "std": 13.249224436434005
+        }
+      },
+      "at_k": {
+        "k": 5,
+        "n_boards": 10,
+        "clean_pass_count": 9,
+        "clean_pass": 0.9,
+        "potential_gain_table3": 64.51643790518683,
+        "potential_gain_true_phi0": 65.86381214037556,
+        "potential_gain_raw": 65.86381214037556,
+        "routability": 1.0,
+        "drv_errors_only": 0.2,
+        "drv_errors_and_promoted": 0.2,
+        "wirelength_mm": 528.687117594368,
+        "via_count": 2.9,
+        "time_s_mean": 18.03258,
+        "failed_boards_at_k": [
+          {
+            "board_id": "0232_ATtiny461Breakout_ATTiny461DevBoard",
+            "rollout_idx": 3,
+            "status": "ok",
+            "clean_pass": false,
+            "success": true,
+            "routability": 1.0,
+            "final_potential": 1.1814999484738777,
+            "final_potential_table3": 0.37005650416357194,
+            "potential_gain_table3": 57.5318229756313,
+            "potential_gain_raw": 58.34326641994161,
+            "potential_gain_true_phi0": 58.34326641994161,
+            "drv_errors_only_count": 2,
+            "drv_errors_and_promoted_count": 2,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 5,
+                "error_type": "Clearance violation",
+                "count": 2
+              }
+            ],
+            "wirelength_mm": 305.72172215515286,
+            "via_count": 2,
+            "elapsed_routing_s": 4.916
+          }
+        ]
+      }
+    }
+  },
+  "ultraroute": {
+    "D3-A": {
+      "seeds": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "per_seed": {
+        "1": {
+          "n_boards": 99,
+          "clean_pass_count": 98,
+          "clean_pass": 0.98989898989899,
+          "potential_gain_table3": 23.263300972337895,
+          "potential_gain_true_phi0": 23.638262229390197,
+          "potential_gain_raw": 23.638262229390197,
+          "routability": 0.9949494949494949,
+          "drv_errors_only": 0.030303030303030304,
+          "drv_errors_and_promoted": 0.030303030303030304,
+          "wirelength_mm": 126.87456792009067,
+          "via_count": 1.2121212121212122,
+          "wall_seconds_mean": 0.2980808080808081,
+          "cpu_seconds_mean": 0.2927272727272727,
+          "wall_seconds_total": 29.51,
+          "cpu_seconds_total": 28.98
+        },
+        "2": {
+          "n_boards": 99,
+          "clean_pass_count": 98,
+          "clean_pass": 0.98989898989899,
+          "potential_gain_table3": 23.27372173149565,
+          "potential_gain_true_phi0": 23.638262229390197,
+          "potential_gain_raw": 23.638262229390197,
+          "routability": 0.9949494949494949,
+          "drv_errors_only": 0.030303030303030304,
+          "drv_errors_and_promoted": 0.030303030303030304,
+          "wirelength_mm": 126.71469339171561,
+          "via_count": 1.1111111111111112,
+          "wall_seconds_mean": 0.30464646464646467,
+          "cpu_seconds_mean": 0.2994949494949495,
+          "wall_seconds_total": 30.16,
+          "cpu_seconds_total": 29.65
+        },
+        "3": {
+          "n_boards": 99,
+          "clean_pass_count": 97,
+          "clean_pass": 0.9797979797979798,
+          "potential_gain_table3": 23.23742133115049,
+          "potential_gain_true_phi0": 23.609066555068015,
+          "potential_gain_raw": 23.609066555068015,
+          "routability": 0.9949494949494949,
+          "drv_errors_only": 0.04040404040404041,
+          "drv_errors_and_promoted": 0.04040404040404041,
+          "wirelength_mm": 126.73170286785081,
+          "via_count": 1.1818181818181819,
+          "wall_seconds_mean": 0.30292929292929294,
+          "cpu_seconds_mean": 0.2971717171717172,
+          "wall_seconds_total": 29.99,
+          "cpu_seconds_total": 29.42
+        },
+        "4": {
+          "n_boards": 99,
+          "clean_pass_count": 98,
+          "clean_pass": 0.98989898989899,
+          "potential_gain_table3": 23.266330986103952,
+          "potential_gain_true_phi0": 23.638262229390197,
+          "potential_gain_raw": 23.638262229390197,
+          "routability": 0.9949494949494949,
+          "drv_errors_only": 0.030303030303030304,
+          "drv_errors_and_promoted": 0.030303030303030304,
+          "wirelength_mm": 126.87471255221308,
+          "via_count": 1.1818181818181819,
+          "wall_seconds_mean": 0.3074747474747475,
+          "cpu_seconds_mean": 0.30242424242424243,
+          "wall_seconds_total": 30.44,
+          "cpu_seconds_total": 29.94
+        },
+        "5": {
+          "n_boards": 99,
+          "clean_pass_count": 98,
+          "clean_pass": 0.98989898989899,
+          "potential_gain_table3": 23.27420973160781,
+          "potential_gain_true_phi0": 23.638262229390197,
+          "potential_gain_raw": 23.638262229390197,
+          "routability": 0.9949494949494949,
+          "drv_errors_only": 0.030303030303030304,
+          "drv_errors_and_promoted": 0.030303030303030304,
+          "wirelength_mm": 127.48079434573778,
+          "via_count": 1.0909090909090908,
+          "wall_seconds_mean": 0.3001010101010101,
+          "cpu_seconds_mean": 0.29535353535353537,
+          "wall_seconds_total": 29.71,
+          "cpu_seconds_total": 29.240000000000002
+        }
+      },
+      "at_k": {
+        "k": 5,
+        "n_boards": 99,
+        "clean_pass_count": 98,
+        "clean_pass": 0.98989898989899,
+        "potential_gain_table3": 23.292764414642424,
+        "potential_gain_true_phi0": 23.638262229390197,
+        "potential_gain_raw": 23.638262229390197,
+        "routability": 0.9949494949494949,
+        "drv_errors_only": 0.030303030303030304,
+        "drv_errors_and_promoted": 0.030303030303030304,
+        "wirelength_mm": 126.78931141428957,
+        "via_count": 0.9191919191919192,
+        "wall_seconds_mean": 0.30264646464646466,
+        "cpu_seconds_mean": 0.29743434343434344,
+        "failed_boards_at_k": [
+          {
+            "board_id": "0068_AVR-ISP_pogo-plug_1.27mm_AVR-ISP_pogo-plug_1.27mm",
+            "seed": 4,
+            "rollout_idx": 3,
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.5,
+            "final_potential": -6.965267519946959,
+            "final_potential_table3": -7.008834233227742,
+            "initial_potential_raw": -12.591673732008658,
+            "initial_potential_bare": -12.591673732008658,
+            "potential_gain_table3": 5.582839498780916,
+            "potential_gain_raw": 5.626406212061699,
+            "potential_gain_true_phi0": 5.626406212061699,
+            "drv_errors_only_count": 3,
+            "drv_errors_and_promoted_count": 3,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 3
+              }
+            ],
+            "drv_promoted_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 3
+              }
+            ],
+            "wirelength_mm": 21.78335664039136,
+            "via_count": 0,
+            "wall_seconds": 0.77,
+            "cpu_seconds": 0.76,
+            "time_limited": [],
+            "hard_deadline": false,
+            "router_opens": 3
+          }
+        ]
+      },
+      "at_1_mean_std": {
+        "clean_pass": {
+          "mean": 0.9878787878787879,
+          "std": 0.00451730904545415
+        },
+        "potential_gain_table3": {
+          "mean": 23.26299695053916,
+          "std": 0.015050481017012202
+        },
+        "potential_gain_true_phi0": {
+          "mean": 23.63242309452576,
+          "std": 0.01305670248666869
+        },
+        "potential_gain_raw": {
+          "mean": 23.63242309452576,
+          "std": 0.01305670248666869
+        },
+        "routability": {
+          "mean": 0.9949494949494949,
+          "std": 0.0
+        },
+        "drv_errors_only": {
+          "mean": 0.03232323232323232,
+          "std": 0.004517309045454122
+        },
+        "wirelength_mm": {
+          "mean": 126.9352942155216,
+          "std": 0.3142619819760834
+        },
+        "via_count": {
+          "mean": 1.1555555555555557,
+          "std": 0.051801541030133715
+        },
+        "wall_seconds_mean": {
+          "mean": 0.30264646464646466,
+          "std": 0.0036985424705536615
+        },
+        "cpu_seconds_mean": {
+          "mean": 0.29743434343434344,
+          "std": 0.003731636327763656
+        }
+      },
+      "failures_per_rollout": [
+        {
+          "board_id": "0068_AVR-ISP_pogo-plug_1.27mm_AVR-ISP_pogo-plug_1.27mm",
+          "seed": 1,
+          "rollout_idx": 0,
+          "clean_pass": false,
+          "success": false,
+          "routability": 0.5,
+          "final_potential": -6.965267519946959,
+          "final_potential_table3": -7.011803458366915,
+          "initial_potential_raw": -12.591673732008658,
+          "initial_potential_bare": -12.591673732008658,
+          "potential_gain_table3": 5.579870273641744,
+          "potential_gain_raw": 5.626406212061699,
+          "potential_gain_true_phi0": 5.626406212061699,
+          "drv_errors_only_count": 3,
+          "drv_errors_and_promoted_count": 3,
+          "drv_errors_by_type": [
+            {
+              "severity": "ERROR",
+              "error_code": 1,
+              "error_type": "Missing connection between items",
+              "count": 3
+            }
+          ],
+          "drv_promoted_by_type": [
+            {
+              "severity": "ERROR",
+              "error_code": 1,
+              "error_type": "Missing connection between items",
+              "count": 3
+            }
+          ],
+          "wirelength_mm": 23.267969209977586,
+          "via_count": 0,
+          "wall_seconds": 0.77,
+          "cpu_seconds": 0.76,
+          "time_limited": [],
+          "hard_deadline": false,
+          "router_opens": 3
+        },
+        {
+          "board_id": "0068_AVR-ISP_pogo-plug_1.27mm_AVR-ISP_pogo-plug_1.27mm",
+          "seed": 2,
+          "rollout_idx": 1,
+          "clean_pass": false,
+          "success": false,
+          "routability": 0.5,
+          "final_potential": -6.965267519946959,
+          "final_potential_table3": -7.011762011669547,
+          "initial_potential_raw": -12.591673732008658,
+          "initial_potential_bare": -12.591673732008658,
+          "potential_gain_table3": 5.579911720339111,
+          "potential_gain_raw": 5.626406212061699,
+          "potential_gain_true_phi0": 5.626406212061699,
+          "drv_errors_only_count": 3,
+          "drv_errors_and_promoted_count": 3,
+          "drv_errors_by_type": [
+            {
+              "severity": "ERROR",
+              "error_code": 1,
+              "error_type": "Missing connection between items",
+              "count": 3
+            }
+          ],
+          "drv_promoted_by_type": [
+            {
+              "severity": "ERROR",
+              "error_code": 1,
+              "error_type": "Missing connection between items",
+              "count": 3
+            }
+          ],
+          "wirelength_mm": 23.247245861294132,
+          "via_count": 0,
+          "wall_seconds": 0.76,
+          "cpu_seconds": 0.76,
+          "time_limited": [],
+          "hard_deadline": false,
+          "router_opens": 3
+        },
+        {
+          "board_id": "0052_breakout-boards_50-to-100",
+          "seed": 3,
+          "rollout_idx": 2,
+          "clean_pass": false,
+          "success": true,
+          "routability": 1.0,
+          "final_potential": -0.40546510810816416,
+          "final_potential_table3": -0.9999931146547514,
+          "initial_potential_raw": -19.429929488765808,
+          "initial_potential_bare": -19.429929488765808,
+          "potential_gain_table3": 18.42993637411106,
+          "potential_gain_raw": 19.024464380657644,
+          "potential_gain_true_phi0": 19.024464380657644,
+          "drv_errors_only_count": 1,
+          "drv_errors_and_promoted_count": 1,
+          "drv_errors_by_type": [
+            {
+              "severity": "ERROR",
+              "error_code": 5,
+              "error_type": "Clearance violation",
+              "count": 1
+            }
+          ],
+          "drv_promoted_by_type": [
+            {
+              "severity": "ERROR",
+              "error_code": 5,
+              "error_type": "Clearance violation",
+              "count": 1
+            }
+          ],
+          "wirelength_mm": 97.26400327329358,
+          "via_count": 4,
+          "wall_seconds": 0.06,
+          "cpu_seconds": 0.05,
+          "time_limited": [],
+          "hard_deadline": false,
+          "router_opens": 0
+        },
+        {
+          "board_id": "0068_AVR-ISP_pogo-plug_1.27mm_AVR-ISP_pogo-plug_1.27mm",
+          "seed": 3,
+          "rollout_idx": 2,
+          "clean_pass": false,
+          "success": false,
+          "routability": 0.5,
+          "final_potential": -6.965267519946959,
+          "final_potential_table3": -7.011762011669547,
+          "initial_potential_raw": -12.591673732008658,
+          "initial_potential_bare": -12.591673732008658,
+          "potential_gain_table3": 5.579911720339111,
+          "potential_gain_raw": 5.626406212061699,
+          "potential_gain_true_phi0": 5.626406212061699,
+          "drv_errors_only_count": 3,
+          "drv_errors_and_promoted_count": 3,
+          "drv_errors_by_type": [
+            {
+              "severity": "ERROR",
+              "error_code": 1,
+              "error_type": "Missing connection between items",
+              "count": 3
+            }
+          ],
+          "drv_promoted_by_type": [
+            {
+              "severity": "ERROR",
+              "error_code": 1,
+              "error_type": "Missing connection between items",
+              "count": 3
+            }
+          ],
+          "wirelength_mm": 23.247245861294132,
+          "via_count": 0,
+          "wall_seconds": 0.77,
+          "cpu_seconds": 0.77,
+          "time_limited": [],
+          "hard_deadline": false,
+          "router_opens": 3
+        },
+        {
+          "board_id": "0068_AVR-ISP_pogo-plug_1.27mm_AVR-ISP_pogo-plug_1.27mm",
+          "seed": 4,
+          "rollout_idx": 3,
+          "clean_pass": false,
+          "success": false,
+          "routability": 0.5,
+          "final_potential": -6.965267519946959,
+          "final_potential_table3": -7.008834233227742,
+          "initial_potential_raw": -12.591673732008658,
+          "initial_potential_bare": -12.591673732008658,
+          "potential_gain_table3": 5.582839498780916,
+          "potential_gain_raw": 5.626406212061699,
+          "potential_gain_true_phi0": 5.626406212061699,
+          "drv_errors_only_count": 3,
+          "drv_errors_and_promoted_count": 3,
+          "drv_errors_by_type": [
+            {
+              "severity": "ERROR",
+              "error_code": 1,
+              "error_type": "Missing connection between items",
+              "count": 3
+            }
+          ],
+          "drv_promoted_by_type": [
+            {
+              "severity": "ERROR",
+              "error_code": 1,
+              "error_type": "Missing connection between items",
+              "count": 3
+            }
+          ],
+          "wirelength_mm": 21.78335664039136,
+          "via_count": 0,
+          "wall_seconds": 0.77,
+          "cpu_seconds": 0.76,
+          "time_limited": [],
+          "hard_deadline": false,
+          "router_opens": 3
+        },
+        {
+          "board_id": "0068_AVR-ISP_pogo-plug_1.27mm_AVR-ISP_pogo-plug_1.27mm",
+          "seed": 5,
+          "rollout_idx": 4,
+          "clean_pass": false,
+          "success": false,
+          "routability": 0.5,
+          "final_potential": -6.965267519946959,
+          "final_potential_table3": -7.011762011669547,
+          "initial_potential_raw": -12.591673732008658,
+          "initial_potential_bare": -12.591673732008658,
+          "potential_gain_table3": 5.579911720339111,
+          "potential_gain_raw": 5.626406212061699,
+          "potential_gain_true_phi0": 5.626406212061699,
+          "drv_errors_only_count": 3,
+          "drv_errors_and_promoted_count": 3,
+          "drv_errors_by_type": [
+            {
+              "severity": "ERROR",
+              "error_code": 1,
+              "error_type": "Missing connection between items",
+              "count": 3
+            }
+          ],
+          "drv_promoted_by_type": [
+            {
+              "severity": "ERROR",
+              "error_code": 1,
+              "error_type": "Missing connection between items",
+              "count": 3
+            }
+          ],
+          "wirelength_mm": 23.247245861294132,
+          "via_count": 0,
+          "wall_seconds": 0.77,
+          "cpu_seconds": 0.76,
+          "time_limited": [],
+          "hard_deadline": false,
+          "router_opens": 3
+        }
+      ]
+    },
+    "D3-B": {
+      "seeds": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "per_seed": {
+        "1": {
+          "n_boards": 10,
+          "clean_pass_count": 10,
+          "clean_pass": 1.0,
+          "potential_gain_table3": 64.49848674193876,
+          "potential_gain_true_phi0": 66.054766390864,
+          "potential_gain_raw": 66.054766390864,
+          "routability": 1.0,
+          "drv_errors_only": 0.0,
+          "drv_errors_and_promoted": 0.0,
+          "wirelength_mm": 453.13982446262554,
+          "via_count": 6.5,
+          "wall_seconds_mean": 1.866,
+          "cpu_seconds_mean": 1.861,
+          "wall_seconds_total": 18.66,
+          "cpu_seconds_total": 18.61
+        },
+        "2": {
+          "n_boards": 10,
+          "clean_pass_count": 10,
+          "clean_pass": 1.0,
+          "potential_gain_table3": 64.46481582410166,
+          "potential_gain_true_phi0": 66.054766390864,
+          "potential_gain_raw": 66.054766390864,
+          "routability": 1.0,
+          "drv_errors_only": 0.0,
+          "drv_errors_and_promoted": 0.0,
+          "wirelength_mm": 454.9752833811737,
+          "via_count": 6.8,
+          "wall_seconds_mean": 1.8030000000000002,
+          "cpu_seconds_mean": 1.795,
+          "wall_seconds_total": 18.03,
+          "cpu_seconds_total": 17.95
+        },
+        "3": {
+          "n_boards": 10,
+          "clean_pass_count": 10,
+          "clean_pass": 1.0,
+          "potential_gain_table3": 64.44398734542065,
+          "potential_gain_true_phi0": 66.054766390864,
+          "potential_gain_raw": 66.054766390864,
+          "routability": 1.0,
+          "drv_errors_only": 0.0,
+          "drv_errors_and_promoted": 0.0,
+          "wirelength_mm": 455.389522721675,
+          "via_count": 7.0,
+          "wall_seconds_mean": 1.8719999999999999,
+          "cpu_seconds_mean": 1.866,
+          "wall_seconds_total": 18.72,
+          "cpu_seconds_total": 18.66
+        },
+        "4": {
+          "n_boards": 10,
+          "clean_pass_count": 10,
+          "clean_pass": 1.0,
+          "potential_gain_table3": 64.48407901576931,
+          "potential_gain_true_phi0": 66.054766390864,
+          "potential_gain_raw": 66.054766390864,
+          "routability": 1.0,
+          "drv_errors_only": 0.0,
+          "drv_errors_and_promoted": 0.0,
+          "wirelength_mm": 450.3436875473508,
+          "via_count": 6.7,
+          "wall_seconds_mean": 1.826,
+          "cpu_seconds_mean": 1.818,
+          "wall_seconds_total": 18.26,
+          "cpu_seconds_total": 18.18
+        },
+        "5": {
+          "n_boards": 10,
+          "clean_pass_count": 10,
+          "clean_pass": 1.0,
+          "potential_gain_table3": 64.47550876522905,
+          "potential_gain_true_phi0": 66.054766390864,
+          "potential_gain_raw": 66.054766390864,
+          "routability": 1.0,
+          "drv_errors_only": 0.0,
+          "drv_errors_and_promoted": 0.0,
+          "wirelength_mm": 449.62881281747457,
+          "via_count": 6.8,
+          "wall_seconds_mean": 1.781,
+          "cpu_seconds_mean": 1.775,
+          "wall_seconds_total": 17.81,
+          "cpu_seconds_total": 17.75
+        }
+      },
+      "at_k": {
+        "k": 5,
+        "n_boards": 10,
+        "clean_pass_count": 10,
+        "clean_pass": 1.0,
+        "potential_gain_table3": 64.60066217371373,
+        "potential_gain_true_phi0": 66.054766390864,
+        "potential_gain_raw": 66.054766390864,
+        "routability": 1.0,
+        "drv_errors_only": 0.0,
+        "drv_errors_and_promoted": 0.0,
+        "wirelength_mm": 452.05210857514004,
+        "via_count": 5.5,
+        "wall_seconds_mean": 1.8296,
+        "cpu_seconds_mean": 1.823,
+        "failed_boards_at_k": []
+      },
+      "at_1_mean_std": {
+        "clean_pass": {
+          "mean": 1.0,
+          "std": 0.0
+        },
+        "potential_gain_table3": {
+          "mean": 64.4733755384919,
+          "std": 0.020534253231644727
+        },
+        "potential_gain_true_phi0": {
+          "mean": 66.054766390864,
+          "std": 0.0
+        },
+        "potential_gain_raw": {
+          "mean": 66.054766390864,
+          "std": 0.0
+        },
+        "routability": {
+          "mean": 1.0,
+          "std": 0.0
+        },
+        "drv_errors_only": {
+          "mean": 0.0,
+          "std": 0.0
+        },
+        "wirelength_mm": {
+          "mean": 452.69542618605993,
+          "std": 2.6262229046067156
+        },
+        "via_count": {
+          "mean": 6.76,
+          "std": 0.18165902124584946
+        },
+        "wall_seconds_mean": {
+          "mean": 1.8296000000000001,
+          "std": 0.03938654592624237
+        },
+        "cpu_seconds_mean": {
+          "mean": 1.823,
+          "std": 0.040018745607527544
+        }
+      },
+      "failures_per_rollout": []
+    },
+    "D3-C": {
+      "seeds": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "per_seed": {
+        "1": {
+          "n_boards": 10,
+          "clean_pass_count": 10,
+          "clean_pass": 1.0,
+          "potential_gain_table3": 153.66946255184294,
+          "potential_gain_true_phi0": 160.04853182828128,
+          "potential_gain_raw": 160.04853182828128,
+          "routability": 1.0,
+          "drv_errors_only": 0.0,
+          "drv_errors_and_promoted": 0.0,
+          "wirelength_mm": 1129.5346382191733,
+          "via_count": 41.2,
+          "wall_seconds_mean": 10.214,
+          "cpu_seconds_mean": 10.206,
+          "wall_seconds_total": 102.14,
+          "cpu_seconds_total": 102.06
+        },
+        "2": {
+          "n_boards": 10,
+          "clean_pass_count": 10,
+          "clean_pass": 1.0,
+          "potential_gain_table3": 153.9003129518348,
+          "potential_gain_true_phi0": 159.88634578503803,
+          "potential_gain_raw": 159.88634578503803,
+          "routability": 1.0,
+          "drv_errors_only": 0.0,
+          "drv_errors_and_promoted": 0.1,
+          "wirelength_mm": 1133.016416601613,
+          "via_count": 37.2,
+          "wall_seconds_mean": 7.302,
+          "cpu_seconds_mean": 7.295999999999999,
+          "wall_seconds_total": 73.02,
+          "cpu_seconds_total": 72.96
+        },
+        "3": {
+          "n_boards": 10,
+          "clean_pass_count": 10,
+          "clean_pass": 1.0,
+          "potential_gain_table3": 153.85075419274256,
+          "potential_gain_true_phi0": 160.04853182828128,
+          "potential_gain_raw": 160.04853182828128,
+          "routability": 1.0,
+          "drv_errors_only": 0.0,
+          "drv_errors_and_promoted": 0.0,
+          "wirelength_mm": 1128.8888177693684,
+          "via_count": 39.4,
+          "wall_seconds_mean": 8.012,
+          "cpu_seconds_mean": 8.004000000000001,
+          "wall_seconds_total": 80.12,
+          "cpu_seconds_total": 80.04
+        },
+        "4": {
+          "n_boards": 10,
+          "clean_pass_count": 10,
+          "clean_pass": 1.0,
+          "potential_gain_table3": 153.77126861259254,
+          "potential_gain_true_phi0": 160.04853182828128,
+          "potential_gain_raw": 160.04853182828128,
+          "routability": 1.0,
+          "drv_errors_only": 0.0,
+          "drv_errors_and_promoted": 0.0,
+          "wirelength_mm": 1138.6316078443872,
+          "via_count": 40.0,
+          "wall_seconds_mean": 8.411,
+          "cpu_seconds_mean": 8.407,
+          "wall_seconds_total": 84.11,
+          "cpu_seconds_total": 84.07
+        },
+        "5": {
+          "n_boards": 10,
+          "clean_pass_count": 10,
+          "clean_pass": 1.0,
+          "potential_gain_table3": 153.8285575384313,
+          "potential_gain_true_phi0": 160.04853182828128,
+          "potential_gain_raw": 160.04853182828128,
+          "routability": 1.0,
+          "drv_errors_only": 0.0,
+          "drv_errors_and_promoted": 0.0,
+          "wirelength_mm": 1134.987144924994,
+          "via_count": 39.5,
+          "wall_seconds_mean": 9.66,
+          "cpu_seconds_mean": 9.652,
+          "wall_seconds_total": 96.60000000000001,
+          "cpu_seconds_total": 96.52
+        }
+      },
+      "at_k": {
+        "k": 5,
+        "n_boards": 10,
+        "clean_pass_count": 10,
+        "clean_pass": 1.0,
+        "potential_gain_table3": 154.16731728132353,
+        "potential_gain_true_phi0": 160.04853182828128,
+        "potential_gain_raw": 160.04853182828128,
+        "routability": 1.0,
+        "drv_errors_only": 0.0,
+        "drv_errors_and_promoted": 0.0,
+        "wirelength_mm": 1130.6072734788759,
+        "via_count": 36.2,
+        "wall_seconds_mean": 8.7198,
+        "cpu_seconds_mean": 8.713,
+        "failed_boards_at_k": []
+      },
+      "at_1_mean_std": {
+        "clean_pass": {
+          "mean": 1.0,
+          "std": 0.0
+        },
+        "potential_gain_table3": {
+          "mean": 153.80407116948882,
+          "std": 0.08836975624711021
+        },
+        "potential_gain_true_phi0": {
+          "mean": 160.01609461963264,
+          "std": 0.0725318035387267
+        },
+        "potential_gain_raw": {
+          "mean": 160.01609461963264,
+          "std": 0.0725318035387267
+        },
+        "routability": {
+          "mean": 1.0,
+          "std": 0.0
+        },
+        "drv_errors_only": {
+          "mean": 0.0,
+          "std": 0.0
+        },
+        "wirelength_mm": {
+          "mean": 1133.0117250719072,
+          "std": 4.01789390071529
+        },
+        "via_count": {
+          "mean": 39.46,
+          "std": 1.4518953130305225
+        },
+        "wall_seconds_mean": {
+          "mean": 8.7198,
+          "std": 1.1961505758055717
+        },
+        "cpu_seconds_mean": {
+          "mean": 8.713,
+          "std": 1.195300798962336
+        }
+      },
+      "failures_per_rollout": []
+    },
+    "medium_all": {
+      "seeds": [
+        1
+      ],
+      "per_seed": {
+        "1": {
+          "n_boards": 286,
+          "clean_pass_count": 283,
+          "clean_pass": 0.9895104895104895,
+          "potential_gain_table3": 62.51629058678249,
+          "potential_gain_true_phi0": 64.0739956999299,
+          "potential_gain_raw": 64.0739956999299,
+          "routability": 0.999459717071053,
+          "drv_errors_only": 0.02097902097902098,
+          "drv_errors_and_promoted": 0.03496503496503497,
+          "wirelength_mm": 427.6287803499282,
+          "via_count": 7.024475524475524,
+          "wall_seconds_mean": 2.2706293706293708,
+          "cpu_seconds_mean": 2.2653846153846153,
+          "wall_seconds_total": 649.4,
+          "cpu_seconds_total": 647.9
+        }
+      },
+      "at_k": {
+        "k": 1,
+        "n_boards": 286,
+        "clean_pass_count": 283,
+        "clean_pass": 0.9895104895104895,
+        "potential_gain_table3": 62.51629058678249,
+        "potential_gain_true_phi0": 64.0739956999299,
+        "potential_gain_raw": 64.0739956999299,
+        "routability": 0.999459717071053,
+        "drv_errors_only": 0.02097902097902098,
+        "drv_errors_and_promoted": 0.03496503496503497,
+        "wirelength_mm": 427.6287803499282,
+        "via_count": 7.024475524475524,
+        "wall_seconds_mean": 2.2706293706293708,
+        "cpu_seconds_mean": 2.2653846153846153,
+        "failed_boards_at_k": [
+          {
+            "board_id": "0199_kitspace_USB-LED-Otter",
+            "seed": 1,
+            "rollout_idx": 0,
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.8974358974358975,
+            "final_potential": -8.917697298436988,
+            "final_potential_table3": -10.124522814466978,
+            "initial_potential_raw": -53.28504141922283,
+            "initial_potential_bare": -53.28504141922283,
+            "potential_gain_table3": 43.16051860475585,
+            "potential_gain_raw": 44.367344120785845,
+            "potential_gain_true_phi0": 44.367344120785845,
+            "drv_errors_only_count": 4,
+            "drv_errors_and_promoted_count": 4,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 4
+              }
+            ],
+            "drv_promoted_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 4
+              }
+            ],
+            "wirelength_mm": 103.41275801499539,
+            "via_count": 10,
+            "wall_seconds": 4.55,
+            "cpu_seconds": 4.55,
+            "time_limited": [],
+            "hard_deadline": false,
+            "router_opens": 4
+          },
+          {
+            "board_id": "0217_esp8266_link_test_esp_micro85-only",
+            "seed": 1,
+            "rollout_idx": 0,
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.9736842105263158,
+            "final_potential": -2.6218604324326575,
+            "final_potential_table3": -3.082645629415479,
+            "initial_potential_raw": -52.7162409152005,
+            "initial_potential_bare": -52.7162409152005,
+            "potential_gain_table3": 49.63359528578503,
+            "potential_gain_raw": 50.094380482767846,
+            "potential_gain_true_phi0": 50.094380482767846,
+            "drv_errors_only_count": 1,
+            "drv_errors_and_promoted_count": 1,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 1
+              }
+            ],
+            "drv_promoted_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 1
+              }
+            ],
+            "wirelength_mm": 80.39259849141068,
+            "via_count": 3,
+            "wall_seconds": 2.84,
+            "cpu_seconds": 2.84,
+            "time_limited": [],
+            "hard_deadline": false,
+            "router_opens": 1
+          },
+          {
+            "board_id": "0228_yamsek.kicad_matrix_attiny861a",
+            "seed": 1,
+            "rollout_idx": 0,
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.9743589743589743,
+            "final_potential": -2.6218604324326575,
+            "final_potential_table3": -6.087852625544988,
+            "initial_potential_raw": -58.16238949112674,
+            "initial_potential_bare": -58.16238949112674,
+            "potential_gain_table3": 52.074536865581756,
+            "potential_gain_raw": 55.540529058694084,
+            "potential_gain_true_phi0": 55.540529058694084,
+            "drv_errors_only_count": 1,
+            "drv_errors_and_promoted_count": 1,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 1
+              }
+            ],
+            "drv_promoted_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 1
+              }
+            ],
+            "wirelength_mm": 332.99609655616507,
+            "via_count": 28,
+            "wall_seconds": 1.2,
+            "cpu_seconds": 1.2,
+            "time_limited": [],
+            "hard_deadline": false,
+            "router_opens": 1
+          }
+        ]
+      }
+    },
+    "hard_all": {
+      "seeds": [
+        1
+      ],
+      "per_seed": {
+        "1": {
+          "n_boards": 292,
+          "clean_pass_count": 270,
+          "clean_pass": 0.9246575342465754,
+          "potential_gain_table3": 220.83188716541235,
+          "potential_gain_true_phi0": 229.82580471596435,
+          "potential_gain_raw": 229.82580471596435,
+          "routability": 0.9941329875884536,
+          "drv_errors_only": 2.8013698630136985,
+          "drv_errors_and_promoted": 2.914383561643836,
+          "wirelength_mm": 1841.1368574677772,
+          "via_count": 53.11643835616438,
+          "wall_seconds_mean": 21.058116438356166,
+          "cpu_seconds_mean": 21.05017123287671,
+          "wall_seconds_total": 6148.97,
+          "cpu_seconds_total": 6146.65
+        }
+      },
+      "at_k": {
+        "k": 1,
+        "n_boards": 292,
+        "clean_pass_count": 270,
+        "clean_pass": 0.9246575342465754,
+        "potential_gain_table3": 220.83188716541235,
+        "potential_gain_true_phi0": 229.82580471596435,
+        "potential_gain_raw": 229.82580471596435,
+        "routability": 0.9941329875884536,
+        "drv_errors_only": 2.8013698630136985,
+        "drv_errors_and_promoted": 2.914383561643836,
+        "wirelength_mm": 1841.1368574677772,
+        "via_count": 53.11643835616438,
+        "wall_seconds_mean": 21.058116438356166,
+        "cpu_seconds_mean": 21.05017123287671,
+        "failed_boards_at_k": [
+          {
+            "board_id": "0490_fifogfx_c64cart",
+            "seed": 1,
+            "rollout_idx": 0,
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.6153846153846154,
+            "final_potential": -65.16209594710325,
+            "final_potential_table3": -69.89708910070266,
+            "initial_potential_raw": -142.19519407770477,
+            "initial_potential_bare": -142.19519407770477,
+            "potential_gain_table3": 72.29810497700211,
+            "potential_gain_raw": 77.03309813060152,
+            "potential_gain_true_phi0": 77.03309813060152,
+            "drv_errors_only_count": 40,
+            "drv_errors_and_promoted_count": 40,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 40
+              }
+            ],
+            "drv_promoted_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 40
+              }
+            ],
+            "wirelength_mm": 1467.4965767996998,
+            "via_count": 18,
+            "wall_seconds": 116.34,
+            "cpu_seconds": 116.31,
+            "time_limited": [
+              "negotiation",
+              "shove"
+            ],
+            "hard_deadline": false,
+            "router_opens": 40
+          },
+          {
+            "board_id": "0536_avr-fuser-32_adapter",
+            "seed": 1,
+            "rollout_idx": 0,
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.8481012658227848,
+            "final_potential": -39.16963191624823,
+            "final_potential_table3": -61.552701770881576,
+            "initial_potential_raw": -196.14302740940224,
+            "initial_potential_bare": -196.14302740940224,
+            "potential_gain_table3": 134.59032563852065,
+            "potential_gain_raw": 156.97339549315402,
+            "potential_gain_true_phi0": 156.97339549315402,
+            "drv_errors_only_count": 24,
+            "drv_errors_and_promoted_count": 26,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 24
+              }
+            ],
+            "drv_promoted_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 24
+              },
+              {
+                "severity": "WARNING",
+                "error_code": 13,
+                "error_type": "Track has unconnected end",
+                "count": 2
+              }
+            ],
+            "wirelength_mm": 4691.534927316675,
+            "via_count": 130,
+            "wall_seconds": 118.07,
+            "cpu_seconds": 118.04,
+            "time_limited": [
+              "negotiation",
+              "rip-up",
+              "shove",
+              "vias"
+            ],
+            "hard_deadline": true,
+            "router_opens": 24
+          },
+          {
+            "board_id": "0547_kitspace_Oak",
+            "seed": 1,
+            "rollout_idx": 0,
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.9571428571428572,
+            "final_potential": -12.591673732008658,
+            "final_potential_table3": -22.359282288799157,
+            "initial_potential_raw": -183.6356477807484,
+            "initial_potential_bare": -183.6356477807484,
+            "potential_gain_table3": 161.27636549194926,
+            "potential_gain_raw": 171.04397404873976,
+            "potential_gain_true_phi0": 171.04397404873976,
+            "drv_errors_only_count": 6,
+            "drv_errors_and_promoted_count": 6,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 6
+              }
+            ],
+            "drv_promoted_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 6
+              }
+            ],
+            "wirelength_mm": 1583.8042783952487,
+            "via_count": 66,
+            "wall_seconds": 50.44,
+            "cpu_seconds": 50.43,
+            "time_limited": [],
+            "hard_deadline": false,
+            "router_opens": 6
+          },
+          {
+            "board_id": "0576_srambo_1_srambo_1",
+            "seed": 1,
+            "rollout_idx": 0,
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.9318181818181818,
+            "final_potential": -17.763430249688756,
+            "final_potential_table3": -31.60370649104513,
+            "initial_potential_raw": -182.97913395027595,
+            "initial_potential_bare": -182.97913395027595,
+            "potential_gain_table3": 151.37542745923082,
+            "potential_gain_raw": 165.2157037005872,
+            "potential_gain_true_phi0": 165.2157037005872,
+            "drv_errors_only_count": 9,
+            "drv_errors_and_promoted_count": 9,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 9
+              }
+            ],
+            "drv_promoted_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 9
+              }
+            ],
+            "wirelength_mm": 2920.138120678186,
+            "via_count": 80,
+            "wall_seconds": 117.77,
+            "cpu_seconds": 117.74,
+            "time_limited": [
+              "negotiation",
+              "rip-up",
+              "shove",
+              "corridors"
+            ],
+            "hard_deadline": true,
+            "router_opens": 9
+          },
+          {
+            "board_id": "0583_elec-power-bms_OSBMS Balancer Rev1",
+            "seed": 1,
+            "rollout_idx": 0,
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.9878787878787879,
+            "final_potential": -5.965267519946959,
+            "final_potential_table3": -14.213944950117071,
+            "initial_potential_raw": -220.4220980030743,
+            "initial_potential_bare": -220.4220980030743,
+            "potential_gain_table3": 206.20815305295721,
+            "potential_gain_raw": 214.45683048312733,
+            "potential_gain_true_phi0": 214.45683048312733,
+            "drv_errors_only_count": 2,
+            "drv_errors_and_promoted_count": 3,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 2
+              }
+            ],
+            "drv_promoted_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 2
+              },
+              {
+                "severity": "WARNING",
+                "error_code": 13,
+                "error_type": "Track has unconnected end",
+                "count": 1
+              }
+            ],
+            "wirelength_mm": 1224.3387150850558,
+            "via_count": 58,
+            "wall_seconds": 108.02,
+            "cpu_seconds": 108.01,
+            "time_limited": [
+              "shove"
+            ],
+            "hard_deadline": false,
+            "router_opens": 2
+          },
+          {
+            "board_id": "0592_protoarray_proto_array",
+            "seed": 1,
+            "rollout_idx": 0,
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.9947089947089947,
+            "final_potential": -2.6218604324326575,
+            "final_potential_table3": -8.782551841603183,
+            "initial_potential_raw": -235.34710214064052,
+            "initial_potential_bare": -235.34710214064052,
+            "potential_gain_table3": 226.5645502990373,
+            "potential_gain_raw": 232.72524170820785,
+            "potential_gain_true_phi0": 232.72524170820785,
+            "drv_errors_only_count": 1,
+            "drv_errors_and_promoted_count": 1,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 1
+              }
+            ],
+            "drv_promoted_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 1
+              }
+            ],
+            "wirelength_mm": 1780.3457045852622,
+            "via_count": 26,
+            "wall_seconds": 16.14,
+            "cpu_seconds": 16.13,
+            "time_limited": [],
+            "hard_deadline": false,
+            "router_opens": 1
+          },
+          {
+            "board_id": "0616_MixSID_mixsid",
+            "seed": 1,
+            "rollout_idx": 0,
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.9854368932038835,
+            "final_potential": -7.917697298436987,
+            "final_potential_table3": -18.77575259942797,
+            "initial_potential_raw": -274.5705403268916,
+            "initial_potential_bare": -274.5705403268916,
+            "potential_gain_table3": 255.79478772746364,
+            "potential_gain_raw": 266.65284302845464,
+            "potential_gain_true_phi0": 266.65284302845464,
+            "drv_errors_only_count": 3,
+            "drv_errors_and_promoted_count": 4,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 3
+              }
+            ],
+            "drv_promoted_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 3
+              },
+              {
+                "severity": "WARNING",
+                "error_code": 13,
+                "error_type": "Track has unconnected end",
+                "count": 1
+              }
+            ],
+            "wirelength_mm": 2629.0276504954913,
+            "via_count": 56,
+            "wall_seconds": 22.0,
+            "cpu_seconds": 21.99,
+            "time_limited": [],
+            "hard_deadline": false,
+            "router_opens": 3
+          },
+          {
+            "board_id": "0630_gsm-iot-core-hw_gsm-iot-core",
+            "seed": 1,
+            "rollout_idx": 0,
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.9757085020242915,
+            "final_potential": -13.638170019537755,
+            "final_potential_table3": -28.368116137628697,
+            "initial_potential_raw": -311.82601072925405,
+            "initial_potential_bare": -311.82601072925405,
+            "potential_gain_table3": 283.45789459162535,
+            "potential_gain_raw": 298.1878407097163,
+            "potential_gain_true_phi0": 298.1878407097163,
+            "drv_errors_only_count": 6,
+            "drv_errors_and_promoted_count": 8,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 6
+              }
+            ],
+            "drv_promoted_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 6
+              },
+              {
+                "severity": "WARNING",
+                "error_code": 13,
+                "error_type": "Track has unconnected end",
+                "count": 2
+              }
+            ],
+            "wirelength_mm": 1364.973059045472,
+            "via_count": 120,
+            "wall_seconds": 112.0,
+            "cpu_seconds": 111.98,
+            "time_limited": [
+              "shove"
+            ],
+            "hard_deadline": false,
+            "router_opens": 6
+          },
+          {
+            "board_id": "0631_kitspace_dropbot-front-panel",
+            "seed": 1,
+            "rollout_idx": 0,
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.9365853658536586,
+            "final_potential": -24.315755467032925,
+            "final_potential_table3": -56.04090864158678,
+            "initial_potential_raw": -284.84279477344757,
+            "initial_potential_bare": -284.84279477344757,
+            "potential_gain_table3": 228.80188613186078,
+            "potential_gain_raw": 260.5270393064146,
+            "potential_gain_true_phi0": 260.5270393064146,
+            "drv_errors_only_count": 13,
+            "drv_errors_and_promoted_count": 13,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 13
+              }
+            ],
+            "drv_promoted_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 13
+              }
+            ],
+            "wirelength_mm": 7062.576587276926,
+            "via_count": 176,
+            "wall_seconds": 117.95,
+            "cpu_seconds": 117.93,
+            "time_limited": [
+              "negotiation",
+              "rip-up",
+              "shove",
+              "vias"
+            ],
+            "hard_deadline": true,
+            "router_opens": 13
+          },
+          {
+            "board_id": "0645_Own-Mailbox-Hardware_eth",
+            "seed": 1,
+            "rollout_idx": 0,
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.7142857142857143,
+            "final_potential": -127.25612921634828,
+            "final_potential_table3": -136.06698293096707,
+            "initial_potential_raw": -368.8664425685455,
+            "initial_potential_bare": -368.8664425685455,
+            "potential_gain_table3": 232.79945963757842,
+            "potential_gain_raw": 241.6103133521972,
+            "potential_gain_true_phi0": 241.6103133521972,
+            "drv_errors_only_count": 84,
+            "drv_errors_and_promoted_count": 84,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 84
+              }
+            ],
+            "drv_promoted_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 84
+              }
+            ],
+            "wirelength_mm": 955.4268573094006,
+            "via_count": 69,
+            "wall_seconds": 109.6,
+            "cpu_seconds": 109.59,
+            "time_limited": [
+              "shove"
+            ],
+            "hard_deadline": false,
+            "router_opens": 84
+          },
+          {
+            "board_id": "0652_kitspace_lpa96",
+            "seed": 1,
+            "rollout_idx": 0,
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.9941348973607038,
+            "final_potential": -4.8903717578961645,
+            "final_potential_table3": -30.53823009641341,
+            "initial_potential_raw": -423.4621597970112,
+            "initial_potential_bare": -423.4621597970112,
+            "potential_gain_table3": 392.9239297005978,
+            "potential_gain_raw": 418.57178803911506,
+            "potential_gain_true_phi0": 418.57178803911506,
+            "drv_errors_only_count": 2,
+            "drv_errors_and_promoted_count": 2,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 2
+              }
+            ],
+            "drv_promoted_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 2
+              }
+            ],
+            "wirelength_mm": 4073.9291692586226,
+            "via_count": 175,
+            "wall_seconds": 117.43,
+            "cpu_seconds": 117.41,
+            "time_limited": [
+              "negotiation",
+              "shove"
+            ],
+            "hard_deadline": false,
+            "router_opens": 2
+          },
+          {
+            "board_id": "0662_stm32_mech_keyboard_TCKB",
+            "seed": 1,
+            "rollout_idx": 0,
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.9834905660377359,
+            "final_potential": -15.072034602167617,
+            "final_potential_table3": -48.766330495123334,
+            "initial_potential_raw": -534.4958950119233,
+            "initial_potential_bare": -534.4958950119233,
+            "potential_gain_table3": 485.72956451679994,
+            "potential_gain_raw": 519.4238604097557,
+            "potential_gain_true_phi0": 519.4238604097557,
+            "drv_errors_only_count": 7,
+            "drv_errors_and_promoted_count": 8,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 7
+              }
+            ],
+            "drv_promoted_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 7
+              },
+              {
+                "severity": "WARNING",
+                "error_code": 13,
+                "error_type": "Track has unconnected end",
+                "count": 1
+              }
+            ],
+            "wirelength_mm": 8597.147946477857,
+            "via_count": 165,
+            "wall_seconds": 118.06,
+            "cpu_seconds": 118.04,
+            "time_limited": [
+              "negotiation",
+              "shove",
+              "vias"
+            ],
+            "hard_deadline": true,
+            "router_opens": 7
+          },
+          {
+            "board_id": "0663_bms-8s50-ic_bms-8s50-ic",
+            "seed": 1,
+            "rollout_idx": 0,
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.9536082474226805,
+            "final_potential": -32.20612722492909,
+            "final_potential_table3": -46.860644928549405,
+            "initial_potential_raw": -490.3910479770837,
+            "initial_potential_bare": -490.3910479770837,
+            "potential_gain_table3": 443.53040304853425,
+            "potential_gain_raw": 458.1849207521546,
+            "potential_gain_true_phi0": 458.1849207521546,
+            "drv_errors_only_count": 18,
+            "drv_errors_and_promoted_count": 18,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 18
+              }
+            ],
+            "drv_promoted_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 18
+              }
+            ],
+            "wirelength_mm": 2477.2588518101584,
+            "via_count": 97,
+            "wall_seconds": 110.91,
+            "cpu_seconds": 110.89,
+            "time_limited": [
+              "shove"
+            ],
+            "hard_deadline": false,
+            "router_opens": 18
+          },
+          {
+            "board_id": "0665_kitspace_d20_tri_r0.2",
+            "seed": 1,
+            "rollout_idx": 0,
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.9421338155515371,
+            "final_potential": -53.855591251085585,
+            "final_potential_table3": -86.08199598044149,
+            "initial_potential_raw": -672.1743811117028,
+            "initial_potential_bare": -672.1743811117028,
+            "potential_gain_table3": 586.0923851312614,
+            "potential_gain_raw": 618.3187898606172,
+            "potential_gain_true_phi0": 618.3187898606172,
+            "drv_errors_only_count": 32,
+            "drv_errors_and_promoted_count": 35,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 32
+              }
+            ],
+            "drv_promoted_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 32
+              },
+              {
+                "severity": "WARNING",
+                "error_code": 13,
+                "error_type": "Track has unconnected end",
+                "count": 3
+              }
+            ],
+            "wirelength_mm": 2213.2023646779544,
+            "via_count": 278,
+            "wall_seconds": 117.92,
+            "cpu_seconds": 117.9,
+            "time_limited": [
+              "shove",
+              "vias"
+            ],
+            "hard_deadline": true,
+            "router_opens": 32
+          },
+          {
+            "board_id": "0666_kitspace_d20_tri_r0.3",
+            "seed": 1,
+            "rollout_idx": 0,
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.9529837251356239,
+            "final_potential": -45.0308865277068,
+            "final_potential_table3": -75.52994597211972,
+            "initial_potential_raw": -672.1743811117028,
+            "initial_potential_bare": -672.1743811117028,
+            "potential_gain_table3": 596.644435139583,
+            "potential_gain_raw": 627.143494583996,
+            "potential_gain_true_phi0": 627.143494583996,
+            "drv_errors_only_count": 26,
+            "drv_errors_and_promoted_count": 29,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 26
+              }
+            ],
+            "drv_promoted_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 26
+              },
+              {
+                "severity": "WARNING",
+                "error_code": 13,
+                "error_type": "Track has unconnected end",
+                "count": 3
+              }
+            ],
+            "wirelength_mm": 2299.52972220646,
+            "via_count": 259,
+            "wall_seconds": 117.91,
+            "cpu_seconds": 117.89,
+            "time_limited": [
+              "shove",
+              "vias"
+            ],
+            "hard_deadline": true,
+            "router_opens": 26
+          },
+          {
+            "board_id": "0667_kitspace_tri_panel_4up_r0.1",
+            "seed": 1,
+            "rollout_idx": 0,
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.9804964539007093,
+            "final_potential": -21.70331174446391,
+            "final_potential_table3": -56.991487173443836,
+            "initial_potential_raw": -683.6560172506948,
+            "initial_potential_bare": -683.6560172506948,
+            "potential_gain_table3": 626.664530077251,
+            "potential_gain_raw": 661.9527055062309,
+            "potential_gain_true_phi0": 661.9527055062309,
+            "drv_errors_only_count": 11,
+            "drv_errors_and_promoted_count": 12,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 11
+              }
+            ],
+            "drv_promoted_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 11
+              },
+              {
+                "severity": "WARNING",
+                "error_code": 13,
+                "error_type": "Track has unconnected end",
+                "count": 1
+              }
+            ],
+            "wirelength_mm": 2394.0877144899646,
+            "via_count": 305,
+            "wall_seconds": 117.91,
+            "cpu_seconds": 117.89,
+            "time_limited": [
+              "shove",
+              "vias"
+            ],
+            "hard_deadline": true,
+            "router_opens": 11
+          },
+          {
+            "board_id": "0670_wiggleport_wiggle-spine",
+            "seed": 1,
+            "rollout_idx": 0,
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.9,
+            "final_potential": -94.62986809994528,
+            "final_potential_table3": -129.22310759916107,
+            "initial_potential_raw": -722.5168493219101,
+            "initial_potential_bare": -722.5168493219101,
+            "potential_gain_table3": 593.293741722749,
+            "potential_gain_raw": 627.8869812219648,
+            "potential_gain_true_phi0": 627.8869812219648,
+            "drv_errors_only_count": 60,
+            "drv_errors_and_promoted_count": 60,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 60
+              }
+            ],
+            "drv_promoted_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 60
+              }
+            ],
+            "wirelength_mm": 5046.619749607894,
+            "via_count": 245,
+            "wall_seconds": 118.23,
+            "cpu_seconds": 118.2,
+            "time_limited": [
+              "prefanout",
+              "negotiation",
+              "rip-up",
+              "shove",
+              "vias"
+            ],
+            "hard_deadline": true,
+            "router_opens": 60
+          },
+          {
+            "board_id": "0671_VB-IoT1_VB-IoT1_v1",
+            "seed": 1,
+            "rollout_idx": 0,
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.9794520547945206,
+            "final_potential": -23.914836138553802,
+            "final_potential_table3": -73.89932890713649,
+            "initial_potential_raw": -722.0560993099491,
+            "initial_potential_bare": -722.0560993099491,
+            "potential_gain_table3": 648.1567704028126,
+            "potential_gain_raw": 698.1412631713953,
+            "potential_gain_true_phi0": 698.1412631713953,
+            "drv_errors_only_count": 12,
+            "drv_errors_and_promoted_count": 14,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 12
+              }
+            ],
+            "drv_promoted_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 12
+              },
+              {
+                "severity": "WARNING",
+                "error_code": 13,
+                "error_type": "Track has unconnected end",
+                "count": 2
+              }
+            ],
+            "wirelength_mm": 6292.24638429134,
+            "via_count": 374,
+            "wall_seconds": 118.24,
+            "cpu_seconds": 118.22,
+            "time_limited": [
+              "prefanout",
+              "pairs",
+              "negotiation",
+              "rip-up",
+              "shove",
+              "vias"
+            ],
+            "hard_deadline": true,
+            "router_opens": 12
+          },
+          {
+            "board_id": "0676_dorkyboard_keyboard",
+            "seed": 1,
+            "rollout_idx": 0,
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.9939759036144579,
+            "final_potential": -11.591673732008658,
+            "final_potential_table3": -43.49803709409603,
+            "initial_potential_raw": -981.573376284773,
+            "initial_potential_bare": -981.573376284773,
+            "potential_gain_table3": 938.0753391906769,
+            "potential_gain_raw": 969.9817025527643,
+            "potential_gain_true_phi0": 969.9817025527643,
+            "drv_errors_only_count": 5,
+            "drv_errors_and_promoted_count": 6,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 5
+              }
+            ],
+            "drv_promoted_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 5
+              },
+              {
+                "severity": "WARNING",
+                "error_code": 13,
+                "error_type": "Track has unconnected end",
+                "count": 1
+              }
+            ],
+            "wirelength_mm": 11853.181681043685,
+            "via_count": 82,
+            "wall_seconds": 118.17,
+            "cpu_seconds": 118.15,
+            "time_limited": [
+              "negotiation",
+              "rip-up",
+              "shove",
+              "vias"
+            ],
+            "hard_deadline": true,
+            "router_opens": 5
+          },
+          {
+            "board_id": "0677_kitspace_glasgow",
+            "seed": 1,
+            "rollout_idx": 0,
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.9492574257425742,
+            "final_potential": -66.67292157086925,
+            "final_potential_table3": -107.98616674214624,
+            "initial_potential_raw": -969.5142212070072,
+            "initial_potential_bare": -969.5142212070072,
+            "potential_gain_table3": 861.5280544648609,
+            "potential_gain_raw": 902.8412996361379,
+            "potential_gain_true_phi0": 902.8412996361379,
+            "drv_errors_only_count": 41,
+            "drv_errors_and_promoted_count": 42,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 41
+              }
+            ],
+            "drv_promoted_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 41
+              },
+              {
+                "severity": "WARNING",
+                "error_code": 13,
+                "error_type": "Track has unconnected end",
+                "count": 1
+              }
+            ],
+            "wirelength_mm": 3606.622585638495,
+            "via_count": 341,
+            "wall_seconds": 118.56,
+            "cpu_seconds": 118.55,
+            "time_limited": [
+              "pairs",
+              "negotiation",
+              "rip-up",
+              "shove",
+              "vias"
+            ],
+            "hard_deadline": true,
+            "router_opens": 41
+          },
+          {
+            "board_id": "0678_oskirby_logicbone",
+            "seed": 1,
+            "rollout_idx": 0,
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.8779461279461279,
+            "final_potential": -208.80159543913373,
+            "final_potential_table3": -283.79413153105145,
+            "initial_potential_raw": -1408.8300439208228,
+            "initial_potential_bare": -1408.8300439208228,
+            "potential_gain_table3": 1125.0359123897715,
+            "potential_gain_raw": 1200.028448481689,
+            "potential_gain_true_phi0": 1200.028448481689,
+            "drv_errors_only_count": 145,
+            "drv_errors_and_promoted_count": 148,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 145
+              }
+            ],
+            "drv_promoted_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 145
+              },
+              {
+                "severity": "WARNING",
+                "error_code": 13,
+                "error_type": "Track has unconnected end",
+                "count": 3
+              }
+            ],
+            "wirelength_mm": 5746.268045958854,
+            "via_count": 635,
+            "wall_seconds": 119.26,
+            "cpu_seconds": 119.25,
+            "time_limited": [
+              "prefanout",
+              "pairs",
+              "negotiation",
+              "finishing",
+              "rip-up",
+              "shove",
+              "vias"
+            ],
+            "hard_deadline": true,
+            "router_opens": 145
+          },
+          {
+            "board_id": "0679_Aleste-520EX_aleste",
+            "seed": 1,
+            "rollout_idx": 0,
+            "clean_pass": false,
+            "success": false,
+            "routability": 0.8323019801980198,
+            "final_potential": -381.73848524401876,
+            "final_potential_table3": -465.3895135952914,
+            "initial_potential_raw": -1969.9485863724742,
+            "initial_potential_bare": -1969.9485863724742,
+            "potential_gain_table3": 1504.5590727771826,
+            "potential_gain_raw": 1588.2101011284553,
+            "potential_gain_true_phi0": 1588.2101011284553,
+            "drv_errors_only_count": 271,
+            "drv_errors_and_promoted_count": 272,
+            "drv_errors_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 271
+              }
+            ],
+            "drv_promoted_by_type": [
+              {
+                "severity": "ERROR",
+                "error_code": 1,
+                "error_type": "Missing connection between items",
+                "count": 271
+              },
+              {
+                "severity": "WARNING",
+                "error_code": 13,
+                "error_type": "Track has unconnected end",
+                "count": 1
+              }
+            ],
+            "wirelength_mm": 23725.514175636337,
+            "via_count": 362,
+            "wall_seconds": 119.06,
+            "cpu_seconds": 119.03,
+            "time_limited": [
+              "prefanout",
+              "negotiation",
+              "finishing",
+              "rip-up",
+              "shove",
+              "vias"
+            ],
+            "hard_deadline": true,
+            "router_opens": 271
+          }
+        ]
+      }
+    }
+  },
+  "cross_judge_seed1": {
+    "D3-A": {
+      "n_boards": 99,
+      "both_clean": 98,
+      "both_fail": 1,
+      "pcbworld_clean_pcbench_fail": 0,
+      "pcbench_clean_pcbworld_fail": 0,
+      "disagreements": []
+    },
+    "D3-B": {
+      "n_boards": 10,
+      "both_clean": 10,
+      "both_fail": 0,
+      "pcbworld_clean_pcbench_fail": 0,
+      "pcbench_clean_pcbworld_fail": 0,
+      "disagreements": []
+    },
+    "D3-C": {
+      "n_boards": 10,
+      "both_clean": 10,
+      "both_fail": 0,
+      "pcbworld_clean_pcbench_fail": 0,
+      "pcbench_clean_pcbworld_fail": 0,
+      "disagreements": []
+    },
+    "medium_all": {
+      "n_boards": 286,
+      "both_clean": 283,
+      "both_fail": 3,
+      "pcbworld_clean_pcbench_fail": 0,
+      "pcbench_clean_pcbworld_fail": 0,
+      "disagreements": []
+    },
+    "hard_all": {
+      "n_boards": 292,
+      "both_clean": 270,
+      "both_fail": 22,
+      "pcbworld_clean_pcbench_fail": 0,
+      "pcbench_clean_pcbworld_fail": 0,
+      "disagreements": []
+    }
+  },
+  "ultraroute_provenance": {
+    "router_binary": "/home/sequoia/ab/pcbworld-ur/core/target/release/ultraroute",
+    "router_sha256": "221e2c8c1efb5f545420c92e8b99f54f5e53c8fd9f4beea4e9ac8bdf2f09f3a5",
+    "text_helper": "/home/sequoia/ab/pcbworld-ur/core/target/release/kicad-text",
+    "text_helper_sha256": "a7a1bb1797ccccbbccab8ae5bfc3abb4ec2f9197c8526bd9802500cd395956ef",
+    "hostname": "sequoia-server",
+    "workers": 5,
+    "timestamp": "2026-11-05T23:12:42+0000"
+  },
+  "d3_build_diff": {
+    "csv": "/home/sequoia/ab/pcbworld-runs/datasets/pcbench/exacad_sorted/pcb_characteristics_exacad_sorted.csv",
+    "splits": {
+      "easy.train": {
+        "shipped_count": 99,
+        "rebuilt_count": 99,
+        "exact_match": true,
+        "only_in_shipped": [],
+        "only_in_rebuilt": [],
+        "unrouted_files_present": 99
+      },
+      "easy.test": {
+        "shipped_count": 99,
+        "rebuilt_count": 99,
+        "exact_match": true,
+        "only_in_shipped": [],
+        "only_in_rebuilt": [],
+        "unrouted_files_present": 99
+      },
+      "medium.train": {
+        "shipped_count": 286,
+        "rebuilt_count": 286,
+        "exact_match": true,
+        "only_in_shipped": [],
+        "only_in_rebuilt": [],
+        "unrouted_files_present": 286
+      },
+      "medium.test": {
+        "shipped_count": 10,
+        "rebuilt_count": 10,
+        "exact_match": false,
+        "only_in_shipped": [
+          "0376_cat-trainer_teensy_base_pcb"
+        ],
+        "only_in_rebuilt": [
+          "0373_badge2016_Badge_init"
+        ],
+        "unrouted_files_present": 10
+      },
+      "hard.train": {
+        "shipped_count": 292,
+        "rebuilt_count": 292,
+        "exact_match": true,
+        "only_in_shipped": [],
+        "only_in_rebuilt": [],
+        "unrouted_files_present": 292
+      },
+      "hard.test": {
+        "shipped_count": 10,
+        "rebuilt_count": 10,
+        "exact_match": true,
+        "only_in_shipped": [],
+        "only_in_rebuilt": [],
+        "unrouted_files_present": 10
+      }
+    }
+  }
+}
