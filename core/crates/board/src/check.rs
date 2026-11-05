@@ -239,30 +239,36 @@ pub fn mask_pair_gap(board: &Board, a_id: ItemId, a: &Item, b_id: ItemId, b: &It
 }
 
 pub fn check(board: &Board) -> Vec<Violation> {
-    let limits = &board.limits;
-    let mut found = Vec::new();
-    let mut failed_pairs = HashSet::new();
-    for (id, _) in board.items() {
-        item_checks(board, id, false, false, limits, &mut failed_pairs, &mut found);
-    }
-    found
+    crate::work::in_bucket(crate::work::Bucket::Checks, || {
+        let limits = &board.limits;
+        let mut found = Vec::new();
+        let mut failed_pairs = HashSet::new();
+        for (id, _) in board.items() {
+            item_checks(board, id, false, false, limits, &mut failed_pairs, &mut found);
+        }
+        found
+    })
 }
 
 /// What one item breaks against everything else: how a router tests copper before keeping it.
 /// Pours are left out, as they are refilled around new copper; a block's kept pours are not.
 pub fn check_item(board: &Board, id: ItemId) -> Vec<Violation> {
     crate::work::count(&crate::work::CHECKS);
-    let mut found = Vec::new();
-    item_checks(board, id, true, true, &board.limits, &mut HashSet::new(), &mut found);
-    found
+    crate::work::in_bucket(crate::work::Bucket::Checks, || {
+        let mut found = Vec::new();
+        item_checks(board, id, true, true, &board.limits, &mut HashSet::new(), &mut found);
+        found
+    })
 }
 
 /// What one item breaks, pours included: for routing that keeps pours as planes.
 pub fn check_item_with_pours(board: &Board, id: ItemId) -> Vec<Violation> {
     crate::work::count(&crate::work::CHECKS);
-    let mut found = Vec::new();
-    item_checks(board, id, true, false, &board.limits, &mut HashSet::new(), &mut found);
-    found
+    crate::work::in_bucket(crate::work::Bucket::Checks, || {
+        let mut found = Vec::new();
+        item_checks(board, id, true, false, &board.limits, &mut HashSet::new(), &mut found);
+        found
+    })
 }
 
 /// Whether `copper` (item `id`) comes within its clearance of spoke `spoke` (item `sid`) on

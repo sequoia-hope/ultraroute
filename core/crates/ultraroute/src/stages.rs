@@ -60,6 +60,7 @@ pub struct StageCtx<'a> {
     pub(crate) clock: &'a RunClock,
     pub(crate) budget: Budget,
     pub(crate) text: &'a str,
+    pub(crate) effort_ns: (u64, u64, u64),
 }
 
 impl StageCtx<'_> {
@@ -375,6 +376,7 @@ impl Stage for Prefanout {
         };
         let watch = &mut *ctx.watch;
         let f = grid::prefanout(ctx.board, &options, &mut |b| watch.frame(b));
+        ctx.effort_ns = (0, f.escaped_ns, f.failed_ns);
         ctx.say("prefanout", format!("{} parts, {} inward bridges, {} of {} pads escaped ({} vias)", f.parts, f.bridged_inward, f.escaped, f.candidates, f.vias));
         eprintln!(
             "prefanout: {} parts, {} inward, {} of {} escaped ({} failed), {} vias, skipped {} no-net {} pth {} exposed {} escaped, {:.1} s",
@@ -468,6 +470,7 @@ impl Stage for Pairs {
         let options = grid::PairOptions { cell: a.cell.unwrap_or(grid::PairOptions::default().cell), pours_block: a.pours_block, deadline: ctx.deadline(), log: ctx.log.clone() };
         let watch = &mut *ctx.watch;
         let p = grid::route_pairs_watch(ctx.board, &options, &mut |b, run| watch.pair_run(b, run));
+        ctx.effort_ns = (p.coupled_ns, 0, p.failed_ns);
         eprintln!(
             "pairs: {} pairs, {} of {} runs coupled, {:.1} mm of their {:.1}, {} matched uncoupled, {:.1} s",
             p.pairs,
@@ -535,6 +538,7 @@ impl Stage for PairEscapes {
         };
         let watch = &mut *ctx.watch;
         let f = grid::prefanout(ctx.board, &options, &mut |b| watch.frame(b));
+        ctx.effort_ns = (0, f.escaped_ns, f.failed_ns);
         ctx.ledger.fanout.extend(f.laid);
         json!({"nets": open_fine_pair_nets.len(), "escaped": f.escaped, "vias": f.vias})
     }
@@ -584,6 +588,8 @@ impl Stage for First {
         };
         let watch = &mut *ctx.watch;
         let s = grid::route_open(ctx.board, ctx.solver, &options, &mut |b| watch.frame(b));
+        let (u, w) = ctx.stats.moves.record_single(&s);
+        ctx.effort_ns = (u, 0, w);
         ctx.ledger.laid.extend(s.laid.iter().copied());
         eprintln!("first: {} nets, {} routed, {} failed, {} vias, {:.1} s", first.len(), s.routed, s.failed, s.vias, ctx.elapsed());
         ctx.failed("first", &s.failures);
@@ -654,6 +660,8 @@ impl Stage for Negotiation {
             &mut |r, trials| watch.borrow_mut().trials(r, trials),
             if wants_rounds { Some(&mut round) } else { None },
         );
+        let (u, w) = ctx.stats.moves.record_negotiation(&n);
+        ctx.effort_ns = (u, 0, w);
         eprintln!("negotiated {} of {} connections in {} rounds, {} vias, {:.1} s", n.committed, n.connections, n.rounds, n.vias, ctx.elapsed());
         ctx.ledger.laid.extend(n.laid);
         json!({"connections": n.connections, "committed": n.committed, "rounds": n.rounds, "conflicted": n.conflicted, "unroutable": n.unroutable, "vias": n.vias})
@@ -687,6 +695,8 @@ impl Stage for Finishing {
         };
         let watch = &mut *ctx.watch;
         let s = grid::route_open(ctx.board, ctx.solver, &options, &mut |b| watch.frame(b));
+        let (u, w) = ctx.stats.moves.record_single(&s);
+        ctx.effort_ns = (u, 0, w);
         ctx.ledger.laid.extend(s.laid.iter().copied());
         ctx.failed("finishing", &s.failures);
         narrowed(ctx, &s.narrowed);
@@ -789,6 +799,8 @@ impl Stage for RipUp {
         };
         let watch = &mut *ctx.watch;
         let r = grid::rip_up_watch(ctx.board, ctx.solver, &options, &mut ctx.ledger.laid, &mut |b, attempt| watch.rip(b, &attempt));
+        let (u, w) = ctx.stats.moves.record_rip(&r);
+        ctx.effort_ns = (u, 0, w);
         eprintln!(
             "rip-up: {} tries, {} kept, {} ripped; lost {} with no way through, {} to copper it may not rip, {} no better; {:.1} s",
             r.attempts,
@@ -848,12 +860,15 @@ impl Stage for Shove {
         // The region plough frees any connection; the rip plough only those at these parts.
         let parts: Option<HashSet<usize>> =
             (a.shove_plough.unwrap_or(grid::ShoveOptions::default().plough) != grid::Plough::Region).then(|| escape_parts(a, ctx.board, ctx.ledger).into_iter().collect());
-        let (mut passes, mut unlocked) = (shove_pass(a, ctx.board, ctx.solver, &mut ctx.ledger.laid, started, &deadline, ctx.log, ctx.watch, &mut ctx.ledger.removed, &parts), 0);
+        let (mut passes, mut unlocked) = (
+            shove_pass(a, ctx.board, ctx.solver, &mut ctx.ledger.laid, started, &deadline, ctx.log, ctx.watch, &mut ctx.ledger.removed, &parts, &mut ctx.stats.moves, &mut ctx.effort_ns),
+            0,
+        );
         if a.diff_pairs && !ctx.ledger.pairs.is_empty() {
             let open = ctx.open();
             unlocked = unlock_pairs_near_open(ctx.board, &ctx.ledger.pairs, &open);
             if unlocked > 0 {
-                passes += shove_pass(a, ctx.board, ctx.solver, &mut ctx.ledger.laid, started, &deadline, ctx.log, ctx.watch, &mut ctx.ledger.removed, &parts);
+                passes += shove_pass(a, ctx.board, ctx.solver, &mut ctx.ledger.laid, started, &deadline, ctx.log, ctx.watch, &mut ctx.ledger.removed, &parts, &mut ctx.stats.moves, &mut ctx.effort_ns);
                 relock_pairs(ctx.board, &ctx.ledger.pairs);
             }
         }
@@ -886,6 +901,8 @@ impl Stage for Nudge {
         };
         let watch = &mut *ctx.watch;
         let n = grid::nudge_watch(ctx.board, ctx.solver, &options, &mut ctx.ledger.laid, &mut |b, event| watch.nudge(b, &event));
+        let (u, w) = ctx.stats.moves.record_nudge(&n);
+        ctx.effort_ns = (u, 0, w);
         ctx.ledger.removed.extend(n.ripped_spans.iter().copied());
         let names: Vec<&str> = n.moved.iter().map(|(f, _)| ctx.board.footprints[*f].reference.as_str()).collect();
         eprintln!("nudge: {} steps tried, {} illegal, {} kept ({} as blame asked), moved {names:?}, {:.1} s", n.tried, n.illegal, n.kept, n.guided, ctx.elapsed());
@@ -910,6 +927,7 @@ impl Stage for Tightening {
         let deadline = ctx.deadline();
         let watch = &mut *ctx.watch;
         let c = grid::pull_tight_watch(ctx.board, &mut ctx.ledger.laid, &deadline, &mut |b, net, old, new| watch.tight(b, net, old, new));
+        ctx.effort_ns = (0, c.kept_ns, c.unchanged_ns);
         let detail = tight_json(&c);
         ctx.ledger.tightened = Some(c);
         detail
@@ -941,6 +959,7 @@ impl Stage for Vias {
         let ledger = &mut *ctx.ledger;
         let watch = &mut *ctx.watch;
         let v = grid::reduce_vias_all(ctx.board, &options, &mut ledger.laid, &mut ledger.fanout, &mut |b| watch.frame(b));
+        let (mut kept_ns, mut wasted_ns) = (v.kept_ns, v.failed_ns);
         ledger.removed.extend(v.removed_spans);
         if v.dropped > 0 {
             eprintln!("vias: {} of {} dropped, {} of {} tries kept, {:.1} s", v.dropped, v.vias_before, v.kept, v.tried, ctx.elapsed());
@@ -948,6 +967,8 @@ impl Stage for Vias {
             if let Some(c) = &mut ctx.ledger.tightened {
                 let watch = &mut *ctx.watch;
                 let again = grid::pull_tight_watch(ctx.board, &mut ctx.ledger.laid, &deadline, &mut |b, net, old, new| watch.tight(b, net, old, new));
+                kept_ns = kept_ns.saturating_add(again.kept_ns);
+                wasted_ns = wasted_ns.saturating_add(again.unchanged_ns);
                 (c.segments_after, c.length_after) = (again.segments_after, again.length_after);
                 // Tightening's figures are those it tells after this, as its line does.
                 if let Some(t) = ctx.stats.stages.iter_mut().find(|s| s.name == "tightening") {
@@ -955,6 +976,7 @@ impl Stage for Vias {
                 }
             }
         }
+        ctx.effort_ns = (0, kept_ns, wasted_ns);
         json!({"before": v.vias_before, "after": v.vias_after, "dropped": v.dropped, "tried": v.tried, "kept": v.kept})
     }
 }
@@ -1041,6 +1063,8 @@ impl Stage for Refinish {
         };
         let watch = &mut *ctx.watch;
         let s = grid::route_open(ctx.board, ctx.solver, &options, &mut |b| watch.frame(b));
+        let (u, w) = ctx.stats.moves.record_single(&s);
+        ctx.effort_ns = (u, 0, w);
         ctx.ledger.laid.extend(s.laid.iter().copied());
         ctx.failed("refinishing", &s.failures);
         narrowed(ctx, &s.narrowed);
@@ -1081,6 +1105,8 @@ impl Stage for Corridors {
             };
             let watch = &mut *ctx.watch;
             let r = grid::rip_up_watch(ctx.board, ctx.solver, &options, &mut ctx.ledger.laid, &mut |b, attempt| watch.rip(b, &attempt));
+            let (u, w) = ctx.stats.moves.record_rip(&r);
+            ctx.effort_ns = (u, 0, w);
             (r.corridor, r.narrowed, r.corridors)
         } else {
             let options = grid::Options {
@@ -1096,6 +1122,8 @@ impl Stage for Corridors {
             };
             let watch = &mut *ctx.watch;
             let s = grid::route_open(ctx.board, ctx.solver, &options, &mut |b| watch.frame(b));
+            let (u, w) = ctx.stats.moves.record_single(&s);
+            ctx.effort_ns = (u, 0, w);
             ctx.ledger.laid.extend(s.laid.iter().copied());
             (s.corridor, s.narrowed, s.corridors)
         };
@@ -1397,6 +1425,8 @@ fn shove_pass(
     watch: &mut dyn Watch,
     removed: &mut Vec<Span>,
     parts: &Option<HashSet<usize>>,
+    moves: &mut crate::stats::MoveStats,
+    effort_ns: &mut (u64, u64, u64),
 ) -> usize {
     let defaults = grid::ShoveOptions::default();
     let plough = a.shove_plough.unwrap_or(defaults.plough);
@@ -1449,6 +1479,10 @@ fn shove_pass(
             laid,
             &mut |b: &Board, event| watch.shove(b, &event),
         );
+        let (u, k, w) = moves.record_shove(&s);
+        effort_ns.0 = effort_ns.0.saturating_add(u);
+        effort_ns.1 = effort_ns.1.saturating_add(k);
+        effort_ns.2 = effort_ns.2.saturating_add(w);
         removed.extend(s.removed_spans.iter().copied());
         let routed = s.tries.iter().filter(|t| t.routed).count();
         let kept = s.tries.iter().filter(|t| t.kept).count();

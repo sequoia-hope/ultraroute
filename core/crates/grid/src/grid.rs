@@ -252,6 +252,7 @@ impl ObstacleMap {
     /// [`ObstacleMap::window`], leaving out the items `skip` names, as [`ObstacleMap::without`].
     pub fn window_without(board: &Board, profile: Profile, h: Nm, bounds: board::BBox, pours_block: bool, skip: &dyn Fn(ItemId) -> bool) -> ObstacleMap {
         crate::work::add(&crate::work::MAPS, 1);
+        let _t = board::work::enter(board::work::Bucket::MapBuild);
         let (x0, y0) = (bounds.min.x, bounds.min.y);
         let nx = ((bounds.max.x - x0) / h).max(1) as usize;
         let ny = ((bounds.max.y - y0) / h).max(1) as usize;
@@ -321,6 +322,7 @@ impl ObstacleMap {
     /// pours again.
     pub fn subwindow(&self, board: &Board, bounds: board::BBox) -> ObstacleMap {
         crate::work::add(&crate::work::MAPS, 1);
+        let _t = board::work::enter(board::work::Bucket::MapBuild);
         let h = self.h;
         let i0 = (bounds.min.x - self.x0).div_euclid(h).clamp(0, self.nx.saturating_sub(1) as Nm) as usize;
         let j0 = (bounds.min.y - self.y0).div_euclid(h).clamp(0, self.ny.saturating_sub(1) as Nm) as usize;
@@ -399,6 +401,7 @@ impl ObstacleMap {
     /// [`ObstacleMap::without`], or `None` if `deadline` passes first.
     pub fn without_by(board: &Board, profile: Profile, h: Nm, pours_block: bool, skip: &dyn Fn(ItemId) -> bool, deadline: &Deadline) -> Option<ObstacleMap> {
         crate::work::add(&crate::work::MAPS, 1);
+        let _t = board::work::enter(board::work::Bucket::MapBuild);
         let b = map_extent(board);
         let (x0, y0) = (b.min.x, b.min.y);
         let nx = ((b.max.x - x0) / h).max(1) as usize;
@@ -1179,8 +1182,10 @@ impl ObstacleMap {
 
     /// Records what `id` claims.
     pub fn stamp(&mut self, board: &Board, id: ItemId) {
-        let gkey = self.grid_stamp_key(board);
-        self.stamp_with_key(board, id, gkey.as_ref());
+        board::work::in_bucket(board::work::Bucket::MapPatch, || {
+            let gkey = self.grid_stamp_key(board);
+            self.stamp_with_key(board, id, gkey.as_ref());
+        });
     }
 
     fn stamp_with_key(&mut self, board: &Board, id: ItemId, gkey: Option<&GridStampKey>) {
@@ -1386,50 +1391,54 @@ impl ObstacleMap {
     /// The grid a net sees: a cell is blocked unless nothing claims it or only this net does.
     /// `grid` made over as this map's view for `net`, keeping its buffers.
     pub fn view_into(&self, net: u32, grid: &mut RouteGrid) {
-        let net_i = net as i32;
-        self.header_into(net, grid);
-        grid.blocked.resize(self.owner.len(), false);
-        for (dst, &o) in grid.blocked.iter_mut().zip(&self.owner) {
-            *dst = o != FREE && o != net_i;
-        }
-        grid.via_blocked.resize(self.via_owner.len(), false);
-        for (dst, &o) in grid.via_blocked.iter_mut().zip(&self.via_owner) {
-            *dst = o != FREE && o != net_i;
-        }
-        grid.penalty.clear();
-        grid.via_penalty.clone_from(&self.via_avoid);
-        grid.region_cost.clear();
-        grid.directional = false;
-        grid.spokes.clone_from(&self.spokes);
-        self.apply_regions(net, grid);
-        self.apply_under(net, grid);
+        board::work::in_bucket(board::work::Bucket::MapPatch, || {
+            let net_i = net as i32;
+            self.header_into(net, grid);
+            grid.blocked.resize(self.owner.len(), false);
+            for (dst, &o) in grid.blocked.iter_mut().zip(&self.owner) {
+                *dst = o != FREE && o != net_i;
+            }
+            grid.via_blocked.resize(self.via_owner.len(), false);
+            for (dst, &o) in grid.via_blocked.iter_mut().zip(&self.via_owner) {
+                *dst = o != FREE && o != net_i;
+            }
+            grid.penalty.clear();
+            grid.via_penalty.clone_from(&self.via_avoid);
+            grid.region_cost.clear();
+            grid.directional = false;
+            grid.spokes.clone_from(&self.spokes);
+            self.apply_regions(net, grid);
+            self.apply_under(net, grid);
+        });
     }
 
     pub fn view(&self, net: u32) -> RouteGrid {
-        let net_i = net as i32;
-        let mut grid = RouteGrid {
-            net,
-            x0: self.x0,
-            y0: self.y0,
-            h: self.h,
-            nx: self.nx,
-            ny: self.ny,
-            layers: (0..self.layers).collect(),
-            half_width: self.profile.half_width,
-            via: Some(ViaSpec { radius: self.profile.via_radius, drill_radius: self.profile.drill_radius }),
-            blocked: self.owner.iter().map(|&o| o != FREE && o != net_i).collect(),
-            via_blocked: self.via_owner.iter().map(|&o| o != FREE && o != net_i).collect(),
-            penalty: Vec::new(),
-            via_penalty: self.via_avoid.clone(),
-            region_cost: Vec::new(),
-            pours_block: self.pours_block,
-            directional: false,
-            deadline: Default::default(),
-            spokes: self.spokes.clone(),
-        };
-        self.apply_regions(net, &mut grid);
-        self.apply_under(net, &mut grid);
-        grid
+        board::work::in_bucket(board::work::Bucket::MapPatch, || {
+            let net_i = net as i32;
+            let mut grid = RouteGrid {
+                net,
+                x0: self.x0,
+                y0: self.y0,
+                h: self.h,
+                nx: self.nx,
+                ny: self.ny,
+                layers: (0..self.layers).collect(),
+                half_width: self.profile.half_width,
+                via: Some(ViaSpec { radius: self.profile.via_radius, drill_radius: self.profile.drill_radius }),
+                blocked: self.owner.iter().map(|&o| o != FREE && o != net_i).collect(),
+                via_blocked: self.via_owner.iter().map(|&o| o != FREE && o != net_i).collect(),
+                penalty: Vec::new(),
+                via_penalty: self.via_avoid.clone(),
+                region_cost: Vec::new(),
+                pours_block: self.pours_block,
+                directional: false,
+                deadline: Default::default(),
+                spokes: self.spokes.clone(),
+            };
+            self.apply_regions(net, &mut grid);
+            self.apply_under(net, &mut grid);
+            grid
+        })
     }
 }
 

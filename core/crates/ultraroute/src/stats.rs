@@ -16,16 +16,33 @@ pub fn version() -> (&'static str, Option<&'static str>) {
 pub struct RunStats {
     pub router: Router,
     pub input: Input,
+    pub board: BoardInfo,
     pub summary: Summary,
     pub findings: Vec<Finding>,
     pub deadline: DeadlineStats,
     pub stages: Vec<StageStats>,
+    pub moves: MoveStats,
+    pub progress: ProgressStats,
     /// Each connection a stage gave up on, and why.
     pub failures: Vec<Failure>,
     pub settings: Settings,
     pub memory: Memory,
+    /// Process CPU seconds spent loading and parsing the input board before `route` began.
+    pub load_cpu_seconds: f64,
     /// The run's own bookkeeping: what counting stages' open connections and copper took.
     pub stats_seconds: f64,
+    /// Main-thread CPU seconds spent inside `Mark::take` while stage timing was paused.
+    pub stats_cpu_seconds: f64,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct BoardInfo {
+    pub copper_layers: usize,
+    pub footprints: usize,
+    pub fine_pitch_parts: usize,
+    pub pads: usize,
+    pub nets: usize,
+    pub diff_pairs: usize,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -55,6 +72,8 @@ pub struct Summary {
     /// Vias on the board at the end.
     pub vias: usize,
     pub seconds: f64,
+    /// Total routing CPU seconds across all stages (main thread plus any worker threads).
+    pub cpu_seconds: f64,
 }
 
 /// Something about the board as routed for its designer: `severity` is `error` (the board is
@@ -107,9 +126,15 @@ impl DeadlineStats {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct StageStats {
     pub name: &'static str,
-    /// Seconds since the run began when it started, and how long it took.
+    /// Seconds since the run began when it started, and how long it took on the wall clock.
     pub started: f64,
     pub seconds: f64,
+    /// Thread CPU seconds spent in the stage (main thread plus any worker threads).
+    pub cpu_seconds: f64,
+    /// Exclusive CPU seconds per sub-operation within the stage, plus `accounted` and `other`.
+    pub cpu: CpuBreakdown,
+    /// CPU seconds split between kept connection-closing work, other kept work, wasted tries and setup/other.
+    pub effort: Effort,
     /// Whether the clock stopped it short.
     pub cut: bool,
     pub open_before: usize,
@@ -122,6 +147,441 @@ pub struct StageStats {
     pub work: Work,
     /// The stage's own figures, as it reports them.
     pub detail: Value,
+}
+
+fn step_down(x: f64) -> f64 {
+    if x <= 0.0 { 0.0 } else { f64::from_bits(x.to_bits() - 1) }
+}
+
+/// Exclusive CPU seconds per sub-operation (`board::work::Bucket`), their sum (`accounted`), and
+/// the unattributed remainder (`other`).
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct CpuBreakdown {
+    pub astar: f64,
+    pub map_build: f64,
+    pub map_patch: f64,
+    pub zones: f64,
+    pub checks: f64,
+    pub connectivity: f64,
+    pub terminals: f64,
+    pub geometry: f64,
+    pub accounted: f64,
+    pub other: f64,
+}
+
+impl CpuBreakdown {
+    /// Converts nanosecond counters into seconds while keeping `accounted + other <= stage_sec`
+    /// exact under IEEE-754 rounding.
+    pub fn from_ns(total_ns: u64, raw: &[u64; board::work::BUCKET_COUNT]) -> (f64, Self) {
+        if total_ns == 0 {
+            return (0.0, Self::default());
+        }
+        let raw_sum: u128 = raw.iter().map(|&x| x as u128).sum();
+        let mut b = *raw;
+        if raw_sum > total_ns as u128 && raw_sum > 0 {
+            for x in &mut b {
+                *x = ((*x as u128) * (total_ns as u128) / raw_sum) as u64;
+            }
+        }
+        let sec = |ns: u64| ns as f64 * 1e-9;
+        let astar = sec(b[board::work::Bucket::Astar as usize]);
+        let map_build = sec(b[board::work::Bucket::MapBuild as usize]);
+        let map_patch = sec(b[board::work::Bucket::MapPatch as usize]);
+        let zones = sec(b[board::work::Bucket::Zones as usize]);
+        let checks = sec(b[board::work::Bucket::Checks as usize]);
+        let connectivity = sec(b[board::work::Bucket::Connectivity as usize]);
+        let terminals = sec(b[board::work::Bucket::Terminals as usize]);
+        let geometry = sec(b[board::work::Bucket::Geometry as usize]);
+        let accounted = astar + map_build + map_patch + zones + checks + connectivity + terminals + geometry;
+        let stage_sec = sec(total_ns).max(accounted);
+        let mut other = (stage_sec - accounted).max(0.0);
+        while accounted + other > stage_sec && other > 0.0 {
+            other = step_down(other);
+        }
+        (
+            stage_sec,
+            Self { astar, map_build, map_patch, zones, checks, connectivity, terminals, geometry, accounted, other },
+        )
+    }
+}
+
+/// CPU seconds spent on kept work that closed a connection (`useful_seconds`), kept work for
+/// non-connection changes (`kept_other_seconds`: fanout stubs, shove tie swaps, pulled-tight
+/// chains, dropped vias), discarded or failed tries (`wasted_seconds`), their sum
+/// (`accounted_seconds`), and fixed stage setup/cleanup (`other_seconds`).
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct Effort {
+    pub useful_seconds: f64,
+    pub kept_other_seconds: f64,
+    pub wasted_seconds: f64,
+    pub accounted_seconds: f64,
+    pub other_seconds: f64,
+}
+
+impl Effort {
+    pub fn from_ns(stage_sec: f64, useful_ns: u64, kept_other_ns: u64, wasted_ns: u64) -> Self {
+        if stage_sec <= 0.0 {
+            return Self::default();
+        }
+        let mut u = useful_ns as f64 * 1e-9;
+        let mut k = kept_other_ns as f64 * 1e-9;
+        let mut w = wasted_ns as f64 * 1e-9;
+        let sum = u + k + w;
+        if sum > stage_sec && sum > 0.0 {
+            let scale = stage_sec / sum;
+            u *= scale;
+            k *= scale;
+            w *= scale;
+            while u + k + w > stage_sec && (u > 0.0 || k > 0.0 || w > 0.0) {
+                if u >= k && u >= w {
+                    u = step_down(u);
+                } else if k >= w {
+                    k = step_down(k);
+                } else {
+                    w = step_down(w);
+                }
+            }
+        }
+        let accounted_seconds = u + k + w;
+        let mut other_seconds = (stage_sec - accounted_seconds).max(0.0);
+        while accounted_seconds + other_seconds > stage_sec && other_seconds > 0.0 {
+            other_seconds = step_down(other_seconds);
+        }
+        Self { useful_seconds: u, kept_other_seconds: k, wasted_seconds: w, accounted_seconds, other_seconds }
+    }
+}
+
+/// Per-move-kind breakdown of kept versus wasted work across the run.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct MoveStats {
+    pub negotiation: NegMoveStats,
+    pub single: SingleMoveStats,
+    pub rip_up: RipMoveStats,
+    pub shove: ShoveMoveStats,
+    pub nudge: NudgeMoveStats,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct NegRoundStat {
+    pub pass: usize,
+    pub round: usize,
+    pub rerouted: usize,
+    pub colliding: usize,
+    pub improved: bool,
+    pub cpu_seconds: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct NegMoveStats {
+    pub passes: usize,
+    pub rounds: usize,
+    pub converging_rounds: usize,
+    pub converging_seconds: f64,
+    pub stalled_rounds: usize,
+    pub stalled_seconds: f64,
+    pub setup_useful_seconds: f64,
+    pub setup_wasted_seconds: f64,
+    pub commit_useful_seconds: f64,
+    pub commit_wasted_seconds: f64,
+    pub rescues_tried: usize,
+    pub rescues_kept: usize,
+    pub rescue_useful_seconds: f64,
+    pub rescues_wasted: usize,
+    pub rescue_wasted_seconds: f64,
+    pub useful_seconds: f64,
+    pub wasted_seconds: f64,
+    pub round_trace: Vec<NegRoundStat>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct SingleMoveStats {
+    pub attempts: usize,
+    pub routed: usize,
+    pub useful_seconds: f64,
+    pub no_terminal: usize,
+    pub no_terminal_seconds: f64,
+    pub no_path: usize,
+    pub no_path_seconds: f64,
+    pub refused: usize,
+    pub refused_seconds: f64,
+    pub wasted_seconds: f64,
+    pub setup_seconds: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct RipMoveStats {
+    pub attempts: usize,
+    pub kept: usize,
+    pub useful_seconds: f64,
+    pub no_path: usize,
+    pub no_path_seconds: f64,
+    pub hard_conflict: usize,
+    pub hard_conflict_seconds: f64,
+    pub no_better: usize,
+    pub no_better_seconds: f64,
+    pub wasted_seconds: f64,
+    pub setup_seconds: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ShoveMoveStats {
+    pub passes: usize,
+    pub attempts: usize,
+    pub kept_closed: usize,
+    pub useful_seconds: f64,
+    pub kept_tie: usize,
+    pub kept_tie_seconds: f64,
+    pub walled_no_path: usize,
+    pub walled_no_path_seconds: f64,
+    pub reverted_routed: usize,
+    pub reverted_routed_seconds: f64,
+    pub reverted_unrouted: usize,
+    pub reverted_unrouted_seconds: f64,
+    pub wasted_seconds: f64,
+    pub setup_seconds: f64,
+    pub kept_plough_seconds: f64,
+    pub kept_reroute_seconds: f64,
+    pub kept_repair_seconds: f64,
+    pub wasted_plough_seconds: f64,
+    pub wasted_reroute_seconds: f64,
+    pub wasted_repair_seconds: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct NudgeMoveStats {
+    pub tried: usize,
+    pub kept: usize,
+    pub guided_kept: usize,
+    pub blind_kept: usize,
+    pub blame_queries: usize,
+    pub blame_useful_seconds: f64,
+    pub blame_wasted_seconds: f64,
+    pub kept_guided_seconds: f64,
+    pub kept_blind_seconds: f64,
+    pub useful_seconds: f64,
+    pub illegal_guided: usize,
+    pub illegal_guided_seconds: f64,
+    pub illegal_blind: usize,
+    pub illegal_blind_seconds: f64,
+    pub no_better_guided: usize,
+    pub no_better_guided_seconds: f64,
+    pub no_better_blind: usize,
+    pub no_better_blind_seconds: f64,
+    pub wasted_seconds: f64,
+}
+
+impl MoveStats {
+    pub fn record_negotiation(&mut self, n: &grid::NegotiationStats) -> (u64, u64) {
+        let sec = |ns: u64| ns as f64 * 1e-9;
+        let (useful_ns, wasted_ns) = if n.committed > 0 {
+            (
+                n.converging_ns.saturating_add(n.setup_useful_ns).saturating_add(n.commit_useful_ns).saturating_add(n.rescue_useful_ns),
+                n.stalled_ns.saturating_add(n.setup_wasted_ns).saturating_add(n.commit_wasted_ns).saturating_add(n.rescue_wasted_ns),
+            )
+        } else {
+            (
+                n.rescue_useful_ns,
+                n.converging_ns
+                    .saturating_add(n.stalled_ns)
+                    .saturating_add(n.setup_useful_ns)
+                    .saturating_add(n.setup_wasted_ns)
+                    .saturating_add(n.commit_useful_ns)
+                    .saturating_add(n.commit_wasted_ns)
+                    .saturating_add(n.rescue_wasted_ns),
+            )
+        };
+        let dst = &mut self.negotiation;
+        dst.passes += n.passes;
+        dst.rounds += n.rounds_total;
+        dst.converging_rounds += n.converging_rounds;
+        dst.converging_seconds += sec(n.converging_ns);
+        dst.stalled_rounds += n.stalled_rounds;
+        dst.stalled_seconds += sec(n.stalled_ns);
+        dst.setup_useful_seconds += sec(n.setup_useful_ns);
+        dst.setup_wasted_seconds += sec(n.setup_wasted_ns);
+        dst.commit_useful_seconds += sec(n.commit_useful_ns);
+        dst.commit_wasted_seconds += sec(n.commit_wasted_ns);
+        dst.rescues_tried += n.rescues_tried;
+        dst.rescues_kept += n.rescues_kept;
+        dst.rescue_useful_seconds += sec(n.rescue_useful_ns);
+        dst.rescues_wasted += n.rescues_wasted;
+        dst.rescue_wasted_seconds += sec(n.rescue_wasted_ns);
+        dst.useful_seconds += sec(useful_ns);
+        dst.wasted_seconds += sec(wasted_ns);
+        dst.round_trace.extend(n.round_trace.iter().map(|r| NegRoundStat {
+            pass: r.pass,
+            round: r.round,
+            rerouted: r.rerouted,
+            colliding: r.colliding,
+            improved: r.improved,
+            cpu_seconds: sec(r.cpu_ns),
+        }));
+        (useful_ns, wasted_ns)
+    }
+
+    pub fn record_single(&mut self, s: &grid::Stats) -> (u64, u64) {
+        let sec = |ns: u64| ns as f64 * 1e-9;
+        let wasted_ns = s.no_terminal_ns.saturating_add(s.no_path_ns).saturating_add(s.refused_ns);
+        let dst = &mut self.single;
+        dst.attempts += s.routed + s.failed;
+        dst.routed += s.routed;
+        dst.useful_seconds += sec(s.routed_ns);
+        dst.no_terminal += s.no_terminal;
+        dst.no_terminal_seconds += sec(s.no_terminal_ns);
+        dst.no_path += s.no_path;
+        dst.no_path_seconds += sec(s.no_path_ns);
+        dst.refused += s.refused;
+        dst.refused_seconds += sec(s.refused_ns);
+        dst.wasted_seconds += sec(wasted_ns);
+        dst.setup_seconds += sec(s.setup_ns);
+        (s.routed_ns, wasted_ns)
+    }
+
+    pub fn record_rip(&mut self, r: &grid::RipStats) -> (u64, u64) {
+        let sec = |ns: u64| ns as f64 * 1e-9;
+        let wasted_ns = r.no_path_ns.saturating_add(r.hard_conflict_ns).saturating_add(r.no_better_ns);
+        let dst = &mut self.rip_up;
+        dst.attempts += r.attempts;
+        dst.kept += r.kept;
+        dst.useful_seconds += sec(r.kept_ns);
+        dst.no_path += r.no_path;
+        dst.no_path_seconds += sec(r.no_path_ns);
+        dst.hard_conflict += r.hard_conflict;
+        dst.hard_conflict_seconds += sec(r.hard_conflict_ns);
+        dst.no_better += r.no_better;
+        dst.no_better_seconds += sec(r.no_better_ns);
+        dst.wasted_seconds += sec(wasted_ns);
+        dst.setup_seconds += sec(r.setup_ns);
+        (r.kept_ns, wasted_ns)
+    }
+
+    pub fn record_shove(&mut self, s: &grid::ShoveStats) -> (u64, u64, u64) {
+        let sec = |ns: u64| ns as f64 * 1e-9;
+        let dst = &mut self.shove;
+        dst.passes += 1;
+        dst.attempts += s.tries.len();
+        dst.setup_seconds += sec(s.setup_ns);
+        let (mut useful_ns, mut tie_ns, mut wasted_ns) = (0u64, 0u64, 0u64);
+        for t in &s.tries {
+            if t.kept {
+                dst.kept_plough_seconds += sec(t.plough_ns);
+                dst.kept_reroute_seconds += sec(t.reroute_ns);
+                dst.kept_repair_seconds += sec(t.repair_ns);
+                if t.open_after < t.open_before {
+                    dst.kept_closed += 1;
+                    dst.useful_seconds += sec(t.cpu_ns);
+                    useful_ns = useful_ns.saturating_add(t.cpu_ns);
+                } else {
+                    dst.kept_tie += 1;
+                    dst.kept_tie_seconds += sec(t.cpu_ns);
+                    tie_ns = tie_ns.saturating_add(t.cpu_ns);
+                }
+            } else {
+                dst.wasted_plough_seconds += sec(t.plough_ns);
+                dst.wasted_reroute_seconds += sec(t.reroute_ns);
+                dst.wasted_repair_seconds += sec(t.repair_ns);
+                wasted_ns = wasted_ns.saturating_add(t.cpu_ns);
+                if t.rounds.iter().all(|r| r.path.is_empty()) {
+                    dst.walled_no_path += 1;
+                    dst.walled_no_path_seconds += sec(t.cpu_ns);
+                } else if t.routed {
+                    dst.reverted_routed += 1;
+                    dst.reverted_routed_seconds += sec(t.cpu_ns);
+                } else {
+                    dst.reverted_unrouted += 1;
+                    dst.reverted_unrouted_seconds += sec(t.cpu_ns);
+                }
+            }
+        }
+        dst.wasted_seconds += sec(wasted_ns);
+        (useful_ns, tie_ns, wasted_ns)
+    }
+
+    pub fn record_nudge(&mut self, n: &grid::NudgeStats) -> (u64, u64) {
+        let sec = |ns: u64| ns as f64 * 1e-9;
+        let useful_ns = n.kept_guided_ns.saturating_add(n.kept_blind_ns).saturating_add(n.blame_useful_ns);
+        let wasted_ns = n
+            .illegal_guided_ns
+            .saturating_add(n.illegal_blind_ns)
+            .saturating_add(n.no_better_guided_ns)
+            .saturating_add(n.no_better_blind_ns)
+            .saturating_add(n.blame_wasted_ns);
+        let dst = &mut self.nudge;
+        dst.tried += n.tried;
+        dst.kept += n.kept;
+        dst.guided_kept += n.guided;
+        dst.blind_kept += n.kept.saturating_sub(n.guided);
+        dst.blame_queries += n.blame_queries;
+        dst.blame_useful_seconds += sec(n.blame_useful_ns);
+        dst.blame_wasted_seconds += sec(n.blame_wasted_ns);
+        dst.kept_guided_seconds += sec(n.kept_guided_ns);
+        dst.kept_blind_seconds += sec(n.kept_blind_ns);
+        dst.useful_seconds += sec(useful_ns);
+        dst.illegal_guided += n.illegal_guided;
+        dst.illegal_guided_seconds += sec(n.illegal_guided_ns);
+        dst.illegal_blind += n.illegal_blind;
+        dst.illegal_blind_seconds += sec(n.illegal_blind_ns);
+        dst.no_better_guided += n.no_better_guided;
+        dst.no_better_guided_seconds += sec(n.no_better_guided_ns);
+        dst.no_better_blind += n.no_better_blind;
+        dst.no_better_blind_seconds += sec(n.no_better_blind_ns);
+        dst.wasted_seconds += sec(wasted_ns);
+        (useful_ns, wasted_ns)
+    }
+}
+
+/// Open-count progress over the run's CPU timeline, plus what the router spent the second half
+/// of its CPU time doing (`last_half`).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ProgressStats {
+    pub initial_open: usize,
+    pub final_open: usize,
+    pub min_open: usize,
+    pub total_cpu_seconds: f64,
+    pub routing_cpu_seconds: f64,
+    /// CPU timestamp at which the open connection count last reached a new record low.
+    pub last_open_drop_cpu_seconds: f64,
+    /// `last_open_drop_cpu_seconds / total_cpu_seconds` (`0.0` when `total_cpu_seconds == 0.0`).
+    pub last_open_drop_fraction: f64,
+    /// Stage in which the open connection count last dropped (`None` if it never dropped).
+    pub last_open_drop_stage: Option<String>,
+    /// CPU seconds spent in open-connection routing stages after `last_open_drop_cpu_seconds`:
+    /// the search time an ideal stop-routing rule would save while still polishing and writing.
+    pub no_progress_routing_cpu_seconds: f64,
+    /// Total run CPU seconds after `last_open_drop_cpu_seconds` (including polish and write).
+    pub no_progress_total_cpu_seconds: f64,
+    /// Step changes in the open connection count along the run's CPU timeline.
+    pub open_curve: Vec<OpenPoint>,
+    /// Breakdown of the run's second half `[0.5 * total_cpu_seconds, total_cpu_seconds]`.
+    pub last_half: HalfSlice,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OpenPoint {
+    pub cpu_seconds: f64,
+    pub open: usize,
+    pub min_open: usize,
+    pub stage: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct HalfSlice {
+    pub start_cpu_seconds: f64,
+    pub end_cpu_seconds: f64,
+    pub cpu_seconds: f64,
+    pub cpu: CpuBreakdown,
+    pub effort: Effort,
+    pub stages: Vec<StageSlice>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StageSlice {
+    pub name: String,
+    pub cpu_seconds: f64,
+    pub useful_seconds: f64,
+    pub kept_other_seconds: f64,
+    pub wasted_seconds: f64,
+    pub other_seconds: f64,
 }
 
 /// The work counted while a stage ran (`grid::work`): the process's, so a process routing two

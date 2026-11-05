@@ -132,6 +132,7 @@ pub fn push_watch(
     soft: &mut Vec<ItemId>,
     watch: &mut dyn FnMut(&Board, PushStep),
 ) -> PushStats {
+    let _b = board::work::enter(board::work::Bucket::Geometry);
     let mut stats = PushStats::default();
     let steps = options.steps.max(1);
     let still = |board: &Board, f: usize| {

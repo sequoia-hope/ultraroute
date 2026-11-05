@@ -253,6 +253,10 @@ impl NodeHeap {
 /// Cost from the nearest source to every cell (`UNREACHED` where none, and everywhere when the
 /// grid's deadline passes before the field is done).
 pub fn cost_field(grid: &RouteGrid, sources: &[usize], via_cost: u32) -> Vec<u32> {
+    board::work::in_bucket(board::work::Bucket::Astar, || cost_field_inner(grid, sources, via_cost))
+}
+
+fn cost_field_inner(grid: &RouteGrid, sources: &[usize], via_cost: u32) -> Vec<u32> {
     let cells = grid.cell_count();
     let mut cost = vec![UNREACHED; grid.blocked.len()];
     let mut heap = NodeHeap::new();
@@ -307,6 +311,15 @@ pub fn cost_field(grid: &RouteGrid, sources: &[usize], via_cost: u32) -> Vec<u32
 /// The cheapest route from any source to any target, by walking the cost field downhill from the
 /// cheapest target. Shared with the GPU path, which produces the same field.
 pub fn trace_back(
+    grid: &RouteGrid,
+    cost: &[u32],
+    targets: &[usize],
+    via_cost: u32,
+) -> Option<GridPath> {
+    board::work::in_bucket(board::work::Bucket::Astar, || trace_back_inner(grid, cost, targets, via_cost))
+}
+
+fn trace_back_inner(
     grid: &RouteGrid,
     cost: &[u32],
     targets: &[usize],
@@ -639,7 +652,8 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
         };
     }
     work::add(&work::ASTAR, 1);
-    BUFS.with(|bufs| {
+    board::work::in_bucket(board::work::Bucket::Astar, || {
+        BUFS.with(|bufs| {
         let mut b = bufs.borrow_mut();
         let nodes = grid.blocked.len();
         let cells = grid.cell_count();
@@ -809,6 +823,7 @@ pub fn route_astar(grid: &RouteGrid, sources: &[usize], targets: &[usize], via_c
                 })
                 .collect(),
         )
+        })
     })
 }
 

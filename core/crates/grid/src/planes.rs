@@ -89,6 +89,7 @@ pub fn pad_vias(board: &Board, reach: Nm) -> Vec<PadVia> {
 /// Gives each plane-net pad without one a via of its own within `reach`, as [`join_planes`] does
 /// first: once routing is done, for the pads whose via a signal took, where one still fits.
 pub fn own_planes_vias(board: &mut Board, log: &Option<Log>, deadline: &Deadline, reach: Nm) -> PlaneStats {
+    let _b = board::work::enter(board::work::Bucket::Geometry);
     let mut stats = PlaneStats::default();
     if board.planes != 0 {
         own_vias(board, log, deadline, reach, &mut stats);
@@ -157,6 +158,7 @@ fn centre(item: &Item) -> Point {
 /// With `reach`, every pad of a plane's net first gets a via of its own within it, where one
 /// fits (`own_vias`); the pieces still off their plane are joined after.
 pub fn join_planes(board: &mut Board, log: &Option<Log>, deadline: &Deadline, reach: Option<Nm>) -> PlaneStats {
+    let _b = board::work::enter(board::work::Bucket::Geometry);
     let mut stats = PlaneStats::default();
     if board.planes == 0 {
         return stats;

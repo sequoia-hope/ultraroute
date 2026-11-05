@@ -17,6 +17,8 @@ pub struct CleanStats {
     /// Total length of the chains, in millimetres.
     pub length_before: f64,
     pub length_after: f64,
+    pub kept_ns: u64,
+    pub unchanged_ns: u64,
 }
 
 /// A chain's points and the track between each pair, all on one layer, one net, one width.
@@ -131,6 +133,7 @@ pub fn drop_duplicates(board: &mut Board, soft: &mut Vec<ItemId>) -> (usize, Vec
 
 /// As [`drop_duplicates`], showing `watch` each duplicate removed and the board after it goes.
 pub fn drop_duplicates_watch(board: &mut Board, soft: &mut Vec<ItemId>, watch: &mut dyn FnMut(&Board, &Item)) -> (usize, Vec<Span>) {
+    let _b = board::work::enter(board::work::Bucket::Geometry);
     let soft_set: HashSet<ItemId> = soft.iter().copied().collect();
     // Whatever its width: a narrower track with the same ends lies wholly inside the wider and
     // joins what it joins (easy2350's USB_DM_C, a 0.09 mm neck under a 0.2 mm track).
@@ -179,6 +182,7 @@ pub fn prune_dangling_watch(board: &mut Board, soft: &mut Vec<ItemId>, watch: &m
 /// As [`prune_dangling`], for the copper `which` picks only: the shove prunes the nets it is
 /// done with mid-run, and leaves an open net's cut copper for the net to join again.
 pub(crate) fn prune_dangling_of(board: &mut Board, soft: &mut Vec<ItemId>, which: &dyn Fn(&Item) -> bool, watch: &mut dyn FnMut(&Board, &Item)) -> (usize, Vec<Span>) {
+    let _b = board::work::enter(board::work::Bucket::Geometry);
     let (mut pruned, mut spans) = (0, Vec::new());
     loop {
         let loose: Vec<ItemId> =
@@ -234,6 +238,7 @@ pub(crate) fn prune_dangling_of(board: &mut Board, soft: &mut Vec<ItemId>, which
 /// from it at an angle is found with an unconnected end (`track_dangling`), and split, never.
 /// The tracks split are taken out of `soft` and their halves put in; the spans of what went.
 pub fn split_at_joins(board: &mut Board, soft: &mut Vec<ItemId>) -> (usize, Vec<Span>) {
+    let _b = board::work::enter(board::work::Bucket::Geometry);
     let (mut split, mut spans) = (0, Vec::new());
     let mut queue: Vec<ItemId> = soft.clone();
     while let Some(id) = queue.pop() {
@@ -363,6 +368,7 @@ fn firmly_linked(board: &Board, a: ItemId, b: ItemId) -> bool {
 /// end's width or, where that breaks a rule, the narrowest the net's rules allow; the pieces join
 /// `laid`. How many joints it mended.
 pub fn mend_joints(board: &mut Board, laid: &mut Vec<ItemId>) -> usize {
+    let _b = board::work::enter(board::work::Bucket::Geometry);
     let mut mended = 0;
     for joint in narrow_joints(board, laid) {
         // A piece laid for the joint's other end may have mended this one.
@@ -498,6 +504,7 @@ fn bridged(board: &Board, layer: usize, xi: ItemId, x: &Item, yi: ItemId, y: &It
 /// they meet at the narrower's full width: at the track's width or, where that breaks a rule, the
 /// narrowest the net's rules allow; the pieces join `laid`. How many it mended.
 pub fn mend_grazes(board: &mut Board, laid: &mut Vec<ItemId>) -> usize {
+    let _b = board::work::enter(board::work::Bucket::Geometry);
     let mut mended = 0;
     for graze in grazes(board, laid) {
         let Some(track) = board.item(graze.track).cloned() else { continue };
@@ -579,6 +586,7 @@ fn via_grazes(board: &Board, laid: &[ItemId]) -> Vec<(ItemId, ItemId)> {
 /// width joins their centres on every layer both have lands on, where that breaks no rule. The
 /// spans of what went, and how many pairs were mended.
 pub fn mend_via_grazes(board: &mut Board, laid: &mut Vec<ItemId>) -> (usize, Vec<Span>) {
+    let _b = board::work::enter(board::work::Bucket::Geometry);
     let (mut mended, mut spans) = (0, Vec::new());
     'pairs: for (id, other) in via_grazes(board, laid) {
         let (Some(v), Some(o)) = (board.item(id).cloned(), board.item(other).cloned()) else { continue };
@@ -692,6 +700,7 @@ fn land_chord(shape: &Shape, c: Point, r: f64) -> Option<(f64, Point)> {
 /// net's narrowest joint, on every layer both are on, where that breaks no rule. The spans of
 /// what went, and how many were mended.
 pub fn mend_via_pad_grazes(board: &mut Board, laid: &mut Vec<ItemId>) -> (usize, Vec<Span>) {
+    let _b = board::work::enter(board::work::Bucket::Geometry);
     let (mut mended, mut spans) = (0, Vec::new());
     for (id, pad) in via_pad_grazes(board, laid) {
         let (Some(v), Some(p)) = (board.item(id).cloned(), board.item(pad).cloned()) else { continue };
@@ -807,6 +816,7 @@ pub fn pad_joints(board: &Board, laid: &[ItemId]) -> Vec<PadJoint> {
 /// where that breaks a rule, the narrowest the net's rules allow; the pieces join `laid`. How
 /// many it mended.
 pub fn mend_pad_joints(board: &mut Board, laid: &mut Vec<ItemId>) -> usize {
+    let _b = board::work::enter(board::work::Bucket::Geometry);
     let mut mended = 0;
     for joint in pad_joints(board, laid) {
         let (Some(track), Some(pad)) = (board.item(joint.track).cloned(), board.item(joint.pad).cloned()) else { continue };
@@ -1326,6 +1336,7 @@ const STEP_TOLERANCE: f64 = 15_000.0;
 /// did and breaks no rule, round after round until none is left. Too slight to pull a coupled
 /// pair apart. How many it took out.
 pub fn smooth_staircases(board: &mut Board, soft: &mut Vec<ItemId>) -> usize {
+    let _b = board::work::enter(board::work::Bucket::Geometry);
     let mut taken = 0;
     loop {
         let soft_set: HashSet<ItemId> = soft.iter().copied().filter(|id| board.item(*id).is_some()).collect();
@@ -1362,6 +1373,7 @@ pub fn smooth_staircases(board: &mut Board, soft: &mut Vec<ItemId>) -> usize {
 /// pair's too, which pulling tight leaves alone, without pulling its coupled runs apart (they
 /// never turn back). How many it took out.
 pub fn straighten_turn_backs(board: &mut Board, soft: &mut Vec<ItemId>) -> usize {
+    let _b = board::work::enter(board::work::Bucket::Geometry);
     let soft_set: HashSet<ItemId> = soft.iter().copied().filter(|id| board.item(*id).is_some()).collect();
     let mut replaced: HashSet<ItemId> = HashSet::new();
     let mut added: Vec<ItemId> = Vec::new();
@@ -1395,6 +1407,7 @@ pub type TightWatch<'a> = dyn FnMut(&Board, u32, &[Item], &[ItemId]) + 'a;
 /// As [`pull_tight`], calling `watch` with the net, replaced tracks and new track ids whenever a
 /// chain is shortened.
 pub fn pull_tight_watch(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &Deadline, watch: &mut TightWatch) -> CleanStats {
+    let _b = board::work::enter(board::work::Bucket::Geometry);
     let soft_set: HashSet<ItemId> = soft.iter().copied().filter(|id| board.item(*id).is_some()).collect();
     let mut stats = CleanStats::default();
     let mut replaced: HashSet<ItemId> = HashSet::new();
@@ -1403,6 +1416,7 @@ pub fn pull_tight_watch(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &De
         if deadline.expired() {
             break;
         }
+        let ct0 = board::work::timed_run_ns();
         stats.chains += 1;
         stats.segments_before += chain.tracks.len();
         stats.length_before += length(&chain.points);
@@ -1439,6 +1453,9 @@ pub fn pull_tight_watch(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &De
         stats.length_after += length(&kept_points);
         if !chain_new.is_empty() {
             watch(board, chain.net, &chain_old, &chain_new);
+            stats.kept_ns = stats.kept_ns.saturating_add(board::work::timed_run_ns().saturating_sub(ct0));
+        } else {
+            stats.unchanged_ns = stats.unchanged_ns.saturating_add(board::work::timed_run_ns().saturating_sub(ct0));
         }
     }
     soft.retain(|id| !replaced.contains(id) && board.item(*id).is_some());

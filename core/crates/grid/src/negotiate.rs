@@ -132,6 +132,16 @@ impl Default for NegotiationOptions {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NegotiationRound {
+    pub pass: usize,
+    pub round: usize,
+    pub rerouted: usize,
+    pub colliding: usize,
+    pub improved: bool,
+    pub cpu_ns: u64,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct NegotiationStats {
     pub connections: usize,
@@ -142,6 +152,22 @@ pub struct NegotiationStats {
     pub unroutable: usize,
     pub vias: usize,
     pub laid: Vec<ItemId>,
+    pub passes: usize,
+    pub rounds_total: usize,
+    pub converging_rounds: usize,
+    pub converging_ns: u64,
+    pub stalled_rounds: usize,
+    pub stalled_ns: u64,
+    pub setup_useful_ns: u64,
+    pub setup_wasted_ns: u64,
+    pub commit_useful_ns: u64,
+    pub commit_wasted_ns: u64,
+    pub rescues_tried: usize,
+    pub rescues_kept: usize,
+    pub rescue_useful_ns: u64,
+    pub rescues_wasted: usize,
+    pub rescue_wasted_ns: u64,
+    pub round_trace: Vec<NegotiationRound>,
 }
 
 struct Connection {
@@ -351,16 +377,18 @@ struct Owned {
 
 impl Owned {
     fn of(map: &ObstacleMap) -> Owned {
-        let by_net = |owner: &[i32]| {
-            let mut out: FxHashMap<i32, Vec<u32>> = FxHashMap::default();
-            for (c, &o) in owner.iter().enumerate() {
-                if o > 0 {
-                    out.entry(o).or_default().push(c as u32);
+        board::work::in_bucket(board::work::Bucket::MapPatch, || {
+            let by_net = |owner: &[i32]| {
+                let mut out: FxHashMap<i32, Vec<u32>> = FxHashMap::default();
+                for (c, &o) in owner.iter().enumerate() {
+                    if o > 0 {
+                        out.entry(o).or_default().push(c as u32);
+                    }
                 }
-            }
-            out
-        };
-        Owned { nodes: by_net(&map.owner), vias: by_net(&map.via_owner) }
+                out
+            };
+            Owned { nodes: by_net(&map.owner), vias: by_net(&map.via_owner) }
+        })
     }
 
     /// Flips `grid`'s blocked and via-blocked cells from `from_net`'s view of `map` to `to_net`'s.
@@ -368,19 +396,21 @@ impl Owned {
         if from_net == to_net {
             return;
         }
-        for (who, blocked) in [(from_net, true), (to_net, false)] {
-            if let Some(cells) = self.nodes.get(&(who as i32)) {
-                for &c in cells {
-                    grid.blocked[c as usize] = blocked;
+        board::work::in_bucket(board::work::Bucket::MapPatch, || {
+            for (who, blocked) in [(from_net, true), (to_net, false)] {
+                if let Some(cells) = self.nodes.get(&(who as i32)) {
+                    for &c in cells {
+                        grid.blocked[c as usize] = blocked;
+                    }
+                }
+                if let Some(cells) = self.vias.get(&(who as i32)) {
+                    for &c in cells {
+                        grid.via_blocked[c as usize] = blocked;
+                    }
                 }
             }
-            if let Some(cells) = self.vias.get(&(who as i32)) {
-                for &c in cells {
-                    grid.via_blocked[c as usize] = blocked;
-                }
-            }
-        }
-        grid.net = to_net;
+            grid.net = to_net;
+        });
     }
 }
 
@@ -482,40 +512,48 @@ struct PassClaims {
 
 impl PassClaims {
     fn new(claimer: &Claimer) -> PassClaims {
-        let cells = claimer.nx * claimer.ny;
-        PassClaims {
-            trace: Claims::new(&claimer.trace_alias, claimer.layers * cells),
-            via: Claims::new(&claimer.via_alias, if claimer.exact { cells } else { 0 }),
-            holes: SameNetHoles::default(),
-        }
+        board::work::in_bucket(board::work::Bucket::Zones, || {
+            let cells = claimer.nx * claimer.ny;
+            PassClaims {
+                trace: Claims::new(&claimer.trace_alias, claimer.layers * cells),
+                via: Claims::new(&claimer.via_alias, if claimer.exact { cells } else { 0 }),
+                holes: SameNetHoles::default(),
+            }
+        })
     }
 
     /// Claims the route's zones, and returns them: by viewer, its trace and via cells.
     fn add(&mut self, claimer: &mut Claimer, r: Route) -> Touched {
-        let touched = Touched { trace: claimer.trace(r), via: claimer.via(r), ring: r.hole_ring.to_vec() };
-        self.trace.add(r.net, &touched.trace);
-        if claimer.exact {
-            self.via.add(r.net, &touched.via);
-            self.holes.add(r.net, r.hole_ring);
-        }
-        touched
+        board::work::in_bucket(board::work::Bucket::Zones, || {
+            let touched = Touched { trace: claimer.trace(r), via: claimer.via(r), ring: r.hole_ring.to_vec() };
+            self.trace.add(r.net, &touched.trace);
+            if claimer.exact {
+                self.via.add(r.net, &touched.via);
+                self.holes.add(r.net, r.hole_ring);
+            }
+            touched
+        })
     }
 
     /// Drops the route's claims, and returns the zones they were on, as [`PassClaims::add`].
     fn remove(&mut self, claimer: &mut Claimer, r: Route) -> Touched {
-        let touched = Touched { trace: claimer.trace(r), via: claimer.via(r), ring: r.hole_ring.to_vec() };
-        self.trace.remove(r.net, &touched.trace);
-        if claimer.exact {
-            self.via.remove(r.net, &touched.via);
-            self.holes.remove(r.net, r.hole_ring);
-        }
-        touched
+        board::work::in_bucket(board::work::Bucket::Zones, || {
+            let touched = Touched { trace: claimer.trace(r), via: claimer.via(r), ring: r.hole_ring.to_vec() };
+            self.trace.remove(r.net, &touched.trace);
+            if claimer.exact {
+                self.via.remove(r.net, &touched.via);
+                self.holes.remove(r.net, r.hole_ring);
+            }
+            touched
+        })
     }
 
     fn clear(&mut self) {
-        self.trace.clear();
-        self.via.clear();
-        self.holes.per_net.clear();
+        board::work::in_bucket(board::work::Bucket::Zones, || {
+            self.trace.clear();
+            self.via.clear();
+            self.holes.per_net.clear();
+        });
     }
 
     /// Whether a route runs into a claim: its cells, other than its own ends', into another
@@ -551,6 +589,7 @@ struct Claimer {
 
 impl Claimer {
     fn new(board: &Board, maps: &HashMap<String, ObstacleMap>, sample: &RouteGrid, exact: bool) -> Claimer {
+        let _b = board::work::enter(board::work::Bucket::Zones);
         let mut discs = HashMap::new();
         let mut hole_discs = HashMap::new();
         for (owner, a) in maps {
@@ -611,7 +650,9 @@ impl Claimer {
         if !self.exact {
             return Vec::new();
         }
-        stamp_cells_2d(vias, self.nx, self.ny, &self.hole_discs[class], &mut self.seen)
+        board::work::in_bucket(board::work::Bucket::Zones, || {
+            stamp_cells_2d(vias, self.nx, self.ny, &self.hole_discs[class], &mut self.seen)
+        })
     }
 }
 
@@ -652,10 +693,15 @@ pub fn route_negotiated_rounds(
 ) -> NegotiationStats {
     let out_of_time = || options.deadline.expired();
     let mut stats = NegotiationStats::default();
+    let setup_ev = board::work::begin_event();
+    let setup_t0 = board::work::timed_run_ns();
     let conn = joined(board, options.pours_block);
+    let board_open_start = conn.airlines.len();
     let mut open = open_of(&conn, &options.nets);
     stats.connections = open.len();
     if open.is_empty() {
+        stats.setup_wasted_ns = stats.setup_wasted_ns.saturating_add(board::work::timed_run_ns().saturating_sub(setup_t0));
+        setup_ev.finish("neg_setup", "empty", options.nets.is_none().then_some(board_open_start));
         return stats;
     }
 
@@ -666,11 +712,17 @@ pub fn route_negotiated_rounds(
             // On a board of much drawn copper the maps alone can outlast negotiation's deadline.
             // They are finished all the same, until the run's: the stage after needs the same
             // maps, and finds them made; one cut short would be made again from nothing.
-            let Some(map) = ObstacleMap::new_by(board, p, options.cell, options.pours_block, &options.deadline.to_hard()) else { return stats };
+            let Some(map) = ObstacleMap::new_by(board, p, options.cell, options.pours_block, &options.deadline.to_hard()) else {
+                stats.setup_wasted_ns = stats.setup_wasted_ns.saturating_add(board::work::timed_run_ns().saturating_sub(setup_t0));
+                setup_ev.finish("neg_setup", "cut", options.nets.is_none().then_some(board_open_start));
+                return stats;
+            };
             slot.insert(map);
         }
     }
     if out_of_time() {
+        stats.setup_wasted_ns = stats.setup_wasted_ns.saturating_add(board::work::timed_run_ns().saturating_sub(setup_t0));
+        setup_ev.finish("neg_setup", "cut", options.nets.is_none().then_some(board_open_start));
         return stats;
     }
     let sample = maps.values().next().expect("one map per class").view(0);
@@ -679,55 +731,109 @@ pub fn route_negotiated_rounds(
     if options.reachable_tree {
         open = reachable_airlines(board, &conn, open, &maps, &mut grid_buf, options.via_cost);
         if out_of_time() {
+            stats.setup_wasted_ns = stats.setup_wasted_ns.saturating_add(board::work::timed_run_ns().saturating_sub(setup_t0));
+            setup_ev.finish("neg_setup", "cut", options.nets.is_none().then_some(board_open_start));
             return stats;
         }
     }
     drop(conn);
     let mut claimer = Claimer::new(board, &maps, &sample, options.via_zones);
+    let top_setup_ns = board::work::timed_run_ns().saturating_sub(setup_t0);
+    setup_ev.finish("neg_setup", "setup", options.nets.is_none().then_some(board_open_start));
     let mut laid: Vec<LaidRoute> = Vec::new();
     let keep_laid = options.repasses > 0 || options.rip_blocked;
 
     let first = run_pass(
         board, solver, options, &mut maps, &mut claimer, &sample, &mut grid_buf, open, options.max_rounds, &options.net_weight, keep_laid, true,
-        &out_of_time, watch, trials, &mut on_round, &mut laid,
+        0, board_open_start, &out_of_time, watch, trials, &mut on_round, &mut laid,
     );
     stats.rounds = first.rounds;
     stats.conflicted = first.conflicted;
     stats.unroutable = first.unroutable;
     stats.committed = first.committed;
     stats.vias = first.vias;
-    stats.laid = first.laid;
+    stats.laid = first.laid.clone();
+    fold_pass(&mut stats, first);
 
     for repass in 0..options.repasses {
         if out_of_time() {
             break;
         }
-        let left = routable_open(board, options, &maps, &mut grid_buf);
+        let probe_ev = board::work::begin_event();
+        let probe_t0 = board::work::timed_run_ns();
+        let (left, board_open_now) = routable_open(board, options, &maps, &mut grid_buf);
+        let probe_ns = board::work::timed_run_ns().saturating_sub(probe_t0);
         if left.is_empty() {
+            stats.setup_wasted_ns = stats.setup_wasted_ns.saturating_add(probe_ns);
+            probe_ev.finish("neg_repass_probe", "empty", options.nets.is_none().then_some(board_open_now));
             break;
         }
+        probe_ev.finish("neg_repass_probe", "routable", options.nets.is_none().then_some(board_open_now));
         // Another order, so that a pass does not lose the same races again.
         let again = NegotiationOptions { seed: options.seed.wrapping_add((repass as u64 + 1).wrapping_mul(0x9e37_79b9)), ..options.clone() };
         let pass = run_pass(
             board, solver, &again, &mut maps, &mut claimer, &sample, &mut grid_buf, left, options.max_rounds.min(16), &options.net_weight, keep_laid, false,
-            &out_of_time, watch, &mut |_, _| {}, &mut None, &mut laid,
+            repass + 1, board_open_now, &out_of_time, watch, &mut |_, _| {}, &mut None, &mut laid,
         );
-        if pass.committed == 0 {
+        let pass_committed = pass.committed;
+        if pass_committed > 0 {
+            stats.setup_useful_ns = stats.setup_useful_ns.saturating_add(probe_ns);
+        } else {
+            stats.setup_wasted_ns = stats.setup_wasted_ns.saturating_add(probe_ns);
+        }
+        fold_pass(&mut stats, pass);
+        if pass_committed == 0 {
             break;
         }
     }
 
     if options.rip_blocked && !out_of_time() && open_of(&joined(board, options.pours_block), &options.nets).len() > stats.unroutable {
-        rescue_walled_off(board, solver, options, &mut maps, &mut claimer, &sample, &mut grid_buf, &out_of_time, watch, &mut laid);
+        rescue_walled_off(board, solver, options, &mut maps, &mut claimer, &sample, &mut grid_buf, &out_of_time, watch, &mut laid, &mut stats);
     }
 
     if keep_laid {
-        let left = open_of(&joined(board, options.pours_block), &options.nets).len();
+        let conn_end = joined(board, options.pours_block);
+        let left = open_of(&conn_end, &options.nets).len();
         stats.committed = stats.connections.saturating_sub(left);
         stats.laid = laid.iter().flat_map(|r| r.items.iter().copied()).collect();
         stats.vias = stats.laid.iter().filter(|id| board.item(**id).is_some_and(|it| it.kind == Kind::Via)).count();
     }
+    if stats.committed > 0 {
+        stats.setup_useful_ns = stats.setup_useful_ns.saturating_add(top_setup_ns);
+    } else {
+        stats.setup_wasted_ns = stats.setup_wasted_ns.saturating_add(top_setup_ns);
+    }
     stats
+}
+
+fn fold_pass(stats: &mut NegotiationStats, pass: PassSummary) {
+    if pass.rounds == 0 && pass.setup_ns == 0 && pass.commit_useful_ns == 0 && pass.commit_wasted_ns == 0 {
+        return;
+    }
+    stats.passes += 1;
+    stats.rounds_total += pass.round_records.len();
+    if pass.committed > 0 {
+        stats.setup_useful_ns = stats.setup_useful_ns.saturating_add(pass.setup_ns);
+        stats.commit_useful_ns = stats.commit_useful_ns.saturating_add(pass.commit_useful_ns);
+        stats.commit_wasted_ns = stats.commit_wasted_ns.saturating_add(pass.commit_wasted_ns);
+        for r in &pass.round_records {
+            if r.improved {
+                stats.converging_rounds += 1;
+                stats.converging_ns = stats.converging_ns.saturating_add(r.cpu_ns);
+            } else {
+                stats.stalled_rounds += 1;
+                stats.stalled_ns = stats.stalled_ns.saturating_add(r.cpu_ns);
+            }
+        }
+    } else {
+        stats.setup_wasted_ns = stats.setup_wasted_ns.saturating_add(pass.setup_ns);
+        stats.commit_wasted_ns = stats.commit_wasted_ns.saturating_add(pass.commit_useful_ns.saturating_add(pass.commit_wasted_ns));
+        stats.stalled_rounds += pass.round_records.len();
+        for r in &pass.round_records {
+            stats.stalled_ns = stats.stalled_ns.saturating_add(r.cpu_ns);
+        }
+    }
+    stats.round_trace.extend(pass.round_records);
 }
 
 struct PassSummary {
@@ -737,6 +843,10 @@ struct PassSummary {
     committed: usize,
     vias: usize,
     laid: Vec<ItemId>,
+    setup_ns: u64,
+    commit_useful_ns: u64,
+    commit_wasted_ns: u64,
+    round_records: Vec<NegotiationRound>,
 }
 
 /// Negotiates `open` to the end and commits what it can. With `keep_laid`, what it lays is also
@@ -755,16 +865,31 @@ fn run_pass(
     weights: &HashMap<u32, f64>,
     keep_laid: bool,
     report: bool,
+    pass_idx: usize,
+    board_open_before: usize,
     out_of_time: &dyn Fn() -> bool,
     watch: &mut dyn FnMut(&Board),
     trials: &mut dyn FnMut(usize, &[Trial]),
     on_round: &mut Option<&mut dyn FnMut(RoundView)>,
     laid: &mut Vec<LaidRoute>,
 ) -> PassSummary {
-    let mut summary = PassSummary { rounds: 0, conflicted: 0, unroutable: 0, committed: 0, vias: 0, laid: Vec::new() };
+    let mut summary = PassSummary {
+        rounds: 0,
+        conflicted: 0,
+        unroutable: 0,
+        committed: 0,
+        vias: 0,
+        laid: Vec::new(),
+        setup_ns: 0,
+        commit_useful_ns: 0,
+        commit_wasted_ns: 0,
+        round_records: Vec::new(),
+    };
     if open.is_empty() || max_rounds == 0 {
         return summary;
     }
+    let pass_setup_ev = board::work::begin_event();
+    let pass_setup_t0 = board::work::timed_run_ns();
     let weight_of = |net: u32| weights.get(&net).copied().unwrap_or(1.0);
     let mut connections: Vec<Connection> = open
         .iter()
@@ -853,12 +978,18 @@ fn run_pass(
     let mut shown = crate::clock::Instant::now();
     let (mut best_colliding, mut stale) = (usize::MAX, 0);
     let mut class_grids: Vec<(String, u64, RouteGrid, Option<Patchable>)> = Vec::new();
+    summary.setup_ns = board::work::timed_run_ns().saturating_sub(pass_setup_t0);
+    pass_setup_ev.finish("neg_setup", "setup", None);
     for round in 0..max_rounds {
         if out_of_time() {
             break;
         }
+        let round_ev = board::work::begin_event();
+        let round_t0 = board::work::timed_run_ns();
+        let mut rerouted = 0usize;
         summary.rounds = round + 1;
         if solver.batch_size() > 1 || options.jacobi {
+            rerouted = connections.len();
             if solver.batch_size() > 1 {
                 route_round_in_batches(&mut connections, maps, &ends, &zones, &history, &via_history, present, via_scale, weights, options, solver);
             } else {
@@ -885,6 +1016,7 @@ fn run_pass(
                 if c.walled || round > 0 && !options.reroute_all && !c.colliding && c.path.is_some() {
                     continue;
                 }
+                rerouted += 1;
                 if report {
                     tell(&options.log, "negotiating", || format!("round {}: rerouting {}", round + 1, board.net_name(c.net)), None);
                 }
@@ -972,27 +1104,31 @@ fn run_pass(
                 }
             }
         }
+        let cut = out_of_time();
         let mut colliding = 0;
-        for (k, c) in connections.iter_mut().enumerate() {
-            let Some(path) = &c.path else { continue };
-            let mut collides = false;
-            for &(layer, i, j) in path.iter().chain(&c.legs) {
-                let n = layer * cells + j * nx + i;
-                if !own_ends[k].contains(&n) && zones.trace.seen_by(&c.class).others(c.net, n) > 0 {
-                    history[n] += options.history_step;
-                    collides = true;
-                }
-            }
-            if options.via_zones {
-                for &cell in &c.vias {
-                    if zones.via.seen_by(&c.class).others(c.net, cell) > 0 || zones.holes.count(c.net, cell) > 0 {
-                        via_history[cell] += via_step;
+        {
+            let _b = board::work::enter(board::work::Bucket::Zones);
+            for (k, c) in connections.iter_mut().enumerate() {
+                let Some(path) = &c.path else { continue };
+                let mut collides = false;
+                for &(layer, i, j) in path.iter().chain(&c.legs) {
+                    let n = layer * cells + j * nx + i;
+                    if !own_ends[k].contains(&n) && zones.trace.seen_by(&c.class).others(c.net, n) > 0 {
+                        history[n] += options.history_step;
                         collides = true;
                     }
                 }
+                if options.via_zones {
+                    for &cell in &c.vias {
+                        if zones.via.seen_by(&c.class).others(c.net, cell) > 0 || zones.holes.count(c.net, cell) > 0 {
+                            via_history[cell] += via_step;
+                            collides = true;
+                        }
+                    }
+                }
+                colliding += usize::from(collides);
+                c.colliding = collides;
             }
-            colliding += usize::from(collides);
-            c.colliding = collides;
         }
         if report {
             let list = trial_list(&connections, sample);
@@ -1010,6 +1146,17 @@ fn run_pass(
         }
         shown = crate::clock::Instant::now();
         summary.conflicted = colliding;
+        let improved = !cut && (round == 0 || colliding == 0 || colliding < best_colliding);
+        let round_ns = board::work::timed_run_ns().saturating_sub(round_t0);
+        round_ev.finish("neg_round", if improved { "converging" } else { "stalled" }, None);
+        summary.round_records.push(NegotiationRound {
+            pass: pass_idx,
+            round: round + 1,
+            rerouted,
+            colliding,
+            improved,
+            cpu_ns: round_ns,
+        });
         if colliding == 0 {
             break;
         }
@@ -1031,17 +1178,28 @@ fn run_pass(
 
     // Commit greedily: a route whose cells lie in no committed net's zone is legal against
     // everything committed so far, converged or not; each piece is still checked exactly.
+    let commit_ev = board::work::begin_event();
+    let commit_t0 = board::work::timed_run_ns();
     let order = commit_order(&connections, &own_ends, nx, cells, claimer, &weight_of);
     let mut committed = PassClaims::new(claimer);
+    summary.commit_useful_ns = summary.commit_useful_ns.saturating_add(board::work::timed_run_ns().saturating_sub(commit_t0));
     for k in order {
+        let kt0 = board::work::timed_run_ns();
         let c = &connections[k];
-        let Some(r) = c.route() else { continue };
-        if committed.hit(r, &own_ends[k], nx, cells, options.via_zones) {
+        let Some(r) = c.route() else {
+            summary.commit_wasted_ns = summary.commit_wasted_ns.saturating_add(board::work::timed_run_ns().saturating_sub(kt0));
+            continue;
+        };
+        if board::work::in_bucket(board::work::Bucket::Zones, || committed.hit(r, &own_ends[k], nx, cells, options.via_zones)) {
+            summary.commit_wasted_ns = summary.commit_wasted_ns.saturating_add(board::work::timed_run_ns().saturating_sub(kt0));
             continue;
         }
         maps[&c.class].header_into(c.net, grid_buf);
         let (sources, targets) = &ends[k];
-        let Some(items) = lay(board, grid_buf, r.path, sources, targets) else { continue };
+        let Some(items) = lay(board, grid_buf, r.path, sources, targets) else {
+            summary.commit_wasted_ns = summary.commit_wasted_ns.saturating_add(board::work::timed_run_ns().saturating_sub(kt0));
+            continue;
+        };
         committed.add(claimer, r);
         if keep_laid {
             for map in maps.values_mut() {
@@ -1064,7 +1222,10 @@ fn run_pass(
         summary.vias += items.iter().filter(|id| board.item(**id).is_some_and(|it| it.kind == Kind::Via)).count();
         summary.laid.extend(items);
         watch(board);
+        summary.commit_useful_ns = summary.commit_useful_ns.saturating_add(board::work::timed_run_ns().saturating_sub(kt0));
     }
+    let open_after_est = (summary.committed > 0 && options.nets.is_none()).then_some(board_open_before.saturating_sub(summary.committed));
+    commit_ev.finish("neg_commit", if summary.committed > 0 { "committed" } else { "empty" }, open_after_est);
     summary
 }
 
@@ -1080,6 +1241,7 @@ fn commit_order(
     claimer: &mut Claimer,
     weight_of: &dyn Fn(u32) -> f64,
 ) -> Vec<usize> {
+    let _b = board::work::enter(board::work::Bucket::Zones);
     let mut trace_at: FxHashMap<u32, Vec<usize>> = FxHashMap::default();
     let mut via_at: FxHashMap<u32, Vec<usize>> = FxHashMap::default();
     for (k, c) in connections.iter().enumerate() {
@@ -1162,14 +1324,16 @@ fn open_of(conn: &Connectivity, nets: &Option<HashSet<u32>>) -> Vec<Airline> {
     open
 }
 
-/// The open connections that still have a way on `maps`, as the copper laid so far leaves them.
-fn routable_open(board: &mut Board, options: &NegotiationOptions, maps: &HashMap<String, ObstacleMap>, grid_buf: &mut RouteGrid) -> Vec<Airline> {
+/// The open connections that still have a way on `maps`, as the copper laid so far leaves them,
+/// and the board's total open airline count from that connectivity pass.
+fn routable_open(board: &mut Board, options: &NegotiationOptions, maps: &HashMap<String, ObstacleMap>, grid_buf: &mut RouteGrid) -> (Vec<Airline>, usize) {
     let conn = joined(board, options.pours_block);
+    let board_open = conn.airlines.len();
     let mut open = open_of(&conn, &options.nets);
     if options.reachable_tree {
         open = reachable_airlines(board, &conn, open, maps, grid_buf, options.via_cost);
     }
-    open.into_iter().filter(|a| has_way(board, maps, grid_buf, a, options.via_cost)).collect()
+    (open.into_iter().filter(|a| has_way(board, maps, grid_buf, a, options.via_cost)).collect(), board_open)
 }
 
 /// Whether `a` has a way on its class's map, if it has one.
@@ -1206,7 +1370,10 @@ fn rescue_walled_off(
     out_of_time: &dyn Fn() -> bool,
     watch: &mut dyn FnMut(&Board),
     laid: &mut Vec<LaidRoute>,
+    stats: &mut NegotiationStats,
 ) {
+    let init_ev = board::work::begin_event();
+    let init_t0 = board::work::timed_run_ns();
     // The maps as they stood before this call laid anything: made again here, not kept from the
     // start, where they would double the maps' memory for a rescue most calls never need.
     let ours: HashSet<ItemId> = laid.iter().flat_map(|r| r.items.iter().copied()).collect();
@@ -1216,6 +1383,9 @@ fn rescue_walled_off(
         .collect();
     drop(ours);
     let base_maps = &base_maps;
+    let init_ns = board::work::timed_run_ns().saturating_sub(init_t0);
+    init_ev.finish("neg_rescue_init", "setup", None);
+    let mut kept_any = false;
     // The maps as `base_maps` with every route in `laid` stamped back in.
     let rebuild = |board: &Board, maps: &mut HashMap<String, ObstacleMap>, laid: &[LaidRoute]| {
         maps.clone_from(base_maps);
@@ -1230,6 +1400,8 @@ fn rescue_walled_off(
         if out_of_time() {
             break;
         }
+        let rev = board::work::begin_event();
+        let rt0 = board::work::timed_run_ns();
         let conn = joined(board, options.pours_block);
         let mut open = open_of(&conn, &options.nets);
         if options.reachable_tree {
@@ -1241,9 +1413,12 @@ fn rescue_walled_off(
             .filter(|a| !tried.contains(&a.net))
             .find(|a| !has_way(board, maps, grid_buf, a, options.via_cost) && has_way(board, base_maps, grid_buf, a, options.via_cost))
         else {
+            stats.rescue_wasted_ns = stats.rescue_wasted_ns.saturating_add(board::work::timed_run_ns().saturating_sub(rt0));
+            rev.finish("neg_rescue", "none", None);
             break;
         };
         tried.insert(walled.net);
+        stats.rescues_tried += 1;
 
         // Its cheapest way on the bare board, every laid route's claims priced.
         let class = Profile::for_net(board, walled.net).class;
@@ -1266,7 +1441,12 @@ fn rescue_walled_off(
             let path = solver.route(grid_buf, &s.iter().map(|t| t.0).collect::<Vec<_>>(), &t.iter().map(|t| t.0).collect::<Vec<_>>(), options.via_cost);
             path.and_then(|path| pieces(grid_buf, &path, &s, &t))
         };
-        let Some(trial) = found else { continue };
+        let Some(trial) = found else {
+            stats.rescues_wasted += 1;
+            stats.rescue_wasted_ns = stats.rescue_wasted_ns.saturating_add(board::work::timed_run_ns().saturating_sub(rt0));
+            rev.finish("neg_rescue", "no_path", None);
+            continue;
+        };
         // The laid routes it breaks a rule against; it must break none against anything else.
         let mut victims: BTreeSet<usize> = BTreeSet::new();
         let mut hard = false;
@@ -1283,11 +1463,17 @@ fn rescue_walled_off(
             board.discard(temp);
         }
         if hard || victims.is_empty() {
+            stats.rescues_wasted += 1;
+            stats.rescue_wasted_ns = stats.rescue_wasted_ns.saturating_add(board::work::timed_run_ns().saturating_sub(rt0));
+            rev.finish("neg_rescue", "hard_conflict", None);
             continue;
         }
         let nets: HashSet<u32> = victims.iter().map(|&i| laid[i].net).collect();
         victims.extend((0..laid.len()).filter(|&i| nets.contains(&laid[i].net)));
         if victims.len() > RESCUE_RIPS {
+            stats.rescues_wasted += 1;
+            stats.rescue_wasted_ns = stats.rescue_wasted_ns.saturating_add(board::work::timed_run_ns().saturating_sub(rt0));
+            rev.finish("neg_rescue", "too_many_rips", None);
             continue;
         }
 
@@ -1311,26 +1497,40 @@ fn rescue_walled_off(
             if out_of_time() {
                 break;
             }
-            let left = routable_open(board, options, maps, grid_buf);
+            let (left, board_open_now) = routable_open(board, options, maps, grid_buf);
             if left.is_empty() {
                 break;
             }
             let again = NegotiationOptions { seed: options.seed.wrapping_add((pass + 17).wrapping_mul(0x517c_c1b7)), ..options.clone() };
             let done = run_pass(
-                board, solver, &again, maps, claimer, sample, grid_buf, left, options.max_rounds.min(16), &weights, true, false, out_of_time,
-                &mut |_| {}, &mut |_, _| {}, &mut None, laid,
+                board, solver, &again, maps, claimer, sample, grid_buf, left, options.max_rounds.min(16), &weights, true, false,
+                100 + pass as usize, board_open_now, out_of_time, &mut |_| {}, &mut |_, _| {}, &mut None, laid,
             );
             if done.committed == 0 {
                 break;
             }
         }
 
-        if open_of(&joined(board, options.pours_block), &options.nets).len() < open_before {
+        let conn_after = joined(board, options.pours_block);
+        let after_len = open_of(&conn_after, &options.nets).len();
+        if after_len < open_before {
+            kept_any = true;
+            stats.rescues_kept += 1;
+            stats.rescue_useful_ns = stats.rescue_useful_ns.saturating_add(board::work::timed_run_ns().saturating_sub(rt0));
             watch(board);
+            rev.finish("neg_rescue", "kept_closed", options.nets.is_none().then_some(conn_after.airlines.len()));
         } else {
             (*board, *laid) = snapshot;
             rebuild(board, maps, laid);
+            stats.rescues_wasted += 1;
+            stats.rescue_wasted_ns = stats.rescue_wasted_ns.saturating_add(board::work::timed_run_ns().saturating_sub(rt0));
+            rev.finish("neg_rescue", "reverted", None);
         }
+    }
+    if kept_any {
+        stats.rescue_useful_ns = stats.rescue_useful_ns.saturating_add(init_ns);
+    } else {
+        stats.rescue_wasted_ns = stats.rescue_wasted_ns.saturating_add(init_ns);
     }
 }
 
@@ -1350,6 +1550,7 @@ pub(crate) fn reachable_airlines(
     grid_buf: &mut RouteGrid,
     via_cost: u32,
 ) -> Vec<Airline> {
+    let _b = board::work::enter(board::work::Bucket::Terminals);
     let mut by_net: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
     for (idx, a) in open.iter().enumerate() {
         by_net.entry(a.net).or_default().push(idx);
@@ -1541,72 +1742,76 @@ impl PriceTable {
 /// where those are so many that building it whole is quicker.
 #[allow(clippy::too_many_arguments)]
 fn patch_grid(p: &mut Patchable, net: u32, owned: &Owned, map: &ObstacleMap, zones: &PassClaims, history: &[u32], via_history: &[u32], present: f64, via_scale: f64, via_zones: bool, grid: &mut RouteGrid) -> bool {
-    let trace = &zones.trace.by_viewer[&p.trace_viewer];
-    let (was, now) = (trace.per_net.get(&p.net), trace.per_net.get(&net));
-    let len = |m: Option<&FxHashMap<u32, u16>>| m.map_or(0, HashMap::len);
-    let owns = |who: u32| owned.nodes.get(&(who as i32)).map_or(0, Vec::len);
-    let flips = if p.net == net { 0 } else { owns(p.net) + owns(net) };
-    if 4 * (len(was) + len(now) + p.dirty.len() + flips) > grid.blocked.len() {
-        return false;
-    }
-    owned.flip(p.net, net, grid);
-    let w = p.weight;
-    let tp = PriceTable::new(present, w);
-    fn keys(m: Option<&FxHashMap<u32, u16>>) -> impl Iterator<Item = u32> + '_ {
-        m.into_iter().flat_map(|m| m.keys().copied())
-    }
-    let old = if p.net == net { None } else { was };
-    for c in keys(old).chain(p.dirty.iter().copied()) {
-        let i = c as usize;
-        grid.penalty[i] = tp.at(history[i], trace.count[i]);
-    }
-    for c in keys(now) {
-        let i = c as usize;
-        grid.penalty[i] = tp.at(history[i], trace.count[i] - 1);
-    }
-    p.dirty.clear();
-    if via_zones {
-        let vias = &zones.via.by_viewer[&p.via_viewer];
-        let vp = PriceTable::new(present * via_scale, w);
-        let (was, now) = (vias.per_net.get(&p.net), vias.per_net.get(&net));
+    board::work::in_bucket(board::work::Bucket::MapPatch, || {
+        let trace = &zones.trace.by_viewer[&p.trace_viewer];
+        let (was, now) = (trace.per_net.get(&p.net), trace.per_net.get(&net));
+        let len = |m: Option<&FxHashMap<u32, u16>>| m.map_or(0, HashMap::len);
+        let owns = |who: u32| owned.nodes.get(&(who as i32)).map_or(0, Vec::len);
+        let flips = if p.net == net { 0 } else { owns(p.net) + owns(net) };
+        if 4 * (len(was) + len(now) + p.dirty.len() + flips) > grid.blocked.len() {
+            return false;
+        }
+        owned.flip(p.net, net, grid);
+        let w = p.weight;
+        let tp = PriceTable::new(present, w);
+        fn keys(m: Option<&FxHashMap<u32, u16>>) -> impl Iterator<Item = u32> + '_ {
+            m.into_iter().flat_map(|m| m.keys().copied())
+        }
         let old = if p.net == net { None } else { was };
-        let old_holes = if p.net == net { None } else { zones.holes.per_net.get(&p.net) };
-        let now_holes = zones.holes.per_net.get(&net);
-        let avoid_slice = map.via_avoid.as_slice();
-        let avoid = |i: usize| avoid_slice.get(i).copied().unwrap_or(0);
-        for c in keys(old).chain(keys(old_holes)).chain(p.dirty_vias.iter().copied()).chain(keys(now_holes)) {
+        for c in keys(old).chain(p.dirty.iter().copied()) {
             let i = c as usize;
-            grid.via_penalty[i] = avoid(i).saturating_add(vp.at(via_history[i], vias.count[i]));
+            grid.penalty[i] = tp.at(history[i], trace.count[i]);
         }
         for c in keys(now) {
             let i = c as usize;
-            let (h, n) = (via_history[i], vias.count[i]);
-            let full = vp.at(h, n);
-            grid.via_penalty[i] = avoid(i).saturating_add(full).saturating_sub(full).saturating_add(vp.at(h, n.saturating_sub(1)));
+            grid.penalty[i] = tp.at(history[i], trace.count[i] - 1);
         }
-        if let Some(ring) = now_holes {
-            for (&c, &k) in ring {
-                if k > 0 {
-                    let i = c as usize;
-                    grid.via_penalty[i] = grid.via_penalty[i].saturating_add(vp.at(0, k));
+        p.dirty.clear();
+        if via_zones {
+            let vias = &zones.via.by_viewer[&p.via_viewer];
+            let vp = PriceTable::new(present * via_scale, w);
+            let (was, now) = (vias.per_net.get(&p.net), vias.per_net.get(&net));
+            let old = if p.net == net { None } else { was };
+            let old_holes = if p.net == net { None } else { zones.holes.per_net.get(&p.net) };
+            let now_holes = zones.holes.per_net.get(&net);
+            let avoid_slice = map.via_avoid.as_slice();
+            let avoid = |i: usize| avoid_slice.get(i).copied().unwrap_or(0);
+            for c in keys(old).chain(keys(old_holes)).chain(p.dirty_vias.iter().copied()).chain(keys(now_holes)) {
+                let i = c as usize;
+                grid.via_penalty[i] = avoid(i).saturating_add(vp.at(via_history[i], vias.count[i]));
+            }
+            for c in keys(now) {
+                let i = c as usize;
+                let (h, n) = (via_history[i], vias.count[i]);
+                let full = vp.at(h, n);
+                grid.via_penalty[i] = avoid(i).saturating_add(full).saturating_sub(full).saturating_add(vp.at(h, n.saturating_sub(1)));
+            }
+            if let Some(ring) = now_holes {
+                for (&c, &k) in ring {
+                    if k > 0 {
+                        let i = c as usize;
+                        grid.via_penalty[i] = grid.via_penalty[i].saturating_add(vp.at(0, k));
+                    }
                 }
             }
+            p.dirty_vias.clear();
         }
-        p.dirty_vias.clear();
-    }
-    p.net = net;
-    true
+        p.net = net;
+        true
+    })
 }
 
 /// Each node's present price for `net` alone, without history: for a rescue, which has none.
 fn crowd_into(zones: &Zones, present: f64, net: u32, out: &mut Vec<u32>) {
-    let tp = PriceTable::new(present, 1.0);
-    out.clear();
-    out.extend(zones.count.iter().map(|&n| tp.at(0, n)));
-    for c in zones.per_net.get(&net).into_iter().flat_map(|m| m.keys().copied()) {
-        let i = c as usize;
-        out[i] = tp.at(0, zones.count[i] - 1);
-    }
+    board::work::in_bucket(board::work::Bucket::MapPatch, || {
+        let tp = PriceTable::new(present, 1.0);
+        out.clear();
+        out.extend(zones.count.iter().map(|&n| tp.at(0, n)));
+        for c in zones.per_net.get(&net).into_iter().flat_map(|m| m.keys().copied()) {
+            let i = c as usize;
+            out[i] = tp.at(0, zones.count[i] - 1);
+        }
+    });
 }
 
 /// The hole rings of `net`'s other routes: in a Jacobi round its own, `own_ring`, is still among
@@ -1634,34 +1839,38 @@ fn via_penalties_into(zones: &PassClaims, class: &str, own_ring: &[u32], via_his
 /// `hole_ring`, the times its net's other routes keep a via from it, onto `out`: the grid's own
 /// via costs (its via-avoid areas), or nothing.
 pub fn via_price_into(via_history: &[u32], count: &[u16], own: impl Iterator<Item = u32>, hole_ring: &[(u32, u16)], via_present: f64, weight: f64, out: &mut Vec<u32>) {
-    if out.len() != count.len() {
-        out.clear();
-        out.resize(count.len(), 0);
-    }
-    let vp = PriceTable::new(via_present, weight);
-    for ((o, &h), &n) in out.iter_mut().zip(via_history).zip(count) {
-        *o = o.saturating_add(vp.at(h, n));
-    }
-    for c in own {
-        let (c, h, n) = (c as usize, via_history[c as usize], count[c as usize]);
-        out[c] = out[c].saturating_sub(vp.at(h, n)).saturating_add(vp.at(h, n.saturating_sub(1)));
-    }
-    for &(c, n) in hole_ring {
-        out[c as usize] = out[c as usize].saturating_add(vp.at(0, n));
-    }
+    board::work::in_bucket(board::work::Bucket::MapPatch, || {
+        if out.len() != count.len() {
+            out.clear();
+            out.resize(count.len(), 0);
+        }
+        let vp = PriceTable::new(via_present, weight);
+        for ((o, &h), &n) in out.iter_mut().zip(via_history).zip(count) {
+            *o = o.saturating_add(vp.at(h, n));
+        }
+        for c in own {
+            let (c, h, n) = (c as usize, via_history[c as usize], count[c as usize]);
+            out[c] = out[c].saturating_sub(vp.at(h, n)).saturating_add(vp.at(h, n.saturating_sub(1)));
+        }
+        for &(c, n) in hole_ring {
+            out[c as usize] = out[c as usize].saturating_add(vp.at(0, n));
+        }
+    });
 }
 
 /// Each node's price from a round's `history` and `count` of nets covering it, the nodes `own`
 /// covers counted one fewer, scaled by `weight`: what [`penalties_into`] gives a connection, for
 /// a worker handed the round's counts once instead of every connection's prices.
 pub fn price_into(history: &[u32], count: &[u16], own: impl Iterator<Item = u32>, present: f64, weight: f64, out: &mut Vec<u32>) {
-    out.clear();
-    let tp = PriceTable::new(present, weight);
-    out.extend(history.iter().zip(count).map(|(&h, &n)| tp.at(h, n)));
-    for c in own {
-        let c = c as usize;
-        out[c] = tp.at(history[c], count[c] - 1);
-    }
+    board::work::in_bucket(board::work::Bucket::MapPatch, || {
+        out.clear();
+        let tp = PriceTable::new(present, weight);
+        out.extend(history.iter().zip(count).map(|(&h, &n)| tp.at(h, n)));
+        for c in own {
+            let c = c as usize;
+            out[c] = tp.at(history[c], count[c] - 1);
+        }
+    });
 }
 
 /// One Jacobi round with the fields solved together, a batch at a time, on the solver's device.
@@ -1779,8 +1988,11 @@ fn route_round_in_parallel(
     let jobs: Vec<(u32, &str, f64, &[u32])> =
         connections.iter().map(|c| (c.net, c.class.as_str(), weights.get(&c.net).copied().unwrap_or(1.0), c.hole_ring.as_slice())).collect();
     let paths: Vec<std::sync::Mutex<Option<Option<GridPath>>>> = (0..connections.len()).map(|_| std::sync::Mutex::new(None)).collect();
+    let sink = board::work::current_sink();
+    let spawned = options.threads > 1;
     // One worker's share of the round, taking connections until none are left.
     let work = || {
+        let _worker = spawned.then(|| board::work::attach_worker(sink.clone()));
         // One grid per worker, refilled for each connection: a large board's views run
         // to tens of megabytes, too much to allocate and free hundreds of times a round.
         let mut grid: Option<RouteGrid> = None;

@@ -17,6 +17,7 @@ use crate::flow::{cut, junctions, layer_of};
 /// of them. Tracks are cut into pieces no longer than `piece` so they bend. Counts the pieces
 /// moved by the rule's two kinds of move, and returns the board file's spans of what moved.
 pub fn shift_copper(board: &mut Board, soft: &mut Vec<ItemId>, piece: f64, rule: &dyn Fn(Point, u32, Option<usize>) -> Option<(Point, bool)>) -> (usize, usize, Vec<Span>) {
+    let _t = board::work::enter(board::work::Bucket::Geometry);
     // A point stays put when copper there could touch a pad, on any layer: every piece meeting
     // at a point must get the same answer, whatever its own width or layers.
     let reach = board
@@ -105,6 +106,7 @@ pub fn shift_copper(board: &mut Board, soft: &mut Vec<ItemId>, piece: f64, rule:
 /// sides of the board, such as the front and back fingers of a card-edge connector at the same
 /// `(x, y)`, do not crowd each other's layer.
 pub fn fine_pitch(board: &Board, pitch: Nm) -> Vec<usize> {
+    let _t = board::work::enter(board::work::Bucket::Geometry);
     let mut centres: HashMap<usize, Vec<(Point, u32, u64)>> = HashMap::new();
     for (_, it) in board.items() {
         if let Kind::Pad { footprint, .. } = it.kind {
@@ -136,6 +138,7 @@ pub fn fine_pitch(board: &Board, pitch: Nm) -> Vec<usize> {
 /// sides free even when no track fits between adjacent pins; a fine-pitch package, a compact
 /// multi-row IC, or an edge-pinned module pressed against `Edge.Cuts` does not.
 pub fn escape_room(board: &Board) -> Vec<usize> {
+    let _t = board::work::enter(board::work::Bucket::Geometry);
     let mut by_part: HashMap<usize, Vec<(ItemId, &Item, Point)>> = HashMap::new();
     for (id, it) in board.items() {
         if let Kind::Pad { footprint, .. } = it.kind {

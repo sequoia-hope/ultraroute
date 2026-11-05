@@ -34,6 +34,7 @@ pub struct FlowStats {
 /// field those moves make, held still by every other part and by locked copper. New and moved
 /// copper is added to `soft`, the copper to write back.
 pub fn flow(board: &mut Board, moves: &HashMap<usize, Point>, soft: &mut Vec<ItemId>) -> FlowStats {
+    let _t = board::work::enter(board::work::Bucket::Geometry);
     let mut stats = FlowStats::default();
     if moves.values().all(|v| *v == Point::new(0, 0)) {
         return stats;

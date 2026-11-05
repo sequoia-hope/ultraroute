@@ -64,6 +64,8 @@ pub struct ViaStats {
     pub tried: usize,
     pub kept: usize,
     pub removed_spans: Vec<Span>,
+    pub kept_ns: u64,
+    pub failed_ns: u64,
 }
 
 /// Copper that joins its net's clusters, as `board::connectivity` and
@@ -406,6 +408,7 @@ pub fn reduce_vias_all(
     fanout: &mut Vec<ItemId>,
     watch: &mut dyn FnMut(&Board),
 ) -> ViaStats {
+    let _b = board::work::enter(board::work::Bucket::Geometry);
     let out_of_time = || options.deadline.expired();
 
     // Plane nets on a board with dedicated inner planes keep their direct stitching vias beside
@@ -551,14 +554,17 @@ pub fn reduce_vias_all(
                         continue;
                     }
                     stats.tried += 1;
+                    let t0 = board::work::timed_run_ns();
                     if let Some((saved, dirty)) = try_replace(board, net, &cand, fixed_map, options, &mut soft_set, &mut stats.removed_spans, watch) {
                         stats.kept += 1;
                         stats.dropped += saved;
+                        stats.kept_ns = stats.kept_ns.saturating_add(board::work::timed_run_ns().saturating_sub(t0));
                         next_dirty.push(dirty);
                         next_dirty_nets.insert(net);
                         tell(&options.log, "vias", || format!("pass {}: dropped {saved} via(s) on {}", pass + 1, board.net_name(net)), None);
                         break;
                     }
+                    stats.failed_ns = stats.failed_ns.saturating_add(board::work::timed_run_ns().saturating_sub(t0));
                 }
             }
 
@@ -584,12 +590,16 @@ pub fn reduce_vias_all(
                     continue;
                 }
                 stats.tried += 1;
+                let t0 = board::work::timed_run_ns();
                 if let Some((saved, dirty)) = try_replace(board, net, &cand, fixed_map, options, &mut soft_set, &mut stats.removed_spans, watch) {
                     stats.kept += 1;
                     stats.dropped += saved;
+                    stats.kept_ns = stats.kept_ns.saturating_add(board::work::timed_run_ns().saturating_sub(t0));
                     next_dirty.push(dirty);
                     next_dirty_nets.insert(net);
                     tell(&options.log, "vias", || format!("pass {}: dropped {saved} via on {}", pass + 1, board.net_name(net)), None);
+                } else {
+                    stats.failed_ns = stats.failed_ns.saturating_add(board::work::timed_run_ns().saturating_sub(t0));
                 }
             }
 
@@ -620,12 +630,16 @@ pub fn reduce_vias_all(
                     continue;
                 }
                 stats.tried += 1;
+                let t0 = board::work::timed_run_ns();
                 if let Some((saved, dirty)) = try_replace(board, net, &comp, fixed_map, options, &mut soft_set, &mut stats.removed_spans, watch) {
                     stats.kept += 1;
                     stats.dropped += saved;
+                    stats.kept_ns = stats.kept_ns.saturating_add(board::work::timed_run_ns().saturating_sub(t0));
                     next_dirty.push(dirty);
                     next_dirty_nets.insert(net);
                     tell(&options.log, "vias", || format!("pass {}: dropped {saved} via(s) on {} cluster", pass + 1, board.net_name(net)), None);
+                } else {
+                    stats.failed_ns = stats.failed_ns.saturating_add(board::work::timed_run_ns().saturating_sub(t0));
                 }
             }
         }

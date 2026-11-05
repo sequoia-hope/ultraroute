@@ -67,6 +67,19 @@ pub struct NudgeStats {
     pub moved: Vec<(usize, Point)>,
     /// Copper from the board file that moving parts tore off, for removing from the file.
     pub ripped_spans: Vec<Span>,
+    pub blame_queries: usize,
+    pub blame_useful_ns: u64,
+    pub blame_wasted_ns: u64,
+    pub kept_guided_ns: u64,
+    pub kept_blind_ns: u64,
+    pub illegal_guided: usize,
+    pub illegal_guided_ns: u64,
+    pub illegal_blind: usize,
+    pub illegal_blind_ns: u64,
+    pub no_better_guided: usize,
+    pub no_better_guided_ns: u64,
+    pub no_better_blind: usize,
+    pub no_better_blind_ns: u64,
 }
 
 const DIRECTIONS: [(i64, i64); 8] = [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)];
@@ -194,6 +207,8 @@ fn try_step(
     guided: bool,
     why: &str,
 ) -> bool {
+    let ev = board::work::begin_event();
+    let t0 = board::work::timed_run_ns();
     stats.tried += 1;
     let before = open_count(board, options.pours_block);
     let snapshot = board.clone();
@@ -228,6 +243,16 @@ fn try_step(
         );
         *board = snapshot;
         *soft = soft_before;
+        let dt = board::work::timed_run_ns().saturating_sub(t0);
+        if guided {
+            stats.illegal_guided += 1;
+            stats.illegal_guided_ns = stats.illegal_guided_ns.saturating_add(dt);
+            ev.finish("nudge_step", "illegal_guided", Some(before));
+        } else {
+            stats.illegal_blind += 1;
+            stats.illegal_blind_ns = stats.illegal_blind_ns.saturating_add(dt);
+            ev.finish("nudge_step", "illegal_blind", Some(before));
+        }
         return false;
     };
     let reroute = Options {
@@ -262,6 +287,16 @@ fn try_step(
         );
         *board = snapshot;
         *soft = soft_before;
+        let dt = board::work::timed_run_ns().saturating_sub(t0);
+        if guided {
+            stats.no_better_guided += 1;
+            stats.no_better_guided_ns = stats.no_better_guided_ns.saturating_add(dt);
+            ev.finish("nudge_step", "no_better_guided", Some(before));
+        } else {
+            stats.no_better_blind += 1;
+            stats.no_better_blind_ns = stats.no_better_blind_ns.saturating_add(dt);
+            ev.finish("nudge_step", "no_better_blind", Some(before));
+        }
         return false;
     }
     soft.retain(|id| board.item(*id).is_some());
@@ -287,6 +322,14 @@ fn try_step(
             outcome: "kept",
         },
     );
+    let dt = board::work::timed_run_ns().saturating_sub(t0);
+    if guided {
+        stats.kept_guided_ns = stats.kept_guided_ns.saturating_add(dt);
+        ev.finish("nudge_step", "kept_guided", Some(after));
+    } else {
+        stats.kept_blind_ns = stats.kept_blind_ns.saturating_add(dt);
+        ev.finish("nudge_step", "kept_blind", Some(after));
+    }
     true
 }
 
@@ -326,6 +369,8 @@ pub fn nudge_watch(
             let ask = BlameOptions { cell: options.cell, via_cost: options.via_cost, pours_block: options.pours_block, ..Default::default() };
             let fixed: Vec<bool> = board.footprints.iter().enumerate().map(|(i, f)| f.locked || options.locked.contains(&i)).collect();
             let free = |f: usize| !fixed[f];
+            let bev = board::work::begin_event();
+            let bt0 = board::work::timed_run_ns();
             let mut blamed = blame(board, airline.from_item, airline.to_item, &ask, &free).blamed;
             if blamed.is_empty() {
                 // Priced, routed copper is cheap enough that the path crosses it rather than
@@ -334,16 +379,27 @@ pub fn nudge_watch(
                 blamed = blame(board, airline.from_item, airline.to_item, &walled, &free).blamed;
             }
             watch(board, NudgeEvent::Blame { airline: &airline, blamed: &blamed });
+            let bdt = board::work::timed_run_ns().saturating_sub(bt0);
+            bev.finish("nudge_blame", if blamed.is_empty() { "empty" } else { "blamed" }, None);
+            stats.blame_queries += 1;
+            let mut guided_helped = false;
             for b in blamed {
                 if out_of_time() {
+                    stats.blame_wasted_ns = stats.blame_wasted_ns.saturating_add(bdt);
                     break 'connections;
                 }
                 let by = Point::new(b.dx.round() as i64, b.dy.round() as i64);
                 if try_step(board, solver, options, soft, &mut stats, watch, &airline, b.footprint, by, true, &why) {
                     stats.guided += 1;
-                    continue 'connections;
+                    stats.blame_useful_ns = stats.blame_useful_ns.saturating_add(bdt);
+                    guided_helped = true;
+                    break;
                 }
             }
+            if guided_helped {
+                continue 'connections;
+            }
+            stats.blame_wasted_ns = stats.blame_wasted_ns.saturating_add(bdt);
             if !options.blind {
                 continue;
             }

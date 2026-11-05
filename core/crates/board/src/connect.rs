@@ -235,6 +235,10 @@ pub fn net_connectivity(board: &Board, net: u32, with_pours: bool) -> Connectivi
 
 fn joined_copper(board: &Board, with_pours: bool, only: Option<u32>) -> Connectivity {
     crate::work::count(&crate::work::CONNECTIVITY);
+    crate::work::in_bucket(crate::work::Bucket::Connectivity, || joined_copper_inner(board, with_pours, only))
+}
+
+fn joined_copper_inner(board: &Board, with_pours: bool, only: Option<u32>) -> Connectivity {
     let ids: Vec<ItemId> = board
         .items()
         .filter(|(_, it)| it.is_copper() && it.net != 0 && only.is_none_or(|n| it.net == n) && cluster_member(board, it, with_pours))

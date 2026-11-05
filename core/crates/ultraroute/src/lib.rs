@@ -40,7 +40,7 @@ pub use watch::{Cleaned, Flow, StageEvent, Unwatched, Watch};
 
 pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--plane-via-reach MM] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--negotiate-jacobi] [--negotiate-reroute-all] [--diff-pairs] [--prefanout] [--escape-room|--no-escape-room] [--prefanout-mode stub|dogbone|grid|inner|same] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--negotiate] [--rip-up] [--rip-boxed|--no-rip-boxed] [--nudge] [--tighten] [--arcs MM] [--via-cost MM[,OPEN_MM]] [--gpu] \
 [--timeout SECONDS] [--cpu-clock] [--cell MM] [--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--guard-ties|--no-guard-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--uuid-seed N] [--adopt] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
-[--recipe default|bench|minimal] [--live PATH|-] [--live-fps N] [--live-step MS] [--blame] [--stats|--report FILE] [-h|--help]
+[--recipe default|bench|minimal] [--live PATH|-] [--live-fps N] [--live-step MS] [--blame] [--stats|--report FILE] [--timing|--no-timing] [-h|--help]
 --place takes millimetres with y pointing up: give KiCad's y negated (KiCad y 127.5 is -127.5).
 Copper and mask text is stroked by the kicad-text program ($ULTRAROUTE_TEXT_HELPER, else next to this one, else on PATH; none: boxes);
 ultraroute text-helper prints the one a route would run.";
@@ -153,6 +153,10 @@ pub struct Args {
     /// Where to write the run's stats and findings as JSON (`--stats`, or `--report` as Studio
     /// names it).
     pub stats: Option<String>,
+    /// Turn on fine-grained sub-stage bucket, per-move effort and progress CPU timing (`--timing`).
+    pub timing: bool,
+    /// Skip all CPU timing, including coarse per-stage timers (`--no-timing`).
+    pub no_timing: bool,
     /// The command line as read, the recipe's flags put in.
     pub line: Vec<String>,
 }
@@ -261,6 +265,8 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
         live_step: 0,
         blame: false,
         stats: None,
+        timing: false,
+        no_timing: false,
         line: args.to_vec(),
     };
     let mut it = args[1..].iter();
@@ -388,6 +394,14 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
             "--verbose" | "-v" => a.verbose = true,
             "--blame" => a.blame = true,
             "--stats" | "--report" => a.stats = Some(value()?),
+            "--timing" => {
+                a.timing = true;
+                a.no_timing = false;
+            }
+            "--no-timing" => {
+                a.timing = false;
+                a.no_timing = true;
+            }
             "--via-avoid" => {
                 let v = value()?;
                 let n: Vec<f64> = v.split(',').map(|x| x.trim().parse::<f64>()).collect::<Result<_, _>>().map_err(|e| format!("--via-avoid {v}: {e}"))?;
@@ -1252,7 +1266,9 @@ pub fn route(
     let log = run_log(a, &live, started, watch.as_ref().and_then(|w| w.log()));
     let mut hooks = watch::Hooks { live: live.clone(), user: watch };
     let threads = a.threads.unwrap_or_else(default_threads);
-    let mut mark = Mark::take(a, &board, &mut stats);
+    let sink = (a.timing && !a.no_timing).then(board::work::CpuSink::new);
+    let _sink_guard = board::work::install_sink(sink.clone());
+    let mut mark = Mark::take(a, &board, sink.as_deref(), &mut stats);
     let (mut ran, mut stopped): (Vec<&str>, bool) = (Vec::new(), false);
     let mut trace = joint_trace::Trace::from_env();
     trace.after("input", &board);
@@ -1276,6 +1292,10 @@ pub fn route(
         }
         ran.push(name);
         stopped |= hooks.stage(name, &board, &ledger, StageEvent::Start) == Flow::Stop;
+        if let Some(s) = sink.as_deref() {
+            s.set_stage(name);
+        }
+        let ev_before = sink.as_deref().map_or(0, |s| s.events_len());
         let from = if ran.len() == 1 { begun } else { Instant::now() };
         let mut ctx = StageCtx {
             args: a,
@@ -1289,22 +1309,19 @@ pub fn route(
             clock: &clock,
             budget: entry.budget,
             text,
+            effort_ns: (0, 0, 0),
         };
         let detail = entry.stage.run(&mut ctx);
-        let before: HashSet<(ItemId, ItemId)> = mark.open.iter().map(stages::pair_key).collect();
-        let done = mark.close(a, &board, name, (begun, from), detail, &mut stats);
-        // The connections the stage leaves open, filed: the failures are the open set after it.
-        let t = Instant::now();
+        let effort_ns = ctx.effort_ns;
         let given_up = std::mem::take(&mut ledger.given_up);
-        stages::reconcile_failures(&board, &mut stats.failures, given_up, name, entry.stage.leaves_open(), &before, &mark.open);
-        stats.stats_seconds += t.elapsed().as_secs_f64();
+        let done = mark.close(a, &board, sink.as_deref(), ev_before, name, entry.stage.leaves_open(), given_up, (begun, from), effort_ns, detail, &mut stats);
         stopped |= hooks.stage(name, &board, &ledger, StageEvent::End(&done)) == Flow::Stop;
         stats.stages.push(done);
         trace.after(name, &board);
     }
     trace.write(&board);
     timeline.enter(&clock.run, "done");
-    finish(a, &board, &mut ledger, &live, stats, &timeline, (begun, started), &cancel)
+    finish(a, &board, &mut ledger, &live, sink.as_deref(), stats, &timeline, (begun, started), &cancel)
 }
 
 /// The run's live frames, which its log writes to as well.
@@ -1318,9 +1335,22 @@ fn begin_stats(a: &Args, board: &Board, text: &str) -> RunStats {
     let threads = a.threads.unwrap_or_else(default_threads);
     let cell = a.cell.unwrap_or_else(default_cell);
     let estimate = grid::memory_estimate(board, cell, if a.negotiate_jacobi { threads } else { 1 });
+    let board_info = if a.no_timing {
+        stats::BoardInfo::default()
+    } else {
+        stats::BoardInfo {
+            copper_layers: board.layers.len(),
+            footprints: board.footprints.len(),
+            fine_pitch_parts: morph::fine_pitch(board, 500_000).len(),
+            pads: board.items().filter(|(_, it)| matches!(it.kind, Kind::Pad { .. })).count(),
+            nets: board.nets.iter().skip(1).filter(|n| !n.is_empty()).count(),
+            diff_pairs: grid::diff_pairs(board).len(),
+        }
+    };
     RunStats {
         router: stats::Router { version: version.to_string(), commit: commit.map(String::from) },
         input: stats::Input { path: a.input.clone(), sha256: stats::sha256(text.as_bytes()), bytes: text.len() },
+        board: board_info,
         settings: stats::Settings { flags: a.line.clone(), seed: a.seed, uuid_seed: a.uuid_seed, threads, cell_mm: cell as f64 / 1e6, timeout: a.timeout, nodes: estimate.nodes },
         memory: stats::Memory { estimate_mb: estimate.mb(), peak_mb: None },
         ..RunStats::default()
@@ -1417,7 +1447,17 @@ fn unrouted(a: &Args, mut board: Board, text: &str, mut ledger: Ledger, live: &A
 
 /// The run's end: what the clock cut short said, the last frame sent, the summary made.
 #[allow(clippy::too_many_arguments)]
-fn finish(a: &Args, board: &Board, ledger: &mut Ledger, live: &Arc<Mutex<Option<Live>>>, mut stats: RunStats, timeline: &Timeline, (begun, started): (Instant, Instant), cancel: &AtomicBool) -> Routed {
+fn finish(
+    a: &Args,
+    board: &Board,
+    ledger: &mut Ledger,
+    live: &Arc<Mutex<Option<Live>>>,
+    sink: Option<&board::work::CpuSink>,
+    mut stats: RunStats,
+    timeline: &Timeline,
+    (begun, started): (Instant, Instant),
+    cancel: &AtomicBool,
+) -> Routed {
     let over = a.timeout.map_or(0.0, |t| grid::clock::since(started).as_secs_f64() - t);
     stats.deadline = stats::DeadlineStats {
         limited: timeline.limited.iter().map(|s| s.to_string()).collect(),
@@ -1449,6 +1489,11 @@ fn finish(a: &Args, board: &Board, ledger: &mut Ledger, live: &Arc<Mutex<Option<
         l.write(&json!({"t": "done", "open": ledger.open, "passes": 0, "stopped": stopped}));
     }
     let connections = stats.stages.first().map_or(ledger.open, |s| s.open_after);
+    let cpu_seconds: f64 = stats.stages.iter().map(|s| s.cpu_seconds).sum();
+    if let Some(s) = sink {
+        let events = s.take_events();
+        stats.progress = build_progress(&stats.stages, &events, connections, ledger.open);
+    }
     stats.summary = stats::Summary {
         connections,
         opens: ledger.open,
@@ -1456,6 +1501,7 @@ fn finish(a: &Args, board: &Board, ledger: &mut Ledger, live: &Arc<Mutex<Option<
         failed: ledger.routed.failed,
         vias: vias_on(board),
         seconds: begun.elapsed().as_secs_f64(),
+        cpu_seconds,
     };
     stats.memory.peak_mb = peak_memory_mb();
     if a.verbose {
@@ -1519,32 +1565,101 @@ fn run_log(a: &Args, live: &Arc<Mutex<Option<Live>>>, started: Instant, extra: O
 }
 
 /// The board between two stages, to tell what the stage after did: connections open, the
-/// router's copper by identity and shape, vias, and the work counts.
+/// router's copper by identity and shape, vias, the work counts, and the CPU snapshot.
 struct Mark {
     open: Vec<board::Airline>,
     copper: HashSet<(ItemId, u64, [Nm; 5])>,
     vias: usize,
     work: grid::work::Work,
+    snap: board::work::CpuSnap,
+    proc_cpu_ns: u64,
 }
 
 impl Mark {
-    fn take(a: &Args, board: &Board, stats: &mut RunStats) -> Mark {
+    fn take(a: &Args, board: &Board, sink: Option<&board::work::CpuSink>, stats: &mut RunStats) -> Mark {
+        let coarse = !a.no_timing && sink.is_none();
+        let pause = board::work::pause_sink();
         let t = Instant::now();
+        let cpu_t0 = if coarse { board::work::process_cpu_ns() } else { 0 };
         let (open, copper, vias) = (open_airlines(a, board), stages::copper_keys(board), vias_on(board));
         stats.stats_seconds += t.elapsed().as_secs_f64();
-        // Last, so the counting itself is not counted as the next stage's work.
-        Mark { open, copper, vias, work: grid::work::Work::now() }
+        let paused_ns = if coarse {
+            board::work::process_cpu_ns().saturating_sub(cpu_t0)
+        } else {
+            pause.close()
+        };
+        stats.stats_cpu_seconds += paused_ns as f64 * 1e-9;
+        // Last, so the counting itself is not counted as the next stage's work or CPU.
+        Mark {
+            open,
+            copper,
+            vias,
+            work: grid::work::Work::now(),
+            snap: sink.map_or_else(Default::default, |s| s.snap()),
+            proc_cpu_ns: if coarse { board::work::process_cpu_ns() } else { 0 },
+        }
     }
 
     /// The stage `name` that ran from `from` is done: its stats, and this mark moved past it.
-    fn close(&mut self, a: &Args, board: &Board, name: &'static str, (begun, from): (Instant, Instant), detail: Value, stats: &mut RunStats) -> StageStats {
+    #[allow(clippy::too_many_arguments)]
+    fn close(
+        &mut self,
+        a: &Args,
+        board: &Board,
+        sink: Option<&board::work::CpuSink>,
+        ev_before: usize,
+        name: &'static str,
+        leaves_open: Option<&'static str>,
+        given_up: Vec<stats::Failure>,
+        (begun, from): (Instant, Instant),
+        (useful_ns, kept_other_ns, wasted_ns): (u64, u64, u64),
+        detail: Value,
+        stats: &mut RunStats,
+    ) -> StageStats {
+        let coarse = !a.no_timing && sink.is_none();
         let work = grid::work::Work::now().since(&self.work);
         let seconds = from.elapsed().as_secs_f64();
-        let next = Mark::take(a, board, stats);
+        let (end_snap, delta, stage_cpu_ns) = if let Some(s) = sink {
+            let end = s.snap();
+            let d = end.since(&self.snap);
+            (end, d, d.run_cpu_ns)
+        } else if coarse {
+            let end_ns = board::work::process_cpu_ns();
+            (Default::default(), Default::default(), end_ns.saturating_sub(self.proc_cpu_ns))
+        } else {
+            (Default::default(), Default::default(), 0)
+        };
+        let (cpu_seconds, cpu) = stats::CpuBreakdown::from_ns(stage_cpu_ns, &delta.buckets_ns);
+        let effort = stats::Effort::from_ns(cpu_seconds, useful_ns, kept_other_ns, wasted_ns);
+        let mut next = Mark::take(a, board, sink, stats);
+        // The connections the stage leaves open, filed: the failures are the open set after it.
+        {
+            let pause = board::work::pause_sink();
+            let t = Instant::now();
+            let cpu_t0 = if coarse { board::work::process_cpu_ns() } else { 0 };
+            let before: HashSet<(ItemId, ItemId)> = self.open.iter().map(stages::pair_key).collect();
+            stages::reconcile_failures(board, &mut stats.failures, given_up, name, leaves_open, &before, &next.open);
+            stats.stats_seconds += t.elapsed().as_secs_f64();
+            if let Some(s) = sink {
+                reconcile_stage_events(s, ev_before, name, self.snap, end_snap, &delta, self.open.len(), next.open.len());
+            }
+            let paused_ns = if coarse {
+                board::work::process_cpu_ns().saturating_sub(cpu_t0)
+            } else {
+                pause.close()
+            };
+            stats.stats_cpu_seconds += paused_ns as f64 * 1e-9;
+        }
+        next.work = grid::work::Work::now();
+        next.snap = sink.map_or_else(Default::default, |s| s.snap());
+        next.proc_cpu_ns = if coarse { board::work::process_cpu_ns() } else { 0 };
         let done = StageStats {
             name,
             started: from.duration_since(begun).as_secs_f64(),
             seconds,
+            cpu_seconds,
+            cpu,
+            effort,
             cut: false,
             open_before: self.open.len(),
             open_after: next.open.len(),
@@ -1556,6 +1671,329 @@ impl Mark {
         };
         *self = next;
         done
+    }
+}
+
+/// Reconciles the stage's recorded `RawEvent`s with its start/end snapshots and true connectivity
+/// open counts so the event timeline partitions `[0, total_cpu_ns]` without gaps or phantom drops.
+#[allow(clippy::too_many_arguments)]
+fn reconcile_stage_events(
+    sink: &board::work::CpuSink,
+    ev_before: usize,
+    stage: &'static str,
+    start_snap: board::work::CpuSnap,
+    end_snap: board::work::CpuSnap,
+    delta: &board::work::CpuSnap,
+    open_before: usize,
+    open_after: usize,
+) {
+    let mut events = sink.events.lock().unwrap_or_else(|e| e.into_inner());
+    if events.len() == ev_before {
+        events.push(board::work::RawEvent {
+            start_ns: start_snap.run_cpu_ns,
+            end_ns: end_snap.run_cpu_ns,
+            stage,
+            kind: "stage",
+            outcome: if open_after < open_before { "kept_closed" } else { "stage" },
+            open_after: Some(open_after),
+            buckets_ns: delta.buckets_ns,
+        });
+        return;
+    }
+    let mut exact_after = open_after;
+    let mut need_drop_fix = true;
+    for ev in events[ev_before..].iter_mut().rev() {
+        match ev.kind {
+            "neg_commit" => {
+                if ev.open_after.is_some() {
+                    ev.open_after = Some(exact_after);
+                }
+            }
+            "route_conn" => {
+                if let Some(est) = ev.open_after {
+                    if need_drop_fix {
+                        ev.open_after = Some(exact_after);
+                        need_drop_fix = false;
+                    } else {
+                        ev.open_after = Some(est.max(exact_after));
+                    }
+                }
+            }
+            _ => {
+                if let Some(o) = ev.open_after {
+                    exact_after = o;
+                    need_drop_fix = true;
+                }
+            }
+        }
+    }
+    let mut ev_buckets = [0u64; board::work::BUCKET_COUNT];
+    for ev in &events[ev_before..] {
+        for (dst, &src) in ev_buckets.iter_mut().zip(&ev.buckets_ns) {
+            *dst = dst.saturating_add(src);
+        }
+    }
+    let mut rem_buckets = [0u64; board::work::BUCKET_COUNT];
+    for ((dst, &tot), &ev_b) in rem_buckets.iter_mut().zip(&delta.buckets_ns).zip(&ev_buckets) {
+        *dst = tot.saturating_sub(ev_b);
+    }
+    let sub: Vec<board::work::RawEvent> = events.drain(ev_before..).collect();
+    let mut cursor = start_snap.run_cpu_ns;
+    let mut gap_total = 0u64;
+    for ev in &sub {
+        gap_total = gap_total.saturating_add(ev.start_ns.saturating_sub(cursor));
+        cursor = cursor.max(ev.end_ns);
+    }
+    gap_total = gap_total.saturating_add(end_snap.run_cpu_ns.saturating_sub(cursor));
+
+    let mut used_buckets = [0u64; board::work::BUCKET_COUNT];
+    let mut used_gap = 0u64;
+    let mut alloc_gap = |dur: u64| -> [u64; board::work::BUCKET_COUNT] {
+        if gap_total == 0 || dur == 0 {
+            return [0u64; board::work::BUCKET_COUNT];
+        }
+        used_gap = used_gap.saturating_add(dur);
+        let mut out = [0u64; board::work::BUCKET_COUNT];
+        for ((dst, used), &rem) in out.iter_mut().zip(&mut used_buckets).zip(&rem_buckets) {
+            let target = if used_gap >= gap_total {
+                rem
+            } else {
+                ((rem as u128) * (used_gap as u128) / (gap_total as u128)) as u64
+            };
+            *dst = target.saturating_sub(*used);
+            *used = target;
+        }
+        out
+    };
+
+    cursor = start_snap.run_cpu_ns;
+    for mut ev in sub {
+        if ev.start_ns > cursor {
+            let dur = ev.start_ns - cursor;
+            events.push(board::work::RawEvent {
+                start_ns: cursor,
+                end_ns: ev.start_ns,
+                stage,
+                kind: "stage_gap",
+                outcome: "setup",
+                open_after: None,
+                buckets_ns: alloc_gap(dur),
+            });
+        }
+        ev.start_ns = ev.start_ns.max(cursor);
+        ev.end_ns = ev.end_ns.max(ev.start_ns).min(end_snap.run_cpu_ns);
+        cursor = ev.end_ns;
+        events.push(ev);
+    }
+    if end_snap.run_cpu_ns > cursor {
+        let dur = end_snap.run_cpu_ns - cursor;
+        events.push(board::work::RawEvent {
+            start_ns: cursor,
+            end_ns: end_snap.run_cpu_ns,
+            stage,
+            kind: "stage_gap",
+            outcome: "setup",
+            open_after: Some(open_after),
+            buckets_ns: alloc_gap(dur),
+        });
+    } else if let Some(last) = events.last_mut() {
+        for ((dst, &rem), &used) in last.buckets_ns.iter_mut().zip(&rem_buckets).zip(&used_buckets) {
+            *dst = dst.saturating_add(rem.saturating_sub(used));
+        }
+        if last.open_after.is_none() {
+            last.open_after = Some(open_after);
+        }
+    }
+}
+
+fn is_routing_stage(stage: &str) -> bool {
+    matches!(
+        stage,
+        "islands"
+            | "prefanout"
+            | "planes"
+            | "pairs"
+            | "pair-escapes"
+            | "routing"
+            | "first"
+            | "negotiation"
+            | "finishing"
+            | "rip-up"
+            | "shove"
+            | "nudge"
+            | "refinishing"
+            | "corridors"
+    )
+}
+
+fn build_progress(
+    stages: &[StageStats],
+    events: &[board::work::RawEvent],
+    initial_open: usize,
+    final_open: usize,
+) -> stats::ProgressStats {
+    let total_ns = events.last().map_or(0, |e| e.end_ns);
+    let setup_end_ns = events.iter().filter(|e| e.stage == "set-up").map(|e| e.end_ns).max().unwrap_or(0);
+    let routing_ns: u64 = events
+        .iter()
+        .filter(|e| is_routing_stage(e.stage))
+        .map(|e| e.end_ns.saturating_sub(e.start_ns))
+        .sum();
+    let mut cur_open = initial_open;
+    let mut best_open = initial_open;
+    let mut last_drop_ns = setup_end_ns;
+    let mut last_drop_stage: Option<String> = None;
+    let mut open_curve = vec![stats::OpenPoint {
+        cpu_seconds: setup_end_ns as f64 * 1e-9,
+        open: initial_open,
+        min_open: initial_open,
+        stage: "set-up".to_string(),
+    }];
+    for ev in events.iter().filter(|e| e.stage != "set-up") {
+        if ev.stage != "write" {
+            if let Some(o) = ev.open_after {
+                if o < best_open {
+                    best_open = o;
+                    last_drop_ns = ev.end_ns;
+                    last_drop_stage = Some(ev.stage.to_string());
+                }
+                if o != cur_open {
+                    cur_open = o;
+                    open_curve.push(stats::OpenPoint {
+                        cpu_seconds: ev.end_ns as f64 * 1e-9,
+                        open: o,
+                        min_open: best_open,
+                        stage: ev.stage.to_string(),
+                    });
+                }
+            }
+        }
+    }
+    if open_curve.last().is_none_or(|p| p.open != final_open || (total_ns as f64 * 1e-9 - p.cpu_seconds).abs() > 1e-9) {
+        best_open = best_open.min(final_open);
+        open_curve.push(stats::OpenPoint {
+            cpu_seconds: total_ns as f64 * 1e-9,
+            open: final_open,
+            min_open: best_open,
+            stage: stages.last().map_or("done", |s| s.name).to_string(),
+        });
+    }
+    let no_progress_total_ns = total_ns.saturating_sub(last_drop_ns);
+    let no_progress_routing_ns: u64 = events
+        .iter()
+        .filter(|e| is_routing_stage(e.stage) && e.end_ns > last_drop_ns)
+        .map(|e| e.end_ns - e.start_ns.max(last_drop_ns))
+        .sum();
+
+    let half_ns = total_ns / 2;
+    let window_ns = total_ns.saturating_sub(half_ns);
+    let neg_useful = stages.iter().find(|s| s.name == "negotiation").is_some_and(|s| s.effort.useful_seconds > 0.0);
+    let mut half_buckets = [0u64; board::work::BUCKET_COUNT];
+    let (mut half_u, mut half_k, mut half_w) = (0u64, 0u64, 0u64);
+    let mut by_stage: Vec<(&'static str, u64, u64, u64, u64)> = Vec::new();
+    for ev in events {
+        let s = ev.start_ns.max(half_ns);
+        let e = ev.end_ns.min(total_ns);
+        if e <= s {
+            continue;
+        }
+        let ov = e - s;
+        let dur = ev.end_ns.saturating_sub(ev.start_ns).max(1);
+        for (dst, &src) in half_buckets.iter_mut().zip(&ev.buckets_ns) {
+            let share = ((src as u128) * (ov as u128) / (dur as u128)) as u64;
+            *dst = dst.saturating_add(share);
+        }
+        let (u, k, w) = if ev.kind == "stage" {
+            if let Some(st) = stages.iter().find(|st| st.name == ev.stage && st.cpu_seconds > 0.0) {
+                let uf = (st.effort.useful_seconds / st.cpu_seconds).clamp(0.0, 1.0);
+                let kf = (st.effort.kept_other_seconds / st.cpu_seconds).clamp(0.0, 1.0);
+                let wf = (st.effort.wasted_seconds / st.cpu_seconds).clamp(0.0, 1.0);
+                let u = ((ov as f64) * uf) as u64;
+                let k = ((ov as f64) * kf) as u64;
+                let w = ((ov as f64) * wf).min(ov.saturating_sub(u).saturating_sub(k) as f64) as u64;
+                (u, k, w)
+            } else {
+                (0, 0, 0)
+            }
+        } else {
+            match (ev.kind, ev.outcome) {
+                ("neg_round", "converging") | ("neg_setup", "setup") | ("neg_commit", "committed") => {
+                    if neg_useful { (ov, 0, 0) } else { (0, 0, ov) }
+                }
+                ("neg_rescue", "kept_closed")
+                | ("route_conn", "closed")
+                | ("rip_try", "kept")
+                | ("shove_try", "kept_closed")
+                | ("nudge_step", "kept_guided" | "kept_blind") => (ov, 0, 0),
+                ("shove_try", "kept_tie") => (0, ov, 0),
+                ("neg_round", "stalled")
+                | ("neg_setup", "empty" | "cut")
+                | ("neg_commit", "empty")
+                | ("neg_rescue", _)
+                | ("route_conn", _)
+                | ("rip_try", _)
+                | ("shove_try", _)
+                | ("nudge_step", _)
+                | ("aborted", _) => (0, 0, ov),
+                _ => (0, 0, 0),
+            }
+        };
+        half_u = half_u.saturating_add(u);
+        half_k = half_k.saturating_add(k);
+        half_w = half_w.saturating_add(w);
+        if let Some(entry) = by_stage.iter_mut().find(|x| x.0 == ev.stage) {
+            entry.1 = entry.1.saturating_add(ov);
+            entry.2 = entry.2.saturating_add(u);
+            entry.3 = entry.3.saturating_add(k);
+            entry.4 = entry.4.saturating_add(w);
+        } else {
+            by_stage.push((ev.stage, ov, u, k, w));
+        }
+    }
+    let (half_sec, half_cpu) = stats::CpuBreakdown::from_ns(window_ns, &half_buckets);
+    let half_effort = stats::Effort::from_ns(half_sec, half_u, half_k, half_w);
+    let stage_slices = by_stage
+        .into_iter()
+        .map(|(name, tot, u, k, w)| {
+            let st_sec = tot as f64 * 1e-9;
+            let eff = stats::Effort::from_ns(st_sec, u, k, w);
+            stats::StageSlice {
+                name: name.to_string(),
+                cpu_seconds: st_sec,
+                useful_seconds: eff.useful_seconds,
+                kept_other_seconds: eff.kept_other_seconds,
+                wasted_seconds: eff.wasted_seconds,
+                other_seconds: eff.other_seconds,
+            }
+        })
+        .collect();
+    let total_cpu_seconds = total_ns as f64 * 1e-9;
+    let last_open_drop_cpu_seconds = last_drop_ns as f64 * 1e-9;
+    let last_open_drop_fraction = if total_ns > 0 {
+        ((last_drop_ns as f64) / (total_ns as f64)).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    stats::ProgressStats {
+        initial_open,
+        final_open,
+        min_open: best_open,
+        total_cpu_seconds,
+        routing_cpu_seconds: routing_ns as f64 * 1e-9,
+        last_open_drop_cpu_seconds,
+        last_open_drop_fraction,
+        last_open_drop_stage: last_drop_stage,
+        no_progress_routing_cpu_seconds: no_progress_routing_ns as f64 * 1e-9,
+        no_progress_total_cpu_seconds: no_progress_total_ns as f64 * 1e-9,
+        open_curve,
+        last_half: stats::HalfSlice {
+            start_cpu_seconds: half_ns as f64 * 1e-9,
+            end_cpu_seconds: total_cpu_seconds,
+            cpu_seconds: half_sec,
+            cpu: half_cpu,
+            effort: half_effort,
+            stages: stage_slices,
+        },
     }
 }
 

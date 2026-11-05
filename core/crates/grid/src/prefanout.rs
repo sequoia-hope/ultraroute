@@ -109,6 +109,9 @@ pub struct PrefanoutStats {
     pub skipped_nets: usize,
     pub failed: usize,
     pub laid: Vec<ItemId>,
+    pub probe_ns: u64,
+    pub escaped_ns: u64,
+    pub failed_ns: u64,
 }
 
 /// Footprint-local coordinates (`u`, `v`) aligned with the package's rotation in KiCad's Y-down
@@ -312,6 +315,7 @@ fn probe_trapped_nets(board: &Board, options: &PrefanoutOptions) -> HashSet<u32>
 /// Lays pre-fanout escapes for `options.parts` on `board`, leaving every laid piece legal under
 /// the board's rules and reachable on the global grid.
 pub fn prefanout(board: &mut Board, options: &PrefanoutOptions, watch: &mut dyn FnMut(&Board)) -> PrefanoutStats {
+    let _b = board::work::enter(board::work::Bucket::Geometry);
     let mut stats = PrefanoutStats::default();
     let cancelled = || options.deadline.expired();
     if options.parts.is_empty() || cancelled() {
@@ -319,7 +323,10 @@ pub fn prefanout(board: &mut Board, options: &PrefanoutOptions, watch: &mut dyn 
     }
 
     let trapped_nets = if options.order == EscapeOrder::TrappedFirst {
-        probe_trapped_nets(board, options)
+        let pt0 = board::work::timed_run_ns();
+        let trapped = probe_trapped_nets(board, options);
+        stats.probe_ns = stats.probe_ns.saturating_add(board::work::timed_run_ns().saturating_sub(pt0));
+        trapped
     } else {
         HashSet::new()
     };
@@ -440,9 +447,14 @@ pub fn prefanout(board: &mut Board, options: &PrefanoutOptions, watch: &mut dyn 
 
         // Step 1: local inward bridges to kept pours, exposed pads, and nearby sibling pads.
         if options.inward && !raw_pads.is_empty() {
+            let bt0 = board::work::timed_run_ns();
             let bridged = bridge_inward(board, fp, &frame, &raw_pads, &exposed_pads, options, &mut global_maps, &mut stats);
+            let bdt = board::work::timed_run_ns().saturating_sub(bt0);
             if bridged > 0 {
+                stats.escaped_ns = stats.escaped_ns.saturating_add(bdt);
                 watch(board);
+            } else {
+                stats.failed_ns = stats.failed_ns.saturating_add(bdt);
             }
         }
 
@@ -549,6 +561,7 @@ pub fn prefanout(board: &mut Board, options: &PrefanoutOptions, watch: &mut dyn 
             if cancelled() {
                 break;
             }
+            let gt0 = board::work::timed_run_ns();
             let mut siblings: Vec<PadInfo> = groups[g_idx + 1..].iter().map(|g| g[0].clone()).collect();
             if options.guard_mouths {
                 siblings.extend(held_back.iter().cloned());
@@ -618,6 +631,9 @@ pub fn prefanout(board: &mut Board, options: &PrefanoutOptions, watch: &mut dyn 
             }
             if !group_ok {
                 stats.failed += 1;
+                stats.failed_ns = stats.failed_ns.saturating_add(board::work::timed_run_ns().saturating_sub(gt0));
+            } else {
+                stats.escaped_ns = stats.escaped_ns.saturating_add(board::work::timed_run_ns().saturating_sub(gt0));
             }
         }
     }
