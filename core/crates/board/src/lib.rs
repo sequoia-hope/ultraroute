@@ -12,7 +12,7 @@ pub mod work;
 pub mod spokes;
 
 pub mod probe;
-pub use model::{arc_chords, Block, Board, FootprintInfo, Item, ItemId, Kind, LoadError, ANY_ONE_NET, DRAWN};
+pub use model::{arc_chords, Block, Board, Crowd, FootprintInfo, Item, ItemId, Kind, LoadError, ANY_ONE_NET, DRAWN};
 pub use custom::Thing;
 pub use check::{check, check_item, check_item_with_pours, intrudes, mask_gap, mask_pair_gap, within, Rule, Violation, MASK_MARGIN};
 pub use connect::{anchors, connectivity, connectivity_without_pours, end_neck, firmly_joined, joined, joint_neck, meets_squarely, FULL_JOINT, net_connectivity, Airline, Connectivity};

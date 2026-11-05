@@ -77,6 +77,12 @@ pub fn within(area: &Shape, shape: &Shape, margin: Nm) -> bool {
 /// pads (checked with kicad-cli 9.0.8: such a track may cross the tie's bar; one ending short of
 /// the pads may not). Against a pad of the tie the track must end inside that pad: one that
 /// crosses the other net's pad to end in its own shorts the two (kicad-cli 9.0.8 again).
+/// Whether `other`, copper drawn rather than routed, is drawn in `pad`'s own footprint.
+fn within_footprint(board: &Board, pad: &Item, other: ItemId) -> bool {
+    let Kind::Pad { footprint, .. } = pad.kind else { return false };
+    board.drawn_in.get(&other) == Some(&footprint)
+}
+
 fn tied(board: &Board, a: ItemId, item: &Item, b: ItemId, other: &Item) -> bool {
     let joins = |member: &Item, track: &Item, f: usize, nets: &[u32]| match member.kind {
         Kind::Pad { .. } => ends_inside(track, member) && nets.contains(&track.net) && track.kind == Kind::Track,
@@ -169,6 +175,72 @@ impl Limits {
 pub const MASK_MARGIN: Nm = 1_000;
 
 impl Board {
+    /// What already breaks a rule against `pad` before any routing: another net's mask opening
+    /// that bares it, and fixed copper of another net, or of none, nearer than the clearance.
+    /// Footprints drawn that way (a connector's back pads opening the front mask, a net tie's
+    /// copper, a logo across a pin) leave such a pad no way in within the rules.
+    pub fn crowd(&self, pad: ItemId) -> crate::model::Crowd {
+        let mut crowd = crate::model::Crowd::default();
+        let Some(item) = self.item(pad) else { return crowd };
+        let margin = self.mask_margin();
+        for (k, (shape, layers, net)) in self.mask_areas.iter().enumerate() {
+            if layers & item.layers == 0 || item.shape.gap_within(shape, margin as f64) >= margin as f64 {
+                continue;
+            }
+            let allowed = if *net >= crate::model::ANY_ONE_NET { self.mask_holder(*net, true, &|other| other == pad) } else { Some(*net) };
+            if allowed.is_some_and(|n| n != item.net || n == 0) {
+                crowd.areas.push(k);
+            }
+        }
+        let bbox = self.bbox(pad).unwrap_or_else(|| item.shape.bbox());
+        for layer in (0..self.layers.len()).filter(|l| item.on(*l)) {
+            for other in self.near(layer, bbox.grow(self.limits.max_clearance)) {
+                let Some(o) = self.item(other) else { continue };
+                if other == pad || !o.on(layer) || !o.is_copper() || o.refilled() || (o.net == item.net && item.net != 0) || same_pad(item, o) {
+                    continue;
+                }
+                let (a, b) = (Thing::Item(self, pad, item), Thing::Item(self, other, o));
+                let required = self.clearance_kept(&a, &b, layer);
+                let mut gap = item.shape.gap_within(&o.shape, required as f64);
+                // Copper of no net that the pad lies on, drawn in the pad's own footprint, is a net
+                // tie's bridge (KiCad 5 drew ties so) or the part's own pattern: the pad is on it
+                // already, and a track on the pad may touch it too.
+                if gap <= 0.0 && o.net == 0 && within_footprint(self, item, other) {
+                    gap = f64::NEG_INFINITY;
+                }
+                if gap + SLACK < required as f64 {
+                    match crowd.copper.iter_mut().find(|(c, _)| *c == other) {
+                        Some(entry) => entry.1 = entry.1.min(gap),
+                        None => crowd.copper.push((other, gap)),
+                    }
+                }
+            }
+        }
+        crowd
+    }
+
+    /// The closest a track or via may come to `other`, fixed copper that already crowds a pad
+    /// of its net that it touches; `None` where no such pad allows it.
+    fn crowd_gap(&self, item: &Item, other: ItemId) -> Option<f64> {
+        self.crowd_allowance(item).copper.iter().filter(|(c, _)| *c == other).map(|(_, g)| *g).reduce(f64::min)
+    }
+    /// What a track or via may share with the crowded pads of its net it touches: their
+    /// [`Board::crowd`]s, merged. Empty for anything else.
+    fn crowd_allowance(&self, item: &Item) -> crate::model::Crowd {
+        let mut allowed = crate::model::Crowd::default();
+        if self.crowded.is_empty() || !matches!(item.kind, Kind::Track | Kind::Via) {
+            return allowed;
+        }
+        for (&pad, crowd) in &self.crowded {
+            let Some(p) = self.item(pad) else { continue };
+            if p.net == item.net && p.layers & item.layers != 0 && item.shape.gap_within(&p.shape, 1.0) <= 0.0 {
+                allowed.areas.extend(&crowd.areas);
+                allowed.copper.extend(&crowd.copper);
+            }
+        }
+        allowed
+    }
+
     /// How far beyond a solder mask opening other nets' copper keeps: the project's solder mask
     /// to copper clearance, and [`MASK_MARGIN`] past it.
     pub fn mask_margin(&self) -> Nm {
@@ -365,8 +437,13 @@ fn item_checks(
     // A track or via of another net bared in an opening drawn in the mask would bridge there, and
     // so would a bare via whose own opening meets it, or comes closer than the mask's narrowest
     // web (a via beside an unplated hole's opening: digital_clock's Q17).
+    // A track or via touching a pad the input already crowds may share that pad's faults.
+    let allowed = board.crowd_allowance(item);
     if matches!(item.kind, Kind::Track | Kind::Via) {
-        for (shape, layers, net) in &board.mask_areas {
+        for (k, (shape, layers, net)) in board.mask_areas.iter().enumerate() {
+            if allowed.areas.contains(&k) {
+                continue;
+            }
             let margin = board.mask_margin() + board.via_opening_on(item, *layers);
             if layers & item.layers != 0 && item.shape.gap_within(shape, margin as f64) < margin as f64 {
                 let allowed = if *net >= crate::model::ANY_ONE_NET {
@@ -417,7 +494,12 @@ fn item_checks(
                             }
                         }
                     }
-                    _ if partner(other) && o.is_copper() && (o.net != item.net || item.net == 0) && !same_pad(item, o) && !tied(board, id, item, other, o) => {
+                    _ if partner(other)
+                        && o.is_copper()
+                        && (o.net != item.net || item.net == 0)
+                        && !same_pad(item, o)
+                        && !tied(board, id, item, other, o) =>
+                    {
                         let (a, b) = (Thing::Item(board, id, item), Thing::Item(board, other, o));
                         let required = board.clearance_kept(&a, &b, layer).max(mask_pair_gap(board, id, item, other, o, layer));
                         let other_bbox = board.bbox(other).unwrap_or_else(|| o.shape.bbox());
@@ -425,6 +507,20 @@ fn item_checks(
                             continue;
                         }
                         let gap = item.shape.gap_within(&o.shape, required as f64);
+                        // No closer than the crowded pad it touches already is to that copper,
+                        // and never touching it: KiCad takes a track on another net's copper, or
+                        // on copper of no net, for a short, where a pad there is only too close.
+                        let shared = if board.crowded.is_empty() {
+                            None
+                        } else {
+                            allowed.copper.iter().filter(|(c, _)| *c == other).map(|(_, g)| *g).reduce(f64::min).or_else(|| board.crowd_gap(o, id))
+                        };
+                        // A net tie's bridge (`f64::NEG_INFINITY`) may be touched, as the pad
+                        // touches it, but not merely neared: KiCad calls that a clearance fault.
+                        let shares = |g: f64| if g == f64::NEG_INFINITY { gap <= 0.0 } else { gap > 0.0 && gap + SLACK >= g };
+                        if shared.is_some_and(shares) {
+                            continue;
+                        }
                         if gap + SLACK < required as f64 {
                             failed_pairs.insert((id.min(other), id.max(other)));
                             found.push(Violation { rule: Rule::Clearance, a: id, b: Some(other), layer: Some(layer), gap, required });

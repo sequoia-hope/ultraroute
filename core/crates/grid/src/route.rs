@@ -670,6 +670,32 @@ fn routing_layers(item: &Item, grid: &RouteGrid) -> Vec<usize> {
 }
 
 /// The point a leg into the item must reach: a pad's or via's centre, or the nearer end of a track.
+/// Points across a crowded pad for legs to start from, its centre first: the copper or mask
+/// that crowds it may cover the centre, and a leg from another part of the pad can leave clear.
+fn crowded_anchors(item: &Item, step: Nm) -> Vec<Point> {
+    const MOST: usize = 25;
+    let bb = item.shape.bbox();
+    let centre = anchor(item, Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2));
+    let step = step.max(1);
+    let mut points: Vec<Point> = Vec::new();
+    let mut y = bb.min.y + step / 2;
+    while y < bb.max.y {
+        let mut x = bb.min.x + step / 2;
+        while x < bb.max.x {
+            let p = Point::new(x, y);
+            if p != centre && item.shape.contains(p) {
+                points.push(p);
+            }
+            x += step;
+        }
+        y += step;
+    }
+    // Spread over the pad: every k-th of them, by distance from the centre.
+    points.sort_by_key(|p| (p.distance(centre) as i64, p.x, p.y));
+    let k = points.len().div_ceil(MOST - 1).max(1);
+    std::iter::once(centre).chain(points.into_iter().step_by(k)).collect()
+}
+
 pub(crate) fn anchor(item: &Item, near: Point) -> Point {
     match (&item.kind, &item.shape) {
         (_, Shape::Capsule { a, b, .. }) if a == b => *a,
@@ -880,7 +906,22 @@ pub(crate) fn terminals(board: &mut Board, grid: &RouteGrid, id: ItemId) -> Vec<
             return by_cell.into_iter().collect();
         }
     }
-    Vec::new()
+    // A pad the input already crowds (another net's mask opening over it, copper of no net
+    // drawn across it) has no way in that keeps every rule. The leg into it may share those
+    // faults, and no others; the run reports each such pad (`crate::crowded`).
+    if board.crowded.contains_key(&id) {
+        return Vec::new();
+    }
+    let crowd = board.crowd(id);
+    if crowd == board::Crowd::default() {
+        return Vec::new();
+    }
+    board.crowded.insert(id, crowd);
+    let found = terminals_within_rules(board, grid, id);
+    if found.is_empty() {
+        board.crowded.remove(&id);
+    }
+    found
 }
 
 pub(crate) fn item_terminals(board: &mut Board, grid: &RouteGrid, id: ItemId, leg_half_width: Nm, leg_cells: Nm, tries: usize) -> Vec<Terminal> {
@@ -890,6 +931,7 @@ pub(crate) fn item_terminals(board: &mut Board, grid: &RouteGrid, id: ItemId, le
     let bb = item.shape.bbox();
     let anchors: Vec<Point> = match (&item.kind, &item.shape) {
         (Kind::Track, Shape::Capsule { a, b, .. }) if a != b => vec![*a, *b],
+        _ if board.crowded.contains_key(&id) => crowded_anchors(&item, grid.h),
         _ => vec![anchor(&item, Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2))],
     };
     let per_anchor = (tries / anchors.len().max(1)).max(8);

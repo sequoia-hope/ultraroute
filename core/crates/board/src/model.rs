@@ -272,6 +272,16 @@ impl Block {
     }
 }
 
+/// What already breaks a rule against a pad before routing: indices into
+/// [`Board::mask_areas`] whose opening bares it for another net, and fixed copper of other nets,
+/// or of none, closer than the clearance, with the pad's gap to each: what touches the pad may
+/// come that close to it and no closer.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Crowd {
+    pub areas: Vec<usize>,
+    pub copper: Vec<(ItemId, f64)>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Board {
     pub layers: Vec<String>,
@@ -315,6 +325,15 @@ pub struct Board {
     /// Pads no zone of their net joins (KiCad's zone connection "none", the pad's own, its
     /// footprint's or the zone's).
     pub pad_zone_connect: HashMap<ItemId, u8>,
+    /// Pads the input already crowds: each pad no route could reach within the rules, with what
+    /// already breaks a rule against it before routing (another net's mask opening over it,
+    /// copper of no net drawn across it, a net tie's other pad). A track or via of the pad's
+    /// net that touches the pad may share those same faults and no others, as a designer would
+    /// connect the pin anyway (see [`Board::crowd`]).
+    pub crowded: HashMap<ItemId, Crowd>,
+    /// Copper drawn in a footprint (`fp_line`, `fp_poly` and the like on a copper layer): the
+    /// footprint, by index into `footprints`.
+    pub drawn_in: HashMap<ItemId, usize>,
     /// Zones, by index, that join no pad of their net unless the pad says otherwise.
     pub zones_without_pads: std::collections::HashSet<usize>,
     /// Slotted holes: the two ends of a slot's centre line, its radius the item's `hole`'s. A
@@ -490,6 +509,8 @@ impl Board {
             mask_groups: Vec::new(),
             pad_clearances: HashMap::new(),
             pad_zone_connect: HashMap::new(),
+            crowded: HashMap::new(),
+            drawn_in: HashMap::new(),
             zones_without_pads: copper.zones.iter().enumerate().filter(|(_, z)| z.no_pads).map(|(i, _)| i).collect(),
             hole_ends: HashMap::new(),
             ties: HashMap::new(),
@@ -811,6 +832,9 @@ impl Board {
                     locked: true,
                     span: None,
                 });
+                if let Some(fp) = g.footprint {
+                    board.drawn_in.insert(id, fp);
+                }
                 // Copper drawn in a net tie is the tie itself, between all its nets.
                 if let Some(fp) = g.footprint {
                     let nets: Vec<u32> = tie_nets(fp).into_iter().flat_map(|(_, n)| n).collect();
