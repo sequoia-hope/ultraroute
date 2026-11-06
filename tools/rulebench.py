@@ -25,6 +25,7 @@ import concurrent.futures
 import json
 import os
 import shutil
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -68,6 +69,9 @@ def route_one(name, run_dir, timeout, extra=()):
     r = subprocess.run(pcbench.CAP + [str(x) for x in args], capture_output=True, text=True)
     (d / "log.txt").write_text(r.stderr[-200_000:])
     res = {"board": name, "code": r.returncode}
+    # The pours' copper the routing kept, as the router fills them: a score, not a verdict.
+    if m := re.search(r"^pours: (\d+)% of (\d+) mm² kept", r.stderr, re.M):
+        res["pours"] = {"kept": int(m[1]) / 100, "mm2": int(m[2])}
     # A router that failed wrote the input board, the designer's copper and all: not judged.
     if pcbench.router_failed(res):
         res["success"] = False
@@ -110,8 +114,9 @@ def compare(a):
         if pcbench.router_failed(p) or pcbench.router_failed(q):
             print(f"{name:20} ROUTER FAILED: code {p.get('code')} -> {q.get('code')}")
             continue
+        kept = lambda r: f"{100 * r['pours']['kept']:.0f}%" if r.get("pours") else "-"
         print(f"{name:20} open {p.get('unconnected')!s:>3} -> {q.get('unconnected')!s:<3} vias {p.get('vias')!s:>4} -> {q.get('vias')!s:<4} "
-              f"new errors {errors(p):>3} -> {errors(q):<3} {q.get('new_errors') or ''}")
+              f"pours kept {kept(p):>4} -> {kept(q):<4} new errors {errors(p):>3} -> {errors(q):<3} {q.get('new_errors') or ''}")
 
 
 def main():

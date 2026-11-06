@@ -1728,6 +1728,22 @@ fn finish(
     for s in &mut stats.stages {
         s.cut = timeline.limited.contains(&s.name);
     }
+    // Why the run stopped with connections open, so its user knows whether to give it more time:
+    // a stage the clock cut while it was still closing connections might have closed more.
+    if ledger.open > 0 && !cancel.load(Ordering::Relaxed) {
+        let cut: Vec<&stats::StageStats> = stats.stages.iter().filter(|s| s.cut).collect();
+        let line = if let Some(s) = cut.iter().rev().find(|s| s.open_after < s.open_before) {
+            format!("stopped: time ran out while {} was still closing connections ({} -> {} open); more time may close more", s.name, s.open_before, s.open_after)
+        } else if let Some(stage) = timeline.overran_in {
+            format!("stopped: the run's time ran out during {stage} with {} open, before the stages after it; more time may close more", ledger.open)
+        } else if let Some(s) = cut.last() {
+            format!("stopped: time ran out in {}, which had closed none of its {} open; more time alone may not help", s.name, s.open_before)
+        } else {
+            format!("stopped: every stage ran to its end with {} open; more time will not help, another attempt (--attempt) or the placement may", ledger.open)
+        };
+        eprintln!("{line}");
+        stats.findings.push(Finding { severity: "info", kind: "stopped", message: line, refs: Vec::new(), nets: Vec::new(), ends: None });
+    }
     let routed = ledger.output.take().expect("the write stage runs whatever the time");
     if let Some(l) = lock(live).as_mut() {
         l.send_frame(board, true, Vec::new());

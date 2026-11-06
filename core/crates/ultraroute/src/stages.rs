@@ -36,6 +36,9 @@ pub struct Ledger {
     pub(crate) costs: ViaCosts,
     /// What `escape_parts` found.
     pub(crate) escape_parts: Option<Vec<usize>>,
+    /// Each pour's copper before routing, as KiCad would refill it: (zone, layer) to its area
+    /// in square millimetres and its pieces.
+    pub(crate) pours: HashMap<(usize, usize), (f64, usize)>,
     /// The connections the running stage gave up on, filed when it is done.
     pub(crate) given_up: Vec<Failure>,
     /// What routing one connection at a time after negotiation did.
@@ -328,6 +331,7 @@ impl Stage for SetUp {
             ledger.laid.retain(|id| board.item(*id).is_some());
         }
         ledger.costs = crate::via_costs(a, board);
+        ledger.pours = pours(board, ctx.text).into_iter().map(|(k, _, area, pieces)| (k, (area, pieces))).collect();
         let connections = board::connectivity_without_pours(board).airlines.len();
         ctx.say("start", format!("{connections} connections to make"));
         json!({"connections": connections, "length_limited_nets": ctx.ledger.first.len()})
@@ -1178,6 +1182,13 @@ impl Stage for LengthMatching {
     }
 }
 
+/// Each pour of the board in `text` filled as KiCad would refill it round `board`'s copper:
+/// (zone, layer), its net, its area in square millimetres and its pieces.
+fn pours(board: &Board, text: &str) -> Vec<((usize, usize), u32, f64, usize)> {
+    let Ok((_, copper)) = kicad_pcb::parse_board(text) else { return Vec::new() };
+    board::fill_zones(board, &copper).iter().map(|f| ((f.zone, f.layer), f.net, f.area() / 1e12, f.pieces)).collect()
+}
+
 /// What the run leaves open, said: the summary line, and with `--blame` what stands in the way
 /// of each open connection. Each is a finding.
 pub struct Outcome;
@@ -1195,7 +1206,36 @@ impl Stage for Outcome {
         let open = ctx.open();
         let s = &ctx.ledger.routed;
         eprintln!("routed {} more, {} failed, {} open, {:.1} s", s.routed, s.failed, open.len(), ctx.elapsed());
-        let detail = json!({"open": open.len(), "routed": s.routed, "failed": s.failed});
+        let mut detail = json!({"open": open.len(), "routed": s.routed, "failed": s.failed});
+        // What the routing took of each pour: a plane cut in pieces or half gone is copper the
+        // board's current and its signals' return paths no longer have. Said, not prevented.
+        let started = grid::clock::Instant::now();
+        let mut kept = Vec::new();
+        for ((zone, layer), net, area, pieces) in pours(ctx.board, ctx.text) {
+            let Some(&(was, were)) = ctx.ledger.pours.get(&(zone, layer)) else { continue };
+            kept.push(json!({"zone": zone, "layer": ctx.board.layers[layer], "net": ctx.board.net_name(net), "before_mm2": was, "after_mm2": area, "pieces_before": were, "pieces_after": pieces}));
+        }
+        let (was, now): (f64, f64) = kept.iter().fold((0.0, 0.0), |(w, n), p| (w + p["before_mm2"].as_f64().unwrap(), n + p["after_mm2"].as_f64().unwrap()));
+        if was > 0.0 {
+            let mut hurt: Vec<&Value> = kept
+                .iter()
+                // Of 10 mm² or more, and under nine tenths of its copper, or in more pieces and no
+                // more copper: not a pour that only grew an island round a new track of its own net.
+                .filter(|p| {
+                    let (was, now) = (p["before_mm2"].as_f64().unwrap(), p["after_mm2"].as_f64().unwrap());
+                    was >= 10.0 && (now < 0.9 * was || (p["pieces_after"].as_u64() > p["pieces_before"].as_u64() && now <= was))
+                })
+                .collect();
+            let lost = |p: &Value| p["before_mm2"].as_f64().unwrap() - p["after_mm2"].as_f64().unwrap();
+            hurt.sort_by(|a, b| lost(b).total_cmp(&lost(a)));
+            let hurt: Vec<String> = hurt
+                .into_iter()
+                .map(|p| format!("{} {} {:.0} -> {:.0} mm², {} -> {} pieces", p["layer"].as_str().unwrap(), p["net"].as_str().unwrap(), p["before_mm2"].as_f64().unwrap(), p["after_mm2"].as_f64().unwrap(), p["pieces_before"], p["pieces_after"]))
+                .collect();
+            eprintln!("pours: {:.0}% of {:.0} mm² kept{}, {:.1} s", 100.0 * now / was, was, if hurt.is_empty() { String::new() } else { format!("; cut: {}", hurt.join("; ")) }, started.elapsed().as_secs_f64());
+            ctx.say("pours", format!("{:.0}% of the pours' {:.0} mm² kept", 100.0 * now / was, was));
+            detail["pours"] = json!(kept);
+        }
         let blamed = if ctx.args.blame { crate::print_blame(ctx.board, ctx.args.pours_block) } else { Vec::new() };
         ctx.stats.findings.extend(open_findings(ctx.board, &open, &blamed));
         ctx.ledger.open = open.len();
