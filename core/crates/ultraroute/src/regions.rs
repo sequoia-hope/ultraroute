@@ -8,7 +8,8 @@
 //!                          "weight": 2.0, "vias": true}]}],
 //!  "max_lengths": [{"nets": ["/XIN"], "max_length_mm": 10}],
 //!  "clear_under": [{"nets": ["/USB_DP", "/USB_DM"], "classes": ["USB"], "layers": ["F.Cu"],
-//!                   "planes": ["In1.Cu"], "margin_mm": 0.0}]}
+//!                   "planes": ["In1.Cu"], "margin_mm": 0.0}],
+//!  "widths": [{"nets": ["/VBUS"], "classes": ["POWER"], "width_mm": 0.8}]}
 //! ```
 //!
 //! Polygons are in millimetres in KiCad's frame (y down); `layers` defaults to every copper
@@ -21,6 +22,10 @@
 //! width: whichever is laid first keeps the other off, and the nets route first (see
 //! [`board::Board::antipads`] for the antipad, and `grid::under` for how the searches see it).
 //! A hole of the zone's own net cuts nothing; where no zone of another net is, nor does any.
+//!
+//! A `widths` entry prefers its nets at `width_mm` (from the current they carry, say): a net
+//! routes at it where it fits and at its class's width where not, and never narrower than its
+//! class's ([`Board::widths`]). Of two entries for a net, the later holds.
 
 use std::collections::{BTreeSet, HashSet};
 
@@ -126,6 +131,16 @@ pub fn load(path: &str, board: &mut Board) -> Result<Vec<MaxLength>, String> {
         let margin = (c["margin_mm"].as_f64().unwrap_or(0.0).max(0.0) * 1e6).round() as board::Nm;
         under.push(ClearUnder { nets, layers, planes, margin });
     }
+    let mut widths = Vec::new();
+    for w in v["widths"].as_array().into_iter().flatten() {
+        let Some(mm) = w["width_mm"].as_f64().filter(|mm| *mm > 0.0) else {
+            return Err(format!("--regions {path}: widths: a positive width_mm expected"));
+        };
+        let classes = strs(&w["classes"]);
+        let mut nets: Vec<u32> = strs(&w["nets"]).iter().filter_map(|n| net_of(n).or_else(|| { unknown.push(n.clone()); None })).collect();
+        nets.extend((1..board.nets.len() as u32).filter(|&n| classes.iter().any(|k| board.rules.in_class(board.net_name(n), k))));
+        widths.extend(nets.into_iter().map(|n| (n, (mm * 1e6).round() as board::Nm)));
+    }
     if !unknown.is_empty() {
         eprintln!("regions: nets the board does not have: {}", unknown.join(", "));
     }
@@ -139,6 +154,7 @@ pub fn load(path: &str, board: &mut Board) -> Result<Vec<MaxLength>, String> {
     }
     board.regions = regions;
     board.clear_under = under;
+    board.widths.extend(widths);
     Ok(lengths)
 }
 

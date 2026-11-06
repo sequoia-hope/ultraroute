@@ -145,6 +145,7 @@ lengths, the deadline, and, of kind `rule`, every project or custom rule left ou
 | `--via-cost MM[,OPEN_MM]` | a via's price in mm of straight track (0.05 to 50): negotiation's, and with OPEN_MM that of routing one connection at a time and of rip-up (else 1.2 and 0.8 times MM) |
 | `--via-avoid X0,Y0,X1,Y1` | a box (mm, KiCad's frame) where vias cost dearly but are allowed; repeatable |
 | `--via-avoid-cost N` | that price, in search units (10 a straight cell; default 3000) |
+| `--power-width MM` | nets that by name carry supply current (power rails, grounds) and switch nodes (an inductor's net with an IC) prefer MM-wide tracks: wide where it fits, at the class's width where not, never under the class's (default off; `--no-power-width`) |
 | `--pour-cost W` | crossing another net's pour costs W times the length inside (default 0) |
 | `--pours-block` | treat pours as walls, and count connections through them as made |
 | `--planes LAYER,...` | layers given whole to a plane: no tracks on them, vias through them |
@@ -198,7 +199,9 @@ CPU seconds, not of what else the machine is doing.
 
 `--regions` reads `routing.json` version 1 (format in `crates/ultraroute/src/regions.rs`, more in
 `docs/library.md`): `regions` (polygons with `never`, `must`, `avoid` and `prefer` rules for
-nets' tracks or vias), `max_lengths` (checked and reported), and `clear_under`:
+nets' tracks or vias), `max_lengths` (checked and reported), `widths` (as `--power-width`, for
+the nets and classes named: `{"nets": ["/VBUS"], "classes": ["POWER"], "width_mm": 0.8}`; a
+planner's width comes before `--power-width`'s), and `clear_under`:
 
 ```json
 "clear_under": [{"nets": ["/USB_DP", "/USB_DM"], "classes": ["USB"], "layers": ["F.Cu"],

@@ -33,6 +33,8 @@ pub struct Ledger {
     /// Nets with a length limit, and those nets, routed first.
     pub(crate) lengths: Vec<regions::MaxLength>,
     pub(crate) first: HashSet<u32>,
+    /// Nets preferred wider than their class when routing began (`Board::widths`).
+    pub(crate) preferred: Vec<u32>,
     pub(crate) costs: ViaCosts,
     /// What `escape_parts` found.
     pub(crate) escape_parts: Option<Vec<usize>>,
@@ -303,6 +305,17 @@ impl Stage for SetUp {
             Some(path) => regions::load(path, board).unwrap_or_else(|e| panic!("{e}")),
             None => Vec::new(),
         };
+        if let Some(mm) = a.power_width {
+            let found = crate::widths::prefer(board, (mm * 1e6).round() as Nm);
+            if !found.is_empty() {
+                let names: Vec<String> = found.iter().map(|(n, why)| format!("{n} ({why})")).collect();
+                eprintln!("widths: {} nets preferred at {mm} mm: {}", found.len(), names.join(", "));
+            }
+        }
+        // Wider than their class only: a preference at or under the class's width changes nothing.
+        let mut preferred: Vec<u32> = board.widths.keys().copied().filter(|&n| grid::Profile::for_net(board, n).rules_class() != grid::Profile::for_net(board, n).class).collect();
+        preferred.sort_unstable();
+        ledger.preferred = preferred;
         // Nets with a length limit route first, while their shortest ways are still free.
         ledger.first = ledger.lengths.iter().flat_map(|m| m.nets.iter().copied()).collect();
         // So do the nets a clear-under rule keeps off other nets' antipads: laid before most
@@ -1190,7 +1203,13 @@ impl Stage for Outcome {
         let open = ctx.open();
         let s = &ctx.ledger.routed;
         eprintln!("routed {} more, {} failed, {} open, {:.1} s", s.routed, s.failed, open.len(), ctx.elapsed());
-        let detail = json!({"open": open.len(), "routed": s.routed, "failed": s.failed});
+        let mut detail = json!({"open": open.len(), "routed": s.routed, "failed": s.failed});
+        let preferred = &ctx.ledger.preferred;
+        if !preferred.is_empty() {
+            let dropped: Vec<&str> = preferred.iter().filter(|n| !ctx.board.widths.contains_key(n)).map(|&n| ctx.board.net_name(n)).collect();
+            eprintln!("widths: {} of {} nets preferred wider routed at their class's width, finding no way at their own{}", dropped.len(), preferred.len(), if dropped.is_empty() { String::new() } else { format!(": {}", dropped.join(", ")) });
+            detail["widths"] = json!({"preferred": preferred.len(), "dropped": dropped});
+        }
         let blamed = if ctx.args.blame { crate::print_blame(ctx.board, ctx.args.pours_block) } else { Vec::new() };
         ctx.stats.findings.extend(open_findings(ctx.board, &open, &blamed));
         ctx.ledger.open = open.len();

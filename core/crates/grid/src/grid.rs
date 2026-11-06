@@ -39,6 +39,12 @@ pub struct Profile {
 }
 
 impl Profile {
+    /// The class the board's rules know the net by: [`Profile::class`] without what tells a
+    /// preferred width's or a corridor's maps apart.
+    pub fn rules_class(&self) -> &str {
+        self.class.split('\u{0}').next().unwrap_or("")
+    }
+
     /// How narrow a leg into `pad` may neck. A signal necks to its narrowest; a net that carries
     /// current only to the pad's own width, as a designer would draw it, where the pad is
     /// narrower than the net's track: never thinner than the copper it feeds.
@@ -71,11 +77,15 @@ impl Profile {
         let class = class.as_ref();
         let take = |v: Option<f64>, floor: f64| nm(v.unwrap_or(floor).max(floor));
         let min_width = board.min_track_width_of(net) as f64 / 1e9;
-        let half_width = take(class.map(|c| c.track_width), min_width) / 2;
+        let own = take(class.map(|c| c.track_width), min_width) / 2;
+        // A net preferred wider than its class (`Board::widths`) routes as a class of its own
+        // width: its maps are apart from the class's, named for the width after a NUL.
+        let preferred = board.widths.get(&net).map(|w| w / 2).filter(|&hw| hw > own);
+        let half_width = preferred.unwrap_or(own);
         // A net whose class is wider than the board's default carries current: it keeps its
         // width all the way into its pads, however tight; only signals neck to the minimum.
         let signal = rules.classes.iter().find(|c| c.name == "Default").map_or(0.0, |c| c.track_width).max(rules.min_track_width);
-        let power = class.is_some_and(|c| c.track_width > signal + 1e-9);
+        let power = preferred.is_some() || class.is_some_and(|c| c.track_width > signal + 1e-9);
         // A class's via may leave a thinner ring round its drill than the board allows; the via
         // grows to keep the ring, the drill as the class has it. Custom rules on vias of the net
         // (hole_size, via_diameter, annular_width) may ask more of either; never less.
@@ -89,7 +99,13 @@ impl Profile {
             (drill, diameter, nm(rules.min_via_annular_width))
         };
         Profile {
-            class: class.map_or_else(String::new, |c| c.name.clone()),
+            class: {
+                let name = class.map_or_else(String::new, |c| c.name.clone());
+                match preferred {
+                    Some(hw) => format!("{name}\u{0}w{}", 2 * hw),
+                    None => name,
+                }
+            },
             half_width,
             narrow_half_width: if power { half_width } else { (nm(min_width) / 2).clamp(1, half_width.max(1)) },
             min_half_width: (nm(min_width) / 2).clamp(1, half_width.max(1)),
@@ -1034,7 +1050,7 @@ impl ObstacleMap {
         use kicad_pcb::dru::Tri;
         let cells = self.nx * self.ny;
         let p = self.profile.clone();
-        let class = p.net.map_or(p.class.as_str(), |n| board.class_name(n)).to_string();
+        let class = p.net.map_or(p.rules_class(), |n| board.class_name(n)).to_string();
         let thing = |via: bool, layer: usize, area: Area| board::Thing::New {
             board,
             via,
