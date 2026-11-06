@@ -168,6 +168,9 @@ pub struct NegotiationStats {
     pub rescues_wasted: usize,
     pub rescue_wasted_ns: u64,
     pub round_trace: Vec<NegotiationRound>,
+    /// Where routes kept colliding in its first pass with any: the board's busiest places,
+    /// busiest first.
+    pub hotspots: Vec<Hotspot>,
 }
 
 struct Connection {
@@ -812,6 +815,9 @@ fn fold_pass(stats: &mut NegotiationStats, pass: PassSummary) {
     }
     stats.passes += 1;
     stats.rounds_total += pass.round_records.len();
+    if stats.hotspots.is_empty() {
+        stats.hotspots = pass.hot;
+    }
     if pass.committed > 0 {
         stats.setup_useful_ns = stats.setup_useful_ns.saturating_add(pass.setup_ns);
         stats.commit_useful_ns = stats.commit_useful_ns.saturating_add(pass.commit_useful_ns);
@@ -836,7 +842,76 @@ fn fold_pass(stats: &mut NegotiationStats, pass: PassSummary) {
     stats.round_trace.extend(pass.round_records);
 }
 
+/// A place where negotiation's routes kept colliding: cells where paths crossed other nets' in
+/// three rounds or more, joined into one region.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Hotspot {
+    /// Its box, in nanometres, KiCad's frame.
+    pub min: Point,
+    pub max: Point,
+    /// The board layers it is on.
+    pub layers: Vec<usize>,
+    /// Its cells, and the collisions there over the rounds (history steps).
+    pub cells: usize,
+    pub collisions: u64,
+}
+
+/// The `most` busiest regions of `history` (per routing layer and cell, `nx` by `ny` cells of
+/// side `h` from `(x0, y0)`), cells where paths collided in `rounds` rounds or more, joined side
+/// or corner across any layer; regions of fewer than four cells are left out.
+#[allow(clippy::too_many_arguments)]
+pub fn hotspots(history: &[u32], nx: usize, ny: usize, layers: &[usize], x0: Nm, y0: Nm, h: Nm, step: u32, rounds: u32, most: usize) -> Vec<Hotspot> {
+    let cells = nx * ny;
+    let hot = |c: usize| (0..layers.len()).any(|l| history[l * cells + c] >= rounds * step.max(1));
+    let mut seen = vec![false; cells];
+    let mut out = Vec::new();
+    for start in 0..cells {
+        if seen[start] || !hot(start) {
+            continue;
+        }
+        let (mut stack, mut members) = (vec![start], Vec::new());
+        seen[start] = true;
+        while let Some(c) = stack.pop() {
+            members.push(c);
+            let (i, j) = ((c % nx) as isize, (c / nx) as isize);
+            for (di, dj) in [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
+                let (a, b) = (i + di, j + dj);
+                if a < 0 || b < 0 || a >= nx as isize || b >= ny as isize {
+                    continue;
+                }
+                let n = b as usize * nx + a as usize;
+                if !seen[n] && hot(n) {
+                    seen[n] = true;
+                    stack.push(n);
+                }
+            }
+        }
+        if members.len() < 4 {
+            continue;
+        }
+        let (mut lo, mut hi) = ((usize::MAX, usize::MAX), (0, 0));
+        let mut on = vec![false; layers.len()];
+        let mut collisions = 0u64;
+        for &c in &members {
+            let (i, j) = (c % nx, c / nx);
+            lo = (lo.0.min(i), lo.1.min(j));
+            hi = (hi.0.max(i), hi.1.max(j));
+            for (l, o) in on.iter_mut().enumerate() {
+                let v = history[l * cells + c];
+                collisions += (v / step.max(1)) as u64;
+                *o |= v >= rounds * step.max(1);
+            }
+        }
+        let at = |i: usize, j: usize| Point::new(x0 + i as Nm * h, y0 + j as Nm * h);
+        out.push(Hotspot { min: at(lo.0, lo.1), max: at(hi.0 + 1, hi.1 + 1), layers: layers.iter().zip(&on).filter(|(_, o)| **o).map(|(l, _)| *l).collect(), cells: members.len(), collisions });
+    }
+    out.sort_by(|a, b| b.collisions.cmp(&a.collisions).then(a.min.x.cmp(&b.min.x)).then(a.min.y.cmp(&b.min.y)));
+    out.truncate(most);
+    out
+}
+
 struct PassSummary {
+    hot: Vec<Hotspot>,
     rounds: usize,
     conflicted: usize,
     unroutable: usize,
@@ -874,6 +949,7 @@ fn run_pass(
     laid: &mut Vec<LaidRoute>,
 ) -> PassSummary {
     let mut summary = PassSummary {
+        hot: Vec::new(),
         rounds: 0,
         conflicted: 0,
         unroutable: 0,
@@ -1173,6 +1249,7 @@ fn run_pass(
     }
     drop(class_grids);
     drop(zones);
+    summary.hot = hotspots(&history, nx, ny, &sample.layers, sample.x0, sample.y0, sample.h, options.history_step, 3, 5);
     drop(history);
     summary.unroutable = connections.iter().filter(|c| c.path.is_none()).count();
 
@@ -2304,6 +2381,28 @@ fn stamp_cells_2d(centres: &[usize], nx: usize, ny: usize, disc: &[(i32, i32)], 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hotspots_join_hot_cells_across_layers_and_leave_out_specks() {
+        // 10 x 10 cells of 0.1 mm on two layers. A 3 x 2 block collided in 4 rounds on layer 0, a
+        // cell beside it on layer 1 (joined across layers), a lone hot cell, and a cell that
+        // collided in only 2 rounds.
+        let (nx, ny, step) = (10, 10, 10);
+        let mut history = vec![0u32; 2 * nx * ny];
+        for j in 2..4 {
+            for i in 2..5 {
+                history[j * nx + i] = 4 * step;
+            }
+        }
+        history[nx * ny + 3 * nx + 5] = 3 * step;
+        history[8 * nx + 8] = 9 * step;
+        history[7 * nx + 1] = 2 * step;
+        let hot = hotspots(&history, nx, ny, &[0, 31], 1_000_000, 2_000_000, 100_000, step, 3, 5);
+        assert_eq!(hot.len(), 1, "{hot:?}");
+        let h = &hot[0];
+        assert_eq!((h.min, h.max), (Point::new(1_200_000, 2_200_000), Point::new(1_600_000, 2_400_000)));
+        assert_eq!((h.layers.clone(), h.cells, h.collisions), (vec![0, 31], 7, 6 * 4 + 3));
+    }
     use board::Shape;
 
     fn xorshift(mut state: u64) -> impl FnMut() -> u64 {
