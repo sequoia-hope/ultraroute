@@ -1031,15 +1031,22 @@ fn regions_blocking(board: &Board, net: u32, from: ItemId, to: ItemId, pours_blo
     out
 }
 
+/// The most open connections `--blame` asks about: each asking builds six maps of the whole
+/// board, about 9 s each on HID_PID_controller, whose 122 open ran past any harness's patience.
+const BLAME_MOST: usize = 10;
+
 /// The lines above, printed, and what each says stands in the way, one per open connection in
-/// the order connectivity gives them.
+/// the order connectivity gives them, for the first [`BLAME_MOST`].
 fn print_blame(board: &mut Board, pours_block: bool) -> Vec<String> {
     let mut said = Vec::new();
     let open = if pours_block { connectivity(board) } else { connectivity_without_pours(board) }.airlines;
     let priced = grid::BlameOptions { pours_block, ..Default::default() };
     let walled = grid::BlameOptions { routed_copper: None, ..priced.clone() };
     let locked: Vec<bool> = board.footprints.iter().map(|f| f.locked).collect();
-    for airline in open {
+    if open.len() > BLAME_MOST {
+        eprintln!("blame: the first {BLAME_MOST} of {} open connections; the rest are listed without", open.len());
+    }
+    for airline in open.into_iter().take(BLAME_MOST) {
         let r = grid::blame(board, airline.from_item, airline.to_item, &priced, &|f| !locked[f]);
         let w = grid::blame(board, airline.from_item, airline.to_item, &walled, &|f| !locked[f]);
         let reference = |f: &usize| board.footprints[*f].reference.clone();
