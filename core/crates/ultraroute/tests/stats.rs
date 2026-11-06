@@ -86,6 +86,8 @@ fn every_open_connection_is_a_finding() {
     let deadline: Vec<&str> = findings.iter().filter(|f| f["kind"] == "deadline").map(|f| f["message"].as_str().unwrap()).collect();
     assert_eq!(deadline.len(), 1, "{deadline:?}");
     assert!(deadline[0].starts_with("deadline: the run's hard limit passed during set-up; "));
+    let stopped: Vec<&str> = findings.iter().filter(|f| f["kind"] == "stopped").map(|f| f["message"].as_str().unwrap()).collect();
+    assert_eq!(stopped, ["stopped: the run's time ran out during set-up with 376 open, before the stages after it; more time may close more"]);
     // Only the stages that run whatever the time ran.
     let names: Vec<&str> = s["stages"].as_array().unwrap().iter().map(|st| st["name"].as_str().unwrap()).collect();
     assert_eq!(names, ["set-up", "cleaning", "result", "write"]);
