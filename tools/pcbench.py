@@ -10,7 +10,10 @@ baselines (FreeRouting, PcbRouter, RL-MCTS; PCBench/Baselines/Results_all.csv).
                                              tools/pcbench_timeouts.json get their own time
                                              --escalate S,S...: then each board that failed for want
                                              of time again at each longer limit, in RUN@S (the
-                                             gate is clean within 30 minutes; 120 s is the fast pass)
+                                             gate is clean within 30 minutes; 120 s is the fast pass);
+                                             then each board still open by at most --retry-open (3)
+                                             with the router's --attempt 1..--attempts (4), each
+                                             its own run RUN@SaK at the longest limit
     pcbench.py ab BASE NEW --base-bin BIN [--tier T] [run's options]
                                              route the same boards with BIN and this router in
                                              one pool, each board's two routes together, then
@@ -585,7 +588,7 @@ def route_all(jobs, a, workers):
     """Routes (run name, run dir, run.json, router, board) jobs, `workers` at once, and prints each verdict."""
     ok = {}
     with concurrent.futures.ThreadPoolExecutor(workers) as pool:
-        futures = {pool.submit(route_one, b, run_dir, a.recipe, info.get("board_timeouts", {}).get(b, a.timeout), a.seed, router, info.get("clock", "wall")): name for name, run_dir, info, router, b in jobs}
+        futures = {pool.submit(route_one, b, run_dir, info.get("recipe", a.recipe), info.get("board_timeouts", {}).get(b, info.get("timeout", a.timeout)), a.seed, router, info.get("clock", "wall")): name for name, run_dir, info, router, b in jobs}
         for k, f in enumerate(concurrent.futures.as_completed(futures), 1):
             r, name = f.result(), futures[f]
             ok[name] = ok.get(name, 0) + bool(r.get("success"))
@@ -637,6 +640,56 @@ def escalate(a, runs, workers):
         for name, _ in runs:
             later = load(f"{name}@{limit:g}")[0]
             last[name] = {b: r for b, r in later.items()}
+    attempt(a, runs, workers, last, limits[-1])
+
+
+def few_open(r, most):
+    """Whether a board failed by at most `most` open connections and nothing else."""
+    return not r.get("success") and not router_failed(r) and not r.get("new_errors") and 0 < (r.get("unconnected") or 0) <= most
+
+
+def attempt(a, runs, workers, last, limit):
+    """Each board still open by at most --retry-open connections after the escalations, routed
+    again at `limit` with each of the router's `--attempt K` changes in turn (another seed, no
+    fan-out, dearer vias), each its own run RUN@SECONDSaK with the whole limit, until one is
+    clean. The router's own `--retries` share one run's time, which a first attempt that runs to
+    the deadline leaves none of (FreeSmartEEG at 1800 s)."""
+    runs = [(name, router) for name, router in runs if "--attempt" in usage_of(router)]
+    for k in range(1, a.attempts + 1):
+        ids = sorted({b for name, _ in runs for b, r in last[name].items() if few_open(r, a.retry_open)})
+        if not ids:
+            break
+        print(f"== attempt {k}: {len(ids)} boards open by at most {a.retry_open}, at {limit:g} s", flush=True)
+        saved = (a.timeout, a.no_board_timeouts, a.recipe)
+        a.timeout, a.no_board_timeouts, a.recipe = limit, True, f"{a.recipe} --attempt {k}"
+        jobs = []
+        for name, router in runs:
+            sub = f"{name}@{limit:g}a{k}"
+            d, info = start(sub, ids, a, router, workers, commit=router == ROUTER)
+            jobs += [(sub, d, info, router, b) for b in ids]
+        a.timeout, a.no_board_timeouts, a.recipe = saved
+        jobs.sort(key=lambda j: (j[4], j[0]))
+        ok = route_all(jobs, a, workers)
+        print(" ".join(f"{name}@{limit:g}a{k}: {ok.get(f'{name}@{limit:g}a{k}', 0)} of {len(ids)} clean" for name, _ in runs))
+        for name, _ in runs:
+            for b, r in load(f"{name}@{limit:g}a{k}")[0].items():
+                if r.get("success") or (r.get("unconnected") or 0) < (last[name].get(b, {}).get("unconnected") or 0):
+                    last[name][b] = r
+
+
+def usage_of(router):
+    try:
+        u = subprocess.run([str(router), "route", "--help"], capture_output=True, text=True)
+        return u.stdout + u.stderr
+    except OSError:
+        return ""
+
+
+def stage_of(d):
+    """(limit, attempt) of an escalation's run directory RUN@SECONDS or RUN@SECONDSaK."""
+    tail = d.name.split("@")[1]
+    limit, _, k = tail.partition("a")
+    return float(limit), int(k or 0)
 
 
 def escalated(name):
@@ -645,8 +698,8 @@ def escalated(name):
     results, meta = load(name)
     first = lambda b: meta.get("board_timeouts", {}).get(b, meta.get("timeout"))
     final = {b: dict(r, clean_within=first(b) if r.get("success") else None) for b, r in results.items()}
-    for d in sorted((HOME / "runs").glob(f"{name}@*"), key=lambda p: float(p.name.split("@")[1])):
-        limit = float(d.name.split("@")[1])
+    for d in sorted((HOME / "runs").glob(f"{name}@*"), key=stage_of):
+        limit = stage_of(d)[0]
         for b, r in load(d.name)[0].items():
             if b in final and not final[b].get("success"):
                 final[b] = dict(r, clean_within=limit if r.get("success") else None)
@@ -904,6 +957,8 @@ def main():
     s.add_argument("--resume-anyway", action="store_true", help="resume a run started with another commit or binary")
     s.add_argument("--note", help="a note for run.json")
     s.add_argument("--escalate", help="seconds, comma-separated: route again at each longer limit the boards that failed for want of time (e.g. 600,1800)")
+    s.add_argument("--attempts", type=int, default=4, help="after --escalate, route boards still open by at most --retry-open again with the router's --attempt 1..N, each its own run at the longest limit (0: none)")
+    s.add_argument("--retry-open", type=int, default=3, help="the most open connections a board may have for --attempts")
     s.add_argument("--tier", help="only the boards of this tier (tools/pcbench_tiers.json)")
     s = sub.add_parser("ab", help="route with two routers side by side, then compare")
     s.add_argument("base", help="the run of --base-bin's routes")
@@ -921,6 +976,8 @@ def main():
     s.add_argument("--resume-anyway", action="store_true")
     s.add_argument("--note")
     s.add_argument("--escalate", help="seconds, comma-separated: route again at each longer limit the boards that failed for want of time (e.g. 600,1800)")
+    s.add_argument("--attempts", type=int, default=4, help="after --escalate, route boards still open by at most --retry-open again with the router's --attempt 1..N, each its own run at the longest limit (0: none)")
+    s.add_argument("--retry-open", type=int, default=3, help="the most open connections a board may have for --attempts")
     s.add_argument("--noise", default="0", help="boards the new run may lose and still pass")
     s = sub.add_parser("tiers", help="sort the boards into tiers by their history in these runs")
     s.add_argument("runs", nargs="+", help="full runs, same seed and recipe, oldest first")

@@ -39,7 +39,7 @@ pub use stats::{Finding, RunStats, StageStats};
 pub use watch::{Cleaned, Flow, StageEvent, Unwatched, Watch};
 
 pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--plane-via-reach MM] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--negotiate-jacobi] [--negotiate-reroute-all] [--diff-pairs] [--prefanout] [--escape-room|--no-escape-room] [--prefanout-mode stub|dogbone|grid|inner|same] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--negotiate] [--rip-up] [--rip-boxed|--no-rip-boxed] [--nudge] [--tighten] [--arcs MM] [--via-cost MM[,OPEN_MM]] [--gpu] \
-[--timeout SECONDS] [--cpu-clock] [--cell MM] [--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--guard-ties|--no-guard-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--retries N|--no-retries] [--uuid-seed N] [--adopt] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
+[--timeout SECONDS] [--cpu-clock] [--cell MM] [--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--guard-ties|--no-guard-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--retries N|--no-retries] [--attempt K] [--uuid-seed N] [--adopt] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
 [--recipe default|bench|minimal] [--live PATH|-] [--live-fps N] [--live-step MS] [--blame] [--stats|--report FILE] [--timing|--no-timing] [-h|--help]
 --place takes millimetres with y pointing up: give KiCad's y negated (KiCad y 127.5 is -127.5).
 Copper and mask text is stroked by the kicad-text program ($ULTRAROUTE_TEXT_HELPER, else next to this one, else on PATH; none: boxes);
@@ -162,6 +162,10 @@ pub struct Args {
     /// Attempts at most after the first, each a different recipe, while connections stay open
     /// and time is left ([`RETRIES`]).
     pub retries: usize,
+    /// One of [`RETRIES`] alone, as its own run (`--attempt K`, the Kth): what a harness routes
+    /// again with when a board is left open at its longest limit, each attempt with the whole
+    /// time, where `--retries` shares one run's.
+    pub attempt: Option<usize>,
     pub line: Vec<String>,
 }
 
@@ -255,6 +259,7 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
         guard_ties: false,
         seed: 0,
         retries: 0,
+        attempt: None,
         uuid_seed: None,
         shove_cascade: None,
         shove_patience: 1,
@@ -395,6 +400,13 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
             "--shove-patience" => a.shove_patience = value()?.parse().map_err(|e| format!("--shove-patience: {e}"))?,
             "--retries" => a.retries = value()?.parse::<usize>().map_err(|e| format!("--retries: {e}"))?.min(RETRIES.len()),
             "--no-retries" => a.retries = 0,
+            "--attempt" => {
+                let k = value()?.parse::<usize>().map_err(|e| format!("--attempt: {e}"))?;
+                if !(1..=RETRIES.len()).contains(&k) {
+                    return Err(format!("--attempt: 1 to {}", RETRIES.len()));
+                }
+                a.attempt = Some(k);
+            }
             "--seed" => a.seed = value()?.parse().map_err(|e| format!("--seed: {e}"))?,
             "--uuid-seed" => a.uuid_seed = Some(value()?.parse().map_err(|e| format!("--uuid-seed: {e}"))?),
             "--adopt" => a.adopt = true,
@@ -445,6 +457,12 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
     }
     if a.input.is_empty() || a.output.is_empty() {
         return Err(USAGE.to_string());
+    }
+    // After every other flag, so the change is made to the recipe as given.
+    if let Some(k) = a.attempt {
+        let change = RETRIES[k - 1].apply(&mut a);
+        eprintln!("attempt {k}: {}", change.as_deref().unwrap_or("changes nothing in this recipe"));
+        a.retries = 0;
     }
     Ok(a)
 }
