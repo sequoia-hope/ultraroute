@@ -9,13 +9,17 @@ intent: what the designer did is the evidence.
   vias    a widened net ours puts more than 2 vias more on than the designer
   decap   a decoupling capacitor (one pad on ground, the other on a net an IC's pin is on) whose
           track path to the nearest such IC pin is 3 mm and 1.5 times longer in ours
+  switch  a switch node (a regulator's switching pin, its inductor and diode: Circuit Composer's
+          intent class SWITCH) whose track copper is 1.5 times the designer's area and 2 mm²
+          more: copper that radiates. Its length and area are totalled too; less area is not
+          better on its own, as a narrower track has less (the width check covers that)
 
     designer.py DESIGNER.kicad_pcb OURS.kicad_pcb [--list] [--json]
-    designer.py --run RUN [--boards DIR] [--workers N]
+    designer.py --run RUN [--boards DIR] [--intent DIR] [--workers N]
 
 The first form compares two boards. The second compares every board of a PCBench run
 (RUN/<id>/out.kicad_pcb) with the designer's (DIR/<id>/board.kicad_pcb), writes each to
-RUN/<id>/designer.json and prints the totals. Paths are followed along tracks and vias only:
+RUN/<id>/designer.json and prints the totals. Switch nodes come from the intent DIR/<id>/intent.json. Paths are followed along tracks and vias only:
 a pad reached only through a pour has no track path, and is said so. KiCad's own geometry
 (pcbnew) reads both boards, nothing of the router's.
 """
@@ -151,6 +155,11 @@ class Copper:
                     heapq.heappush(heap, (nd, n, v))
         return None
 
+    def copper(self, net):
+        """A net's track length in mm and its track area in mm² (each track's length by its width)."""
+        ts = self.tracks.get(net, [])
+        return sum(t[4] for t in ts) / MM, sum(t[4] * t[3] for t in ts) / MM / MM
+
     def decaps(self):
         """Each decoupling capacitor's supply pad and the IC pads on its supply net."""
         caps = defaultdict(dict)
@@ -194,7 +203,7 @@ def on_segment(p, a, b, tol):
     return math.dist(p, (ax + t * dx, ay + t * dy)) <= tol
 
 
-def compare(designer_path, ours_path):
+def compare(designer_path, ours_path, switches=()):
     d, o = Copper(designer_path), Copper(ours_path)
     ds, os_ = d.net_stats(), o.net_stats()
     board_usual = (d.usual_width() or 0) / MM
@@ -218,6 +227,14 @@ def compare(designer_path, ours_path):
         a, b = dp[ref], op[ref]
         if a is not None and (b is None or (b > a + 3 and b > 1.5 * a)):
             findings.append({"check": "decap", "part": ref, "net": caps[ref][1], "designer_mm": rnd(a), "ours_mm": rnd(b)})
+    switch = {}
+    for net in sorted({norm(n) for n in switches}):
+        (dl, da), (ol, oa) = d.copper(net), o.copper(net)
+        if dl == 0 and ol == 0:
+            continue
+        switch[net] = {"designer_mm": rnd(dl), "designer_mm2": rnd(da), "ours_mm": rnd(ol), "ours_mm2": rnd(oa)}
+        if oa > 1.5 * da and oa > da + 2:
+            findings.append({"check": "switch", "net": net, "designer_mm2": rnd(da), "ours_mm2": rnd(oa)})
     return {
         "board_usual_width_mm": round(board_usual, 3),
         "widened_nets": len(widened),
@@ -227,6 +244,7 @@ def compare(designer_path, ours_path):
         "counts": dict(Counter(f["check"] for f in findings)),
         "findings": findings,
         "decap": decap,
+        "switch": switch,
     }
 
 
@@ -234,10 +252,19 @@ def rnd(x):
     return None if x is None else round(x, 2)
 
 
-def one(job):
-    b, designer, ours, out = job
+def switch_nets(intent):
+    """The nets Circuit Composer's intent file `intent` classes as switch nodes."""
     try:
-        res = compare(designer, ours)
+        nets = json.loads(Path(intent).read_text())["nets"]
+    except (OSError, ValueError, KeyError):
+        return []
+    return [n for n, v in nets.items() if v.get("class") == "SWITCH"]
+
+
+def one(job):
+    b, designer, ours, out, intent = job
+    try:
+        res = compare(designer, ours, switch_nets(intent))
     except Exception as e:  # a board KiCad cannot load is reported, not fatal
         res = {"error": f"{type(e).__name__}: {e}"}
     res["id"] = b
@@ -256,7 +283,7 @@ def run(a):
         if not a.redo and (d / "designer.json").exists():
             jobs.append(None)
             continue
-        jobs.append((d.name, str(boards / d.name / "board.kicad_pcb"), str(d / "out.kicad_pcb"), str(d / "designer.json")))
+        jobs.append((d.name, str(boards / d.name / "board.kicad_pcb"), str(d / "out.kicad_pcb"), str(d / "designer.json"), str(Path(a.intent) / d.name / "intent.json")))
     todo = [j for j in jobs if j]
     with ProcessPoolExecutor(a.workers) as ex:
         for i, res in enumerate(ex.map(one, todo, chunksize=1), 1):
@@ -292,7 +319,10 @@ def summarize(run_dir):
     print(f"{run_dir}: {clean} clean boards compared with the designer's ({errors} could not be read)")
     print(f"   track length {dl / 1000:.1f} m designer -> {ol / 1000:.1f} m ours; vias {dv} -> {ov}")
     print(f"   widened nets {sum(r['widened_nets'] for r in rows)}, decoupling capacitors {sum(r['decaps'] for r in rows)}")
-    for k in ("width", "vias", "length", "decap"):
+    sw = [v for r in rows for v in r.get("switch", {}).values()]
+    if sw:
+        print(f"   switch nodes {len(sw)}: track {sum(v['designer_mm'] for v in sw):.0f} mm, {sum(v['designer_mm2'] for v in sw):.0f} mm² designer -> {sum(v['ours_mm'] for v in sw):.0f} mm, {sum(v['ours_mm2'] for v in sw):.0f} mm² ours")
+    for k in ("width", "vias", "length", "decap", "switch"):
         print(f"   {k:7} {totals[k]:6} findings on {boards_with[k]} boards")
     worst = sorted(rows, key=lambda r: -len(r["findings"]))[:10]
     print("   most findings: " + ", ".join(f"{r['id']} {len(r['findings'])}" for r in worst))
@@ -304,6 +334,7 @@ def main():
     ap.add_argument("ours", nargs="?")
     ap.add_argument("--run")
     ap.add_argument("--boards", default=str(Path(os.environ.get("ULTRAROUTE_LAB", Path.home() / "Software" / "ultraroute-lab")) / "pcbench" / "boards"))
+    ap.add_argument("--intent", default=str(Path(os.environ.get("ULTRAROUTE_LAB", Path.home() / "Software" / "ultraroute-lab")) / "pcbench" / "intent"), help="Circuit Composer intent files, DIR/<id>/intent.json, for the switch nodes")
     ap.add_argument("--workers", type=int, default=int(os.environ.get("RESERVED_CORES", "4")))
     ap.add_argument("--redo", action="store_true")
     ap.add_argument("--summary", action="store_true", help="with --run: only print the totals of what is written")
