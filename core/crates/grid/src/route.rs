@@ -456,14 +456,21 @@ pub(crate) const CORRIDOR_STRETCH: Nm = 5_000_000;
 /// A corridor's narrowed stretch: its half width and its length.
 pub(crate) type Stretch = (Nm, Nm);
 
-/// Legal narrower half-widths a connection of `profile` may squeeze through tight gaps at. A
-/// signal, which necks to its minimum near its pads already, goes to the net's minimum. A net
-/// that carries current (a class wider than the default) keeps its width as the router's rule
-/// has it ([`Profile::narrow_half_width`]), and narrows only as [`narrow_run`] allows it: for
-/// ends no further apart than [`NARROW_RUN_REACH`], never thinner than its pins.
+/// Legal narrower half-widths a connection of `profile` may squeeze through tight gaps at,
+/// widest first. A signal, which necks to its minimum near its pads already, goes to the net's
+/// minimum. A net that carries current (a class wider than the default) first narrows as
+/// [`narrow_run`] allows it, for ends no further apart than [`NARROW_RUN_REACH`] and never
+/// thinner than its pins; then, last, to its own minimum (the board's, a custom rule's, a
+/// planner's): a class's width is the width KiCad draws a net at, not a rule its DRC holds, and
+/// a designer necks a rail through a pinch as antdroid's 1.6 mm +5VA runs 0.25 mm past R7. The
+/// corridor keeps the narrow stretch to the pinch, and each stretch is reported.
 pub(crate) fn corridor_widths(board: &Board, profile: &Profile, airline: &board::Airline) -> Vec<Nm> {
     if profile.narrow_half_width >= profile.half_width {
-        return narrow_run(board, profile, airline).into_iter().collect();
+        let mut widths: Vec<Nm> = narrow_run(board, profile, airline).into_iter().collect();
+        if profile.min_half_width + 1_000 < profile.half_width && widths.last().is_none_or(|&w| w > profile.min_half_width) {
+            widths.push(profile.min_half_width);
+        }
+        return widths;
     }
     let floor = if profile.min_half_width < SANE_MIN_HALF_WIDTH {
         FALLBACK_MIN_HALF_WIDTH.max(profile.min_half_width)
@@ -1472,23 +1479,25 @@ mod tests {
         // A signal narrows to its minimum.
         let board = gap_board(false, 0.4);
         assert_eq!(corridor_widths(&board, &Profile::for_net(&board, 1), &airline(&board)), vec![mm(0.1)]);
-        // A net of a class wider than the default, 12 mm between its pins, keeps its width: the
-        // gap stays shut to it even with corridors on.
+        // A net of a class wider than the default, 12 mm between its pins, narrows last to its
+        // own minimum, through the pinch only.
         let mut board = gap_board(true, 0.15);
         let profile = Profile::for_net(&board, 1);
         assert_eq!(profile.half_width, mm(0.25));
-        assert!(corridor_widths(&board, &profile, &airline(&board)).is_empty());
-        let stats = route_open(&mut board, &mut CpuSolver, &Options { corridor: true, ..Default::default() }, &mut |_| {});
-        assert_eq!((stats.routed, stats.corridor), (0, 0), "{stats:?}");
-        // Its pins 3 mm apart, it may narrow to their width and no thinner.
+        assert_eq!(corridor_widths(&board, &profile, &airline(&board)), vec![profile.min_half_width]);
+        // Its pins 3 mm apart, it narrows to their width first, then to its minimum.
         let mut short = airline(&board);
         short.to = Point::new(short.from.x + mm(3.0), short.from.y);
-        assert_eq!(corridor_widths(&board, &profile, &short), vec![mm(0.15)]);
-        // Pins as wide as its track leave it nothing to narrow to.
+        assert_eq!(corridor_widths(&board, &profile, &short), vec![mm(0.15), profile.min_half_width]);
+        let stats = route_open(&mut board, &mut CpuSolver, &Options { corridor: true, ..Default::default() }, &mut |_| {});
+        assert_eq!((stats.routed, stats.corridor), (1, 1), "{stats:?}");
+        assert!(stats.corridors.iter().all(|&(_, _, w, _)| w == 2 * profile.min_half_width), "{:?}", stats.corridors);
+        // Pins as wide as its track: only its minimum is left to narrow to.
         let board = gap_board(true, 0.3);
         let mut short = airline(&board);
         short.to = Point::new(short.from.x + mm(3.0), short.from.y);
-        assert!(corridor_widths(&board, &Profile::for_net(&board, 1), &short).is_empty());
+        let profile = Profile::for_net(&board, 1);
+        assert_eq!(corridor_widths(&board, &profile, &short), vec![profile.min_half_width]);
     }
 
     /// A solver that stops the run at its first search, as a deadline passing then would.
