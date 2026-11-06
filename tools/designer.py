@@ -11,7 +11,8 @@ intent: what the designer did is the evidence.
           track path to the nearest such IC pin is 3 mm and 1.5 times longer in ours
   switch  a switch node (a regulator's switching pin, its inductor and diode: Circuit Composer's
           intent class SWITCH) whose track copper is 1.5 times the designer's area and 2 mm²
-          more: copper that radiates, the less of it the better
+          more: copper that radiates. Its length and area are totalled too; less area is not
+          better on its own, as a narrower track has less (the width check covers that)
 
     designer.py DESIGNER.kicad_pcb OURS.kicad_pcb [--list] [--json]
     designer.py --run RUN [--boards DIR] [--intent DIR] [--workers N]
