@@ -343,8 +343,8 @@ def regulator_blocks(intent):
 def hot_loops(copper, blocks):
     """Each regulator block's hot loop as legs (pad, [target pads]) on `copper`'s pads: a
     buck's input capacitor to its supply pin and its ground to the power ground pin; a boost's
-    output capacitor to the parts on the switch node that drive the output (its diode or
-    regulator) and its ground to the power ground pin. A block missing a role is skipped."""
+    output capacitor to the output diode's pin on the rail (vout) and its ground to the power
+    ground pin. A block missing a role is skipped."""
     pads = copper.pads
 
     def pin(role):
@@ -360,20 +360,19 @@ def hot_loops(copper, blocks):
         pgnd, sw = pin(roles.get("pgnd", "")), pin(roles.get("sw", ""))
         if not pgnd or not sw:
             continue
-        gnet, swnet = pads[pgnd][0], pads[sw][0]
+        gnet = pads[pgnd][0]
         if b["type"] == "buck":
             cap, vin = roles.get("cin"), pin(roles.get("vin", ""))
             if not cap or not vin:
                 continue
             hot, targets = cap_pad(cap, pads[vin][0]), [vin]
         else:
-            cap = roles.get("cout")
-            other = [(r, n) for (r, n), v in pads.items() if r == cap and v[0] != gnet]
-            if not cap or len(other) != 1:
+            # Circuit Composer names the output diode's pin on the rail (vout) and leaves cout
+            # out when no capacitor sits past the diode.
+            cap, vout = roles.get("cout"), pin(roles.get("vout", ""))
+            if not cap or not vout:
                 continue
-            hot = other[0]
-            drivers = {r for (r, n), v in pads.items() if v[0] == swnet and r != roles.get("inductor")}
-            targets = [k for k, v in pads.items() if k[0] in drivers and v[0] == pads[hot][0]]
+            hot, targets = cap_pad(cap, pads[vout][0]), [vout]
         cold = cap_pad(cap, gnet)
         if hot and cold and targets:
             out.append((name, [(hot, targets), (cold, [pgnd])]))
