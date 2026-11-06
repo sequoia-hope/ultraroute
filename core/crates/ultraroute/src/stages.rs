@@ -33,8 +33,8 @@ pub struct Ledger {
     /// Nets with a length limit, and those nets, routed first.
     pub(crate) lengths: Vec<regions::MaxLength>,
     pub(crate) first: HashSet<u32>,
-    /// Nets preferred wider than their class when routing began (`Board::widths`).
-    pub(crate) preferred: Vec<u32>,
+    /// Nets preferred wider than their class when routing began, and their widths (`Board::widths`).
+    pub(crate) preferred: Vec<(u32, Nm)>,
     pub(crate) costs: ViaCosts,
     /// What `escape_parts` found.
     pub(crate) escape_parts: Option<Vec<usize>>,
@@ -313,7 +313,7 @@ impl Stage for SetUp {
             }
         }
         // Wider than their class only: a preference at or under the class's width changes nothing.
-        let mut preferred: Vec<u32> = board.widths.keys().copied().filter(|&n| grid::Profile::for_net(board, n).rules_class() != grid::Profile::for_net(board, n).class).collect();
+        let mut preferred: Vec<(u32, Nm)> = board.widths.iter().map(|(&n, &w)| (n, w)).filter(|&(n, _)| grid::Profile::for_net(board, n).rules_class() != grid::Profile::for_net(board, n).class).collect();
         preferred.sort_unstable();
         ledger.preferred = preferred;
         // Nets with a length limit route first, while their shortest ways are still free.
@@ -802,10 +802,12 @@ impl Stage for RipUp {
     fn run(&self, ctx: &mut StageCtx) -> Value {
         let a = ctx.args;
         // Every connection before a net's width: with connections left open, the rescue reroutes
-        // what it rips at the class's width (a wide ground in the way had cost AS5043 its last).
+        // what it rips at the class's width, and the wide tracks laid give back their room (a
+        // wide +5V and ground in the way had cost AS5043 its last connection).
         if !ctx.board.widths.is_empty() && !ctx.open().is_empty() {
-            eprintln!("widths: connections open; nets preferred wider route at their class's width from here");
-            ctx.board.widths.clear();
+            let widths = std::mem::take(&mut ctx.board.widths);
+            let narrowed = crate::widths::narrow(ctx.board, &widths, |b| open_airlines(a, b));
+            eprintln!("widths: connections open; nets preferred wider route at their class's width from here, {narrowed} of their tracks narrowed to it");
         }
         let options = grid::RipOptions {
             cell: a.cell.unwrap_or(grid::RipOptions::default().cell),
@@ -1212,9 +1214,24 @@ impl Stage for Outcome {
         let mut detail = json!({"open": open.len(), "routed": s.routed, "failed": s.failed});
         let preferred = &ctx.ledger.preferred;
         if !preferred.is_empty() {
-            let dropped: Vec<&str> = preferred.iter().filter(|n| !ctx.board.widths.contains_key(n)).map(|&n| ctx.board.net_name(n)).collect();
-            eprintln!("widths: {} of {} nets preferred wider routed at their class's width, finding no way at their own{}", dropped.len(), preferred.len(), if dropped.is_empty() { String::new() } else { format!(": {}", dropped.join(", ")) });
-            detail["widths"] = json!({"preferred": preferred.len(), "dropped": dropped});
+            // Of each net's unlocked track, the length at its preferred width.
+            let want: HashMap<u32, Nm> = preferred.iter().copied().collect();
+            let (mut at, mut all) = (HashMap::<u32, f64>::new(), HashMap::<u32, f64>::new());
+            for (_, it) in ctx.board.items().filter(|(_, it)| it.kind == Kind::Track && !it.locked) {
+                if let (Some(&w), Shape::Capsule { a, b, r }) = (want.get(&it.net), &it.shape) {
+                    let len = a.distance(*b);
+                    *all.entry(it.net).or_default() += len;
+                    if 2 * r >= w {
+                        *at.entry(it.net).or_default() += len;
+                    }
+                }
+            }
+            let total: f64 = all.values().sum();
+            let wide: f64 = at.values().sum();
+            let short: Vec<&str> = preferred.iter().filter(|(n, _)| at.get(n).copied().unwrap_or(0.0) < all.get(n).copied().unwrap_or(0.0)).map(|&(n, _)| ctx.board.net_name(n)).collect();
+            let share = if total > 0.0 { wide / total } else { 1.0 };
+            eprintln!("widths: {:.0}% of the track of {} nets preferred wider at their width; {} with some at their class's{}", 100.0 * share, preferred.len(), short.len(), if short.is_empty() { String::new() } else { format!(": {}", short.join(", ")) });
+            detail["widths"] = json!({"preferred": preferred.len(), "share": share, "narrower": short});
         }
         let blamed = if ctx.args.blame { crate::print_blame(ctx.board, ctx.args.pours_block) } else { Vec::new() };
         ctx.stats.findings.extend(open_findings(ctx.board, &open, &blamed));
