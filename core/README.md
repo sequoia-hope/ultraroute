@@ -193,7 +193,7 @@ lengths, the deadline, and, of kind `rule`, every project or custom rule left ou
 
 | Flag | |
 |---|---|
-| `--blame` | list what stands in the way of every connection left open |
+| `--blame` | list what stands in the way of each connection left open, the first 10 (each costs six maps of the board) |
 | `--stats FILE`, `--report FILE` | write the run's stats and findings as JSON |
 | `--timing`, `--no-timing` | `--timing` turns on fine-grained sub-stage bucket, per-move effort and progress CPU timers for `--report` (off by default to keep `clock_gettime` overhead out of normal runs); `--no-timing` skips coarse stage CPU timers too |
 | `--verbose`, `-v` | everything the router does, on standard error, and the stats table |
