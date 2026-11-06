@@ -801,6 +801,12 @@ impl Stage for RipUp {
 
     fn run(&self, ctx: &mut StageCtx) -> Value {
         let a = ctx.args;
+        // Every connection before a net's width: with connections left open, the rescue reroutes
+        // what it rips at the class's width (a wide ground in the way had cost AS5043 its last).
+        if !ctx.board.widths.is_empty() && !ctx.open().is_empty() {
+            eprintln!("widths: connections open; nets preferred wider route at their class's width from here");
+            ctx.board.widths.clear();
+        }
         let options = grid::RipOptions {
             cell: a.cell.unwrap_or(grid::RipOptions::default().cell),
             via_cost: ctx.ledger.costs.rip,

@@ -9,8 +9,11 @@
 //! - a switch node: a net joining an inductor (`L1`) and an IC (`U1`, `IC1`), as a regulator's
 //!   switch pin, its inductor and its catch diode are.
 //!
+//! Not a net whose name says it senses, enables or measures (`VBUS_SENSE`, `BATT_MEASURE`).
+//!
 //! The width is a preference ([`board::Board::widths`]): a net whose class is as wide keeps its
-//! class's, and a connection that finds no way at it routes at its class's.
+//! class's, a connection that finds no way at it routes at its class's, and once connections
+//! are left open for rip-up, every net routes at its class's.
 
 use board::{Board, Kind, Nm};
 
@@ -21,6 +24,10 @@ pub fn why(board: &Board, net: u32, refs: &[&str]) -> Option<&'static str> {
     if is_ground(&last) {
         return Some("ground");
     }
+    // A supply's sense, enable or measuring net carries none: BATT_MEASURE, VBUS_SENSE, VIN_EN.
+    if is_sensing(&last) {
+        return None;
+    }
     if is_power(&last) {
         return Some("power");
     }
@@ -29,6 +36,10 @@ pub fn why(board: &Board, net: u32, refs: &[&str]) -> Option<&'static str> {
         return Some("switch node");
     }
     None
+}
+
+fn is_sensing(u: &str) -> bool {
+    ["SENSE", "MEAS", "MON", "ADC", "DET", "_EN", "_ON", "_FB", "_PG", "SNS"].iter().any(|w| u.contains(w))
 }
 
 fn is_ground(u: &str) -> bool {
@@ -87,6 +98,12 @@ mod tests {
         }
         for n in ["NET-(R1-PAD1)", "SDA", "LED5", "D+", "12C", "VSYNC", "V5_SENSE"] {
             assert!(!is_power(n), "{n}");
+        }
+        for n in ["BATT_MEASURE", "BATT_MEASURE_ON", "VBUS_SENSE", "VIN_EN", "VDD_PG"] {
+            assert!(is_sensing(n), "{n}");
+        }
+        for n in ["VBAT", "+3V3", "VDD_IO"] {
+            assert!(!is_sensing(n), "{n}");
         }
     }
 }
