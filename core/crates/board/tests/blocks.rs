@@ -118,3 +118,26 @@ fn locked_copper_left_on_another_nets_pad_is_warned_of() {
     assert!(on.iter().any(|w| w.starts_with("locked copper of B lies on R1-1 of A")), "{on:?}");
     assert!(load("20 20").locked_copper_on_pads().is_empty());
 }
+
+#[test]
+fn a_blocks_tracks_and_vias_are_held_still() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+    // The earring's copper is all locked: unlocked here, so only the group holds it.
+    let text = std::fs::read_to_string(dir.join("earring.kicad_pcb")).unwrap().replace("(locked yes)", "");
+    let rules = || kicad_pcb::Rules::read(&dir.join("earring.kicad_pro")).unwrap();
+    let (pcb, copper) = kicad_pcb::parse_board(&text).unwrap();
+    let (track, via) = (&copper.tracks[0], &copper.vias[0]);
+    let (track_at, via_at) = (Point::from_m(track.start), Point::from_m(via.at));
+    let close = text.trim_end().rfind(')').unwrap();
+    let grouped = format!("{}\t(group \"laid\" (uuid \"0b10c000-0000-4000-8000-000000000002\") (members \"{}\" \"{}\"))\n{}", &text[..close], track.uuid, via.uuid, &text[close..]);
+    let (gpcb, gcopper) = kicad_pcb::parse_board(&grouped).unwrap();
+    let plain = Board::new(&pcb, &copper, rules());
+    let b = Board::new(&gpcb, &gcopper, rules());
+    let [block] = b.blocks.as_slice() else { panic!("{:?}", b.blocks) };
+    assert_eq!(block.copper.len(), 2);
+    let locked = |b: &Board, kind: Kind, at: Point| {
+        b.items().filter(|(_, it)| it.kind == kind).any(|(_, it)| it.locked && matches!(it.shape, Shape::Capsule { a, .. } if a == at))
+    };
+    assert!(locked(&b, Kind::Track, track_at) && locked(&b, Kind::Via, via_at));
+    assert!(!locked(&plain, Kind::Track, track_at) && !locked(&plain, Kind::Via, via_at));
+}
