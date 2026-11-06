@@ -401,9 +401,12 @@ impl Stage for Prefanout {
             f.skipped_escaped,
             ctx.elapsed()
         );
+        if !f.failed_pads.is_empty() {
+            eprintln!("prefanout: no escape for {}", said_list(&f.failed_pads, 12));
+        }
         ctx.watch.step(ctx.board);
         ctx.ledger.fanout = f.laid;
-        json!({"parts": f.parts, "inward": f.bridged_inward, "escaped": f.escaped, "candidates": f.candidates, "failed": f.failed, "vias": f.vias})
+        json!({"parts": f.parts, "inward": f.bridged_inward, "escaped": f.escaped, "candidates": f.candidates, "failed": f.failed, "failed_pads": f.failed_pads, "vias": f.vias})
     }
 }
 
@@ -1182,6 +1185,16 @@ impl Stage for LengthMatching {
     }
 }
 
+/// The first `most` of `names`, and how many more: every one is in the report.
+fn said_list(names: &[String], most: usize) -> String {
+    let shown = names.iter().take(most).cloned().collect::<Vec<_>>().join(", ");
+    if names.len() > most {
+        format!("{shown}, and {} more (all in --report)", names.len() - most)
+    } else {
+        shown
+    }
+}
+
 /// Each pour of the board in `text` filled as KiCad would refill it round `board`'s copper:
 /// (zone, layer), its net, its area in square millimetres and its pieces.
 fn pours(board: &Board, text: &str) -> Vec<((usize, usize), u32, f64, usize)> {
@@ -1237,7 +1250,13 @@ impl Stage for Outcome {
             detail["pours"] = json!(kept);
         }
         let blamed = if ctx.args.blame { crate::print_blame(ctx.board, ctx.args.pours_block) } else { Vec::new() };
-        ctx.stats.findings.extend(open_findings(ctx.board, &open, &blamed));
+        let found = open_findings(ctx.board, &open, &blamed);
+        // Which connections, not only how many (--blame says what stands in their way).
+        if !ctx.args.blame && !found.is_empty() {
+            let named: Vec<String> = found.iter().map(|f| f.message.trim_start_matches("open ").to_string()).collect();
+            eprintln!("open: {}", said_list(&named, 10));
+        }
+        ctx.stats.findings.extend(found);
         ctx.ledger.open = open.len();
         detail
     }
@@ -1644,4 +1663,16 @@ pub(crate) fn copper_keys(board: &Board) -> HashSet<(ItemId, u64, [Nm; 5])> {
             (id, it.layers, shape)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::said_list;
+
+    #[test]
+    fn a_long_list_is_said_in_part_with_how_many_more() {
+        let names: Vec<String> = (1..=14).map(|k| format!("U1-{k}")).collect();
+        assert_eq!(said_list(&names[..2], 12), "U1-1, U1-2");
+        assert_eq!(said_list(&names, 12), "U1-1, U1-2, U1-3, U1-4, U1-5, U1-6, U1-7, U1-8, U1-9, U1-10, U1-11, U1-12, and 2 more (all in --report)");
+    }
 }
