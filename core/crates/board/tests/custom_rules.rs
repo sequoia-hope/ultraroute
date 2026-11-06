@@ -107,8 +107,10 @@ fn rules_the_router_does_not_keep_are_said_by_constraint() {
         "(version 1)\n(rule \"clock\" (condition \"A.NetName == 'A'\") (constraint length (max 5mm)) (constraint via_count (max 0)))\n(rule \"silk\" (constraint silk_clearance (min 0.15mm)))\n(rule \"bad\" (condition \"A.Type == \") (constraint clearance (min 1mm)))",
     );
     let custom: Vec<&String> = b.rules.warnings.iter().filter(|w| w.contains("test.kicad_dru")).collect();
-    assert_eq!(custom.len(), 2, "{custom:?}");
-    assert!(custom.iter().any(|w| w.contains("\"clock\": length, via_count checked after routing")), "{custom:?}");
+    assert_eq!(custom.len(), 3, "{custom:?}");
+    assert!(custom.iter().any(|w| w.contains("\"clock\": length checked after routing")), "{custom:?}");
+    // A via_count of 0 is routed to (`Board::no_vias`), and said so.
+    assert!(custom.iter().any(|w| w.contains("\"clock\": via_count (max 0) routed to")), "{custom:?}");
     assert!(custom.iter().any(|w| w.contains("bad") && w.contains("not applied")), "{custom:?}");
 }
 

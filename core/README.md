@@ -79,7 +79,7 @@ A stage runs only when its flag or the board asks for it.
 | `pairs` | `--diff-pairs` | until a quarter of `--timeout` has gone |
 | `pair-escapes` | `--prefanout`, after `pairs` | 15% of what is left |
 | `routing` | always; holds the next six | |
-| `first` | `--regions` gives nets a length limit or a `clear_under` rule | a quarter of what is left of the routing time |
+| `first` | nets with a length limit (`--regions`, or a custom rule's `length (max ...)`), a `via_count (max 0)` rule, or a `clear_under` rule | a quarter of what is left of the routing time |
 | `negotiation` | `--negotiate` | half of `--timeout`; after `first`, half of what is left of the routing time |
 | `finishing` | always: one connection at a time | the routing time |
 | `prune-escapes` | there are escapes | no limit |
@@ -153,7 +153,7 @@ lengths, the deadline, and, of kind `rule`, every project or custom rule left ou
 | `--regions FILE` | a planner's routing regions, length limits and clear-under rules (circuit-composer's `routing.json`; see below) |
 | `--rip-region X,Y,R` | rip every unlocked track and via in this disc (mm, KiCad's frame) first; repeatable |
 | `--lock REF,...` | parts that may not move |
-| `--place REF=X,Y` | put a part at X,Y mm before routing; Y points up (KiCad's y negated); repeatable |
+| `--place REF=X,Y` | put a part at X,Y mm before routing, in KiCad's frame (y down, as KiCad shows it, like `--rip-region` and `--via-avoid`); repeatable |
 | `--cell MM` | the grid cell for every stage (0.005 to 1; default 0.05) |
 | `--timeout SECONDS` | the run's time; the board routed so far is written when it runs out |
 | `--cpu-clock` | `--timeout` and every stage's share count the process's CPU seconds (all threads together), not the wall's, so a loaded machine gets as far as an idle one; the benchmark runs with it |

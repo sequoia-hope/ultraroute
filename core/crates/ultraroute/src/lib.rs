@@ -41,7 +41,7 @@ pub use watch::{Cleaned, Flow, StageEvent, Unwatched, Watch};
 pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--plane-via-reach MM] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--negotiate-jacobi] [--negotiate-reroute-all] [--diff-pairs] [--prefanout] [--escape-room|--no-escape-room] [--prefanout-mode stub|dogbone|grid|inner|same] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--negotiate] [--rip-up] [--rip-boxed|--no-rip-boxed] [--nudge] [--tighten] [--arcs MM] [--via-cost MM[,OPEN_MM]] [--gpu] \
 [--timeout SECONDS] [--cpu-clock] [--cell MM] [--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--guard-ties|--no-guard-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--pour-cost W] [--seed N] [--uuid-seed N] [--adopt] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
 [--recipe default|bench|minimal] [--live PATH|-] [--live-fps N] [--live-step MS] [--blame] [--stats|--report FILE] [--timing|--no-timing] [-h|--help]
---place takes millimetres with y pointing up: give KiCad's y negated (KiCad y 127.5 is -127.5).
+--place, --rip-region and --via-avoid take millimetres in KiCad's frame, y pointing down, as KiCad shows them.
 Copper and mask text is stroked by the kicad-text program ($ULTRAROUTE_TEXT_HELPER, else next to this one, else on PATH; none: boxes);
 ultraroute text-helper prints the one a route would run.";
 
@@ -1503,7 +1503,7 @@ fn prepare(a: &Args, board: &mut Board, ledger: &mut Ledger) {
             eprintln!("warning: --place {name}: no such part on the board");
             continue;
         };
-        let target = Point::new((x * 1e6).round() as i64, (-y * 1e6).round() as i64);
+        let target = Point::new((x * 1e6).round() as i64, (y * 1e6).round() as i64);
         let at = board.footprints[fp].at;
         let ripped = board.move_footprint(fp, Point::new(target.x - at.x, target.y - at.y));
         ledger.removed.extend(ripped.iter().filter_map(|it| it.span));

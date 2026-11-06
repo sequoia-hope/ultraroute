@@ -857,7 +857,8 @@ fn start(request: &Value, config: &Config, runner: &Arc<Runner>, owner: u64) -> 
     for (name, at) in request["place"].as_object().into_iter().flatten() {
         let at: Vec<f64> = at.as_array().into_iter().flatten().filter_map(Value::as_f64).collect();
         if at.len() == 2 {
-            args.push(format!("--place={name}={:.4},{:.4}", at[0], at[1]));
+            // The studio draws y up; --place takes KiCad's frame, y down.
+            args.push(format!("--place={name}={:.4},{:.4}", at[0], -at[1]));
         }
     }
     args.extend(strings(&request["args"]));

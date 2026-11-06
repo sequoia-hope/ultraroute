@@ -73,13 +73,11 @@ eight cells of track, `rip_cost: 400` forty. `Board::via_avoid_cost` (3,000 by d
 the same units. `topo::Options::via_cost` and `rip_cost` are different: lengths in nanometres.
 
 **Coordinates.** The board model keeps KiCad's file frame: x right, y down, in nanometres.
-`Pcb` is the same frame in metres. Two places flip y:
-
-- The live stream (`Live`, the studio) draws y up, so its millimetres are `(x, -y)`.
-- The command's `--place REF=X,Y` takes y up too: the set-up stage builds the point as
-  `Point::new(x * 1e6, -y * 1e6)`. To place a part at KiCad's (100, 97.5) you pass
-  `--place U1=100,-97.5`.
-- `--rip-region X,Y,R` and `--via-avoid X0,Y0,X1,Y1` do not flip: they are KiCad's frame.
+`Pcb` is the same frame in metres. One place flips y: the live stream (`Live`, the studio) draws
+y up, so its millimetres are `(x, -y)`, and the studio negates y again when it passes a part it
+placed to `--place`. The command's coordinates (`--place REF=X,Y`, `--rip-region X,Y,R`,
+`--via-avoid X0,Y0,X1,Y1`, a `--regions` file's polygons) are all KiCad's frame: to place a part
+at KiCad's (100, 97.5) you pass `--place U1=100,97.5`. (Before 2026-11-06 `--place` took y up.)
 
 In library code there is no flip anywhere: build `Point`s in the board's frame.
 

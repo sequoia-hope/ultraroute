@@ -215,3 +215,25 @@ fn shove_updates_report_failures_when_closing_or_opening_connections() {
     assert_eq!(rescued["summary"]["opens"], 0, "{rescued}");
     assert!(rescued["failures"].as_array().unwrap().is_empty(), "{:?}", rescued["failures"]);
 }
+
+#[test]
+fn a_custom_rules_length_limit_routes_its_net_first() {
+    // The earring beside a .kicad_dru limiting IMU_SDA's length: the net routes in the `first`
+    // stage, before negotiation, as a planner's length limit does.
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures");
+    let dir = std::env::temp_dir().join(format!("ultraroute-first-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("b.kicad_pcb");
+    std::fs::copy(fixtures.join("earring.kicad_pcb"), &path).unwrap();
+    std::fs::copy(fixtures.join("earring.kicad_pro"), dir.join("b.kicad_pro")).unwrap();
+    std::fs::write(dir.join("b.kicad_dru"), "(version 1)\n(rule \"short\" (condition \"A.NetName == 'IMU_SDA'\") (constraint length (max 40mm)))\n").unwrap();
+    let args: Vec<String> = ["route", path.to_str().unwrap(), "-o", "unused.kicad_pcb", "--strip-all", "--seed", "0", "--recipe", "default", "--cell", "0.1", "--threads", "4"].map(String::from).to_vec();
+    let a = ultraroute::parse(&args).unwrap();
+    let (board, text) = Board::load(&path).unwrap();
+    let routed = ultraroute::route(&a, board, &text, None, Arc::new(AtomicBool::new(false)), None, None);
+    let s = serde_json::to_value(&routed.stats).unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+    let first = s["stages"].as_array().unwrap().iter().find(|st| st["name"] == "first").expect("a first stage");
+    assert_eq!(first["detail"]["nets"], 1, "{first}");
+    assert!(first["detail"]["routed"].as_u64().unwrap() > 0, "{first}");
+}

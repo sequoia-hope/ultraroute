@@ -303,8 +303,11 @@ impl Stage for SetUp {
             Some(path) => regions::load(path, board).unwrap_or_else(|e| panic!("{e}")),
             None => Vec::new(),
         };
-        // Nets with a length limit route first, while their shortest ways are still free.
+        // Nets with a length limit route first, while their shortest ways are still free: a
+        // planner's, a custom rule's `length (max ...)`, and a `via_count (max 0)`'s, whose one
+        // layer fills up first.
         ledger.first = ledger.lengths.iter().flat_map(|m| m.nets.iter().copied()).collect();
+        ledger.first.extend((1..board.nets.len() as u32).filter(|&n| board.no_vias(n) || board.net_maximum("length", n).is_some()));
         // So do the nets a clear-under rule keeps off other nets' antipads: laid before most
         // other nets' vias, their tracks keep those vias away, rather than winding round them.
         ledger.first.extend(board.clear_under.iter().flat_map(|c| c.nets.iter().copied()));
@@ -315,6 +318,8 @@ impl Stage for SetUp {
         for &(x, y, r) in &a.rip_regions {
             let disc = Shape::Capsule { a: Point::new((x * 1e6).round() as i64, (y * 1e6).round() as i64), b: Point::new((x * 1e6).round() as i64, (y * 1e6).round() as i64), r: (r * 1e6).round() as i64 };
             let inside: Vec<ItemId> = board.items().filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via) && !it.locked && it.shape.gap(&disc) == 0.0).map(|(id, _)| id).collect();
+            // Said, as nothing else shows a disc that missed (given y up, say: KiCad's frame is y down).
+            eprintln!("rip-region ({x}, {y}) mm, radius {r} mm: {} tracks and vias taken out", inside.len());
             for id in inside {
                 if let Some(it) = board.remove(id) {
                     ledger.removed.extend(it.span);

@@ -28,8 +28,8 @@ fn a_placed_part_takes_its_zones_with_it() {
     let pcb = dir.join("b.kicad_pcb");
     std::fs::write(&pcb, BOARD).unwrap();
     std::fs::write(dir.join("b.kicad_pro"), "{}").unwrap();
-    // --place takes y pointing up: KiCad's (15, 20) is 15,-20.
-    let args: Vec<String> = ["route", pcb.to_str().unwrap(), "-o", "unused.kicad_pcb", "--no-route", "--place", "U1=15,-20"].map(String::from).to_vec();
+    // --place takes KiCad's frame: (15, 20).
+    let args: Vec<String> = ["route", pcb.to_str().unwrap(), "-o", "unused.kicad_pcb", "--no-route", "--place", "U1=15,20"].map(String::from).to_vec();
     let a = ultraroute::parse(&args).unwrap();
     let (board, text) = Board::load(&pcb).unwrap();
     let out = ultraroute::run(&a, board, &text, None, Arc::new(AtomicBool::new(false)));

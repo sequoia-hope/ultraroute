@@ -269,7 +269,12 @@ impl Board {
         for rule in &set.rules {
             let kinds: Vec<&str> = rule.constraints.iter().map(|c| c.kind.as_str()).filter(|k| !APPLIED.contains(k) && !ELSEWHERE.contains(k)).collect();
             let (tuned, kinds): (Vec<&str>, Vec<&str>) = kinds.into_iter().partition(|k| *k == "skew");
-            let (reported, dropped): (Vec<&str>, Vec<&str>) = kinds.into_iter().partition(|k| REPORTED.contains(k));
+            let (mut reported, dropped): (Vec<&str>, Vec<&str>) = kinds.into_iter().partition(|k| REPORTED.contains(k));
+            // A via_count of 0 is routed to: its nets get no vias (`Board::no_vias`).
+            if rule.constraints.iter().any(|c| c.kind == "via_count" && c.max == Some(0.0)) {
+                reported.retain(|k| *k != "via_count");
+                out.push(format!("{source}: custom rule \"{}\": via_count (max 0) routed to: its nets get no vias", rule.name));
+            }
             if !tuned.is_empty() {
                 out.push(format!("{source}: custom rule \"{}\": skew tuned to within each differential pair (--diff-pairs), not across pairs", rule.name));
             }
