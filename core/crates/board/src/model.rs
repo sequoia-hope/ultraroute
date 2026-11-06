@@ -231,7 +231,7 @@ pub struct FootprintInfo {
 
 /// A functional block: a KiCad group of parts and zones laid out by hand (an RP2350's regulator,
 /// say) that routing must leave whole. Its pours are kept as planes other nets keep clear of, and
-/// its parts are held still; moving a block as one piece is left for later.
+/// its parts, tracks and vias are held still; moving a block as one piece is left for later.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Block {
     pub name: String,
@@ -239,6 +239,8 @@ pub struct Block {
     pub footprints: Vec<usize>,
     /// Zones, by index into the board's copper zones.
     pub zones: Vec<usize>,
+    /// Its tracks, arcs and vias, by uuid.
+    pub copper: Vec<String>,
 }
 
 impl Block {
@@ -262,8 +264,10 @@ impl Block {
             }
             let footprints: Vec<usize> = pcb.footprints.iter().enumerate().filter(|(_, f)| members.contains(&f.uuid.as_str())).map(|(i, _)| i).collect();
             let zones: Vec<usize> = copper.zones.iter().enumerate().filter(|(_, z)| members.contains(&z.uuid.as_str())).map(|(i, _)| i).collect();
-            if !footprints.is_empty() || !zones.is_empty() {
-                blocks.push(Block { name: group.name.clone(), footprints, zones });
+            let uuids = copper.tracks.iter().map(|t| &t.uuid).chain(copper.arcs.iter().map(|a| &a.uuid)).chain(copper.vias.iter().map(|v| &v.uuid));
+            let laid: Vec<String> = uuids.filter(|u| members.contains(&u.as_str())).cloned().collect();
+            if !footprints.is_empty() || !zones.is_empty() || !laid.is_empty() {
+                blocks.push(Block { name: group.name.clone(), footprints, zones, copper: laid });
             }
         }
         // By what is in them: groups go by uuid, which says nothing.
@@ -464,6 +468,7 @@ impl Board {
             .collect();
         let class_names: Vec<String> = nets.iter().map(|name| rules.class_of(name).map(|c| c.name).unwrap_or_default()).collect();
         let blocks = Block::of(pcb, copper);
+        let held: std::collections::HashSet<&str> = blocks.iter().flat_map(|b| &b.copper).map(String::as_str).collect();
         let mut board = Board {
             layers: layers.clone(),
             nets,
@@ -683,7 +688,7 @@ impl Board {
                 layers: one(&t.layer),
                 shape: Shape::Capsule { a: Point::from_m(t.start), b: Point::from_m(t.end), r: nm(t.width / 2.0) },
                 hole: None,
-                locked: t.locked,
+                locked: t.locked || held.contains(t.uuid.as_str()),
                 span: Some(t.span),
             });
         }
@@ -696,7 +701,7 @@ impl Board {
                     layers: one(&arc.layer),
                     shape: Shape::Capsule { a: w[0], b: w[1], r: nm(arc.width / 2.0 + sag) },
                     hole: None,
-                    locked: arc.locked,
+                    locked: arc.locked || held.contains(arc.uuid.as_str()),
                     span: Some(arc.span),
                 });
             }
@@ -714,7 +719,7 @@ impl Board {
                 layers: span_mask,
                 shape: Shape::Capsule { a: at, b: at, r: nm(v.size / 2.0) },
                 hole: Some((at, nm(v.drill / 2.0))),
-                locked: v.locked,
+                locked: v.locked || held.contains(v.uuid.as_str()),
                 span: Some(v.span),
             });
         }
