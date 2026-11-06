@@ -36,7 +36,12 @@ fn help_prints_every_flag_and_succeeds() {
     for flag in ["--help", "-h"] {
         let run = Command::new(env!("CARGO_BIN_EXE_ultraroute")).args(["route", flag]).output().unwrap();
         assert!(run.status.success(), "{flag}: {}", String::from_utf8_lossy(&run.stderr));
-        assert_eq!(String::from_utf8_lossy(&run.stdout).trim_end(), ultraroute::USAGE);
+        let out = String::from_utf8_lossy(&run.stdout);
+        assert_eq!(out.trim_end(), ultraroute::help().trim_end());
+        // Grouped, a description under each flag, and every flag of the usage line among them.
+        assert!(out.contains("\nStages:\n  --prefanout\n      escape every fine-pitch part's pads before routing\n"), "{out}");
+        let missing: Vec<&str> = long_flags(ultraroute::USAGE).into_iter().filter(|f| !long_flags(&out).contains(f)).collect();
+        assert!(missing.is_empty(), "--help does not name {missing:?}");
     }
 }
 

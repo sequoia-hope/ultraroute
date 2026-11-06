@@ -17,7 +17,7 @@ use board::Board;
 use serde_json::json;
 use ultraroute::{
     fit_memory, parse, parse_compact, parse_scale, peak_memory_mb, route_retrying, Finding, Live, RunStats,
-    COMPACT_USAGE, SCALE_USAGE, USAGE,
+    COMPACT_USAGE, SCALE_USAGE,
 };
 
 fn main() {
@@ -29,7 +29,7 @@ fn main() {
     }
     // Asked for: the flags on standard output, and success. A mistake prints them as an error.
     if args.iter().any(|a| a == "-h" || a == "--help") {
-        println!("{USAGE}");
+        println!("{}", ultraroute::help());
         return;
     }
     // The text helper a route would run, for a bench to record; failing if text would be boxes.

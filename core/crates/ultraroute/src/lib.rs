@@ -45,6 +45,43 @@ pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [
 Copper and mask text is stroked by the kicad-text program ($ULTRAROUTE_TEXT_HELPER, else next to this one, else on PATH; none: boxes);
 ultraroute text-helper prints the one a route would run.";
 
+/// `ultraroute route --help`: every flag by group, with what it does and its default, from the
+/// "Every flag" tables of core/README.md, so the two say the same.
+pub fn help() -> String {
+    const README: &str = include_str!("../../../README.md");
+    let section = README.split("\n## Every flag\n").nth(1).unwrap_or("");
+    let section = section.split("\n## ").next().unwrap_or("");
+    let mut out = String::from("usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [FLAG...]\n");
+    for line in section.lines() {
+        if let Some(title) = line.strip_prefix("### ") {
+            out.push_str(&format!("\n{title}:\n"));
+        } else if let Some(row) = line.strip_prefix("| `").filter(|_| !line.starts_with("|---")) {
+            // `--a X`, `--b` | what it does | : the cells split at bars that a backslash does not escape.
+            let row = row.replace("\\|", "\u{1}");
+            let mut cells = row.split('|').map(|c| c.trim().replace('\u{1}', "|").replace('`', ""));
+            let (Some(flags), Some(what)) = (cells.next(), cells.next()) else { continue };
+            out.push_str(&format!("  {flags}\n"));
+            let mut width = 0;
+            out.push_str("      ");
+            for word in what.split_whitespace() {
+                if width > 0 && width + word.len() > 88 {
+                    out.push_str("\n      ");
+                    width = 0;
+                } else if width > 0 {
+                    out.push(' ');
+                    width += 1;
+                }
+                out.push_str(word);
+                width += word.len();
+            }
+            out.push('\n');
+        }
+    }
+    out.push('\n');
+    out.push_str(&USAGE[USAGE.find("\n").map_or(USAGE.len(), |k| k + 1)..]);
+    out
+}
+
 #[derive(Clone)]
 pub struct Args {
     pub input: String,
