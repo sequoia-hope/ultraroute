@@ -108,6 +108,8 @@ pub struct PrefanoutStats {
     /// Pads of nets the options leave out.
     pub skipped_nets: usize,
     pub failed: usize,
+    /// The pads of each group that found no escape, by name (`U1-12`).
+    pub failed_pads: Vec<String>,
     pub laid: Vec<ItemId>,
     pub probe_ns: u64,
     pub escaped_ns: u64,
@@ -631,6 +633,7 @@ pub fn prefanout(board: &mut Board, options: &PrefanoutOptions, watch: &mut dyn 
             }
             if !group_ok {
                 stats.failed += 1;
+                stats.failed_pads.extend(groups[g_idx].iter().map(|p| item_name(board, p.id)));
                 stats.failed_ns = stats.failed_ns.saturating_add(board::work::timed_run_ns().saturating_sub(gt0));
             } else {
                 stats.escaped_ns = stats.escaped_ns.saturating_add(board::work::timed_run_ns().saturating_sub(gt0));
