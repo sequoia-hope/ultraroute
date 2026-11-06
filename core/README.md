@@ -107,14 +107,22 @@ lengths, the deadline, and, of kind `rule`, every project or custom rule left ou
 
 ## Every flag
 
+### Input and output
+
 | Flag | |
 |---|---|
 | `-o`, `--output OUT` | where to write the routed board |
-| `--recipe default\|bench\|minimal` | the default stages (see above), or none; later flags override it |
+| `--recipe default\|bench\|minimal` | the default stages (core/README.md, "The default recipe"), or none; later flags override it |
 | `--strip` | take out every unlocked track and via first |
 | `--strip-all` | take out every track and via first, locked ones too (the benchmark uses this) |
 | `--adopt` | treat the board's unlocked tracks and vias as the router's own: free to rip, move and rewrite |
 | `--no-route` | only load, strip and place, then write |
+| `--uuid-seed N` | draw the new copper's uuids from this seed, so the output is the same every time |
+
+### Stages
+
+| Flag | |
+|---|---|
 | `--prefanout` | escape every fine-pitch part's pads before routing |
 | `--escape-room`, `--no-escape-room` | choose the parts to escape by their pins' room against neighbours and the board edge rather than a fixed 0.5 mm pitch, and keep sibling and held-back pad mouths open; the parts so chosen are also those the pair escapes and `--shove-plough rip` work at |
 | `--prefanout-mode stub\|dogbone\|grid\|inner\|same` | how the escapes are laid; default `inner` (a fine-grid route across layers). `same` first tries an escape without a via for a pad whose net meets no other layer; measured as no better than the default (`docs/pcbench.md`), kept as an option |
@@ -142,6 +150,11 @@ lengths, the deadline, and, of kind `rule`, every project or custom rule left ou
 | `--nudge` | move unlocked parts aside for connections nothing else could route; not in the default (it moves the designer's parts) |
 | `--tighten` | straighten the routed copper |
 | `--arcs MM` | when writing, round the corners of the router's tracks with arcs of radius up to MM (0.05 to 10), each as wide as the rules let it be; not in the default |
+
+### Costs, pours and planes
+
+| Flag | |
+|---|---|
 | `--via-cost MM[,OPEN_MM]` | a via's price in mm of straight track (0.05 to 50): negotiation's, and with OPEN_MM that of routing one connection at a time and of rip-up (else 1.2 and 0.8 times MM) |
 | `--via-avoid X0,Y0,X1,Y1` | a box (mm, KiCad's frame) where vias cost dearly but are allowed; repeatable |
 | `--via-avoid-cost N` | that price, in search units (10 a straight cell; default 3000) |
@@ -150,28 +163,42 @@ lengths, the deadline, and, of kind `rule`, every project or custom rule left ou
 | `--planes LAYER,...` | layers given whole to a plane: no tracks on them, vias through them |
 | `--auto-planes` | take inner layers one net's pour all but fills as planes |
 | `--plane-via-reach MM` | every surface pad of a plane's net gets a via of its own within MM, edge to edge, laid before routing as the router's own copper (a signal that needs the room may rip it; it is laid again after routing where it still fits); a pad left without is reported (a `plane-via` finding) |
+| `--cell MM` | the grid cell for every stage (0.005 to 1; default 0.05) |
+
+### The planner's input and the parts
+
+| Flag | |
+|---|---|
 | `--regions FILE` | a planner's routing regions, length limits and clear-under rules (circuit-composer's `routing.json`; see below) |
 | `--rip-region X,Y,R` | rip every unlocked track and via in this disc (mm, KiCad's frame) first; repeatable |
 | `--lock REF,...` | parts that may not move |
 | `--place REF=X,Y` | put a part at X,Y mm before routing, in KiCad's frame (y down, as KiCad shows it, like `--rip-region` and `--via-avoid`); repeatable |
-| `--cell MM` | the grid cell for every stage (0.005 to 1; default 0.05) |
+
+### Time, seeds and attempts
+
+| Flag | |
+|---|---|
 | `--timeout SECONDS` | the run's time; the board routed so far is written when it runs out |
 | `--cpu-clock` | `--timeout` and every stage's share count the process's CPU seconds (all threads together), not the wall's, so a loaded machine gets as far as an idle one; the benchmark runs with it |
 | `--seed N` | reorders connections of nearly equal length, for a search over runs (default 0) |
 | `--retries N`, `--no-retries` | while connections stay open, routes the board again from the start, up to N times, each with one change: the seed one on, no `--prefanout`, `--via-cost 20`, the seed two on; keeps the attempt with fewest open. An attempt starts only while at least half the first attempt's time is left of `--timeout`. The recipe has `--retries 4`; `--stats` lists the attempts |
 | `--attempt K` | one of those changes alone (the Kth), for a harness that routes each attempt as its own run with the whole time (`pcbench.py --escalate ... --attempts N`); no `--retries` |
-| `--uuid-seed N` | draw the new copper's uuids from this seed, so the output is the same every time |
 | `--threads N` | threads for pre-fanout and Jacobi negotiation (default half the machine's) |
 | `--max-memory MB` | the most memory the run may take; default the cgroup's `memory.max`, else 60% of available memory. Over it, the run first gives up Jacobi threads, then routes on a coarser cell, up to 0.1 mm; a board that still does not fit is refused (exit 1) and the input is written as the output |
 | `--estimate` | print what the run's grids will take and the limit, then stop |
 | `--gpu` | solve cost fields on the GPU: experimental, about 10x slower than A* on the CPU, and only in a router built with `--features gpu` |
-| `--live PATH\|-` | stream the board as the studio's JSON frames; with `-`, to standard output, and a `stop` line on standard input stops the run |
-| `--live-fps N` | the stream's frame rate (default 30) |
-| `--live-step MS` | least time between the stream's step frames |
+
+### Reports and the live view
+
+| Flag | |
+|---|---|
 | `--blame` | list what stands in the way of every connection left open |
 | `--stats FILE`, `--report FILE` | write the run's stats and findings as JSON |
 | `--timing`, `--no-timing` | `--timing` turns on fine-grained sub-stage bucket, per-move effort and progress CPU timers for `--report` (off by default to keep `clock_gettime` overhead out of normal runs); `--no-timing` skips coarse stage CPU timers too |
 | `--verbose`, `-v` | everything the router does, on standard error, and the stats table |
+| `--live PATH\|-` | stream the board as the studio's JSON frames; with `-`, to standard output, and a `stop` line on standard input stops the run |
+| `--live-fps N` | the stream's frame rate (default 30) |
+| `--live-step MS` | least time between the stream's step frames |
 | `-h`, `--help` | print the flags |
 
 A test (`tests/cli.rs`) checks that this table names every flag in `ultraroute::USAGE`.
