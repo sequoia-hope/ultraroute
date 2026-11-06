@@ -1505,7 +1505,9 @@ impl Retry {
 /// [`route`], and while connections stay open, routes the board again from the start with each
 /// of the first `--retries` changes of [`RETRIES`] in turn, keeping the attempt that leaves the
 /// fewest open (the earliest of equals). Every attempt keeps the run's `--timeout`: one starts only
-/// while at least as long as the first attempt took is left. `live` sees the first attempt only.
+/// while at least half as long as the first attempt took is left. A first attempt that struggles
+/// to a few open takes longer than one that does not: FreeSmartEEG's takes ~1090 s at 1800 s and
+/// leaves 1 open, where seed 2 alone routes it clean in ~490 s. `live` sees the first attempt only.
 pub fn route_retrying(a: &Args, board: Board, text: &str, live: Option<Live>, cancel: Arc<AtomicBool>) -> Routed {
     if a.retries == 0 || a.no_route {
         return route(a, board, text, live, cancel, None, None);
@@ -1527,8 +1529,8 @@ pub fn route_retrying(a: &Args, board: Board, text: &str, live: Option<Live>, ca
         let Some(change) = retry.apply(&mut b) else { continue };
         if let Some(t) = a.timeout {
             let left = t - grid::clock::since(started).as_secs_f64();
-            if left < first {
-                eprintln!("retry: {left:.0} s left of --timeout, less than the first attempt took ({first:.0} s): no more attempts");
+            if left < first / 2.0 {
+                eprintln!("retry: {left:.0} s left of --timeout, less than half what the first attempt took ({first:.0} s): no more attempts");
                 break;
             }
             b.timeout = Some(left);
