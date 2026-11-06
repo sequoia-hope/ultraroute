@@ -36,6 +36,8 @@ pub struct Ledger {
     pub(crate) costs: ViaCosts,
     /// What `escape_parts` found.
     pub(crate) escape_parts: Option<Vec<usize>>,
+    /// Where negotiation's routes kept colliding, busiest first.
+    pub(crate) hotspots: Vec<grid::Hotspot>,
     /// Each pour's copper before routing, as KiCad would refill it: (zone, layer) to its area
     /// in square millimetres and its pieces.
     pub(crate) pours: HashMap<(usize, usize), (f64, usize)>,
@@ -676,7 +678,12 @@ impl Stage for Negotiation {
         ctx.effort_ns = (u, 0, w);
         eprintln!("negotiated {} of {} connections in {} rounds, {} vias, {:.1} s", n.committed, n.connections, n.rounds, n.vias, ctx.elapsed());
         ctx.ledger.laid.extend(n.laid);
-        json!({"connections": n.connections, "committed": n.committed, "rounds": n.rounds, "conflicted": n.conflicted, "unroutable": n.unroutable, "vias": n.vias})
+        let hot: Vec<Value> = n.hotspots.iter().map(|h| hotspot_json(ctx.board, h)).collect();
+        if !n.hotspots.is_empty() && n.committed < n.connections {
+            eprintln!("negotiation: busiest {}", n.hotspots.iter().map(|h| said_hotspot(ctx.board, h)).collect::<Vec<_>>().join("; "));
+        }
+        ctx.ledger.hotspots = n.hotspots;
+        json!({"connections": n.connections, "committed": n.committed, "rounds": n.rounds, "conflicted": n.conflicted, "unroutable": n.unroutable, "vias": n.vias, "hotspots": hot})
     }
 }
 
@@ -1195,6 +1202,20 @@ fn said_list(names: &[String], most: usize) -> String {
     }
 }
 
+/// A hotspot in millimetres, KiCad's frame, for the report.
+fn hotspot_json(board: &Board, h: &grid::Hotspot) -> Value {
+    let mm = |v: Nm| (v as f64 * 1e-3).round() / 1e3;
+    json!({"min_mm": [mm(h.min.x), mm(h.min.y)], "max_mm": [mm(h.max.x), mm(h.max.y)], "layers": h.layers.iter().map(|&l| board.layers[l].clone()).collect::<Vec<_>>(), "cells": h.cells, "collisions": h.collisions})
+}
+
+/// A hotspot said: its box's centre and size in millimetres, and its layers.
+fn said_hotspot(board: &Board, h: &grid::Hotspot) -> String {
+    let (cx, cy) = ((h.min.x + h.max.x) as f64 * 5e-7, (h.min.y + h.max.y) as f64 * 5e-7);
+    let (w, ht) = ((h.max.x - h.min.x) as f64 * 1e-6, (h.max.y - h.min.y) as f64 * 1e-6);
+    let layers: Vec<&str> = h.layers.iter().map(|&l| board.layers[l].as_str()).collect();
+    format!("({cx:.1}, {cy:.1}) mm, {w:.1} x {ht:.1} mm on {}", layers.join(","))
+}
+
 /// Each pour of the board in `text` filled as KiCad would refill it round `board`'s copper:
 /// (zone, layer), its net, its area in square millimetres and its pieces.
 fn pours(board: &Board, text: &str) -> Vec<((usize, usize), u32, f64, usize)> {
@@ -1257,6 +1278,24 @@ impl Stage for Outcome {
             eprintln!("open: {}", said_list(&named, 10));
         }
         ctx.stats.findings.extend(found);
+        // Open connections whose straight line crosses a place negotiation found crowded: room
+        // there, not time, is likely what they lack.
+        if !open.is_empty() && !ctx.ledger.hotspots.is_empty() {
+            let crosses = |air: &board::Airline, h: &grid::Hotspot| {
+                (0..=32).any(|k| {
+                    let t = k as f64 / 32.0;
+                    let (x, y) = (air.from.x as f64 + t * (air.to.x - air.from.x) as f64, air.from.y as f64 + t * (air.to.y - air.from.y) as f64);
+                    x >= (h.min.x - 500_000) as f64 && x <= (h.max.x + 500_000) as f64 && y >= (h.min.y - 500_000) as f64 && y <= (h.max.y + 500_000) as f64
+                })
+            };
+            let through: Vec<usize> = ctx.ledger.hotspots.iter().map(|h| open.iter().filter(|air| crosses(air, h)).count()).collect();
+            let any = open.iter().filter(|air| ctx.ledger.hotspots.iter().any(|h| crosses(air, h))).count();
+            if any > 0 {
+                let busiest: Vec<String> = ctx.ledger.hotspots.iter().zip(&through).filter(|(_, &n)| n > 0).map(|(h, n)| format!("{n} at {}", said_hotspot(ctx.board, h))).collect();
+                eprintln!("crowding: {any} of {} open connections cross where negotiation's routes kept colliding ({}); room there, not time, is likely what they lack", open.len(), busiest.join("; "));
+                detail["crowded_open"] = json!(any);
+            }
+        }
         ctx.ledger.open = open.len();
         detail
     }
