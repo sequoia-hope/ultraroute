@@ -559,7 +559,7 @@ pub fn prefanout(board: &mut Board, options: &PrefanoutOptions, watch: &mut dyn 
         stats.candidates += groups.len();
         let mut opp_via_guards: HashMap<usize, Vec<bool>> = HashMap::new();
 
-        for g_idx in 0..groups.len() {
+        'groups: for g_idx in 0..groups.len() {
             if cancelled() {
                 break;
             }
@@ -572,9 +572,11 @@ pub fn prefanout(board: &mut Board, options: &PrefanoutOptions, watch: &mut dyn 
             let mut group_ok = false;
             for pad in groups[g_idx].clone() {
                 let profile = Profile::for_net(board, pad.net);
-                global_maps
-                    .entry(profile.class.clone())
-                    .or_insert_with(|| ObstacleMap::new(board, profile.clone(), options.global_cell, options.pours_block));
+                // A whole board's map, which the deadline may cut short.
+                if !global_maps.contains_key(&profile.class) {
+                    let Some(map) = ObstacleMap::new_by(board, profile.clone(), options.global_cell, options.pours_block, &options.deadline) else { break 'groups };
+                    global_maps.insert(profile.class.clone(), map);
+                }
                 let opp_via_guard = opp_via_guards
                     .entry(pad.layer)
                     .or_insert_with(|| compute_opposite_via_guard(board, pad.layer, win_bounds, options.local_cell));
@@ -714,6 +716,10 @@ fn bridge_inward(
     }
 
     for pad in pads {
+        // Each pad asks the whole board's connectivity: the deadline is asked as often.
+        if options.deadline.expired() {
+            break;
+        }
         let conn = board_connectivity(board, options.pours_block);
         let Some(&pad_cid) = conn.cluster.get(&pad.id) else { continue };
         let profile = Profile::for_net(board, pad.net);

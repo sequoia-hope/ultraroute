@@ -133,3 +133,36 @@ fn routed_copper_as_a_wall_is_never_crossed() {
         assert!(r.routed_nets.is_empty());
     }
 }
+
+#[test]
+fn a_via_under_a_part_on_a_layer_the_path_never_runs_on_is_in_the_way() {
+    // A on F.Cu either side of a wall of unnetted F.Cu copper the full height of the board, and a
+    // pad of another part covering B.Cu (an electrode): the way round is through In1.Cu, by vias
+    // that pass the B.Cu pad. No path is clear; blame must say what is in it.
+    let src = r#"(kicad_pcb (version 20241229) (generator "pcbnew") (general (thickness 1.6))
+      (layers (0 "F.Cu" signal) (4 "In1.Cu" signal) (6 "In2.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+      (net 0 "") (net 1 "A") (net 2 "E")
+      (footprint "t:P" (layer "F.Cu") (uuid "22222222-2222-4222-8222-222222222221") (at 5 10)
+        (property "Reference" "J1" (at 0 -2 0) (layer "F.SilkS") (uuid "22222222-2222-4222-8222-222222222222"))
+        (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "A")))
+      (footprint "t:P" (layer "F.Cu") (uuid "33333333-3333-4333-8333-333333333331") (at 15 10)
+        (property "Reference" "J2" (at 0 -2 0) (layer "F.SilkS") (uuid "33333333-3333-4333-8333-333333333332"))
+        (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "A")))
+      (footprint "t:W" (layer "F.Cu") (uuid "44444444-4444-4444-8444-444444444441") (at 10 10)
+        (property "Reference" "W1" (at 0 -2 0) (layer "F.SilkS") (uuid "44444444-4444-4444-8444-444444444442"))
+        (pad "" smd rect (at 0 0) (size 0.5 20) (layers "F.Cu")))
+      (footprint "t:K" (layer "B.Cu") (uuid "55555555-5555-4555-8555-555555555551") (at 10 10)
+        (property "Reference" "K1" (at 0 -2 0) (layer "B.SilkS") (uuid "55555555-5555-4555-8555-555555555552"))
+        (pad "1" smd rect (at 0 0) (size 18 18) (layers "B.Cu") (net 2 "E")))
+      (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts") (width 0.1)))"#;
+    let (pcb, copper) = kicad_pcb::parse_board(src).unwrap();
+    let rules = r#"{"board":{"design_settings":{"rules":{"min_clearance":0.2,"min_copper_edge_clearance":0.5}}},"net_settings":{"classes":[{"name":"Default","clearance":0.2,"track_width":0.2,"via_diameter":0.6,"via_drill":0.3}]}}"#;
+    let mut b = Board::new(&pcb, &copper, kicad_pcb::Rules::parse(rules).unwrap());
+    let open = connectivity_without_pours(&b).airlines;
+    assert_eq!(open.len(), 1);
+    let k1 = b.footprints.iter().position(|f| f.reference == "K1").unwrap();
+    let w1 = b.footprints.iter().position(|f| f.reference == "W1").unwrap();
+    let r = blame(&mut b, open[0].from_item, open[0].to_item, &options(), &|_| false);
+    assert!(r.blocked(), "{r:?}");
+    assert!(r.pinned_parts.contains(&k1) || r.pinned_parts.contains(&w1), "{r:?}");
+}

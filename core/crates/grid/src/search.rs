@@ -1218,7 +1218,7 @@ mod tests {
         use crate::spokes::SpokePrices;
         for (mode, &(nx, ny, layers)) in [(1, 18, 2), (18, 1, 2), (3, 3, 1), (28, 22, 2), (24, 20, 4)].iter().enumerate() {
             for seed in 1..=25u64 {
-                let mut state = (seed * 13_1071) ^ ((mode as u64 + 1) * 0x517c_c1b7_2722_0a95);
+                let mut state = (seed * 13_1071) ^ (mode as u64 + 1).wrapping_mul(0x517c_c1b7_2722_0a95);
                 let mut next = || {
                     state ^= state << 13;
                     state ^= state >> 7;

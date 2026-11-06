@@ -167,6 +167,23 @@ pub fn blame(board: &mut Board, from: ItemId, to: ItemId, options: &BlameOptions
         })
         .collect();
 
+    // A via is priced by what it passes on every layer.
+    let cells = grid.cell_count();
+    grid.via_penalty = (0..cells)
+        .map(|c| {
+            let mut penalty = 0;
+            if routed_grid.via_blocked[c] {
+                penalty += options.routed_copper.unwrap_or(0);
+            }
+            if pinned_grid.via_blocked[c] {
+                penalty += PINNED_PART;
+            }
+            if (0..grid.layers.len()).any(|l| depth[l * cells + c] > 0.0) {
+                penalty += INTRUSION_BASE;
+            }
+            penalty
+        })
+        .collect();
     let sources: Vec<usize> = terminals(board, &grid, from).into_iter().map(|t| t.0).collect();
     let targets: Vec<usize> = terminals(board, &grid, to).into_iter().map(|t| t.0).collect();
     report.end_cells = (sources.len(), targets.len());
@@ -180,7 +197,29 @@ pub fn blame(board: &mut Board, from: ItemId, to: ItemId, options: &BlameOptions
     type Push = ((f64, f64), f64);
     let mut pushes: BTreeMap<usize, Vec<Push>> = BTreeMap::new();
     let (mut pinned_parts, mut routed_nets) = (BTreeSet::new(), BTreeSet::new());
-    for &(layer, i, j) in &path {
+    // A via stands on every layer, not only the two its step joins: a part's pad on a layer the
+    // path never runs on is in its way as much. Where one stands, what keeps a via off is asked
+    // too, as a via reaches further than a trace.
+    let vias: BTreeSet<(usize, usize)> =
+        path.windows(2).filter(|w| w[0].0 != w[1].0 && (w[0].1, w[0].2) == (w[1].1, w[1].2)).map(|w| (w[0].1, w[0].2)).collect();
+    let via_reach = grid.via.as_ref().map_or(0.0, |v| (v.radius - grid.half_width) as f64);
+    for &(i, j) in &vias {
+        let cell = j * grid.nx + i;
+        let at = grid.centre(i, j);
+        if routed_grid.via_blocked[cell] {
+            report.routed_cells += 1;
+            for &layer in &grid.layers {
+                routed_nets.extend(routed_nets_near(board, &hard_map, layer, at, net));
+            }
+        }
+        if pinned_grid.via_blocked[cell] {
+            report.pinned_cells += 1;
+            pinned_parts.extend(intruders.iter().filter(|x| !x.movable && nearest(&x.shape, at).0 < x.reach + via_reach + h).map(|x| x.footprint));
+        }
+    }
+    let mut cells: BTreeSet<(usize, usize, usize)> = path.iter().copied().collect();
+    cells.extend(vias.iter().flat_map(|&(i, j)| (0..grid.layers.len()).map(move |layer| (layer, i, j))));
+    for &(layer, i, j) in &cells {
         let n = grid.index(layer, i, j);
         let at = grid.centre(i, j);
         if routed_grid.blocked[n] {

@@ -40,9 +40,9 @@ pub struct Ledger {
     pub(crate) escape_parts: Option<Vec<usize>>,
     /// Where negotiation's routes kept colliding, busiest first.
     pub(crate) hotspots: Vec<grid::Hotspot>,
-    /// Each pour's copper before routing, as KiCad would refill it: (zone, layer) to its area
-    /// in square millimetres and its pieces.
-    pub(crate) pours: HashMap<(usize, usize), (f64, usize)>,
+    /// The board as routing found it, when it has pours: filled at the end beside the routed
+    /// board, in the time the run keeps back, so the pours' report takes none of the routing's.
+    pub(crate) unrouted: Option<Board>,
     /// The connections the running stage gave up on, filed when it is done.
     pub(crate) given_up: Vec<Failure>,
     /// What routing one connection at a time after negotiation did.
@@ -351,7 +351,9 @@ impl Stage for SetUp {
             ledger.laid.retain(|id| board.item(*id).is_some());
         }
         ledger.costs = crate::via_costs(a, board);
-        ledger.pours = pours(board, ctx.text).into_iter().map(|(k, _, area, pieces)| (k, (area, pieces))).collect();
+        if ctx.text.contains("(zone") {
+            ledger.unrouted = Some(board.clone());
+        }
         let connections = board::connectivity_without_pours(board).airlines.len();
         ctx.say("start", format!("{connections} connections to make"));
         json!({"connections": connections, "length_limited_nets": ctx.ledger.first.len()})
@@ -1258,9 +1260,9 @@ fn said_hotspot(board: &Board, h: &grid::Hotspot) -> String {
 
 /// Each pour of the board in `text` filled as KiCad would refill it round `board`'s copper:
 /// (zone, layer), its net, its area in square millimetres and its pieces.
-fn pours(board: &Board, text: &str) -> Vec<((usize, usize), u32, f64, usize)> {
-    let Ok((_, copper)) = kicad_pcb::parse_board(text) else { return Vec::new() };
-    board::fill_zones(board, &copper).iter().map(|f| ((f.zone, f.layer), f.net, f.area() / 1e12, f.pieces)).collect()
+fn pours(board: &Board, text: &str, stop: &dyn Fn() -> bool) -> Option<Vec<((usize, usize), u32, f64, usize)>> {
+    let Ok((_, copper)) = kicad_pcb::parse_board(text) else { return Some(Vec::new()) };
+    Some(board::fill_zones_until(board, &copper, stop)?.iter().map(|f| ((f.zone, f.layer), f.net, f.area() / 1e12, f.pieces)).collect())
 }
 
 /// What the run leaves open, said: the summary line, and with `--blame` what stands in the way
@@ -1285,8 +1287,23 @@ impl Stage for Outcome {
         // board's current and its signals' return paths no longer have. Said, not prevented.
         let started = grid::clock::Instant::now();
         let mut kept = Vec::new();
-        for ((zone, layer), net, area, pieces) in pours(ctx.board, ctx.text) {
-            let Some(&(was, were)) = ctx.ledger.pours.get(&(zone, layer)) else { continue };
+        // Both filled before the run's hard end, in the time its reserve leaves: a large board's
+        // pours take a second or more each.
+        let clock = ctx.clock;
+        let end = clock.timeout.map(|t| grid::Deadline::until(clock.started + std::time::Duration::from_secs_f64(t), clock.run.cancel.clone()));
+        let stop = || end.as_ref().is_some_and(|e| e.expired());
+        let filled = ctx.ledger.unrouted.take().map(|unrouted| (pours(&unrouted, ctx.text, &stop), pours(ctx.board, ctx.text, &stop)));
+        let (before, after) = match filled {
+            Some((Some(before), Some(after))) => (before, after),
+            Some(_) => {
+                eprintln!("pours: not measured, the run's time ran out first");
+                (Vec::new(), Vec::new())
+            }
+            None => (Vec::new(), Vec::new()),
+        };
+        let before: HashMap<(usize, usize), (f64, usize)> = before.into_iter().map(|(k, _, area, pieces)| (k, (area, pieces))).collect();
+        for ((zone, layer), net, area, pieces) in after {
+            let Some(&(was, were)) = before.get(&(zone, layer)) else { continue };
             kept.push(json!({"zone": zone, "layer": ctx.board.layers[layer], "net": ctx.board.net_name(net), "before_mm2": was, "after_mm2": area, "pieces_before": were, "pieces_after": pieces}));
         }
         let (was, now): (f64, f64) = kept.iter().fold((0.0, 0.0), |(w, n), p| (w + p["before_mm2"].as_f64().unwrap(), n + p["after_mm2"].as_f64().unwrap()));
