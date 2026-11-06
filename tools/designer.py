@@ -99,11 +99,11 @@ class Copper:
         ts = self.tracks.get(net, [])
         vias = self.vias.get(net, [])
         edges = defaultdict(list)
-        ends = [(e, t[2]) for t in ts for e in (t[0], t[1])]
+        ends = [(e, t[2], t[3]) for t in ts for e in (t[0], t[1])]
         # Each track's points along it: its ends, and other tracks' ends lying on it.
         for i, (a, b, layer, w, _) in enumerate(ts):
             pts = [a, b]
-            for e, l in ends:
+            for e, l, _ in ends:
                 if l == layer and e not in (a, b) and on_segment(e, a, b, w / 2):
                     pts.append(e)
             pts.sort(key=lambda p: (p[0] - a[0]) ** 2 + (p[1] - a[1]) ** 2)
@@ -111,21 +111,22 @@ class Copper:
                 d = math.dist(p, q)
                 edges[("p", p, layer)].append((("p", q, layer), d))
                 edges[("p", q, layer)].append((("p", p, layer), d))
-        # Vias join the layers at their point; an end within a via's ring is on it.
+        # Vias join the layers at their point; a track whose end's copper reaches a via's ring is
+        # on it, as KiCad's connectivity has it.
         for k, (v, r) in enumerate(vias):
-            for e, l in ends:
-                if math.dist(e, v) <= r:
+            for e, l, w in ends:
+                if math.dist(e, v) <= r + w / 2:
                     edges[("v", k)].append((("p", e, l), 0.0))
                     edges[("p", e, l)].append((("v", k), 0.0))
-        # Pads: an end inside a pad, on a layer the pad is on.
+        # Pads: an end whose round copper reaches a pad, on a layer the pad is on.
         for key in self.by_net.get(net, []):
             _, pos, pad = self.pads[key]
-            for e, l in ends:
-                if pad.IsOnLayer(l) and pad.HitTest(pcbnew.VECTOR2I(int(e[0]), int(e[1]))):
+            for e, l, w in ends:
+                if pad.IsOnLayer(l) and pad.HitTest(pcbnew.VECTOR2I(int(e[0]), int(e[1])), int(w / 2)):
                     edges[("pad", key)].append((("p", e, l), math.dist(pos, e)))
                     edges[("p", e, l)].append((("pad", key), math.dist(pos, e)))
             for k, (v, r) in enumerate(vias):
-                if pad.HitTest(pcbnew.VECTOR2I(int(v[0]), int(v[1]))):
+                if pad.HitTest(pcbnew.VECTOR2I(int(v[0]), int(v[1])), int(r)):
                     edges[("pad", key)].append((("v", k), math.dist(pos, v)))
                     edges[("v", k)].append((("pad", key), math.dist(pos, v)))
         return edges
