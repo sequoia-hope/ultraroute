@@ -606,6 +606,7 @@ def route_all(jobs, a, workers):
 def run(a):
     ids = chosen(a)
     workers = int(os.environ.get("RESERVED_CORES", "4"))
+    need_text(a, ((a.run, ROUTER),))
     run_dir, info = start(a.run, ids, a, ROUTER, workers)
     ok = route_all([(a.run, run_dir, info, ROUTER, b) for b in ids], a, workers)
     print(f"{ok.get(a.run, 0)} of {len(ids)} succeeded")
@@ -722,6 +723,17 @@ def text_helper(binary):
     return Path(helper) if helper and Path(helper).is_file() else None
 
 
+def need_text(a, routers):
+    """Stops unless every router shapes its text with the kicad-text helper, or --boxed-text
+    asks for boxes: a build with `-p ultraroute` alone, or a binary copied away from its helper,
+    boxes copper and mask text, which buries pads under it and reads as a routing change."""
+    missing = [(name, router) for name, router in routers if not text_helper(router)]
+    for name, router in missing:
+        print(f"{name}: no kicad-text helper beside {router} (cargo build --release -p ultraroute -p kicad-text, and copy both)", file=sys.stderr)
+    if missing and not a.boxed_text:
+        sys.exit("not routing: text would be boxed (--boxed-text to route anyway)")
+
+
 def ab(a):
     """Routes the same boards with two routers in one pool, each board's two routes side by side,
     then compares them. Two runs started at once each with half the workers are not equal: on
@@ -732,10 +744,7 @@ def ab(a):
     base = Path(a.base_bin).resolve()
     if not base.exists():
         sys.exit(f"no router at {base}")
-    # A build with `-p ultraroute` alone boxes its text, which reads as a routing change.
-    for name, router in ((a.base, base), (a.new, ROUTER)):
-        if not text_helper(router):
-            print(f"WARNING: {name} boxes copper and mask text: no kicad-text helper beside {router} (cargo build --release -p ultraroute -p kicad-text)", file=sys.stderr)
+    need_text(a, ((a.base, base), (a.new, ROUTER)))
     runs = [(a.base, *start(a.base, ids, a, base, workers, commit=False), base), (a.new, *start(a.new, ids, a, ROUTER, workers), ROUTER)]
     # Interleaved so each board's two routes start together.
     ok = route_all([(name, d, info, router, b) for b in ids for name, d, info, router in runs], a, workers)
@@ -963,6 +972,7 @@ def main():
     s.add_argument("--only")
     s = sub.add_parser("run")
     s.add_argument("run")
+    s.add_argument("--boxed-text", action="store_true", help="route even with a router that boxes its text (no kicad-text helper beside it)")
     s.add_argument("--recipe", default=RECIPE)
     s.add_argument("--timeout", type=float, default=120)
     s.add_argument("--no-board-timeouts", action="store_true", help="every board at --timeout, none at its own from pcbench_timeouts.json")
@@ -978,6 +988,7 @@ def main():
     s.add_argument("--retry-open", type=int, default=3, help="the most open connections a board may have for --attempts")
     s.add_argument("--tier", help="only the boards of this tier (tools/pcbench_tiers.json)")
     s = sub.add_parser("ab", help="route with two routers side by side, then compare")
+    s.add_argument("--boxed-text", action="store_true", help="route even with a router that boxes its text (no kicad-text helper beside it)")
     s.add_argument("base", help="the run of --base-bin's routes")
     s.add_argument("new", help="the run of this checkout's router (ULTRAROUTE_BIN)")
     s.add_argument("--base-bin", required=True, help="the reference router binary")
