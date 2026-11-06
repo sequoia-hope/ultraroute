@@ -85,7 +85,9 @@ impl Profile {
         // A net whose class is wider than the board's default carries current: it keeps its
         // width all the way into its pads, however tight; only signals neck to the minimum.
         let signal = rules.classes.iter().find(|c| c.name == "Default").map_or(0.0, |c| c.track_width).max(rules.min_track_width);
-        let power = class.is_some_and(|c| c.track_width > signal + 1e-9) || (held && half_width > nm(signal) / 2);
+        // So does one held wider by a minimum of its own over every board-wide floor: not a custom
+        // rule's minimum for all tracks, which holds signals up too.
+        let power = class.is_some_and(|c| c.track_width > signal + 1e-9) || (held && 2 * half_width > nm(signal).max(board.min_track_width_any()));
         // A class's via may leave a thinner ring round its drill than the board allows; the via
         // grows to keep the ring, the drill as the class has it. Custom rules on vias of the net
         // (hole_size, via_diameter, annular_width) may ask more of either; never less.
