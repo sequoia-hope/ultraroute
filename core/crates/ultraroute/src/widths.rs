@@ -11,14 +11,14 @@
 //!
 //! Not a net whose name says it senses, enables or measures (`VBUS_SENSE`, `BATT_MEASURE`).
 //!
-//! The width is a preference ([`board::Board::widths`]): a net whose class is as wide keeps its
-//! class's, a connection that finds no way at it routes at its class's, and once connections
-//! are left open for rip-up, every net routes at its class's and the wide tracks laid so far are
-//! narrowed to it ([`narrow`]).
+//! The width is an optimum, KiCad's `opt` ([`board::Board::opt_widths`]): the nets route at
+//! their class's width, and [`widen`] takes it after where the routing left room. A guess from a
+//! name never costs a connection; a width a net must have is a rule (a class, a custom rule's
+//! `min`, a planner's `min_mm`).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-use board::{Airline, Board, ItemId, Kind, Nm, Shape};
+use board::{Board, ItemId, Kind, Nm, Shape};
 
 /// Why a net is taken to carry current, or `None`.
 pub fn why(board: &Board, net: u32, refs: &[&str]) -> Option<&'static str> {
@@ -42,7 +42,8 @@ pub fn why(board: &Board, net: u32, refs: &[&str]) -> Option<&'static str> {
 }
 
 fn is_sensing(u: &str) -> bool {
-    ["SENSE", "MEAS", "MON", "ADC", "DET", "_EN", "_ON", "_FB", "_PG", "SNS"].iter().any(|w| u.contains(w))
+    // An enable may run the word on: PWREN, VBUSEN.
+    u.ends_with("EN") || ["SENSE", "MEAS", "MON", "ADC", "DET", "_EN", "_ON", "_FB", "_PG", "SNS"].iter().any(|w| u.contains(w))
 }
 
 fn is_ground(u: &str) -> bool {
@@ -64,8 +65,8 @@ fn is_power(u: &str) -> bool {
     PREFIXES.iter().any(|p| u.starts_with(p))
 }
 
-/// Prefers every net [`why`] finds, and that has no preference yet (a planner's comes first),
-/// at `width`; returns them, by name, with why.
+/// Gives every net [`why`] finds, and that has no optimum yet (a planner's or a custom rule's
+/// comes first), `width` as its optimum; returns them, by name, with why.
 pub fn prefer(board: &mut Board, width: Nm) -> Vec<(String, &'static str)> {
     let mut refs: Vec<Vec<&str>> = vec![Vec::new(); board.nets.len()];
     for (_, it) in board.items() {
@@ -75,50 +76,13 @@ pub fn prefer(board: &mut Board, width: Nm) -> Vec<(String, &'static str)> {
             }
         }
     }
-    let found: Vec<(u32, &'static str)> = (1..board.nets.len() as u32).filter(|n| !board.widths.contains_key(n)).filter_map(|n| why(board, n, &refs[n as usize]).map(|w| (n, w))).collect();
+    let found: Vec<(u32, &'static str)> = (1..board.nets.len() as u32).filter(|n| !board.opt_widths.contains_key(n)).filter_map(|n| why(board, n, &refs[n as usize]).map(|w| (n, w))).collect();
     let mut out = Vec::new();
     for (net, why) in found {
-        board.widths.insert(net, width);
+        board.opt_widths.insert(net, width);
         out.push((board.net_name(net).to_string(), why));
     }
     out
-}
-
-/// Narrows each unlocked track of a net in `widths` that is wider than its net's class's to
-/// that width, on the same centre line, which keeps its clearances and its joins at its ends;
-/// a net with more connections open after (a join in a wide track's side) gets its tracks back.
-/// For when the room the widths took is wanted: `board.widths` must no longer hold the nets, so
-/// that [`grid::Profile::for_net`] gives the class's width. Returns the tracks narrowed.
-pub fn narrow(board: &mut Board, widths: &HashMap<u32, Nm>, open: impl Fn(&Board) -> Vec<Airline>) -> usize {
-    let class: HashMap<u32, Nm> = widths.keys().map(|&n| (n, grid::Profile::for_net(board, n).half_width)).collect();
-    let wide: Vec<_> = board.items().filter(|(_, it)| it.kind == Kind::Track && !it.locked && matches!(it.shape, Shape::Capsule { r, .. } if class.get(&it.net).is_some_and(|&hw| r > hw))).map(|(id, it)| (id, it.clone())).collect();
-    if wide.is_empty() {
-        return 0;
-    }
-    let count = |airlines: Vec<Airline>| airlines.into_iter().fold(HashMap::new(), |mut m: HashMap<u32, usize>, a| {
-        *m.entry(a.net).or_default() += 1;
-        m
-    });
-    let before = count(open(board));
-    for (id, it) in &wide {
-        let mut thin = board.remove(*id).expect("a track on the board");
-        if let Shape::Capsule { r, .. } = &mut thin.shape {
-            *r = class[&it.net];
-        }
-        board.restore(*id, thin);
-    }
-    let after = count(open(board));
-    let apart: HashSet<u32> = after.iter().filter(|(n, &k)| k > before.get(n).copied().unwrap_or(0)).map(|(&n, _)| n).collect();
-    let mut narrowed = 0;
-    for (id, it) in wide {
-        if apart.contains(&it.net) {
-            board.remove(id);
-            board.restore(id, it);
-        } else {
-            narrowed += 1;
-        }
-    }
-    narrowed
 }
 
 /// Widens each unlocked track of a net in `widths` narrower than its preferred width to that
@@ -172,7 +136,7 @@ mod tests {
         for n in ["NET-(R1-PAD1)", "SDA", "LED5", "D+", "12C", "VSYNC", "V5_SENSE"] {
             assert!(!is_power(n), "{n}");
         }
-        for n in ["BATT_MEASURE", "BATT_MEASURE_ON", "VBUS_SENSE", "VIN_EN", "VDD_PG"] {
+        for n in ["BATT_MEASURE", "BATT_MEASURE_ON", "VBUS_SENSE", "VIN_EN", "VDD_PG", "PWREN"] {
             assert!(is_sensing(n), "{n}");
         }
         for n in ["VBAT", "+3V3", "VDD_IO"] {
@@ -190,43 +154,6 @@ mod tests {
 
     fn track(a: (f64, f64), b: (f64, f64), width: f64, net: u32, k: u32) -> String {
         format!(r#"(segment (start {} {}) (end {} {}) (width {width}) (layer "F.Cu") (net {net}) (uuid "{k:08}-5555-4555-8555-555555555555"))"#, a.0, a.1, b.0, b.1)
-    }
-
-    #[test]
-    fn narrowing_keeps_every_join_and_gives_back_a_net_it_would_part() {
-        // N1: a 0.4 mm track pad to pad. N2: the same, and a 0.15 mm stub from a third pad ending
-        // 0.2 mm off its centre line, inside the 0.4 mm copper but not the class's 0.15 mm.
-        let src = format!(
-            r#"(kicad_pcb (version 20241229) (generator "pcbnew") (general (thickness 1.6))
-          (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
-          (net 0 "") (net 1 "N1") (net 2 "N2")
-          {} {} {} {} {}
-          {} {} {}
-          (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts") (width 0.1)))"#,
-            pad("J1", 5.0, 10.0, 1, 1),
-            pad("J2", 15.0, 10.0, 1, 2),
-            pad("K1", 5.0, 5.0, 2, 3),
-            pad("K2", 15.0, 5.0, 2, 4),
-            pad("K3", 10.0, 2.0, 2, 5),
-            track((5.0, 10.0), (15.0, 10.0), 0.4, 1, 6),
-            track((5.0, 5.0), (15.0, 5.0), 0.4, 2, 7),
-            track((10.0, 2.0), (10.0, 4.8), 0.15, 2, 8),
-        );
-        let (pcb, copper) = kicad_pcb::parse_board(&src).unwrap();
-        let rules = r#"{"board":{"design_settings":{"rules":{"min_clearance":0.12,"min_track_width":0.1}}},
-          "net_settings":{"classes":[{"name":"Default","clearance":0.12,"track_width":0.15,"via_diameter":0.6,"via_drill":0.3}]}}"#;
-        let mut b = Board::new(&pcb, &copper, kicad_pcb::Rules::parse(rules).unwrap());
-        let open = |b: &Board| board::connectivity(b).airlines;
-        assert!(open(&b).is_empty(), "joined before");
-        let widths = HashMap::from([(1, 400_000), (2, 400_000)]);
-        assert_eq!(narrow(&mut b, &widths, open), 1, "N1's track, not N2's");
-        assert!(open(&b).is_empty(), "joined after");
-        let widths_of = |net: u32| b.items().filter(|(_, it)| it.kind == Kind::Track && it.net == net).map(|(_, it)| match it.shape {
-            Shape::Capsule { r, .. } => 2 * r,
-            _ => 0,
-        }).max();
-        assert_eq!(widths_of(1), Some(150_000));
-        assert_eq!(widths_of(2), Some(400_000));
     }
 
     #[test]

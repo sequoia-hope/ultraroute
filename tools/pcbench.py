@@ -281,6 +281,9 @@ def route_one(b, run_dir, recipe, timeout, seed, router=ROUTER, clock="cpu"):
         # What shaped the board's copper and mask text: the kicad-text helper, or why boxes.
         if m := re.search(r"^text: (.*)$", r.stderr, re.M):
             res["text"] = m[1]
+        # Nets with an optimum width (--power-width, a rule's opt): their track, and how much of it at that width.
+        if m := re.search(r"^widths: \d+% of the track of (\d+) nets with an optimum width at it \(([\d.]+) of ([\d.]+) mm\)", r.stderr, re.M):
+            res["opt_widths"] = {"nets": int(m[1]), "at_mm": float(m[2]), "of_mm": float(m[3])}
     except subprocess.TimeoutExpired:
         res["code"] = "hung"
     res["seconds"] = round(time.time() - started, 1)
@@ -789,6 +792,11 @@ def compare(a):
         if (base_meta.get("board_timeouts") or {}) != (meta.get("board_timeouts") or {}):
             print(f"   board timeouts differ: {len(base_meta.get('board_timeouts') or {})} -> {len(meta.get('board_timeouts') or {})} boards given their own")
         refs = [[i for i in common if "referee_error" in rs[i]] for rs in (base, new)]
+        # Optimum widths (KiCad's opt): a score, not a verdict; on boards clean in both.
+        wide = [i for i in common if base[i].get("success") and new[i].get("success") and (base[i].get("opt_widths") or new[i].get("opt_widths"))]
+        if wide:
+            share = lambda rs: (lambda w: f"{100 * w[0] / w[1]:.0f}% of {w[1] / 1000:.1f} m" if w[1] else "none")([sum(rs[i].get("opt_widths", {}).get(k, 0) for i in wide) for k in ("at_mm", "of_mm")])
+            print(f"   optimum widths on {len(wide)} boards clean in both: track at its net's optimum {share(base)} -> {share(new)}")
         judged = [i for i in common if base[i].get("judge", 1) >= 2 and new[i].get("judge", 1) >= 2]
         if judged:
             necks = lambda r: r.get("necks", 0)

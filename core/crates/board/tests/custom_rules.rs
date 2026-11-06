@@ -318,3 +318,17 @@ fn a_copper_zone_a_rule_keeps_other_nets_off_is_laid() {
     let half = board(body, tracks_only);
     assert!(!half.is_laid(strip(&half)));
 }
+
+#[test]
+fn a_track_width_rules_opt_is_read_and_a_planners_minimum_holds_under_any_rule() {
+    let b = board("", "(version 1)\n(rule \"rail\" (condition \"A.NetName == 'A'\") (constraint track_width (min 0.2mm) (opt 0.6mm)))");
+    assert_eq!(b.opt_track_width_of(1), Some(nm(0.6e-3)));
+    assert_eq!(b.opt_track_width_of(2), None);
+    assert_eq!(b.min_track_width_of(1), nm(0.2e-3));
+    // A planner's 0.4 mm over the rule's 0.2 mm minimum, and over no rule at all.
+    let mut b = b;
+    b.min_widths.insert(1, nm(0.4e-3));
+    b.min_widths.insert(2, nm(0.3e-3));
+    assert_eq!(b.min_track_width_of(1), nm(0.4e-3));
+    assert_eq!(b.min_track_width_of(2), nm(0.3e-3));
+}

@@ -265,105 +265,94 @@ pub fn route_open(board: &mut Board, solver: &mut dyn FieldSolver, options: &Opt
                 || format!("{net_name}: {} to {}", item_name(board, airline.from_item), item_name(board, airline.to_item)),
                 Some(Focus::Connection { net: airline.net, from: airline.from, to: airline.to }),
             );
-            // A net preferred wider than its class tries its preferred width first, then, where
-            // that finds no way, its class's: dropped from the board's widths, it routes at its
-            // class's for the rest of the run.
-            let mut tried;
-            loop {
-                let profile = Profile::for_net(board, airline.net);
-                if !maps.contains_key(&profile.class) {
-                    let mt0 = board::work::timed_run_ns();
-                    let Some(map) = ObstacleMap::new_by(board, profile.clone(), options.cell, options.pours_block, &options.deadline) else {
-                        stats.setup_ns = stats.setup_ns.saturating_add(board::work::timed_run_ns().saturating_sub(t0));
-                        ev.finish("route_setup", "cut", None);
-                        return stats;
-                    };
-                    map_build_ns = map_build_ns.saturating_add(board::work::timed_run_ns().saturating_sub(mt0));
-                    maps.insert(profile.class.clone(), map);
+            let profile = Profile::for_net(board, airline.net);
+            if !maps.contains_key(&profile.class) {
+                let mt0 = board::work::timed_run_ns();
+                let Some(map) = ObstacleMap::new_by(board, profile.clone(), options.cell, options.pours_block, &options.deadline) else {
+                    stats.setup_ns = stats.setup_ns.saturating_add(board::work::timed_run_ns().saturating_sub(t0));
+                    ev.finish("route_setup", "cut", None);
+                    return stats;
+                };
+                map_build_ns = map_build_ns.saturating_add(board::work::timed_run_ns().saturating_sub(mt0));
+                maps.insert(profile.class.clone(), map);
+            }
+            let mut tried = attempt(board, solver, options, &maps[&profile.class], &mut grid, directional, &airline);
+            // A short connection of a net that carries current, which finds no way at its width,
+            // may go narrowed to its pin's width the whole way: as a designer runs a regulator's
+            // switch node from a fine-pitch pin through the gap beside its capacitors. Its map
+            // covers the connection's neighbourhood only.
+            if let (Err(_), Some(hw)) = (&tried, narrow_run(board, &profile, &airline)) {
+                let mut narrow = profile.clone();
+                (narrow.half_width, narrow.narrow_half_width) = (hw, hw);
+                let map = ObstacleMap::window(board, narrow, options.cell, narrow_window(&airline), options.pours_block);
+                if let Ok(items) = attempt(board, solver, options, &map, &mut grid, directional, &airline) {
+                    stats.narrowed.push((airline.from_item, airline.to_item, 2 * hw));
+                    tried = Ok(items);
                 }
-                tried = attempt(board, solver, options, &maps[&profile.class], &mut grid, directional, &airline);
-                // A short connection of a net that carries current, which finds no way at its width,
-                // may go narrowed to its pin's width the whole way: as a designer runs a regulator's
-                // switch node from a fine-pitch pin through the gap beside its capacitors. Its map
-                // covers the connection's neighbourhood only.
-                if let (Err(_), Some(hw)) = (&tried, narrow_run(board, &profile, &airline)) {
+            }
+            // A way that fits by less than the grid's margin (a track between header pins at the
+            // rules' clearance, which a step between cell centres may stray into) shows on a finer
+            // grid: the connection's neighbourhood on cells half the size, once.
+            let fine = options.cell / 2;
+            let window = narrow_window(&airline);
+            let nodes = ((window.max.x - window.min.x) / fine.max(1)) as f64 * ((window.max.y - window.min.y) / fine.max(1)) as f64 * board.layers.len() as f64;
+            if tried.is_err() && options.fine && fine >= FINE_CELL_FLOOR && nodes <= FINE_NODES {
+                let map = ObstacleMap::window(board, profile.clone(), fine, window, options.pours_block);
+                if let Ok(items) = attempt(board, solver, options, &map, &mut grid, directional, &airline) {
+                    stats.fine += 1;
+                    tried = Ok(items);
+                }
+            }
+            // Where a tight gap between pins or obstacles blocks the class's full width, route on
+            // a narrower legal map while pricing cells blocked at full width, so the track narrows
+            // only through the pinch and returns to full width outside it. A gap whose free band
+            // at the narrower width is narrower than a cell (as 2.54 mm header rows are on 50 um
+            // cells) falls back to a half-cell window round the connection.
+            if tried.is_err() && options.corridor {
+                let cwin = corridor_window(&airline);
+                let cnodes = ((cwin.max.x - cwin.min.x) / fine.max(1)) as f64 * ((cwin.max.y - cwin.min.y) / fine.max(1)) as f64 * board.layers.len() as f64;
+                for hw in corridor_widths(board, &profile, &airline) {
+                    // A map the deadline cuts short gives up the corridor, not the run: the
+                    // connection fails as any other, and the loop's own check stops it.
+                    if out_of_time() {
+                        break;
+                    }
                     let mut narrow = profile.clone();
-                    (narrow.half_width, narrow.narrow_half_width) = (hw, hw);
-                    let map = ObstacleMap::window(board, narrow, options.cell, narrow_window(&airline), options.pours_block);
-                    if let Ok(items) = attempt(board, solver, options, &map, &mut grid, directional, &airline) {
-                        stats.narrowed.push((airline.from_item, airline.to_item, 2 * hw));
-                        tried = Ok(items);
-                    }
-                }
-                // A way that fits by less than the grid's margin (a track between header pins at the
-                // rules' clearance, which a step between cell centres may stray into) shows on a finer
-                // grid: the connection's neighbourhood on cells half the size, once.
-                let fine = options.cell / 2;
-                let window = narrow_window(&airline);
-                let nodes = ((window.max.x - window.min.x) / fine.max(1)) as f64 * ((window.max.y - window.min.y) / fine.max(1)) as f64 * board.layers.len() as f64;
-                if tried.is_err() && options.fine && fine >= FINE_CELL_FLOOR && nodes <= FINE_NODES {
-                    let map = ObstacleMap::window(board, profile.clone(), fine, window, options.pours_block);
-                    if let Ok(items) = attempt(board, solver, options, &map, &mut grid, directional, &airline) {
-                        stats.fine += 1;
-                        tried = Ok(items);
-                    }
-                }
-                // Where a tight gap between pins or obstacles blocks the class's full width, route on
-                // a narrower legal map while pricing cells blocked at full width, so the track narrows
-                // only through the pinch and returns to full width outside it. A gap whose free band
-                // at the narrower width is narrower than a cell (as 2.54 mm header rows are on 50 um
-                // cells) falls back to a half-cell window round the connection.
-                if tried.is_err() && options.corridor {
-                    let cwin = corridor_window(&airline);
-                    let cnodes = ((cwin.max.x - cwin.min.x) / fine.max(1)) as f64 * ((cwin.max.y - cwin.min.y) / fine.max(1)) as f64 * board.layers.len() as f64;
-                    for hw in corridor_widths(board, &profile, &airline) {
-                        // A map the deadline cuts short gives up the corridor, not the run: the
-                        // connection fails as any other, and the loop's own check stops it.
-                        if out_of_time() {
-                            break;
-                        }
-                        let mut narrow = profile.clone();
-                        (narrow.half_width, narrow.narrow_half_width) = (hw, profile.narrow_half_width.min(hw));
-                        let key = format!("{}\u{0}c{hw}", profile.class);
-                        if !maps.contains_key(&key) {
-                            let mt0 = board::work::timed_run_ns();
-                            let Some(map) = ObstacleMap::new_by(board, narrow.clone(), options.cell, options.pours_block, &options.deadline) else {
-                                map_build_ns = map_build_ns.saturating_add(board::work::timed_run_ns().saturating_sub(mt0));
-                                break;
-                            };
+                    (narrow.half_width, narrow.narrow_half_width) = (hw, profile.narrow_half_width.min(hw));
+                    let key = format!("{}\u{0}c{hw}", profile.class);
+                    if !maps.contains_key(&key) {
+                        let mt0 = board::work::timed_run_ns();
+                        let Some(map) = ObstacleMap::new_by(board, narrow.clone(), options.cell, options.pours_block, &options.deadline) else {
                             map_build_ns = map_build_ns.saturating_add(board::work::timed_run_ns().saturating_sub(mt0));
-                            maps.insert(key.clone(), map);
-                        }
-                        let (full_map, narrow_map) = (&maps[&profile.class], &maps[&key]);
-                        if let Ok((items, stretches)) = attempt_corridor(board, solver, options, full_map, narrow_map, &mut grid, &mut full_grid, directional, &airline) {
-                            stats.corridor += 1;
-                            stats.corridors.extend(stretches.into_iter().map(|(w, l)| (airline.from_item, airline.to_item, 2 * w, l)));
-                            tried = Ok(items);
                             break;
-                        }
-                        if !(options.fine && fine >= FINE_CELL_FLOOR && cnodes <= FINE_NODES) || out_of_time() {
-                            continue;
-                        }
-                        let fine_narrow = ObstacleMap::window(board, narrow, fine, cwin, options.pours_block);
-                        fine_narrow.view_into(airline.net, &mut grid);
-                        if terminals(board, &grid, airline.from_item).is_empty() || terminals(board, &grid, airline.to_item).is_empty() || out_of_time() {
-                            continue;
-                        }
-                        let fine_full = ObstacleMap::window(board, profile.clone(), fine, cwin, options.pours_block);
-                        if let Ok((items, stretches)) = attempt_corridor(board, solver, options, &fine_full, &fine_narrow, &mut grid, &mut full_grid, directional, &airline) {
-                            stats.corridor += 1;
-                            stats.fine += 1;
-                            stats.corridors.extend(stretches.into_iter().map(|(w, l)| (airline.from_item, airline.to_item, 2 * w, l)));
-                            tried = Ok(items);
-                            break;
-                        }
+                        };
+                        map_build_ns = map_build_ns.saturating_add(board::work::timed_run_ns().saturating_sub(mt0));
+                        maps.insert(key.clone(), map);
+                    }
+                    let (full_map, narrow_map) = (&maps[&profile.class], &maps[&key]);
+                    if let Ok((items, stretches)) = attempt_corridor(board, solver, options, full_map, narrow_map, &mut grid, &mut full_grid, directional, &airline) {
+                        stats.corridor += 1;
+                        stats.corridors.extend(stretches.into_iter().map(|(w, l)| (airline.from_item, airline.to_item, 2 * w, l)));
+                        tried = Ok(items);
+                        break;
+                    }
+                    if !(options.fine && fine >= FINE_CELL_FLOOR && cnodes <= FINE_NODES) || out_of_time() {
+                        continue;
+                    }
+                    let fine_narrow = ObstacleMap::window(board, narrow, fine, cwin, options.pours_block);
+                    fine_narrow.view_into(airline.net, &mut grid);
+                    if terminals(board, &grid, airline.from_item).is_empty() || terminals(board, &grid, airline.to_item).is_empty() || out_of_time() {
+                        continue;
+                    }
+                    let fine_full = ObstacleMap::window(board, profile.clone(), fine, cwin, options.pours_block);
+                    if let Ok((items, stretches)) = attempt_corridor(board, solver, options, &fine_full, &fine_narrow, &mut grid, &mut full_grid, directional, &airline) {
+                        stats.corridor += 1;
+                        stats.fine += 1;
+                        stats.corridors.extend(stretches.into_iter().map(|(w, l)| (airline.from_item, airline.to_item, 2 * w, l)));
+                        tried = Ok(items);
+                        break;
                     }
                 }
-                if tried.is_err() && !out_of_time() && board.widths.remove(&airline.net).is_some() {
-                    tell(&options.log, "narrowed", || format!("{net_name}: no way at its preferred width; its class's from now on"), None);
-                    continue;
-                }
-                break;
             }
             let mut cause_tag: &'static str = "closed";
             let laid = match tried {

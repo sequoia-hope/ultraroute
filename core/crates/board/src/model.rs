@@ -346,10 +346,13 @@ pub struct Board {
     pub regions: Vec<crate::regions::Region>,
     /// Rules a planner set that keep other nets' antipads out from under some nets' tracks.
     pub clear_under: Vec<crate::regions::ClearUnder>,
-    /// Widths nets are preferred to route at, wider than their class's: supply rails a planner
-    /// or the net names say carry current. Soft: a connection that finds no way at its net's
-    /// width drops the net from here and routes at its class's.
-    pub widths: HashMap<u32, Nm>,
+    /// Widths nets would be better at, wider than their class's (KiCad's `opt`): a planner's, a
+    /// custom rule's `track_width (opt ...)`, or supply rails the net names give. Taken after
+    /// routing where there is room, never at a connection's cost.
+    pub opt_widths: HashMap<u32, Nm>,
+    /// Widths nets must have at least beyond their class and the rules (a planner's, from the
+    /// current a net carries): as hard as a custom rule's `track_width (min ...)`.
+    pub min_widths: HashMap<u32, Nm>,
     /// The copper zones, for what other nets' holes cut out of them.
     pub zone_areas: Vec<crate::regions::ZoneArea>,
     /// What crossing another net's pour (one refilled round new copper, not a plane) costs, as a
@@ -505,7 +508,8 @@ impl Board {
             via_avoid_cost: 3_000,
             regions: Vec::new(),
             clear_under: Vec::new(),
-            widths: HashMap::new(),
+            opt_widths: HashMap::new(),
+            min_widths: HashMap::new(),
             zone_areas: Vec::new(),
             pour_cost: 0.0,
             warnings: pcb.warnings.iter().chain(&copper.warnings).cloned().collect(),

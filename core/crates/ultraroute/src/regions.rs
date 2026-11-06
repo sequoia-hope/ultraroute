@@ -9,7 +9,7 @@
 //!  "max_lengths": [{"nets": ["/XIN"], "max_length_mm": 10}],
 //!  "clear_under": [{"nets": ["/USB_DP", "/USB_DM"], "classes": ["USB"], "layers": ["F.Cu"],
 //!                   "planes": ["In1.Cu"], "margin_mm": 0.0}],
-//!  "widths": [{"nets": ["/VBUS"], "classes": ["POWER"], "width_mm": 0.8}]}
+//!  "widths": [{"nets": ["/VBUS"], "classes": ["POWER"], "min_mm": 0.4, "opt_mm": 0.8}]}
 //! ```
 //!
 //! Polygons are in millimetres in KiCad's frame (y down); `layers` defaults to every copper
@@ -23,9 +23,10 @@
 //! [`board::Board::antipads`] for the antipad, and `grid::under` for how the searches see it).
 //! A hole of the zone's own net cuts nothing; where no zone of another net is, nor does any.
 //!
-//! A `widths` entry prefers its nets at `width_mm` (from the current they carry, say): a net
-//! routes at it where it fits and at its class's width where not, and never narrower than its
-//! class's ([`Board::widths`]). Of two entries for a net, the later holds.
+//! A `widths` entry gives its nets widths as KiCad's `track_width` constraint does: `min_mm` a
+//! rule their tracks are routed to, as hard as a class's width ([`Board::min_widths`]: the
+//! current a net carries, say), `opt_mm` what they are widened to after routing where there is
+//! room ([`Board::opt_widths`]). Of two entries for a net, the later holds.
 
 use std::collections::{BTreeSet, HashSet};
 
@@ -131,15 +132,23 @@ pub fn load(path: &str, board: &mut Board) -> Result<Vec<MaxLength>, String> {
         let margin = (c["margin_mm"].as_f64().unwrap_or(0.0).max(0.0) * 1e6).round() as board::Nm;
         under.push(ClearUnder { nets, layers, planes, margin });
     }
-    let mut widths = Vec::new();
+    let (mut mins, mut opts) = (Vec::new(), Vec::new());
     for w in v["widths"].as_array().into_iter().flatten() {
-        let Some(mm) = w["width_mm"].as_f64().filter(|mm| *mm > 0.0) else {
-            return Err(format!("--regions {path}: widths: a positive width_mm expected"));
+        let width = |key: &str| -> Result<Option<board::Nm>, String> {
+            match &w[key] {
+                Value::Null => Ok(None),
+                x => x.as_f64().filter(|mm| *mm > 0.0).map(|mm| Some((mm * 1e6).round() as board::Nm)).ok_or(format!("--regions {path}: widths: {key} a positive width in millimetres")),
+            }
         };
+        let (min, opt) = (width("min_mm")?, width("opt_mm")?);
+        if min.is_none() && opt.is_none() {
+            return Err(format!("--regions {path}: widths: min_mm or opt_mm expected"));
+        }
         let classes = strs(&w["classes"]);
         let mut nets: Vec<u32> = strs(&w["nets"]).iter().filter_map(|n| net_of(n).or_else(|| { unknown.push(n.clone()); None })).collect();
         nets.extend((1..board.nets.len() as u32).filter(|&n| classes.iter().any(|k| board.rules.in_class(board.net_name(n), k))));
-        widths.extend(nets.into_iter().map(|n| (n, (mm * 1e6).round() as board::Nm)));
+        mins.extend(min.into_iter().flat_map(|m| nets.iter().map(move |&n| (n, m))));
+        opts.extend(opt.into_iter().flat_map(|o| nets.iter().map(move |&n| (n, o))));
     }
     if !unknown.is_empty() {
         eprintln!("regions: nets the board does not have: {}", unknown.join(", "));
@@ -154,7 +163,8 @@ pub fn load(path: &str, board: &mut Board) -> Result<Vec<MaxLength>, String> {
     }
     board.regions = regions;
     board.clear_under = under;
-    board.widths.extend(widths);
+    board.min_widths.extend(mins);
+    board.opt_widths.extend(opts);
     Ok(lengths)
 }
 
