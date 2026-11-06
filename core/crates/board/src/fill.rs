@@ -22,6 +22,15 @@ pub struct Fill {
     pub net: u32,
     pub layer: usize,
     pub rects: Vec<[Nm; 4]>,
+    /// Its separate pieces of copper: a plane a route cut in two has two.
+    pub pieces: usize,
+}
+
+impl Fill {
+    /// Its copper's area in square nanometres.
+    pub fn area(&self) -> f64 {
+        self.rects.iter().map(|r| (r[2] - r[0]) as f64 * (r[3] - r[1]) as f64).sum()
+    }
 }
 
 /// Cells on a grid shared by every raster, so two rasters line up cell for cell.
@@ -188,6 +197,39 @@ impl Raster {
         self.cells = kept;
     }
 
+    /// How many pieces the copper is in, cells joined side to side.
+    fn pieces(&self) -> usize {
+        let mut seen = vec![false; self.cells.len()];
+        let mut pieces = 0;
+        for start in 0..self.cells.len() {
+            if seen[start] || !self.cells[start] {
+                continue;
+            }
+            pieces += 1;
+            let mut stack = vec![start];
+            while let Some(k) = stack.pop() {
+                if seen[k] || !self.cells[k] {
+                    continue;
+                }
+                seen[k] = true;
+                let (i, j) = (k % self.w, k / self.w);
+                if i > 0 {
+                    stack.push(k - 1);
+                }
+                if i + 1 < self.w {
+                    stack.push(k + 1);
+                }
+                if j > 0 {
+                    stack.push(k - self.w);
+                }
+                if j + 1 < self.h {
+                    stack.push(k + self.w);
+                }
+            }
+        }
+        pieces
+    }
+
     /// The copper as rectangles: runs along each row, runs alike in successive rows merged.
     fn rects(&self) -> Vec<[Nm; 4]> {
         let mut done = Vec::new();
@@ -247,7 +289,7 @@ pub fn fill_zones(board: &Board, copper: &Copper) -> Vec<Fill> {
             copper.expand(&zone.layers).iter().filter_map(|n| board.layers.iter().position(|l| l == n)).collect();
         for layer in layers {
             if let Some(r) = fill_one(board, zone, layer, &poured) {
-                fills.push(Fill { zone: z, net: zone.net, layer, rects: r.rects() });
+                fills.push(Fill { zone: z, net: zone.net, layer, rects: r.rects(), pieces: r.pieces() });
                 poured.push((zone.net, layer, r));
             }
         }
@@ -394,5 +436,21 @@ mod tests {
         // 0.1 mm half-width plus 0.2 mm clearance: nothing within 0.3 mm of the wall's centre.
         assert!(!covered(&fills, Point::new(4_750_000, 5_000_000)));
         assert!(covered(&fills, Point::new(4_650_000, 5_000_000)));
+        assert_eq!(fills[0].pieces, 1);
+    }
+
+    #[test]
+    fn a_pour_cut_in_two_with_its_own_copper_on_both_sides_is_two_pieces() {
+        let (mut b, copper) = board(ZONE);
+        b.insert(track(1, Point::new(1_000_000, 1_000_000), Point::new(2_000_000, 1_000_000)));
+        let whole = fill_zones(&b, &copper);
+        assert_eq!(whole[0].pieces, 1);
+        b.insert(track(1, Point::new(8_000_000, 1_000_000), Point::new(9_000_000, 1_000_000)));
+        b.insert(track(2, Point::new(5_000_000, -1_000_000), Point::new(5_000_000, 11_000_000)));
+        let cut = fill_zones(&b, &copper);
+        assert_eq!(cut[0].pieces, 2);
+        // The wall takes its own width and a clearance each side, 0.6 mm by 10 mm.
+        let lost = (whole[0].area() - cut[0].area()) / 1e12;
+        assert!((lost - 6.0).abs() < 0.5, "{lost} mm²");
     }
 }

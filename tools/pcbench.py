@@ -284,6 +284,9 @@ def route_one(b, run_dir, recipe, timeout, seed, router=ROUTER, clock="cpu"):
         # What shaped the board's copper and mask text: the kicad-text helper, or why boxes.
         if m := re.search(r"^text: (.*)$", r.stderr, re.M):
             res["text"] = m[1]
+        # The pours' copper the routing kept, as the router fills them before and after: a score, not a verdict.
+        if m := re.search(r"^pours: (\d+)% of (\d+) mm² kept", r.stderr, re.M):
+            res["pours"] = {"kept": int(m[1]) / 100, "mm2": int(m[2])}
     except subprocess.TimeoutExpired:
         res["code"] = "hung"
     res["seconds"] = round(time.time() - started, 1)
@@ -842,6 +845,12 @@ def compare(a):
         if (base_meta.get("board_timeouts") or {}) != (meta.get("board_timeouts") or {}):
             print(f"   board timeouts differ: {len(base_meta.get('board_timeouts') or {})} -> {len(meta.get('board_timeouts') or {})} boards given their own")
         refs = [[i for i in common if "referee_error" in rs[i]] for rs in (base, new)]
+        # Pours kept (planes and fills a route cuts into): a score, on boards clean in both.
+        poured = [i for i in common if base[i].get("success") and new[i].get("success") and base[i].get("pours") and new[i].get("pours")]
+        if poured:
+            kept = lambda rs: sum(rs[i]["pours"]["kept"] * rs[i]["pours"]["mm2"] for i in poured) / max(1, sum(rs[i]["pours"]["mm2"] for i in poured))
+            worse = sorted((i for i in poured if new[i]["pours"]["kept"] < base[i]["pours"]["kept"] - 0.05), key=lambda i: new[i]["pours"]["kept"] - base[i]["pours"]["kept"])
+            print(f"   pours kept on {len(poured)} boards clean in both: {100 * kept(base):.0f}% -> {100 * kept(new):.0f}% of their area, more than 5 points less on {len(worse)}" + "".join(f"\n      {i}: {100 * base[i]['pours']['kept']:.0f}% -> {100 * new[i]['pours']['kept']:.0f}%" for i in worse[:5]))
         judged = [i for i in common if base[i].get("judge", 1) >= 2 and new[i].get("judge", 1) >= 2]
         if judged:
             necks = lambda r: r.get("necks", 0)

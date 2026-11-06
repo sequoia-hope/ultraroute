@@ -237,3 +237,27 @@ fn a_custom_rules_length_limit_routes_its_net_first() {
     assert_eq!(first["detail"]["nets"], 1, "{first}");
     assert!(first["detail"]["routed"].as_u64().unwrap() > 0, "{first}");
 }
+
+#[test]
+fn a_pour_the_routing_cuts_is_reported_with_what_it_kept() {
+    // One layer, a GND pour over all of it fed by one pad at the left; SIG must cross from top to
+    // bottom, and the pour right of its track then has no GND copper and fills nothing.
+    let board = "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal))
+        (net 0 \"\") (net 1 \"GND\") (net 2 \"SIG\")
+        (gr_rect (start 0 0) (end 20 20) (layer \"Edge.Cuts\") (width 0.1))
+        (footprint \"Part\" (layer \"F.Cu\") (at 0 0)
+            (property \"Reference\" \"U1\" (at 0 0) (layer \"F.SilkS\"))
+            (pad \"1\" smd circle (at 3 10) (size 0.8 0.8) (layers \"F.Cu\") (net 1 \"GND\"))
+            (pad \"2\" smd circle (at 10 0.9) (size 0.6 0.6) (layers \"F.Cu\") (net 2 \"SIG\"))
+            (pad \"3\" smd circle (at 10 19.1) (size 0.6 0.6) (layers \"F.Cu\") (net 2 \"SIG\")))
+        (zone (net 1) (net_name \"GND\") (layer \"F.Cu\") (uuid \"z\") (connect_pads yes (clearance 0.2))
+          (min_thickness 0.2) (polygon (pts (xy 0.5 0.5) (xy 19.5 0.5) (xy 19.5 19.5) (xy 0.5 19.5)))))";
+    let s = run_text(board, &["--negotiate"]);
+    assert_eq!(s["summary"]["opens"], 0, "{s}");
+    let result = s["stages"].as_array().unwrap().iter().find(|st| st["name"] == "result").unwrap();
+    let pours = result["detail"]["pours"].as_array().expect("the pours, before and after");
+    assert_eq!(pours.len(), 1, "{pours:?}");
+    let (before, after) = (pours[0]["before_mm2"].as_f64().unwrap(), pours[0]["after_mm2"].as_f64().unwrap());
+    assert!(before > 300.0 && after < 0.7 * before, "{before} -> {after} mm²");
+    assert_eq!(pours[0]["net"], "GND");
+}
