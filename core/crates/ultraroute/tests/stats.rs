@@ -36,8 +36,8 @@ fn every_stage_the_recipe_runs_is_in_the_stats() {
     // A coarse grid and four threads keep it to a few seconds; every stage still runs.
     let s = stats(&["--cell", "0.1", "--threads", "4"]);
     let names: Vec<&str> = s["stages"].as_array().unwrap().iter().map(|st| st["name"].as_str().unwrap()).collect();
-    // The earring has no planes, no planner's regions, no laid strips, and the recipe does not nudge.
-    let expected: Vec<&str> = ultraroute::STAGES.iter().map(|e| e.stage.name()).filter(|n| !["islands", "planes", "first", "nudge"].contains(n)).collect();
+    // The earring has no planes, no planner's regions or widths, no laid strips, and the recipe does not nudge.
+    let expected: Vec<&str> = ultraroute::STAGES.iter().map(|e| e.stage.name()).filter(|n| !["islands", "planes", "first", "nudge", "widening"].contains(n)).collect();
     assert_eq!(names, expected);
     for stage in s["stages"].as_array().unwrap() {
         let mut ns = Vec::new();

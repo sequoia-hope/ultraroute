@@ -33,6 +33,8 @@ pub struct Ledger {
     /// Nets with a length limit, and those nets, routed first.
     pub(crate) lengths: Vec<regions::MaxLength>,
     pub(crate) first: HashSet<u32>,
+    /// Nets with an optimum width wider than their class's, and those widths (`Board::opt_widths`).
+    pub(crate) preferred: Vec<(u32, Nm)>,
     pub(crate) costs: ViaCosts,
     /// What `escape_parts` found.
     pub(crate) escape_parts: Option<Vec<usize>>,
@@ -308,6 +310,22 @@ impl Stage for SetUp {
             Some(path) => regions::load(path, board).unwrap_or_else(|e| panic!("{e}")),
             None => Vec::new(),
         };
+        if let Some(mm) = a.power_width {
+            let found = crate::widths::prefer(board, (mm * 1e6).round() as Nm);
+            if !found.is_empty() {
+                let names: Vec<String> = found.iter().map(|(n, why)| format!("{n} ({why})")).collect();
+                eprintln!("widths: {} nets preferred at {mm} mm: {}", found.len(), names.join(", "));
+            }
+        }
+        // Wider than their class only: a preference at or under the class's width changes nothing.
+        for n in 1..board.nets.len() as u32 {
+            if let Some(w) = board.opt_track_width_of(n) {
+                board.opt_widths.entry(n).or_insert(w);
+            }
+        }
+        let mut preferred: Vec<(u32, Nm)> = board.opt_widths.iter().map(|(&n, &w)| (n, w)).filter(|&(n, w)| 2 * grid::Profile::for_net(board, n).half_width < w).collect();
+        preferred.sort_unstable();
+        ledger.preferred = preferred;
         // Nets with a length limit route first, while their shortest ways are still free: a
         // planner's, a custom rule's `length (max ...)`, and a `via_count (max 0)`'s, whose one
         // layer fills up first.
@@ -1192,6 +1210,28 @@ impl Stage for LengthMatching {
     }
 }
 
+/// The tracks of nets with an optimum width (`Board::opt_widths`: a custom rule's `opt`, a
+/// planner's, `--power-width`) widened to it where the routing left room, moving nothing: the
+/// routing never gives up a connection for it.
+pub struct Widening;
+
+impl Stage for Widening {
+    fn name(&self) -> &'static str {
+        "widening"
+    }
+
+    fn enabled(&self, _: &Args, _: &Board, ledger: &Ledger) -> bool {
+        !ledger.preferred.is_empty()
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let widened = crate::widths::widen(ctx.board, &ctx.ledger.preferred, ctx.args.pours_block);
+        eprintln!("widening: {widened} tracks of nets preferred wider widened, {:.1} s", ctx.elapsed());
+        ctx.watch.step(ctx.board);
+        json!({"widened": widened})
+    }
+}
+
 /// The first `most` of `names`, and how many more: every one is in the report.
 fn said_list(names: &[String], most: usize) -> String {
     let shown = names.iter().take(most).cloned().collect::<Vec<_>>().join(", ");
@@ -1269,6 +1309,27 @@ impl Stage for Outcome {
             eprintln!("pours: {:.0}% of {:.0} mm² kept{}, {:.1} s", 100.0 * now / was, was, if hurt.is_empty() { String::new() } else { format!("; cut: {}", hurt.join("; ")) }, started.elapsed().as_secs_f64());
             ctx.say("pours", format!("{:.0}% of the pours' {:.0} mm² kept", 100.0 * now / was, was));
             detail["pours"] = json!(kept);
+        }
+        let preferred = &ctx.ledger.preferred;
+        if !preferred.is_empty() {
+            // Of each net's unlocked track, the length at its preferred width.
+            let want: HashMap<u32, Nm> = preferred.iter().copied().collect();
+            let (mut at, mut all) = (HashMap::<u32, f64>::new(), HashMap::<u32, f64>::new());
+            for (_, it) in ctx.board.items().filter(|(_, it)| it.kind == Kind::Track && !it.locked) {
+                if let (Some(&w), Shape::Capsule { a, b, r }) = (want.get(&it.net), &it.shape) {
+                    let len = a.distance(*b);
+                    *all.entry(it.net).or_default() += len;
+                    if 2 * r >= w {
+                        *at.entry(it.net).or_default() += len;
+                    }
+                }
+            }
+            let total: f64 = all.values().sum();
+            let wide: f64 = at.values().sum();
+            let short: Vec<&str> = preferred.iter().filter(|(n, _)| at.get(n).copied().unwrap_or(0.0) < all.get(n).copied().unwrap_or(0.0)).map(|&(n, _)| ctx.board.net_name(n)).collect();
+            let share = if total > 0.0 { wide / total } else { 1.0 };
+            eprintln!("widths: {:.0}% of the track of {} nets with an optimum width at it ({:.1} of {:.1} mm); {} with some narrower{}", 100.0 * share, preferred.len(), wide / 1e6, total / 1e6, short.len(), if short.is_empty() { String::new() } else { format!(": {}", short.join(", ")) });
+            detail["widths"] = json!({"preferred": preferred.len(), "share": share, "at_mm": wide / 1e6, "of_mm": total / 1e6, "narrower": short});
         }
         let blamed = if ctx.args.blame { crate::print_blame(ctx.board, ctx.args.pours_block) } else { Vec::new() };
         let found = open_findings(ctx.board, &open, &blamed);

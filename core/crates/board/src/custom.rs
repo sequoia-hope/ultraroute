@@ -97,18 +97,36 @@ impl Board {
     }
 
     /// The narrowest track `net` may have on any layer: the board minimum, or a custom rule's
-    /// `track_width` for a track of the net where that is wider (a rule for one layer holds on
-    /// all, which only ever widens).
+    /// `track_width` or a planner's minimum ([`Board::min_widths`]) for the net where that is
+    /// wider (a rule for one layer holds on all, which only ever widens).
     pub fn min_track_width_of(&self, net: u32) -> Nm {
         let floor = nm(self.rules.min_track_width);
+        let planned = self.min_widths.get(&net).copied().unwrap_or(0);
         if !self.custom.has("track_width") {
-            return floor;
+            return floor.max(planned);
         }
         let class = self.class_names.get(net as usize).map_or("", String::as_str);
         (0..self.layers.len())
             .map(|l| self.rule_min("track_width", &Thing::New { board: self, via: false, net: Some(net), class, width: 0, drill: 0, layer: Some(l), area: Area::Unknown }, None, l, floor))
             .max()
             .unwrap_or(floor)
+            .max(planned)
+    }
+
+    /// The widest `opt` a custom rule that surely holds sets on `net`'s tracks on any layer:
+    /// the width KiCad's router would draw them at.
+    pub fn opt_track_width_of(&self, net: u32) -> Option<Nm> {
+        if !self.custom.has("track_width") {
+            return None;
+        }
+        let class = self.class_names.get(net as usize).map_or("", String::as_str);
+        (0..self.layers.len())
+            .filter_map(|l| {
+                let track = Thing::New { board: self, via: false, net: Some(net), class, width: 0, drill: 0, layer: Some(l), area: Area::Unknown };
+                let r = self.custom.resolve("track_width", &track, None, &self.layers[l], self.layers.len());
+                r.sure.filter(|(rule, _)| rule.severity != Severity::Ignore).and_then(|(_, c)| c.opt).map(nm)
+            })
+            .max()
     }
 
     /// How narrow `net`'s copper may be where its tracks join: its narrowest track
