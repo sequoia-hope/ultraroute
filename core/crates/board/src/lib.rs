@@ -16,6 +16,6 @@ pub use model::{arc_chords, Block, Board, FootprintInfo, Item, ItemId, Kind, Loa
 pub use custom::Thing;
 pub use check::{check, check_item, check_item_with_pours, intrudes, mask_gap, mask_pair_gap, within, Rule, Violation, MASK_MARGIN};
 pub use connect::{anchors, connectivity, connectivity_without_pours, end_neck, firmly_joined, joined, joint_neck, meets_squarely, FULL_JOINT, net_connectivity, Airline, Connectivity};
-pub use fill::{fill_zones, Fill};
+pub use fill::{fill_zones, fill_zones_until, Fill};
 pub use regions::{broken_region, region_price, Antipad, ClearUnder, Region, RegionKind, RegionRule, ZoneArea};
 pub use geom::{inside, nm, point_segment, BBox, Nm, Point, Shape};

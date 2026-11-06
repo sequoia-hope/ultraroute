@@ -279,6 +279,13 @@ fn distance(shape: &Shape, p: Point) -> f64 {
 
 /// Every zone that pours copper, filled, highest priority first.
 pub fn fill_zones(board: &Board, copper: &Copper) -> Vec<Fill> {
+    fill_zones_until(board, copper, &|| false).unwrap_or_default()
+}
+
+/// The fills of [`fill_zones`], or None once `stop` says so: a large board's pours take a
+/// second or more, which a run's deadline must bound. `stop` is asked between zones and every
+/// [`STOP_EVERY`] items or rows within one.
+pub fn fill_zones_until(board: &Board, copper: &Copper, stop: &dyn Fn() -> bool) -> Option<Vec<Fill>> {
     let mut order: Vec<usize> = (0..copper.zones.len()).filter(|&z| copper.zones[z].keepout.is_none()).collect();
     order.sort_by_key(|&z| std::cmp::Reverse(copper.zones[z].priority));
     let mut poured: Vec<(u32, usize, Raster)> = Vec::new();
@@ -288,26 +295,33 @@ pub fn fill_zones(board: &Board, copper: &Copper) -> Vec<Fill> {
         let layers: Vec<usize> =
             copper.expand(&zone.layers).iter().filter_map(|n| board.layers.iter().position(|l| l == n)).collect();
         for layer in layers {
-            if let Some(r) = fill_one(board, zone, layer, &poured) {
+            if stop() {
+                return None;
+            }
+            if let Some(r) = fill_one(board, zone, layer, &poured, stop)? {
                 fills.push(Fill { zone: z, net: zone.net, layer, rects: r.rects(), pieces: r.pieces() });
                 poured.push((zone.net, layer, r));
             }
         }
     }
-    fills
+    Some(fills)
 }
 
-fn fill_one(board: &Board, zone: &Zone, layer: usize, poured: &[(u32, usize, Raster)]) -> Option<Raster> {
+/// How many items or raster rows a fill works through between asking whether to stop.
+const STOP_EVERY: usize = 64;
+
+/// One zone's fill on one layer: Some(None) when it pours nothing there, None when `stop` said so.
+fn fill_one(board: &Board, zone: &Zone, layer: usize, poured: &[(u32, usize, Raster)], stop: &dyn Fn() -> bool) -> Option<Option<Raster>> {
     let outline: Vec<Point> = zone.outline.iter().copied().map(Point::from_m).collect();
     if outline.len() < 3 {
-        return None;
+        return Some(None);
     }
     let mut b = BBox::of(outline.iter().copied());
     if !board.outline.is_empty() {
         let edge = BBox::of(board.outline.iter().flatten().copied());
         b = BBox { min: Point::new(b.min.x.max(edge.min.x), b.min.y.max(edge.min.y)), max: Point::new(b.max.x.min(edge.max.x), b.max.y.min(edge.max.y)) };
     }
-    let mut r = Raster::over(b)?;
+    let Some(mut r) = Raster::over(b) else { return Some(None) };
     r.scan(&[&outline], true);
     if !board.outline.is_empty() {
         let mut board_area = r.clone();
@@ -325,7 +339,10 @@ fn fill_one(board: &Board, zone: &Zone, layer: usize, poured: &[(u32, usize, Ras
     let own = nm(zone.clearance);
     let net = zone.net;
     let mut seeds = Vec::new();
-    for id in board.near(layer, b) {
+    for (k, id) in board.near(layer, b).into_iter().enumerate() {
+        if k % STOP_EVERY == 0 && stop() {
+            return None;
+        }
         let Some(item) = board.item(id) else { continue };
         if !item.on(layer) {
             continue;
@@ -355,7 +372,10 @@ fn fill_one(board: &Board, zone: &Zone, layer: usize, poured: &[(u32, usize, Ras
     }
     let holes = board.layers.len();
     let hole_gap = nm(board.rules.min_hole_clearance);
-    for id in board.near(holes, b) {
+    for (k, id) in board.near(holes, b).into_iter().enumerate() {
+        if k % STOP_EVERY == 0 && stop() {
+            return None;
+        }
         let Some(item) = board.item(id) else { continue };
         let Some(Shape::Capsule { a, b: end, r: radius }) = board.hole_shape(id, item) else { continue };
         if net != 0 && item.net == net && item.on(layer) {
@@ -376,6 +396,9 @@ fn fill_one(board: &Board, zone: &Zone, layer: usize, poured: &[(u32, usize, Ras
         }
         let c = own.max(board.clearance(net, *other)) as f64;
         for j in 0..done.h {
+            if j % STOP_EVERY == 0 && stop() {
+                return None;
+            }
             for i in 0..done.w {
                 if !done.cells[j * done.w + i] {
                     continue;
@@ -391,11 +414,14 @@ fn fill_one(board: &Board, zone: &Zone, layer: usize, poured: &[(u32, usize, Ras
             }
         }
     }
+    if stop() {
+        return None;
+    }
     r.open(nm(zone.min_thickness) / 2);
     if net != 0 {
         r.keep_seeded(&seeds);
     }
-    r.cells.iter().any(|&c| c).then_some(r)
+    Some(r.cells.iter().any(|&c| c).then_some(r))
 }
 
 #[cfg(test)]
