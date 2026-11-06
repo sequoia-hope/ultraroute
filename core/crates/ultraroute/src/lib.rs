@@ -140,6 +140,7 @@ pub struct Args {
     /// The width, in millimetres, supply nets (by name: power, ground, switch nodes) are
     /// preferred at; see `widths`.
     pub power_width: Option<f64>,
+    pub widths_after: bool,
     /// Take inner layers that one net's pour all but fills as planes, as --planes would.
     pub auto_planes: bool,
     /// Every pad of a plane's net gets a via of its own within this many millimetres, edge to
@@ -263,6 +264,7 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
         regions: None,
         pour_cost: None,
         power_width: None,
+        widths_after: false,
         auto_planes: false,
         plane_via_reach: None,
         adopt: false,
@@ -430,6 +432,7 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
                 a.power_width = Some(mm);
             }
             "--no-power-width" => a.power_width = None,
+            "--widths-after" => a.widths_after = true,
             "--pour-cost" => a.pour_cost = Some(value()?.parse().map_err(|e| format!("--pour-cost: {e}"))?),
             "--via-avoid-cost" => a.via_avoid_cost = Some(value()?.parse().map_err(|e| format!("--via-avoid-cost: {e}"))?),
             "--rip-region" => {
@@ -1181,6 +1184,7 @@ pub const STAGES: &[Entry] = &[
     row(&stages::Refinish, Clock::Timed, Budget::Run, None),
     row(&stages::Corridors, Clock::Timed, Budget::Run, None),
     row(&stages::LengthMatching, Clock::Timed, Budget::Run, None),
+    row(&stages::Widening, Clock::Untold, Budget::Untimed, None),
     row(&stages::Outcome, Clock::Untold, Budget::Untimed, None),
     row(&stages::Write, Clock::Untold, Budget::Untimed, None),
 ];

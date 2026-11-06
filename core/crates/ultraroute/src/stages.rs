@@ -316,6 +316,10 @@ impl Stage for SetUp {
         let mut preferred: Vec<(u32, Nm)> = board.widths.iter().map(|(&n, &w)| (n, w)).filter(|&(n, _)| grid::Profile::for_net(board, n).rules_class() != grid::Profile::for_net(board, n).class).collect();
         preferred.sort_unstable();
         ledger.preferred = preferred;
+        // Routed at their classes' widths, widened only after (`--widths-after`).
+        if a.widths_after {
+            board.widths.clear();
+        }
         // Nets with a length limit route first, while their shortest ways are still free.
         ledger.first = ledger.lengths.iter().flat_map(|m| m.nets.iter().copied()).collect();
         // So do the nets a clear-under rule keeps off other nets' antipads: laid before most
@@ -1191,6 +1195,27 @@ impl Stage for LengthMatching {
         ctx.watch.step(ctx.board);
         let skews: Vec<Value> = t.skews.iter().map(|s| json!({"pair": s.pair, "before_mm": s.before, "after_mm": s.after, "rule": s.limit.as_ref().map(|l| &l.0), "max_mm": s.limit.as_ref().map(|l| l.1)})).collect();
         json!({"pairs": t.pairs, "untuned": t.untuned(), "bumps": t.bumps, "skews": skews})
+    }
+}
+
+/// The tracks of nets preferred wider (`Board::widths`, `--power-width`) widened to their width
+/// where the routing left room, without moving anything.
+pub struct Widening;
+
+impl Stage for Widening {
+    fn name(&self) -> &'static str {
+        "widening"
+    }
+
+    fn enabled(&self, _: &Args, _: &Board, ledger: &Ledger) -> bool {
+        !ledger.preferred.is_empty()
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let widened = crate::widths::widen(ctx.board, &ctx.ledger.preferred, ctx.args.pours_block);
+        eprintln!("widening: {widened} tracks of nets preferred wider widened, {:.1} s", ctx.elapsed());
+        ctx.watch.step(ctx.board);
+        json!({"widened": widened})
     }
 }
 
