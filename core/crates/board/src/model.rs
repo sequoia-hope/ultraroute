@@ -362,6 +362,9 @@ pub struct Board {
     /// What crossing another net's pour (one refilled round new copper, not a plane) costs, as a
     /// multiple of the length inside: crossing cuts the pour into pieces. 0 for nothing.
     pub pour_cost: f64,
+    /// Route signal nets at their minimum width, not their class's: the class's width becomes an
+    /// optimum, widened to after routing where there is room (`--narrow-signals`).
+    pub signals_at_min: bool,
     /// What reading the board found and could not take as given: the reader's own warnings
     /// (drawings it skips, values it assumed) and an outline that does not close.
     pub warnings: Vec<String>,
@@ -517,6 +520,7 @@ impl Board {
             min_widths: HashMap::new(),
             zone_areas: Vec::new(),
             pour_cost: 0.0,
+            signals_at_min: false,
             warnings: pcb.warnings.iter().chain(&copper.warnings).cloned().collect(),
             text_note: copper.text_note.clone(),
             via_height: nm((pcb.thickness_m - OUTER_COPPER_M).max(0.0)),

@@ -88,6 +88,8 @@ impl Profile {
         // So does one held wider by a minimum of its own over every board-wide floor: not a custom
         // rule's minimum for all tracks, which holds signals up too.
         let power = class.is_some_and(|c| c.track_width > signal + 1e-9) || (held && 2 * half_width > nm(signal).max(board.min_track_width_any()));
+        // A signal routed at its minimum (`Board::signals_at_min`) takes its class's width after.
+        let half_width = if board.signals_at_min && !power && !held { (nm(min_width) / 2).clamp(1, half_width.max(1)) } else { half_width };
         // A class's via may leave a thinner ring round its drill than the board allows; the via
         // grows to keep the ring, the drill as the class has it. Custom rules on vias of the net
         // (hole_size, via_diameter, annular_width) may ask more of either; never less.

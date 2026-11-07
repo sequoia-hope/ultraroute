@@ -317,6 +317,16 @@ impl Stage for SetUp {
                 eprintln!("widths: {} nets preferred at {mm} mm: {}", found.len(), names.join(", "));
             }
         }
+        // Signals at their minimum keep their class's width as an optimum, taken after routing.
+        if a.narrow_signals {
+            for n in 1..board.nets.len() as u32 {
+                let class = 2 * grid::Profile::for_net(board, n).half_width;
+                if class > board.min_track_width_of(n) {
+                    board.opt_widths.entry(n).or_insert(class);
+                }
+            }
+            board.signals_at_min = true;
+        }
         // Wider than their class only: a preference at or under the class's width changes nothing.
         for n in 1..board.nets.len() as u32 {
             if let Some(w) = board.opt_track_width_of(n) {
