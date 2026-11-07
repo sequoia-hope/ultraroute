@@ -1184,6 +1184,32 @@ mod tests {
     }
 
     #[test]
+    fn an_oval_pads_outline_keeps_its_straight_sides_and_holds_its_round_ends() {
+        // A 0.8 x 0.2 mm oval pin: its long sides lie 0.1 mm from its centre line exactly, as a
+        // neighbour's track 0.2 mm away is measured; its round ends lie inside the outline.
+        let poly = super::stadium([0.8e-3, 0.2e-3]);
+        let ys: Vec<f64> = poly.iter().map(|p| p[1].abs()).collect();
+        assert!(ys.iter().all(|&y| y <= 0.1e-3 + 1e-12), "no side past 0.1 mm: {:?}", ys.iter().copied().fold(0.0, f64::max));
+        let side: Vec<&[f64; 2]> = poly.iter().filter(|p| (p[1].abs() - 0.1e-3).abs() < 1e-12).collect();
+        assert!(side.iter().any(|p| p[0] > 0.29e-3) && side.iter().any(|p| p[0] < -0.29e-3), "the sides run the pad's length");
+        let inside = |q: [f64; 2]| {
+            let mut odd = false;
+            for i in 0..poly.len() {
+                let (a, b) = (poly[i], poly[(i + 1) % poly.len()]);
+                if (a[1] > q[1]) != (b[1] > q[1]) && q[0] < a[0] + (q[1] - a[1]) * (b[0] - a[0]) / (b[1] - a[1]) {
+                    odd = !odd;
+                }
+            }
+            odd
+        };
+        for k in 0..=180 {
+            let a = std::f64::consts::PI * (k as f64 / 180.0 - 0.5);
+            let r = 0.1e-3 - 1e-9;
+            assert!(inside([0.3e-3 + r * a.cos(), r * a.sin()]) && inside([-0.3e-3 - r * a.cos(), r * a.sin()]), "round end at {a} rad");
+        }
+    }
+
+    #[test]
     fn a_drawn_ring_is_two_half_rings() {
         let (_, copper) = crate::parse_board(
             "(kicad_pcb (version 20240108) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal) (2 \"B.Cu\" signal)) (net 0 \"\")
