@@ -42,7 +42,7 @@ b.Save(sys.argv[2])
 
 
 NEAR = """
-import json, math, sys, pcbnew
+import json, math, os, sys, pcbnew
 b = pcbnew.LoadBoard(sys.argv[1])
 net, near = sys.argv[3], float(sys.argv[4]) * 1e6
 
@@ -101,7 +101,10 @@ for t in list(b.GetTracks()):
         t.SetStart(pcbnew.VECTOR2I(int(ax + (bx - ax) * k0 / n), int(ay + (by - ay) * k0 / n)))
         t.SetEnd(pcbnew.VECTOR2I(int(ax + (bx - ax) * k1 / n), int(ay + (by - ay) * k1 / n)))
 b.Save(sys.argv[2])
-json.dump({"mine": ids, "kept": kept}, open(sys.argv[5], "w"))
+with open(sys.argv[5], "w") as f:
+    json.dump({"mine": ids, "kept": kept}, f)
+# Python's teardown frees the removed tracks KiCad still holds and crashes (OpenHardwareExG).
+os._exit(0)
 """
 
 
