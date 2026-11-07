@@ -1489,7 +1489,8 @@ pub fn pull_taut_watch(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &Dea
     let soft_set: HashSet<ItemId> = soft.iter().copied().filter(|id| board.item(*id).is_some()).collect();
     let mut stats = CleanStats::default();
     let mut replaced: HashSet<ItemId> = HashSet::new();
-    let mut added: HashSet<ItemId> = HashSet::new();
+    // In the order laid, so the board written is the same run to run.
+    let mut added: Vec<ItemId> = Vec::new();
     for chain in chains(board, &soft_set) {
         if deadline.expired() {
             break;
@@ -1507,8 +1508,13 @@ pub fn pull_taut_watch(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &Dea
                 match cut_bend(board, &chain, &points, &tracks, k) {
                     Some((cut, pieces, taken)) => {
                         for t in &tracks[k - 1..=k] {
-                            if !added.remove(t) {
-                                replaced.insert(*t);
+                            match added.iter().position(|a| a == t) {
+                                Some(i) => {
+                                    added.remove(i);
+                                }
+                                None => {
+                                    replaced.insert(*t);
+                                }
                             }
                         }
                         new.retain(|n| !tracks[k - 1..=k].contains(n));
@@ -1537,7 +1543,7 @@ pub fn pull_taut_watch(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &Dea
         }
     }
     soft.retain(|id| !replaced.contains(id) && board.item(*id).is_some());
-    soft.extend(added.into_iter().filter(|id| board.item(*id).is_some()));
+    soft.extend(added);
     stats
 }
 
