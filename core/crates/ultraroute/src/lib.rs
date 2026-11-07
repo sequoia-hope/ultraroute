@@ -216,7 +216,7 @@ pub struct Args {
 
 /// The stages and settings the router runs with unless told otherwise: the benchmark's recipe
 /// (`docs/pcbench.md`), measured as the best of what the router has.
-pub const RECIPE: &str = "--negotiate --rip-up --rip-boxed --tighten --prefanout --escape-room --diff-pairs --shove-plough region --shove-reach 0.5 --shove-repair 20 --shove-ties --guard-ties --shove-passes 60 --shove-patience 8 --retries 4";
+pub const RECIPE: &str = "--negotiate --rip-up --rip-boxed --tighten --prefanout --escape-room --diff-pairs --shove-plough region --shove-reach 0.5 --shove-repair 20 --shove-ties --guard-ties --shove-passes 60 --shove-patience 8 --retries 5";
 
 /// Flags that name a stage to run. A run naming none gets [`RECIPE`]; one naming its own stages
 /// gets those alone, as before there was a default.
@@ -1561,8 +1561,9 @@ pub enum Retry {
 /// The attempts `--retries N` makes, the first N in turn, while connections stay open. Another
 /// order of the nets wins boards left one or two open, chiefly those the clock cut short (the
 /// seed-restarts study of 2026-11, explore/restarts); a route without the fan-out, and one with
-/// dearer vias, are what m2r and FreeSmartEEG needed, two boards FreeRouting routes clean.
-pub const RETRIES: [Retry; 4] = [Retry::Seed(1), Retry::NoPrefanout, Retry::ViaCost(20.0), Retry::Seed(2)];
+/// dearer vias, are what m2r and FreeSmartEEG needed, two boards FreeRouting routes clean; signals
+/// at their minimum width are what OSBMS needed, whose designer runs them so between its parts.
+pub const RETRIES: [Retry; 5] = [Retry::Seed(1), Retry::NoPrefanout, Retry::ViaCost(20.0), Retry::Seed(2), Retry::NarrowSignals];
 
 impl Retry {
     /// Makes the change to `a`, and says what it was; nothing when it would change nothing.

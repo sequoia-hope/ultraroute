@@ -12,7 +12,7 @@ baselines (FreeRouting, PcbRouter, RL-MCTS; PCBench/Baselines/Results_all.csv).
                                              of time again at each longer limit, in RUN@S (the
                                              gate is clean within 30 minutes; 120 s is the fast pass);
                                              then each board still open by at most --retry-open (3)
-                                             with the router's --attempt 1..--attempts (4), each
+                                             with the router's --attempt 1..--attempts (5), each
                                              its own run RUN@SaK at the longest limit
     pcbench.py ab BASE NEW --base-bin BIN [--tier T] [run's options]
                                              route the same boards with BIN and this router in
@@ -984,7 +984,7 @@ def main():
     s.add_argument("--resume-anyway", action="store_true", help="resume a run started with another commit or binary")
     s.add_argument("--note", help="a note for run.json")
     s.add_argument("--escalate", help="seconds, comma-separated: route again at each longer limit the boards that failed for want of time (e.g. 600,1800)")
-    s.add_argument("--attempts", type=int, default=4, help="after --escalate, route boards still open by at most --retry-open again with the router's --attempt 1..N, each its own run at the longest limit (0: none)")
+    s.add_argument("--attempts", type=int, default=5, help="after --escalate, route boards still open by at most --retry-open again with the router's --attempt 1..N, each its own run at the longest limit (0: none)")
     s.add_argument("--retry-open", type=int, default=3, help="the most open connections a board may have for --attempts")
     s.add_argument("--tier", help="only the boards of this tier (tools/pcbench_tiers.json)")
     s = sub.add_parser("ab", help="route with two routers side by side, then compare")
@@ -1004,7 +1004,7 @@ def main():
     s.add_argument("--resume-anyway", action="store_true")
     s.add_argument("--note")
     s.add_argument("--escalate", help="seconds, comma-separated: route again at each longer limit the boards that failed for want of time (e.g. 600,1800)")
-    s.add_argument("--attempts", type=int, default=4, help="after --escalate, route boards still open by at most --retry-open again with the router's --attempt 1..N, each its own run at the longest limit (0: none)")
+    s.add_argument("--attempts", type=int, default=5, help="after --escalate, route boards still open by at most --retry-open again with the router's --attempt 1..N, each its own run at the longest limit (0: none)")
     s.add_argument("--retry-open", type=int, default=3, help="the most open connections a board may have for --attempts")
     s.add_argument("--noise", default="0", help="boards the new run may lose and still pass")
     s = sub.add_parser("tiers", help="sort the boards into tiers by their history in these runs")
