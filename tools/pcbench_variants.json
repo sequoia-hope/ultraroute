@@ -1,11 +1,13 @@
 {
- "why": "Boards of our own made from a PCBench board by one stated edit, prepared and routed as the others are (pcbench.py reads this file). The edit names what it removes exactly; preparing fails if it matches anything but `count` items. A variant joins the tiers it names.",
+ "why": "Boards of our own: a PCBench board with an exact patch (tools/variants/ID.patch, a unified diff of PCBs/BASE/processed.kicad_pcb at the PCBench commit named), made by tools/apply_variant.py and prepared and routed as the others are. Only the patch is shipped, never the board. A variant joins the tiers it names.",
  "variants": [
   {
    "id": "SPEX_HAB_Mainboard_Hardware_Power-no-mask-text",
    "base": "SPEX_HAB_Mainboard_Hardware_Power",
-   "remove": {"head": "gr_text", "contains": "Exsisto nimis", "layer": "F.Mask", "count": 1},
-   "why": "The F.Mask text beside U103 overlaps pins 8, 9 and 11 and bares pads of many nets, so no track leaves those pins without a mask bridge: the designer's own routing adds them (tools/netcheck.py). Without the text the board routes clean (2026-11-06: 12 s at 120 s, 78 vias).",
+   "pcbench_commit": "2d3db61dd7945648102fbf16d390c19b14c5ef7d",
+   "base_sha256": "9123d6e1a658bf493b106e69b4d0145e13189fc9eb50d28a090408716e7de65d",
+   "patch": "variants/SPEX_HAB_Mainboard_Hardware_Power-no-mask-text.patch",
+   "why": "Removes the F.Mask text \"Exsisto nimis piger deficere.\" beside U103: it overlaps pins 8, 9 and 11 and bares pads of many nets, so no track leaves those pins without a mask bridge, and the designer's own routing adds them (tools/netcheck.py). Without it the board routes clean (2026-11-06: 12 s at 120 s, 78 vias).",
    "tiers": ["guard"]
   }
  ]

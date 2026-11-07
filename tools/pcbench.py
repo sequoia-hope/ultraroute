@@ -99,39 +99,13 @@ def baselines():
     return out
 
 
-# Boards of our own made from a PCBench board by one stated edit (`variants`).
-VARIANTS = Path(__file__).with_name("pcbench_variants.json")
+# Boards of our own: a PCBench board with an exact patch (tools/apply_variant.py).
+import apply_variant  # noqa: E402
 
 
 def variants():
     """{variant id: its entry in tools/pcbench_variants.json}."""
-    if not VARIANTS.exists():
-        return {}
-    return {v["id"]: v for v in json.loads(VARIANTS.read_text())["variants"]}
-
-
-def apply_variant(v, board):
-    """Makes `v`'s edit to the board file in place: removes each top-level item headed
-    `remove.head` on `remove.layer` whose text contains `remove.contains`, and fails unless it
-    removed exactly `remove.count`."""
-    r, text = v["remove"], board.read_text()
-    out, i, removed = [], 0, 0
-    for m in re.finditer(r"\n(\s*)\(" + re.escape(r["head"]) + r"\b", text):
-        if m.start() < i:
-            continue
-        start, depth = m.start() + 1 + len(m[1]), 0
-        for j in range(start, len(text)):
-            depth += {"(": 1, ")": -1}.get(text[j], 0)
-            if depth == 0:
-                break
-        item = text[start : j + 1]
-        if r["contains"] in item and f'(layer "{r["layer"]}")' in item:
-            out.append(text[i : m.start()])
-            i, removed = j + 1, removed + 1
-    out.append(text[i:])
-    if removed != r["count"]:
-        raise ValueError(f"{v['id']}: removed {removed} {r['head']} items, expected {r['count']}")
-    board.write_text("".join(out))
+    return apply_variant.variants() if apply_variant.VARIANTS.exists() else {}
 
 
 def board_ids(only=None):
@@ -267,13 +241,16 @@ def prepare_one(b):
     board = d / "board.kicad_pcb"
     info = {"id": b}
     v = variants().get(b)
-    err = convert(BENCH / "PCBs" / (v["base"] if v else b) / "processed.kicad_pcb", board)
-    if err is None and v:
+    src, err = BENCH / "PCBs" / b / "processed.kicad_pcb", None
+    if v:
+        src = d / "variant.kicad_pcb"
         try:
-            apply_variant(v, board)
+            apply_variant.make(v, BENCH, src)
             info["variant_of"] = v["base"]
         except ValueError as e:
             err = str(e)
+    if err is None:
+        err = convert(src, board)
     if err is not None:
         info["error"] = "convert: " + err
     else:
