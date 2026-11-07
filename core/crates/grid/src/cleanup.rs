@@ -818,10 +818,10 @@ pub fn pad_joints(board: &Board, laid: &[ItemId]) -> Vec<PadJoint> {
     out
 }
 
-/// Lays a piece from each pad joint's end into the pad, so the track ends inside it: to the pad's
-/// centre, a joint as a person draws it, else only to where the pad is as deep as the piece's
-/// half width; at the end's width or, where that breaks a rule, the narrowest the net's rules
-/// allow; the pieces join `laid`. How many it mended.
+/// Lays a short piece from each pad joint's end into the pad, so the track ends inside it: to
+/// where the pad is as deep as the piece's half width, else to its centre, at the end's width or,
+/// where that breaks a rule, the narrowest the net's rules allow; the pieces join `laid`. How
+/// many it mended.
 pub fn mend_pad_joints(board: &mut Board, laid: &mut Vec<ItemId>) -> usize {
     let _b = board::work::enter(board::work::Bucket::Geometry);
     let mut mended = 0;
@@ -845,7 +845,7 @@ pub fn mend_pad_joints(board: &mut Board, laid: &mut Vec<ItemId>) -> usize {
                 break;
             }
             let deep = (1..=20).map(|k| along(k as f64 / 20.0)).find(|&q| pad.shape.depth(q) >= r as f64).unwrap_or(centre);
-            for to in [centre, deep] {
+            for to in [deep, centre] {
                 let piece = board.insert(Item { shape: Shape::Capsule { a: joint.at, b: to, r }, span: None, locked: false, ..track.clone() });
                 if check_item(board, piece).is_empty() {
                     laid.push(piece);
@@ -1478,6 +1478,11 @@ const TAUT_GAIN: f64 = 50_000.0;
 /// included, so a chain that wraps round an obstacle nears it in a few.
 const TAUT_ROUNDS: usize = 4;
 
+/// How much wider than they are a cut's pieces are tried, in nm: a cut is pulled as deep as it
+/// fits, which is against what it wraps, where the check's slack would let KiCad find it short
+/// (23 boards of the gate tier, each 0.5 um inside a clearance).
+const TAUT_MARGIN: Nm = 2_000;
+
 /// Pulls the router's chains taut, as a rubber band: where [`pull_tight`] can only join two of a
 /// chain's points, this cuts each bend from a point on one of its tracks to a point on the other,
 /// as deep as no rule is broken and nothing the chain goes round lies in the corner cut off. The
@@ -1595,10 +1600,16 @@ fn cut_bend(board: &mut Board, chain: &Chain, points: &[Point], tracks: &[ItemId
 /// Cuts the bend `p` between `u` and `w` from `a` to `b`, where the triangle cut off holds
 /// nothing of another net, no hole and no edge, whatever joined the two tracks still joins the
 /// pieces or the tracks either side, and no piece breaks a rule. The pieces and the tracks taken
-/// out if `keep`; else, or if it does not fit, the board is left as it was.
+/// out if `keep`; else, or if it does not fit, the board is left as it was. Tried without
+/// keeping, the pieces are [`TAUT_MARGIN`] wider.
 #[allow(clippy::too_many_arguments)]
 fn try_cut(board: &mut Board, chain: &Chain, tracks: &[ItemId], k: usize, u: Point, a: Point, p: Point, b: Point, w: Point, keep: bool) -> Option<(Vec<ItemId>, Vec<Item>)> {
     let layer = chain.layer.trailing_zeros() as usize;
+    // A piece shorter than the track is wide leaves the pieces either side overlapping without
+    // meeting end to end, a graze (a 1 mm power net's bend cut 0.37 mm long, bridged at 0.15 mm).
+    if [(u, a), (a, b), (b, w)].iter().any(|&(x, y)| x != y && x.distance(y) < (2 * chain.half_width) as f64) {
+        return None;
+    }
     if !sweep_clear(board, chain.net, layer, a, p, b) {
         return None;
     }
@@ -1622,7 +1633,8 @@ fn try_cut(board: &mut Board, chain: &Chain, tracks: &[ItemId], k: usize, u: Poi
         if x == y || !ok {
             continue;
         }
-        let id = board.insert(Item { kind: Kind::Track, net: chain.net, layers: chain.layer, shape: Shape::Capsule { a: x, b: y, r: chain.half_width }, hole: None, locked: false, span: None });
+        let r = if keep { chain.half_width } else { chain.half_width + TAUT_MARGIN };
+        let id = board.insert(Item { kind: Kind::Track, net: chain.net, layers: chain.layer, shape: Shape::Capsule { a: x, b: y, r }, hole: None, locked: false, span: None });
         pieces.push(id);
         ok = check_item(board, id).is_empty();
     }
