@@ -976,11 +976,25 @@ impl Stage for Tightening {
         ctx.say("tightening", "straightening the routed copper".to_string());
         let deadline = ctx.deadline();
         let watch = &mut *ctx.watch;
-        let c = grid::pull_tight_watch(ctx.board, &mut ctx.ledger.laid, &deadline, &mut |b, net, old, new| watch.tight(b, net, old, new));
+        let c = tighten(ctx.board, &mut ctx.ledger.laid, &deadline, watch);
         ctx.effort_ns = (0, c.kept_ns, c.unchanged_ns);
         let detail = tight_json(&c);
         ctx.ledger.tightened = Some(c);
         detail
+    }
+}
+
+/// Pulls the router's chains tight between their points, then taut round what they wrap: one
+/// set of figures, from the chains as they were to as they are.
+fn tighten(board: &mut Board, laid: &mut Vec<ItemId>, deadline: &grid::Deadline, watch: &mut dyn Watch) -> grid::CleanStats {
+    let tight = grid::pull_tight_watch(board, laid, deadline, &mut |b, net, old, new| watch.tight(b, net, old, new));
+    let taut = grid::pull_taut_watch(board, laid, deadline, &mut |b, net, old, new| watch.tight(b, net, old, new));
+    grid::CleanStats {
+        segments_after: taut.segments_after,
+        length_after: taut.length_after,
+        kept_ns: tight.kept_ns.saturating_add(taut.kept_ns),
+        unchanged_ns: tight.unchanged_ns.saturating_add(taut.unchanged_ns),
+        ..tight
     }
 }
 
@@ -1016,7 +1030,7 @@ impl Stage for Vias {
             ctx.watch.step(ctx.board);
             if let Some(c) = &mut ctx.ledger.tightened {
                 let watch = &mut *ctx.watch;
-                let again = grid::pull_tight_watch(ctx.board, &mut ctx.ledger.laid, &deadline, &mut |b, net, old, new| watch.tight(b, net, old, new));
+                let again = tighten(ctx.board, &mut ctx.ledger.laid, &deadline, watch);
                 kept_ns = kept_ns.saturating_add(again.kept_ns);
                 wasted_ns = wasted_ns.saturating_add(again.unchanged_ns);
                 (c.segments_after, c.length_after) = (again.segments_after, again.length_after);
