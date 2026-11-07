@@ -1599,9 +1599,9 @@ fn cut_bend(board: &mut Board, chain: &Chain, points: &[Point], tracks: &[ItemId
 
 /// Cuts the bend `p` between `u` and `w` from `a` to `b`, where the triangle cut off holds
 /// nothing of another net, no hole and no edge, whatever joined the two tracks still joins the
-/// pieces or the tracks either side, and no piece breaks a rule. The pieces and the tracks taken
-/// out if `keep`; else, or if it does not fit, the board is left as it was. Tried without
-/// keeping, the pieces are [`TAUT_MARGIN`] wider.
+/// pieces or the tracks either side, and no piece breaks a rule or grazes its net's copper. The
+/// pieces and the tracks taken out if `keep`; else, or if it does not fit, the board is left as
+/// it was. Tried without keeping, the pieces are [`TAUT_MARGIN`] wider.
 #[allow(clippy::too_many_arguments)]
 fn try_cut(board: &mut Board, chain: &Chain, tracks: &[ItemId], k: usize, u: Point, a: Point, p: Point, b: Point, w: Point, keep: bool) -> Option<(Vec<ItemId>, Vec<Item>)> {
     let layer = chain.layer.trailing_zeros() as usize;
@@ -1639,6 +1639,9 @@ fn try_cut(board: &mut Board, chain: &Chain, tracks: &[ItemId], k: usize, u: Poi
         ok = check_item(board, id).is_empty();
     }
     ok = ok && partners.iter().all(|&o| pieces.iter().chain(&sides).any(|&s| s == o || joined(board, o, s)));
+    // Nor may a piece be pulled against its own net's copper so they only overlap by a sliver,
+    // which KiCad measures as a neck (ChirpHardware's +5V, 7 um across C5-1's edge).
+    ok = ok && grazes(board, &pieces).is_empty();
     if ok && keep {
         return Some((pieces, removed.into_iter().map(|(_, it)| it).collect()));
     }
