@@ -968,7 +968,10 @@ fn pad_can_escape_mouth(
     let via_lim = (lmap.profile.via_radius + clr + reach) as f64;
     let multi = lmap.layers >= 2 && (0..lmap.layers).any(|l| l != sib.layer && board.planes & (1 << l) == 0);
 
-    let win = BBox::of([sib.centre]).grow(650_000);
+    // Far enough to reach the goal out past the package's edge: a long pin's centre may lie
+    // 0.4 mm in, putting it beyond 0.65 mm.
+    let goal_fwd = sib.edge_gap + 260_000.0;
+    let win = BBox::of([sib.centre]).grow((goal_fwd as Nm + 2 * lmap.h).max(650_000));
     let i0 = ((win.min.x - lmap.x0).div_euclid(lmap.h)).max(0) as usize;
     let i1 = (((win.max.x - lmap.x0).div_euclid(lmap.h)).max(0) as usize).min(lmap.nx.saturating_sub(1));
     let j0 = ((win.min.y - lmap.y0).div_euclid(lmap.h)).max(0) as usize;
@@ -1036,7 +1039,6 @@ fn pad_can_escape_mouth(
             }
         }
     }
-    let goal_fwd = sib.edge_gap + 260_000.0;
     while let Some((i, j)) = queue.pop_front() {
         let p = Point::new(lmap.x0 + (2 * i as Nm + 1) * lmap.h / 2, lmap.y0 + (2 * j as Nm + 1) * lmap.h / 2);
         let dx = (p.x - sib.centre.x) as f64;
@@ -1918,6 +1920,58 @@ mod tests {
             board.remove(id);
         }
         board
+    }
+
+    /// A 0.8 mm pin at (10, 10) leading out along +x, between two bars of netless copper 0.35 mm
+    /// either side of its centre line and, with `capped`, a third 0.15 mm past its tip: room on
+    /// its centre line to its tip, and behind it, into the package, but no way out.
+    fn walled_pin(capped: bool) -> (Board, PadInfo) {
+        let cap = if capped { r#"(pad "" smd rect (at 10.65 10) (size 0.2 1.2) (layers "F.Cu") (uuid "00000000-0000-4000-8000-000000000004"))"# } else { "" };
+        let text = format!(
+            r#"(kicad_pcb (version 20241229) (generator "pcbnew") (general (thickness 1.6))
+              (layers (0 "F.Cu" signal) (25 "Edge.Cuts" user))
+              (net 0 "") (net 1 "S")
+              (footprint "t:U" (layer "F.Cu") (uuid "11111111-1111-4111-8111-111111111110") (at 0 0)
+                (property "Reference" "U1" (at 10 8 0) (layer "F.SilkS") (uuid "11111111-1111-4111-8111-111111111119"))
+                (pad "1" smd rect (at 10 10) (size 0.8 0.22) (layers "F.Cu") (net 1 "S") (uuid "00000000-0000-4000-8000-000000000001"))
+                (pad "" smd rect (at 10 9.55) (size 1.6 0.2) (layers "F.Cu") (uuid "00000000-0000-4000-8000-000000000002"))
+                (pad "" smd rect (at 10 10.45) (size 1.6 0.2) (layers "F.Cu") (uuid "00000000-0000-4000-8000-000000000003"))
+                {cap})
+              (gr_rect (start 5 5) (end 15 15) (layer "Edge.Cuts") (width 0.1)))"#
+        );
+        let (pcb, copper) = kicad_pcb::parse_board(&text).unwrap();
+        let rules = kicad_pcb::Rules::parse(
+            r#"{"board": {"design_settings": {"rules": {"min_clearance": 0.0, "min_track_width": 0.2, "min_via_diameter": 0.6, "min_through_hole_diameter": 0.3}}},
+                "net_settings": {"classes": [{"name": "Default", "clearance": 0.2, "track_width": 0.2, "via_diameter": 0.8, "via_drill": 0.3}]}}"#,
+        )
+        .unwrap();
+        let board = Board::new(&pcb, &copper, rules);
+        let id = board.items().find(|(_, it)| it.net == 1).map(|(id, _)| id).unwrap();
+        let pad = PadInfo {
+            id,
+            net: 1,
+            layer: 0,
+            centre: Point::new(10_000_000, 10_000_000),
+            angle: 0.0,
+            edge_gap: 400_000.0,
+            off_mid: 0.0,
+            out: (1.0, 0.0),
+            along: (0.0, 1.0),
+            crowding: 0,
+            mouth_room: 25,
+            seq_index: 0,
+            profile_reach: 0,
+        };
+        (board, pad)
+    }
+
+    #[test]
+    fn a_pin_that_reaches_only_its_tip_or_its_inner_end_has_no_way_out() {
+        for (capped, way_out) in [(false, true), (true, false)] {
+            let (board, pad) = walled_pin(capped);
+            let map = ObstacleMap::window(&board, Profile::for_net(&board, 1), 10_000, BBox::of([pad.centre]).grow(1_500_000), false);
+            assert_eq!(pad_can_escape_mouth(&board, &pad, &map, &[], 1), way_out, "capped: {capped}");
+        }
     }
 
     #[test]
