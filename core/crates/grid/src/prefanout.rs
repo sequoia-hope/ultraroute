@@ -16,7 +16,7 @@ use crate::cleanup::{prune_dangling, pull_tight};
 use crate::grid::{ObstacleMap, Profile, RouteGrid};
 use crate::negotiate::{route_negotiated, NegotiationOptions};
 use crate::report::{item_name, tell, Focus, Log};
-use crate::route::{anchor, item_terminals, lay, route_open, track, CpuSolver, Options, Terminal};
+use crate::route::{anchor, item_terminals, lay, pad_bent_terminals, route_open, track, CpuSolver, Options, Terminal};
 use crate::search::{route_astar, GridPath};
 
 /// Escape geometry laid for each outward fine-pitch pad.
@@ -1036,6 +1036,30 @@ fn pad_can_escape_mouth(
             }
         }
     }
+    // A fine-pitch pin whose neighbours leave room only on its own centre line, which no cell
+    // centre lies on, holds no free cell: it leaves along that line (a bent leg,
+    // `route::pad_bent_terminals`), so its mouth starts at the first free cell there that the
+    // new copper leaves the line clear to.
+    if queue.is_empty() {
+        let len = |p: Point| ((p.x - sib.centre.x) as f64 * sib.out.0 + (p.y - sib.centre.y) as f64 * sib.out.1).max(0.0);
+        let mut t = 0.0;
+        while t < 650_000.0 {
+            let p = Point::new(sib.centre.x + (sib.out.0 * t).round() as Nm, sib.centre.y + (sib.out.1 * t).round() as Nm);
+            if extra_blocks_trace(p, sib.layer) {
+                break;
+            }
+            let (i, j) = (((p.x - lmap.x0).div_euclid(lmap.h)) as isize, ((p.y - lmap.y0).div_euclid(lmap.h)) as isize);
+            if i >= i0 as isize && i <= i1 as isize && j >= j0 as isize && j <= j1 as isize && len(p) > 0.0 {
+                let (i, j) = (i as usize, j as usize);
+                if !lmap.blocked_at(sib.net, sib.layer * cells + j * lmap.nx + i) {
+                    seen[(j - j0) * wnx + (i - i0)] = true;
+                    queue.push_back((i, j));
+                    break;
+                }
+            }
+            t += lmap.h as f64;
+        }
+    }
     let goal_fwd = sib.edge_gap + 260_000.0;
     while let Some((i, j)) = queue.pop_front() {
         let p = Point::new(lmap.x0 + (2 * i as Nm + 1) * lmap.h / 2, lmap.y0 + (2 * j as Nm + 1) * lmap.h / 2);
@@ -1653,7 +1677,13 @@ fn lay_grid_escape(
         base_grid.deadline = options.deadline.clone();
         protect_vital_handoffs(board, &mut base_grid, pad.net, hw, global_maps, handoffs);
 
-        let sources = item_terminals(board, &base_grid, pad.id, hw, 8, 24);
+        let mut sources = item_terminals(board, &base_grid, pad.id, hw, 8, 24);
+        // A fine-pitch pin whose neighbours leave room only on its own centre line, which no cell
+        // centre lies on (0.4 mm pitch at 0.2 mm tracks and 0.178 mm clearance: 11 um either
+        // side), leaves along that line before it steps onto the grid.
+        if sources.is_empty() {
+            sources = pad_bent_terminals(board, &base_grid, pad.id, hw);
+        }
         if sources.is_empty() {
             continue;
         }

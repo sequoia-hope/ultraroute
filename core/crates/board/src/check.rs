@@ -211,7 +211,10 @@ impl Board {
 
 /// The gap copper of another net must keep on `layer` from `own` (item `id`) so as not to be
 /// bared in its solder mask opening, for solder to bridge the two: a pad's opening, or a bare
-/// via's; 0 where that does not apply. Two pads are the footprints' affair.
+/// via's; 0 where that does not apply. Two pads are the footprints' affair. Copper may touch the
+/// opening's edge, as KiCad's check allows: a 0.2 mm track between two 0.4 mm-pitch pins whose
+/// openings reach 0.2 mm past them lies on both edges (freeDSPx's VQFN-32, its designer's own
+/// route), and a margin beyond the edge left those pins with no way out.
 pub fn mask_gap(board: &Board, id: ItemId, own: &Item, other: &Item, layer: usize) -> Nm {
     let routed = matches!(other.kind, Kind::Track | Kind::Via);
     let opening = match own.kind {
@@ -220,7 +223,7 @@ pub fn mask_gap(board: &Board, id: ItemId, own: &Item, other: &Item, layer: usiz
         _ => None,
     };
     match opening {
-        Some((layers, by)) if layers & (1 << layer) != 0 => by + board.mask_margin(),
+        Some((layers, by)) if layers & (1 << layer) != 0 => by + board.mask_margin() - MASK_MARGIN,
         _ => 0,
     }
 }
@@ -232,7 +235,8 @@ pub fn mask_gap(board: &Board, id: ItemId, own: &Item, other: &Item, layer: usiz
 pub fn mask_pair_gap(board: &Board, a_id: ItemId, a: &Item, b_id: ItemId, b: &Item, layer: usize) -> Nm {
     let (x, y) = (mask_gap(board, a_id, a, b, layer), mask_gap(board, b_id, b, a, layer));
     if x > 0 && y > 0 {
-        x + y - board.mask_margin() + board.mask_web
+        // The two openings' reach, a web between them, and the margin past it.
+        x + y - board.mask_margin() + 2 * MASK_MARGIN + board.mask_web
     } else {
         x.max(y)
     }

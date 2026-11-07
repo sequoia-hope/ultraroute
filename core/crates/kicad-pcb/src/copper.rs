@@ -965,15 +965,25 @@ fn rounded(size: [f64; 2], r: f64) -> Vec<[f64; 2]> {
     }
     let corners = [[w - r, h - r, 0.0], [-(w - r), h - r, 90.0], [-(w - r), -(h - r), 180.0], [w - r, -(h - r), 270.0]];
     let n = arc_steps(r, std::f64::consts::FRAC_PI_2);
-    let ro = outside(r, std::f64::consts::FRAC_PI_2 / n as f64);
     let mut out = Vec::new();
     for [cx, cy, a0] in corners {
-        for k in 0..=n {
-            let a = (a0 + 90.0 * k as f64 / n as f64).to_radians();
-            out.push([cx + ro * a.cos(), cy + ro * a.sin()]);
-        }
+        tangent_arc(&mut out, [cx, cy], r, a0.to_radians(), std::f64::consts::FRAC_PI_2, n);
     }
     out
+}
+
+/// An arc of radius `r` about `c` from angle `a0` through `sweep`, as `n` tangent edges: its ends
+/// on the circle, so the straight sides it joins stay where they are, and between them the
+/// corners where neighbouring tangents meet, so the outline holds the whole arc.
+fn tangent_arc(out: &mut Vec<[f64; 2]>, c: [f64; 2], r: f64, a0: f64, sweep: f64, n: usize) {
+    let step = sweep / n as f64;
+    let ro = outside(r, step);
+    out.push([c[0] + r * a0.cos(), c[1] + r * a0.sin()]);
+    for k in 0..n {
+        let a = a0 + step * (k as f64 + 0.5);
+        out.push([c[0] + ro * a.cos(), c[1] + ro * a.sin()]);
+    }
+    out.push([c[0] + r * (a0 + sweep).cos(), c[1] + r * (a0 + sweep).sin()]);
 }
 
 fn stadium(size: [f64; 2]) -> Vec<[f64; 2]> {
@@ -988,13 +998,9 @@ fn capsule(a: [f64; 2], b: [f64; 2], r: f64) -> Vec<[f64; 2]> {
     }
     let base = dy.atan2(dx);
     let n = arc_steps(r, std::f64::consts::PI);
-    let ro = outside(r, std::f64::consts::PI / n as f64);
     let mut out = Vec::new();
     for (c, from) in [(b, base - std::f64::consts::FRAC_PI_2), (a, base + std::f64::consts::FRAC_PI_2)] {
-        for k in 0..=n {
-            let t = from + std::f64::consts::PI * k as f64 / n as f64;
-            out.push([c[0] + ro * t.cos(), c[1] + ro * t.sin()]);
-        }
+        tangent_arc(&mut out, c, r, from, std::f64::consts::PI, n);
     }
     out
 }

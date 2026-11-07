@@ -860,6 +860,15 @@ fn bent_terminals(board: &mut Board, grid: &RouteGrid, id: ItemId) -> Vec<Termin
     Vec::new()
 }
 
+/// Bent legs at `half_width` out of an SMD pad, for a fan-out whose straight legs found none:
+/// the pin's own centre line past its neighbours, then a step onto a cell ([`bent_terminals`]).
+pub(crate) fn pad_bent_terminals(board: &mut Board, grid: &RouteGrid, id: ItemId, half_width: Nm) -> Vec<Terminal> {
+    if !board.item(id).is_some_and(|it| matches!(it.kind, Kind::Pad { .. }) && it.hole.is_none()) {
+        return Vec::new();
+    }
+    item_bent_terminals(board, grid, id, half_width, NECK_CELLS, 2 * LEG_CANDIDATES)
+}
+
 /// Free cells on the item's local copper cluster, and free cells a short straight leg from its
 /// anchors reaches legally: how a path leaves a pad too small or too crowded to hold a free cell
 /// of its own, or picks up a pre-laid escape via. Where no full-width leg fits, a leg necked down
