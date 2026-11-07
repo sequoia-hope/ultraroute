@@ -1041,7 +1041,11 @@ fn pad_can_escape_mouth(
         let p = Point::new(lmap.x0 + (2 * i as Nm + 1) * lmap.h / 2, lmap.y0 + (2 * j as Nm + 1) * lmap.h / 2);
         let dx = (p.x - sib.centre.x) as f64;
         let dy = (p.y - sib.centre.y) as f64;
-        if dx * sib.out.0 + dy * sib.out.1 >= goal_fwd || p.distance(sib.centre) >= 440_000.0 {
+        // Out past the package's edge, or as far clear of the pad to its side; not behind it,
+        // into the package, nor just past its tip: a long pin reaches both without leaving
+        // (hotstick's U1-24, boxed in by its neighbours' vias, 2026-11).
+        let fwd = dx * sib.out.0 + dy * sib.out.1;
+        if fwd >= goal_fwd || (fwd >= 0.0 && pad_item.shape.gap(&Shape::Capsule { a: p, b: p, r: 0 }) >= 260_000.0) {
             return true;
         }
         let cell2d = j * lmap.nx + i;
