@@ -410,6 +410,9 @@ pub struct Graze {
     pub from: Point,
     pub to: Point,
     pub overlap: f64,
+    /// Into a pad, the piece tried first: from the centre line's point nearest the pad's centre
+    /// to that centre.
+    pub centre: Option<(Point, Point)>,
 }
 
 /// The closest points of segments `ab` and `cd`, which do not cross.
@@ -444,7 +447,7 @@ pub fn grazes(board: &Board, laid: &[ItemId]) -> Vec<Graze> {
             if squarely(*a, *r, o) || squarely(*b, *r, o) {
                 continue;
             }
-            let (from, to, overlap, full) = match (&o.kind, &o.shape) {
+            let (from, to, overlap, full, centre) = match (&o.kind, &o.shape) {
                 (Kind::Track | Kind::Via, Shape::Capsule { a: c, b: d, r: r2 }) => {
                     if o.kind == Kind::Track && (squarely(*c, *r2, item) || squarely(*d, *r2, item)) {
                         continue;
@@ -454,7 +457,7 @@ pub fn grazes(board: &Board, laid: &[ItemId]) -> Vec<Graze> {
                         continue;
                     }
                     let (p, q) = closest_points(*a, *b, *c, *d);
-                    (p, q, (*r + *r2) as f64 - gap, 2.0 * (*r).min(*r2) as f64)
+                    (p, q, (*r + *r2) as f64 - gap, 2.0 * (*r).min(*r2) as f64, None)
                 }
                 (Kind::Pad { .. }, shape) => {
                     let line = Shape::Capsule { a: *a, b: *b, r: 0 };
@@ -467,7 +470,7 @@ pub fn grazes(board: &Board, laid: &[ItemId]) -> Vec<Graze> {
                     let centre = shape.bbox();
                     let centre = Point::new((centre.min.x + centre.max.x) / 2, (centre.min.y + centre.max.y) / 2);
                     let into = (1..=20).map(|k| Point::new(p.x + (centre.x - p.x) * k / 20, p.y + (centre.y - p.y) * k / 20)).find(|&q| shape.depth(q) >= *r as f64).unwrap_or(centre);
-                    (p, into, *r as f64 - gap, 2.0 * *r as f64)
+                    (p, into, *r as f64 - gap, 2.0 * *r as f64, shape.contains(centre).then(|| (closest_on_segment(*a, *b, centre).1, centre)))
                 }
                 _ => continue,
             };
@@ -485,7 +488,7 @@ pub fn grazes(board: &Board, laid: &[ItemId]) -> Vec<Graze> {
                 })
             };
             if overlap > 0.0 && overlap < full && !bridged(board, layer, id, item, other, o) && !covered() {
-                out.push(Graze { track: id, other, from, to, overlap });
+                out.push(Graze { track: id, other, from, to, overlap, centre });
             }
         }
     }
@@ -500,9 +503,11 @@ fn bridged(board: &Board, layer: usize, xi: ItemId, x: &Item, yi: ItemId, y: &It
     })
 }
 
-/// Bridges each graze with a short piece from the track's centre line into the other copper, so
-/// they meet at the narrower's full width: at the track's width or, where that breaks a rule, the
-/// narrowest the net's rules allow; the pieces join `laid`. How many it mended.
+/// Bridges each graze with a piece from the track's centre line into the other copper, so they
+/// meet at the narrower's full width: into a pad, to its centre where that breaks no rule, a
+/// joint as a person draws it (sunflower's VSYS across C32-1's corner), else just far enough; at
+/// the track's width or, where that breaks a rule, the narrowest the net's rules allow; the pieces
+/// join `laid`. How many it mended.
 pub fn mend_grazes(board: &mut Board, laid: &mut Vec<ItemId>) -> usize {
     let _b = board::work::enter(board::work::Bucket::Geometry);
     let mut mended = 0;
@@ -521,14 +526,16 @@ pub fn mend_grazes(board: &mut Board, laid: &mut Vec<ItemId>) -> usize {
             continue;
         }
         let least = (board.min_joint_of(track.net) + 1) / 2;
-        for r in [r, least] {
-            let piece = board.insert(Item { shape: Shape::Capsule { a: graze.from, b: graze.to, r }, span: None, locked: false, ..track.clone() });
-            if check_item(board, piece).is_empty() {
-                laid.push(piece);
-                mended += 1;
-                break;
+        'widths: for r in [r, least] {
+            for (from, to) in graze.centre.into_iter().chain([(graze.from, graze.to)]) {
+                let piece = board.insert(Item { shape: Shape::Capsule { a: from, b: to, r }, span: None, locked: false, ..track.clone() });
+                if check_item(board, piece).is_empty() {
+                    laid.push(piece);
+                    mended += 1;
+                    break 'widths;
+                }
+                board.discard(piece);
             }
-            board.discard(piece);
         }
     }
     mended
@@ -811,10 +818,10 @@ pub fn pad_joints(board: &Board, laid: &[ItemId]) -> Vec<PadJoint> {
     out
 }
 
-/// Lays a short piece from each pad joint's end into the pad, so the track ends inside it: to
-/// where the pad is as deep as the piece's half width, else to its centre, at the end's width or,
-/// where that breaks a rule, the narrowest the net's rules allow; the pieces join `laid`. How
-/// many it mended.
+/// Lays a piece from each pad joint's end into the pad, so the track ends inside it: to the pad's
+/// centre, a joint as a person draws it, else only to where the pad is as deep as the piece's
+/// half width; at the end's width or, where that breaks a rule, the narrowest the net's rules
+/// allow; the pieces join `laid`. How many it mended.
 pub fn mend_pad_joints(board: &mut Board, laid: &mut Vec<ItemId>) -> usize {
     let _b = board::work::enter(board::work::Bucket::Geometry);
     let mut mended = 0;
@@ -838,7 +845,7 @@ pub fn mend_pad_joints(board: &mut Board, laid: &mut Vec<ItemId>) -> usize {
                 break;
             }
             let deep = (1..=20).map(|k| along(k as f64 / 20.0)).find(|&q| pad.shape.depth(q) >= r as f64).unwrap_or(centre);
-            for to in [deep, centre] {
+            for to in [centre, deep] {
                 let piece = board.insert(Item { shape: Shape::Capsule { a: joint.at, b: to, r }, span: None, locked: false, ..track.clone() });
                 if check_item(board, piece).is_empty() {
                     laid.push(piece);
@@ -1845,6 +1852,23 @@ mod tests {
             board.insert(Item { kind: Kind::Pour { zone: 0, kept }, net: 1, layers: 1, shape: Shape::Polygon(square), hole: None, locked: true, span: None });
             assert_eq!(grazes(&board, &laid).len(), want, "kept {kept}");
         }
+    }
+
+    #[test]
+    fn a_track_across_a_pads_corner_is_joined_by_a_piece_to_the_pads_centre() {
+        // sunflower's VSYS on B.Cu: a 0.2 mm track across C32-1's corner, 0.56 x 0.62 mm, the
+        // overlap 0.02 mm. The piece that bridged it reached just past the pad's edge; a person
+        // draws one from where the track passes to the pad's centre.
+        let mut board = empty_board();
+        let rect = |w: Nm, h: Nm| vec![Point::new(-w, -h), Point::new(w, -h), Point::new(w, h), Point::new(-w, h)];
+        board.insert(Item { kind: Kind::Pad { footprint: 0, number: "1".into(), plated: false }, net: 1, layers: 1, shape: Shape::Polygon(rect(310_000, 280_000)), hole: None, locked: true, span: None });
+        let track = board.insert(Item { shape: Shape::Capsule { a: Point::new(-1_000_000, -360_000), b: Point::new(1_000_000, -360_000), r: 100_000 }, ..seg(Point::new(0, 0), Point::new(0, 0)) });
+        let mut laid = vec![track];
+        assert_eq!(grazes(&board, &laid).len(), 1);
+        assert_eq!(mend_grazes(&mut board, &mut laid), 1);
+        let piece = board.item(laid[1]).expect("the piece").clone();
+        let Shape::Capsule { a, b, r } = piece.shape else { panic!("a track") };
+        assert_eq!((a, b, r), (Point::new(0, -360_000), Point::new(0, 0), 100_000), "from the track to the centre, at its width");
     }
 
     #[test]
