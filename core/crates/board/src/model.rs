@@ -365,6 +365,9 @@ pub struct Board {
     /// Route signal nets at their minimum width, not their class's: the class's width becomes an
     /// optimum, widened to after routing where there is room (`--narrow-signals`).
     pub signals_at_min: bool,
+    /// Route to a pad that has a clearance of its own at that clearance, as KiCad judges it, even
+    /// below the classes' (`--pad-clearances`): the router otherwise keeps the wider of the two.
+    pub pad_clearances_exact: bool,
     /// What reading the board found and could not take as given: the reader's own warnings
     /// (drawings it skips, values it assumed) and an outline that does not close.
     pub warnings: Vec<String>,
@@ -521,6 +524,7 @@ impl Board {
             zone_areas: Vec::new(),
             pour_cost: 0.0,
             signals_at_min: false,
+            pad_clearances_exact: false,
             warnings: pcb.warnings.iter().chain(&copper.warnings).cloned().collect(),
             text_note: copper.text_note.clone(),
             via_height: nm((pcb.thickness_m - OUTER_COPPER_M).max(0.0)),
@@ -1467,8 +1471,12 @@ impl Board {
 
     /// The clearance the router keeps between items `a` and `b` on `layer`: KiCad's
     /// ([`Board::clearance_between`]) where a pad's own clearance raises it, but never below what
-    /// the classes and custom rules ask, as the grid keeps it (KiCad accepts the wider).
+    /// the classes and custom rules ask, as the grid keeps it (KiCad accepts the wider); KiCad's
+    /// own with `pad_clearances_exact`.
     pub fn clearance_kept(&self, a: &crate::custom::Thing, b: &crate::custom::Thing, layer: usize) -> Nm {
+        if self.pad_clearances_exact {
+            return self.clearance_between(a, b, layer);
+        }
         let local = |t: &crate::custom::Thing| match t {
             crate::custom::Thing::Item(_, id, _) => self.pad_clearances.get(id).copied(),
             _ => None,

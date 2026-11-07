@@ -1309,11 +1309,17 @@ impl ObstacleMap {
             // A pad's own clearance stands in for the classes and the custom rules in KiCad's
             // judgement (`Board::clearance_between`), lower too; the router keeps the wider of the
             // two, which KiCad always accepts: on PCBench, using a pad's narrower clearance let
-            // other nets box a pad in more often than it opened a way (2026-10-30).
-            let own = board.pad_clearances.get(&id).copied().unwrap_or(0);
-            let implicit = self.clearance_to(board, item.net);
-            let clearance = self.rule_to(board, "clearance", id, item, false, implicit).max(own);
-            let via_clearance = self.rule_to(board, "clearance", id, item, true, implicit).max(own);
+            // other nets box a pad in more often than it opened a way (2026-10-30). With
+            // `Board::pad_clearances_exact` it keeps KiCad's, the board's minimum under it.
+            let own = board.pad_clearances.get(&id).copied();
+            let (clearance, via_clearance) = match own {
+                Some(own) if board.pad_clearances_exact => (own.max(nm(rules.min_clearance)), own.max(nm(rules.min_clearance))),
+                _ => {
+                    let implicit = self.clearance_to(board, item.net);
+                    let own = own.unwrap_or(0);
+                    (self.rule_to(board, "clearance", id, item, false, implicit).max(own), self.rule_to(board, "clearance", id, item, true, implicit).max(own))
+                }
+            };
             self.stamp_owner_near(&item.shape, half_width + clearance + reach, cells, item.layers, item.net, rec.as_deref_mut(), &mut spans);
             self.stamp_via_near(&item.shape, via_radius + via_clearance, item.net, rec.as_deref_mut(), &mut spans);
             // Where the mask leaves vias bare, a via of this net may not open over this copper:
