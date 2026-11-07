@@ -40,7 +40,7 @@ pub use stats::{Finding, RunStats, StageStats};
 pub use watch::{Cleaned, Flow, StageEvent, Unwatched, Watch};
 
 pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--plane-via-reach MM] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--negotiate-jacobi] [--negotiate-reroute-all] [--diff-pairs] [--prefanout] [--escape-room|--no-escape-room] [--prefanout-mode stub|dogbone|grid|inner|same] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--negotiate] [--rip-up] [--rip-boxed|--no-rip-boxed] [--nudge] [--tighten] [--arcs MM] [--via-cost MM[,OPEN_MM]] [--gpu] \
-[--timeout SECONDS] [--cpu-clock] [--cell MM] [--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--guard-ties|--no-guard-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--power-width MM|--no-power-width] [--pour-cost W] [--seed N] [--retries N|--no-retries] [--attempt K] [--uuid-seed N] [--adopt] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
+[--timeout SECONDS] [--cpu-clock] [--cell MM] [--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--guard-ties|--no-guard-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--power-width MM|--no-power-width] [--narrow-signals] [--pour-cost W] [--seed N] [--retries N|--no-retries] [--attempt K] [--uuid-seed N] [--adopt] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
 [--recipe default|bench|minimal] [--live PATH|-] [--live-fps N] [--live-step MS] [--blame] [--stats|--report FILE] [--timing|--no-timing] [-h|--help]
 --place, --rip-region and --via-avoid take millimetres in KiCad's frame, y pointing down, as KiCad shows them.
 Copper and mask text is stroked by the kicad-text program ($ULTRAROUTE_TEXT_HELPER, else next to this one, else on PATH; none: boxes);
@@ -178,6 +178,10 @@ pub struct Args {
     /// The optimum width, in millimetres, of supply nets (by name: power, ground, switch nodes),
     /// widened to after routing where there is room; see `widths`.
     pub power_width: Option<f64>,
+    /// Route signal nets at their minimum width, widened to their class's width after routing
+    /// where there is room: room for one more track through each gap, at the class width's cost
+    /// where none is left.
+    pub narrow_signals: bool,
     /// Take inner layers that one net's pour all but fills as planes, as --planes would.
     pub auto_planes: bool,
     /// Every pad of a plane's net gets a via of its own within this many millimetres, edge to
@@ -309,6 +313,7 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
         via_avoid_cost: None,
         regions: None,
         pour_cost: None,
+        narrow_signals: false,
         power_width: None,
         auto_planes: false,
         plane_via_reach: None,
@@ -486,6 +491,7 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
                 a.power_width = Some(mm);
             }
             "--no-power-width" => a.power_width = None,
+            "--narrow-signals" => a.narrow_signals = true,
             "--pour-cost" => a.pour_cost = Some(value()?.parse().map_err(|e| format!("--pour-cost: {e}"))?),
             "--via-avoid-cost" => a.via_avoid_cost = Some(value()?.parse().map_err(|e| format!("--via-avoid-cost: {e}"))?),
             "--rip-region" => {
@@ -1548,6 +1554,8 @@ pub enum Retry {
     NoPrefanout,
     /// Vias this dear, in millimetres of track (`--via-cost`).
     ViaCost(f64),
+    /// Signals at their minimum width, widened after (`--narrow-signals`).
+    NarrowSignals,
 }
 
 /// The attempts `--retries N` makes, the first N in turn, while connections stay open. Another
@@ -1574,6 +1582,11 @@ impl Retry {
                 Some(format!("--via-cost {mm}"))
             }
             Retry::ViaCost(_) => None,
+            Retry::NarrowSignals if !a.narrow_signals => {
+                a.narrow_signals = true;
+                Some("--narrow-signals".into())
+            }
+            Retry::NarrowSignals => None,
         }
     }
 }
