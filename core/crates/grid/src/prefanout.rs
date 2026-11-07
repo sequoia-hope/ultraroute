@@ -933,7 +933,19 @@ fn preserves_sibling_exits(
     siblings: &[PadInfo],
     local_maps: &HashMap<(String, Nm), ObstacleMap>,
 ) -> bool {
-    let Some(items_bb) = items.iter().filter_map(|&id| board.bbox(id)).reduce(BBox::union) else { return true };
+    sealed_sibling(board, items, net, siblings, local_maps).is_none()
+}
+
+/// The centre of the first nearby unescaped sibling pad whose mouth stamping `items` of `net`
+/// seals, as [`preserves_sibling_exits`] judges.
+fn sealed_sibling(
+    board: &Board,
+    items: &[ItemId],
+    net: u32,
+    siblings: &[PadInfo],
+    local_maps: &HashMap<(String, Nm), ObstacleMap>,
+) -> Option<Point> {
+    let items_bb = items.iter().filter_map(|&id| board.bbox(id)).reduce(BBox::union)?;
     let near_bb = items_bb.grow(500_000);
     for sib in siblings {
         if sib.net == net || !near_bb.overlaps(BBox::of([sib.centre])) {
@@ -946,10 +958,10 @@ fn preserves_sibling_exits(
             continue;
         }
         if !pad_can_escape_mouth(board, sib, lmap, items, net) {
-            return false;
+            return Some(sib.centre);
         }
     }
-    true
+    None
 }
 
 fn pad_can_escape_mouth(
@@ -1294,7 +1306,7 @@ fn lay_pour_escape(
             if path.len() > max_steps {
                 continue;
             }
-            if let Some(ok) = commit_grid_path(board, &grid, &path, &sources, &targets, &profile.class, true, global_maps, handoffs, sib_guard) {
+            if let Some(ok) = commit_grid_path(board, &grid, &path, &sources, &targets, &profile.class, true, global_maps, handoffs, sib_guard, &mut None) {
                 return Some(ok);
             }
         }
@@ -1673,48 +1685,60 @@ fn lay_grid_escape(
 
         // Penalize lateral drift from the pad's own outward ray so adjacent 0.4 mm pads stagger
         // their vias radially along their own lanes rather than drifting in front of a neighbour.
-        let cells = base_grid.cell_count();
-        base_grid.penalty = vec![0; base_grid.blocked.len()];
-        let rl_pad = base_grid.layers.iter().position(|&l| l == pad.layer);
-        for j in 0..base_grid.ny {
-            for i in 0..base_grid.nx {
-                let p = base_grid.centre(i, j);
-                let dx = (p.x - pad.centre.x) as f64;
-                let dy = (p.y - pad.centre.y) as f64;
-                let lat = (dx * pad.along.0 + dy * pad.along.1).abs();
-                let lat_outer = if lat <= 15_000.0 { 0 } else { 3 + ((lat / 40_000.0) as u32) * 3 };
-                let lat_inner = (lat / 80_000.0) as u32;
-                if let Some(rl) = rl_pad {
-                    let mut pen = lat_outer;
-                    if multi_layer && !two_layer && base_grid.layers.len() > 1 {
-                        let depth = frame.ring_depth(p);
-                        if depth > 500_000.0 {
-                            pen += 3;
-                        }
-                        if depth > 900_000.0 {
-                            pen += 5;
-                        }
-                    }
-                    base_grid.penalty[rl * cells + j * base_grid.nx + i] += pen;
-                }
-                if multi_layer && base_grid.layers.len() > 1 {
-                    for (rl, &bl) in base_grid.layers.iter().enumerate() {
-                        if bl == pad.layer {
-                            continue;
-                        }
-                        let mut pen = lat_inner;
-                        if inner_layers.contains(&bl) {
-                            if bl != preferred_inner {
+        // Fanning, `fan` the side of a sibling whose mouth the escape sealed, drift to that side
+        // costs twice as much and drift away little, so the via fans out from the sibling.
+        let lane_penalty = |grid: &mut RouteGrid, fan: f64| {
+            let cells = grid.cell_count();
+            grid.penalty = vec![0; grid.blocked.len()];
+            let rl_pad = grid.layers.iter().position(|&l| l == pad.layer);
+            for j in 0..grid.ny {
+                for i in 0..grid.nx {
+                    let p = grid.centre(i, j);
+                    let dx = (p.x - pad.centre.x) as f64;
+                    let dy = (p.y - pad.centre.y) as f64;
+                    let signed = dx * pad.along.0 + dy * pad.along.1;
+                    let lat = signed.abs();
+                    let (lat_outer, lat_inner) = if fan == 0.0 {
+                        (if lat <= 15_000.0 { 0 } else { 3 + ((lat / 40_000.0) as u32) * 3 }, (lat / 80_000.0) as u32)
+                    } else if signed * fan > 0.0 {
+                        (if lat <= 15_000.0 { 0 } else { 6 + ((lat / 40_000.0) as u32) * 6 }, (lat / 40_000.0) as u32)
+                    } else {
+                        ((lat / 80_000.0) as u32, (lat / 160_000.0) as u32)
+                    };
+                    if let Some(rl) = rl_pad {
+                        let mut pen = lat_outer;
+                        if multi_layer && !two_layer && grid.layers.len() > 1 {
+                            let depth = frame.ring_depth(p);
+                            if depth > 500_000.0 {
                                 pen += 3;
                             }
-                        } else {
-                            pen += 8;
+                            if depth > 900_000.0 {
+                                pen += 5;
+                            }
                         }
-                        base_grid.penalty[rl * cells + j * base_grid.nx + i] += pen;
+                        grid.penalty[rl * cells + j * grid.nx + i] += pen;
+                    }
+                    if multi_layer && grid.layers.len() > 1 {
+                        for (rl, &bl) in grid.layers.iter().enumerate() {
+                            if bl == pad.layer {
+                                continue;
+                            }
+                            let mut pen = lat_inner;
+                            if inner_layers.contains(&bl) {
+                                if bl != preferred_inner {
+                                    pen += 3;
+                                }
+                            } else {
+                                pen += 8;
+                            }
+                            grid.penalty[rl * cells + j * grid.nx + i] += pen;
+                        }
                     }
                 }
             }
-        }
+        };
+        lane_penalty(&mut base_grid, 0.0);
+        let mut fan = 0.0;
 
         let collect_targets = |grid: &RouteGrid, layers: &[usize], r_lo: f64, r_hi: f64, with_pours: bool| -> Vec<Terminal> {
             let mut targets = Vec::new();
@@ -1798,7 +1822,11 @@ fn lay_grid_escape(
 
         let sib_guard = options.guard_mouths.then_some((siblings, &*local_maps));
 
+        let mut sealed = None;
         for mut grid in tiers {
+            if fan != 0.0 {
+                lane_penalty(&mut grid, fan);
+            }
             for (b_idx, &(r_lo, r_hi)) in ring_bands.iter().enumerate() {
                 for (s_idx, layers) in target_sets.iter().enumerate() {
                     let with_pours = b_idx == 0 && s_idx == 0 && !pour_targets.is_empty();
@@ -1824,12 +1852,26 @@ fn lay_grid_escape(
                             global_maps,
                             handoffs,
                             sib_guard,
+                            &mut sealed,
                         ) {
                             return Some(ok);
                         }
                         if let Some(&(rl, ti, tj)) = path.last() {
                             let bidx = grid.index(rl, ti, tj);
                             grid.blocked[bidx] = true;
+                        }
+                        // The escape sealed a sibling's mouth: fan away from that sibling, and
+                        // drop no via where this path dropped one.
+                        if let Some(c) = sealed.take() {
+                            let side = ((c.x - pad.centre.x) as f64 * pad.along.0 + (c.y - pad.centre.y) as f64 * pad.along.1).signum();
+                            if side != 0.0 && side != fan {
+                                fan = side;
+                                lane_penalty(&mut grid, fan);
+                            }
+                            for w in path.windows(2).filter(|w| w[0].0 != w[1].0) {
+                                let at = grid.centre(w[0].1, w[0].2);
+                                block_via_sites(&mut grid, at, profile.via_radius);
+                            }
                         }
                     }
                     if saved_via.is_some() {
@@ -1840,6 +1882,19 @@ fn lay_grid_escape(
         }
     }
     None
+}
+
+/// Drops no via of `grid` within `r` of `at`.
+fn block_via_sites(grid: &mut RouteGrid, at: Point, r: Nm) {
+    let span = (r / grid.h) as usize + 1;
+    let Some((ci, cj)) = grid.cell_at(at) else { return };
+    for j in cj.saturating_sub(span)..=(cj + span).min(grid.ny - 1) {
+        for i in ci.saturating_sub(span)..=(ci + span).min(grid.nx - 1) {
+            if grid.centre(i, j).distance(at) < r as f64 {
+                grid.via_blocked[j * grid.nx + i] = true;
+            }
+        }
+    }
 }
 
 type SiblingGuard<'a> = (&'a [PadInfo], &'a HashMap<(String, Nm), ObstacleMap>);
@@ -1856,9 +1911,14 @@ fn commit_grid_path(
     global_maps: &HashMap<String, ObstacleMap>,
     handoffs: &[EscapedHandoff],
     sib_guard: Option<SiblingGuard<'_>>,
+    sealed: &mut Option<Point>,
 ) -> Option<(Vec<ItemId>, Vec<usize>)> {
-    let sibs_ok = |board: &Board, ids: &[ItemId]| {
-        sib_guard.is_none_or(|(sibs, lmaps)| preserves_sibling_exits(board, ids, grid.net, sibs, lmaps))
+    let mut sibs_ok = |board: &Board, ids: &[ItemId]| {
+        let s = sib_guard.and_then(|(sibs, lmaps)| sealed_sibling(board, ids, grid.net, sibs, lmaps));
+        if s.is_some() {
+            *sealed = s;
+        }
+        s.is_none()
     };
     let mut ids = lay(board, grid, path, sources, targets)?;
     if !grid.pours_block {
