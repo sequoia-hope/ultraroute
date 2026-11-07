@@ -327,6 +327,7 @@ impl Stage for SetUp {
             }
             board.signals_at_min = true;
         }
+        board.pad_clearances_exact = a.pad_clearances;
         // Wider than their class only: a preference at or under the class's width changes nothing.
         for n in 1..board.nets.len() as u32 {
             if let Some(w) = board.opt_track_width_of(n) {

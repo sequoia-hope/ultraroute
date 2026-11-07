@@ -182,6 +182,11 @@ pub struct Args {
     /// where there is room: room for one more track through each gap, at the class width's cost
     /// where none is left.
     pub narrow_signals: bool,
+    /// Route to a pad that has a clearance of its own at that clearance, as KiCad does, even below
+    /// its class's: room to leave a fine-pitch pin whose footprint narrows the clearance to its
+    /// neighbours. Off, the router keeps the wider, which leaves other nets less room to box a pad
+    /// in.
+    pub pad_clearances: bool,
     /// Take inner layers that one net's pour all but fills as planes, as --planes would.
     pub auto_planes: bool,
     /// Every pad of a plane's net gets a via of its own within this many millimetres, edge to
@@ -216,7 +221,7 @@ pub struct Args {
 
 /// The stages and settings the router runs with unless told otherwise: the benchmark's recipe
 /// (`docs/pcbench.md`), measured as the best of what the router has.
-pub const RECIPE: &str = "--negotiate --rip-up --rip-boxed --tighten --prefanout --escape-room --diff-pairs --shove-plough region --shove-reach 0.5 --shove-repair 20 --shove-ties --guard-ties --shove-passes 60 --shove-patience 8 --retries 5";
+pub const RECIPE: &str = "--negotiate --rip-up --rip-boxed --tighten --prefanout --escape-room --diff-pairs --shove-plough region --shove-reach 0.5 --shove-repair 20 --shove-ties --guard-ties --shove-passes 60 --shove-patience 8 --retries 6";
 
 /// Flags that name a stage to run. A run naming none gets [`RECIPE`]; one naming its own stages
 /// gets those alone, as before there was a default.
@@ -314,6 +319,7 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
         regions: None,
         pour_cost: None,
         narrow_signals: false,
+        pad_clearances: false,
         power_width: None,
         auto_planes: false,
         plane_via_reach: None,
@@ -492,6 +498,7 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
             }
             "--no-power-width" => a.power_width = None,
             "--narrow-signals" => a.narrow_signals = true,
+            "--pad-clearances" => a.pad_clearances = true,
             "--pour-cost" => a.pour_cost = Some(value()?.parse().map_err(|e| format!("--pour-cost: {e}"))?),
             "--via-avoid-cost" => a.via_avoid_cost = Some(value()?.parse().map_err(|e| format!("--via-avoid-cost: {e}"))?),
             "--rip-region" => {
@@ -1556,14 +1563,18 @@ pub enum Retry {
     ViaCost(f64),
     /// Signals at their minimum width, widened after (`--narrow-signals`).
     NarrowSignals,
+    /// A pad's own clearance where it is narrower than its class's (`--pad-clearances`).
+    PadClearances,
 }
 
 /// The attempts `--retries N` makes, the first N in turn, while connections stay open. Another
 /// order of the nets wins boards left one or two open, chiefly those the clock cut short (the
 /// seed-restarts study of 2026-11, explore/restarts); a route without the fan-out, and one with
 /// dearer vias, are what m2r and FreeSmartEEG needed, two boards FreeRouting routes clean; signals
-/// at their minimum width are what OSBMS needed, whose designer runs them so between its parts.
-pub const RETRIES: [Retry; 5] = [Retry::Seed(1), Retry::NoPrefanout, Retry::ViaCost(20.0), Retry::Seed(2), Retry::NarrowSignals];
+/// at their minimum width are what OSBMS needed, whose designer runs them so between its parts;
+/// a pad's own clearance is what typec-charger needed, whose QFN's footprint narrows it so its
+/// pins leave between their neighbours.
+pub const RETRIES: [Retry; 6] = [Retry::Seed(1), Retry::NoPrefanout, Retry::ViaCost(20.0), Retry::Seed(2), Retry::NarrowSignals, Retry::PadClearances];
 
 impl Retry {
     /// Makes the change to `a`, and says what it was; nothing when it would change nothing.
@@ -1588,6 +1599,11 @@ impl Retry {
                 Some("--narrow-signals".into())
             }
             Retry::NarrowSignals => None,
+            Retry::PadClearances if !a.pad_clearances => {
+                a.pad_clearances = true;
+                Some("--pad-clearances".into())
+            }
+            Retry::PadClearances => None,
         }
     }
 }
