@@ -36,7 +36,7 @@ const CLAIMS_NODE: u64 = 2;
 const ITEM: u64 = 400;
 /// What the structures above leave out, per node: the maps the stages build beside the
 /// negotiation's (with and without the pours, the shove's copies) and the claims' per-net maps.
-/// Fitted to the peaks measured on the fixtures (earring 1.7 M nodes 236 MB, bluebuzz 3.5 M nodes
+/// Fitted to measured peaks (the earring fixture 1.7 M nodes 236 MB, a 6-layer board 3.5 M nodes
 /// 406 MB, one thread), with room to spare.
 const OTHER_NODE: u64 = 128;
 

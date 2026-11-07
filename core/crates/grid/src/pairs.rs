@@ -2717,15 +2717,16 @@ mod tests {
     }
 
     #[test]
-    fn both_bluebuzz_usb_pairs_route_coupled_end_to_end() {
-        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/bluebuzz-rm2.kicad_pcb");
+    fn the_parallelogram_usb_pairs_route_coupled_end_to_end() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/parallelogram-p1-66.kicad_pcb");
         let (mut board, _) = Board::load(&path).unwrap_or_else(|e| panic!("{} must load: {e:?}", path.display()));
         let all_copper: Vec<ItemId> = board.items().filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via)).map(|(id, _)| id).collect();
         for id in all_copper {
             board.remove(id);
         }
         let pairs = diff_pairs(&board);
-        assert_eq!(pairs.len(), 2);
+        // USB_DP/DM, /MCU/USB_D*_MCU and /Power/USB_D*_C.
+        assert_eq!(pairs.len(), 3);
         let stats = route_pairs(&mut board, &PairOptions::default(), &mut |_| {});
         assert!(stats.runs >= pairs.len() && stats.coupled + stats.matched == stats.runs, "{stats:?}");
         for id in &stats.laid {

@@ -207,11 +207,11 @@ fn own(b: &mut Board, (x0, y0): (f64, f64), (x1, y1): (f64, f64)) -> ItemId {
 
 #[test]
 fn the_projects_minimum_holds_where_no_rule_sets_one() {
-    let text = std::fs::read_to_string(env!("CARGO_MANIFEST_DIR").to_string() + "/../../fixtures/bluebuzz-rm2.kicad_pro").unwrap();
+    let text = std::fs::read_to_string(env!("CARGO_MANIFEST_DIR").to_string() + "/../../fixtures/parallelogram-p1-66.kicad_pro").unwrap();
     assert!(text.contains("\"min_resolved_spokes\": 1"));
-    let (pcb, copper) = kicad_pcb::parse_board(&std::fs::read_to_string(env!("CARGO_MANIFEST_DIR").to_string() + "/../../fixtures/bluebuzz-rm2.kicad_pcb").unwrap()).unwrap();
+    let (pcb, copper) = kicad_pcb::parse_board(&std::fs::read_to_string(env!("CARGO_MANIFEST_DIR").to_string() + "/../../fixtures/parallelogram-p1-66.kicad_pcb").unwrap()).unwrap();
     let b = Board::new(&pcb, &copper, kicad_pcb::Rules::parse(&text).unwrap());
-    assert!(needs(&b).iter().all(|&n| n == 1), "bluebuzz asks one spoke of each pad");
+    assert!(needs(&b).iter().all(|&n| n == 1), "the parallelogram asks one spoke of each pad");
 }
 
 #[test]

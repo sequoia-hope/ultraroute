@@ -1,0 +1,246 @@
+(version 1)
+
+# Derived from design/nets-d.csv and design/brief.md. Each rule cites its source.
+
+# 0.5 A, nets-d.csv; IPC-2221 outer 1 oz, 10 C rise
+(rule "VBUS current width"
+  (condition "A.NetName == 'VBUS'")
+  (constraint track_width (min 0.25mm)))
+
+# VSYS plane on In5.Cu; pad stubs min 0.2 mm (powerclass.py / LESSONS.md)
+(rule "VSYS current width"
+  (condition "A.NetName == 'VSYS'")
+  (constraint track_width (min 0.2mm)))
+
+# 0.34 A avg, 1 A peak, nets-d.csv
+(rule "VBAT current width"
+  (condition "A.NetName == 'VBAT'")
+  (constraint track_width (min 0.3mm)))
+
+# same as VBAT, cell minus
+(rule "/Power/BAT_N current width"
+  (condition "A.NetName == '/Power/BAT_N'")
+  (constraint track_width (min 0.3mm)))
+
+# 150 mA max, intent.md
+(rule "+3V3 current width"
+  (condition "A.NetName == '+3V3'")
+  (constraint track_width (min 0.2mm)))
+
+(rule "/Driver 1 and matrix/SW1_1 width"
+  (condition "A.NetName == '/Driver 1 and matrix/SW1_1'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 1 and matrix/SW1_2 width"
+  (condition "A.NetName == '/Driver 1 and matrix/SW1_2'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 1 and matrix/SW1_3 width"
+  (condition "A.NetName == '/Driver 1 and matrix/SW1_3'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 1 and matrix/SW1_4 width"
+  (condition "A.NetName == '/Driver 1 and matrix/SW1_4'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 1 and matrix/SW1_5 width"
+  (condition "A.NetName == '/Driver 1 and matrix/SW1_5'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 1 and matrix/SW1_6 width"
+  (condition "A.NetName == '/Driver 1 and matrix/SW1_6'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 1 and matrix/SW1_7 width"
+  (condition "A.NetName == '/Driver 1 and matrix/SW1_7'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 1 and matrix/SW1_8 width"
+  (condition "A.NetName == '/Driver 1 and matrix/SW1_8'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 2 and matrix/SW2_1 width"
+  (condition "A.NetName == '/Driver 2 and matrix/SW2_1'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 2 and matrix/SW2_2 width"
+  (condition "A.NetName == '/Driver 2 and matrix/SW2_2'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 2 and matrix/SW2_3 width"
+  (condition "A.NetName == '/Driver 2 and matrix/SW2_3'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 2 and matrix/SW2_4 width"
+  (condition "A.NetName == '/Driver 2 and matrix/SW2_4'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 2 and matrix/SW2_5 width"
+  (condition "A.NetName == '/Driver 2 and matrix/SW2_5'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 2 and matrix/SW2_6 width"
+  (condition "A.NetName == '/Driver 2 and matrix/SW2_6'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 2 and matrix/SW2_7 width"
+  (condition "A.NetName == '/Driver 2 and matrix/SW2_7'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 2 and matrix/SW2_8 width"
+  (condition "A.NetName == '/Driver 2 and matrix/SW2_8'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 3 and matrix/SW3_1 width"
+  (condition "A.NetName == '/Driver 3 and matrix/SW3_1'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 3 and matrix/SW3_2 width"
+  (condition "A.NetName == '/Driver 3 and matrix/SW3_2'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 3 and matrix/SW3_3 width"
+  (condition "A.NetName == '/Driver 3 and matrix/SW3_3'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 3 and matrix/SW3_4 width"
+  (condition "A.NetName == '/Driver 3 and matrix/SW3_4'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 3 and matrix/SW3_5 width"
+  (condition "A.NetName == '/Driver 3 and matrix/SW3_5'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 3 and matrix/SW3_6 width"
+  (condition "A.NetName == '/Driver 3 and matrix/SW3_6'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 3 and matrix/SW3_7 width"
+  (condition "A.NetName == '/Driver 3 and matrix/SW3_7'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 3 and matrix/SW3_8 width"
+  (condition "A.NetName == '/Driver 3 and matrix/SW3_8'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 4 and matrix/SW4_1 width"
+  (condition "A.NetName == '/Driver 4 and matrix/SW4_1'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 4 and matrix/SW4_2 width"
+  (condition "A.NetName == '/Driver 4 and matrix/SW4_2'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 4 and matrix/SW4_3 width"
+  (condition "A.NetName == '/Driver 4 and matrix/SW4_3'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 4 and matrix/SW4_4 width"
+  (condition "A.NetName == '/Driver 4 and matrix/SW4_4'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 4 and matrix/SW4_5 width"
+  (condition "A.NetName == '/Driver 4 and matrix/SW4_5'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 4 and matrix/SW4_6 width"
+  (condition "A.NetName == '/Driver 4 and matrix/SW4_6'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 4 and matrix/SW4_7 width"
+  (condition "A.NetName == '/Driver 4 and matrix/SW4_7'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 4 and matrix/SW4_8 width"
+  (condition "A.NetName == '/Driver 4 and matrix/SW4_8'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 5 and matrix/SW5_1 width"
+  (condition "A.NetName == '/Driver 5 and matrix/SW5_1'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 5 and matrix/SW5_2 width"
+  (condition "A.NetName == '/Driver 5 and matrix/SW5_2'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 5 and matrix/SW5_3 width"
+  (condition "A.NetName == '/Driver 5 and matrix/SW5_3'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 5 and matrix/SW5_4 width"
+  (condition "A.NetName == '/Driver 5 and matrix/SW5_4'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 5 and matrix/SW5_5 width"
+  (condition "A.NetName == '/Driver 5 and matrix/SW5_5'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 5 and matrix/SW5_6 width"
+  (condition "A.NetName == '/Driver 5 and matrix/SW5_6'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 5 and matrix/SW5_7 width"
+  (condition "A.NetName == '/Driver 5 and matrix/SW5_7'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/Driver 5 and matrix/SW5_8 width"
+  (condition "A.NetName == '/Driver 5 and matrix/SW5_8'")
+  (constraint track_width (min 0.1mm)))
+
+(rule "/MCU/QSPI_SCLK length"
+  (condition "A.NetName == '/MCU/QSPI_SCLK'")
+  (constraint length (max 25mm)))
+(rule "/MCU/QSPI_SD0 length"
+  (condition "A.NetName == '/MCU/QSPI_SD0'")
+  (constraint length (max 25mm)))
+(rule "/MCU/QSPI_SD1 length"
+  (condition "A.NetName == '/MCU/QSPI_SD1'")
+  (constraint length (max 25mm)))
+(rule "/MCU/QSPI_SD2 length"
+  (condition "A.NetName == '/MCU/QSPI_SD2'")
+  (constraint length (max 25mm)))
+(rule "/MCU/QSPI_SD3 length"
+  (condition "A.NetName == '/MCU/QSPI_SD3'")
+  (constraint length (max 25mm)))
+(rule "/MCU/QSPI_SS length"
+  (condition "A.NetName == '/MCU/QSPI_SS'")
+  (constraint length (max 25mm)))
+(rule "Net-(C24-Pad1) length"
+  (condition "A.NetName == 'Net-(C24-Pad1)'")
+  (constraint length (max 11mm)))
+(rule "Net-(C24-Pad1) no vias"
+  (condition "A.NetName == 'Net-(C24-Pad1)'")
+  (constraint via_count (max 0)))
+(rule "Net-(U3-XIN) length"
+  (condition "A.NetName == 'Net-(U3-XIN)'")
+  (constraint length (max 11mm)))
+(rule "Net-(U3-XIN) no vias"
+  (condition "A.NetName == 'Net-(U3-XIN)'")
+  (constraint via_count (max 0)))
+(rule "Net-(U3-XOUT) length"
+  (condition "A.NetName == 'Net-(U3-XOUT)'")
+  (constraint length (max 11mm)))
+(rule "Net-(U3-XOUT) no vias"
+  (condition "A.NetName == 'Net-(U3-XOUT)'")
+  (constraint via_count (max 0)))
+(rule "USB_DM one via"
+  (condition "A.NetName == 'USB_DM'")
+  (constraint via_count (max 1)))
+(rule "USB_DP one via"
+  (condition "A.NetName == 'USB_DP'")
+  (constraint via_count (max 1)))
+
+(rule "U3 ring foreign vias"
+  (condition "A.intersectsArea('U3 ring vias') && A.NetName != '+1V1' && A.NetName != 'GND'")
+  (constraint disallow via))
+
+# U3 and regulator keep-outs: foreign nets only (LESSONS.md, a part's own power may pass).
+(rule "U3 ring foreign tracks"
+  (condition "A.intersectsArea('U3 ring') && A.NetName != '+3V3' && A.NetName != '+1V1' && A.NetName != 'GND'")
+  (constraint disallow track))
+(rule "reg corner foreign"
+  (condition "A.intersectsArea('reg corner') && A.NetName != '/MCU/VREG_LX' && A.NetName != '+1V1' && A.NetName != '+3V3' && A.NetName != 'GND' && A.NetName != '/MCU/VREG_AVDD'")
+  (constraint disallow track via))
+(rule "L1 window foreign"
+  (condition "A.intersectsArea('L1 window') && A.NetName != '/MCU/VREG_LX' && A.NetName != '+1V1'")
+  (constraint disallow track via))

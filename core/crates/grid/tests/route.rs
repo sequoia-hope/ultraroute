@@ -195,7 +195,7 @@ fn a_zero_time_budget_is_honoured() {
 /// its rounds.
 #[test]
 fn a_one_second_budget_holds_on_a_whole_board() {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/bluebuzz-rm2.kicad_pcb");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/parallelogram-p1-66.kicad_pcb");
     let mut b = Board::load(&path).unwrap().0;
     let copper: Vec<ItemId> = b.items().filter(|(_, it)| matches!(it.kind, Kind::Track | Kind::Via)).map(|(id, _)| id).collect();
     for id in copper {

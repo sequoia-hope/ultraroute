@@ -24,14 +24,14 @@ fn a_board_over_the_cap_is_refused_and_its_input_written_back() {
     let out = dir.join("out.kicad_pcb");
     let started = std::time::Instant::now();
     let run = Command::new(env!("CARGO_BIN_EXE_ultraroute"))
-        .args(["route", fixture("bluebuzz-rm2.kicad_pcb").to_str().unwrap(), "-o", out.to_str().unwrap(), "--negotiate", "--max-memory", "16"])
+        .args(["route", fixture("parallelogram-p1-66.kicad_pcb").to_str().unwrap(), "-o", out.to_str().unwrap(), "--negotiate", "--max-memory", "16"])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&run.stderr);
     assert_eq!(run.status.code(), Some(1), "{stderr}");
     assert!(stderr.contains("over the 16 MB allowed by --max-memory"), "{stderr}");
     assert!(started.elapsed().as_secs() < 30, "refused before routing, not after");
-    let input = std::fs::read_to_string(fixture("bluebuzz-rm2.kicad_pcb")).unwrap();
+    let input = std::fs::read_to_string(fixture("parallelogram-p1-66.kicad_pcb")).unwrap();
     assert_eq!(std::fs::read_to_string(&out).unwrap(), input, "the input comes back as the output");
     std::fs::remove_dir_all(dir).unwrap();
 }

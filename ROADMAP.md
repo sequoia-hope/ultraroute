@@ -1,7 +1,7 @@
 # Roadmap
 
 Work proceeds one phase at a time; each phase ends with its scores on the test boards
-(bluebuzz, bluebuzz-1024, bluebuzz-ripped, the morph keyframes) and a commit.
+(the 6-layer board, ripped up and not, and its morph keyframes) and a commit.
 
 ## State at 2026-10-30
 
@@ -33,10 +33,10 @@ the same machine (`tools/pcbench.py compare`).
 - [x] Rip-up: an open connection may cross other connections' copper at a price that grows with
       each rip; what it crosses is ripped and rerouted, and the board joining most is kept.
 - [x] The maze stage after topo runs with a bounded via optimizer (it stalled on one pass).
-- [x] Latest bluebuzz with its updated rules as job `bluebuzz-1024`.
-- [x] Scores (open connections, all with 0 new errors): bluebuzz-1024 topo+maze 12 (grid 10,
-      maze 16); bluebuzz 12; bluebuzz-ripped topo alone 55 → 62 of 69 joined with rip-up, but after
-      maze 14 without and 15 with (maze alone 9).
+- [x] The latest 6-layer board with its updated rules as a job.
+- [x] Scores (open connections, all with 0 new errors): the latest 6-layer board topo+maze 12
+      (grid 10, maze 16); its earlier revision 12; ripped up, topo alone 55 → 62 of 69 joined with
+      rip-up, but after maze 14 without and 15 with (maze alone 9).
 - [x] Keyframe reroute from bare pads, open connections (grid / topo / topo + rip-up): rectangle
       25 / 35 / 24, circle 26 / 33 / 35, diamond 21 / 29 / 33, stretched 53 / 59 / 65, rainbow
       155 / 157 / 157 (topo finds a channel for 5 of 69 there: the parts are packed shut).
@@ -56,8 +56,8 @@ ride the flow (velocity −∇d/d), so crowded regions spread while relative ord
 - [x] Unit tests: spreading lowers the peak, locked parts stay, groups move as one, the move
       limit holds, demand pushes, applied moves add no violation.
 - [x] Scores: no gain yet. The backend's spread board was worse every time, so it kept the
-      first route: bluebuzz-1024 10 open (29 spread; 17 at target 2.0 and 0.5 mm, 10 parts
-      moved), bluebuzz-ripped 9 (70 spread). Keyframe reroute with spreading, open connections
+      first route: the 6-layer board 10 open (29 spread; 17 at target 2.0 and 0.5 mm, 10 parts
+      moved), ripped up 9 (70 spread). Keyframe reroute with spreading, open connections
       (vs. without): rectangle 56 (25), circle 62 (26), diamond 59 (21), stretched 83 (53),
       rainbow 104 (155); every keyframe hit the 10 min limit.
 - [ ] Why: pin demand puts the peak density near fine-pitch parts above 1 (2.4–7), which no
@@ -83,7 +83,7 @@ natively and, compiled to WebAssembly, in the browser tab, on the CPU in both. E
 - [x] Board I/O from `.kicad_pcb` directly (`core/crates/kicad-pcb`, from waffle-iron's reader):
       copper layers, tracks, arcs, vias, zones and rule areas, pad layer sets and exact shapes
       (custom pads included), `.kicad_pro` rules and net classes, and a writer that replaces
-      routed copper and keeps every other byte. On bluebuzz all 2290 tracks and 331 vias
+      routed copper and keeps every other byte. On the 6-layer board all 2290 tracks and 331 vias
       rewritten give KiCad's DRC the same result (0 violations, 0 unconnected).
 - [x] Locked flags kept when copper is written back (`(locked yes)`, REMEDIATION Stage 9);
       `.kicad_dru` custom rules applied where the router models them (per-net track width,
@@ -93,27 +93,27 @@ natively and, compiled to WebAssembly, in the browser tab, on the CPU in both. E
       outside crates.
 - [x] Connectivity as KiCad joins copper (at anchors: track ends, via and round-pad discs, pad
       centres; pours wherever they touch) and a clearance check (copper, edge, plated-hole, hole
-      to hole, keepouts; KiCad's 0.5 µm epsilon). Against KiCad 9's DRC on bluebuzz and the
-      earring, clean, stripped, half-stripped and shifted: identical open-connection and
-      clearance counts, except 455 vs 458 open on half-stripped bluebuzz. 66 ms connectivity,
-      0.5 s full check on bluebuzz.
+      to hole, keepouts; KiCad's 0.5 µm epsilon). Against KiCad 9's DRC on the 6-layer board
+      and the earring, clean, stripped, half-stripped and shifted: identical open-connection and
+      clearance counts, except 455 vs 458 open on the half-stripped 6-layer board. 66 ms
+      connectivity, 0.5 s full check on the 6-layer board.
 - [x] Grid routing on the core (`core/crates/grid`, CPU): a conservative obstacle map per net
       class, our integer-cost search, legs out of crowded pads, every piece checked before it is
       kept. Pours are refilled around new copper (`tools/refill_zones.py`), so every connection is
-      made in tracks. Judged by KiCad after a refill: the earring 249 → 14 open in 22 s, bluebuzz
-      with its unlocked copper stripped 25 → 5 open in 13 s, 0 errors on both.
+      made in tracks. Judged by KiCad after a refill: the earring 249 → 14 open in 22 s, the
+      6-layer board with its unlocked copper stripped 25 → 5 open in 13 s, 0 errors on both.
 - [x] Holes as slots (oval drills), not only round (REMEDIATION Stage 9).
 - [x] The GPU field solver (`--features gpu`) and negotiated congestion on the core. With
       negotiation then single routing for what is left, after a KiCad refill: the earring 10 open,
-      stripped bluebuzz 3 open, 0 errors on both. Slow yet: 30 rounds that do not converge, ~3 min
-      on the earring; one field at a time leaves the GPU idle (58 s vs 22 s CPU, sequential).
+      the stripped 6-layer board 3 open, 0 errors on both. Slow yet: 30 rounds that do not converge,
+      ~3 min on the earring; one field at a time leaves the GPU idle (58 s vs 22 s CPU, sequential).
 - [x] `ultraroute route` (`core/crates/ultraroute`): routes a `.kicad_pcb` and writes it back,
       `--place`, `--strip`, `--negotiate`, `--gpu`, `--timeout`, a `stop` line, and `--live` in
       the studio's frame format, negotiation's trial routes included. The studio runs it as the
-      Core router on the `bluebuzz-kicad` and `earring-kicad` jobs.
+      Core router on the 6-layer board's and the earring's jobs.
 - [x] Negotiation stops after 4 rounds without fewer collisions; pad outlines drawn outside
       their arcs so clearance to them is never overstated. Earring 8–14 open (runs vary),
-      bluebuzz 3, 0 errors.
+      the 6-layer board 3, 0 errors.
 - [ ] GPU batches for negotiation rounds work but are slow: ~110 s a round on the earring's
       3.5M-node fields against ~10 s on CPU threads. The relaxation kernel needs a better
       schedule (or a coarser grid) before the GPU pays. Parked (REMEDIATION Stage 10, 2026-10-30):
@@ -128,18 +128,18 @@ natively and, compiled to WebAssembly, in the browser tab, on the CPU in both. E
       and a rip-up finisher: a blocked connection may cross copper the router laid, which is
       ripped and rerouted, kept only if fewer connections stay open. After a KiCad refill: the
       earring 3 open in 54 s (copperroute's best is 3, nudge, 511 s; its grid recipe 4) and
-      stripped bluebuzz 4, 0 errors on both.
+      the stripped 6-layer board 4, 0 errors on both.
 - [x] Deterministic runs (ordered connectivity), a finisher that rips any of the router's
       own copper and retries after progress, and a pull-tight pass that straightens each chain
       of router copper between fixed points while keeping everything it joins. Earring 5 open,
-      3403 → 1305 segments, 1207 → 1164 mm; stripped bluebuzz 4 (its leftovers are walled in by
-      fixed copper: a job for nudging, not rip-up). 0 errors.
+      3403 → 1305 segments, 1207 → 1164 mm; the stripped 6-layer board 4 (its leftovers are
+      walled in by fixed copper: a job for nudging, not rip-up). 0 errors.
 - [x] Courtyards read; a core nudger (`--nudge`): parts near a blocked airline stepped 0.25–1 mm
       in eight directions, kept only when legal (pads clear, no courtyard overlap) and fewer
       connections stay open. On the packed earring nearly every step is illegal and none helps.
 - [x] `legacy/tools/kicad_bench.py`: both routers on the same KiCad board, judged by KiCad after a
       refill. Earring: core 5 open / 0 new errors / 304 vias / 48 s; copperroute grid 18 / 0 /
-      196 / 427 s; copperroute maze 37 / 2 / 140 / 150 s. (Nudge and bluebuzz still to run.)
+      196 / 427 s; copperroute maze 37 / 2 / 140 / 150 s. (Nudge still to run.)
 - [ ] Fewer vias. The core used ~1.5× copperroute's on the earring, and 5.7× FreeRouting's on
       PCBench (base-1, `docs/pcbench.md`). Since then: a via pass after tightening, and a 5 mm
       via price that took 6% off the sample's vias (REMEDIATION Stage 7).

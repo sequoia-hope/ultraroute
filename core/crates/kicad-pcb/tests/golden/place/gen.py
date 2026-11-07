@@ -14,7 +14,7 @@ import json, os, subprocess, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FIXTURES = os.path.join(HERE, "../../../../../fixtures")
-BOARDS = ["earring", "bluebuzz-rm2", "earring-locked"]
+BOARDS = ["earring", "parallelogram-p1-66", "earring-locked"]
 NM = 1e6
 
 

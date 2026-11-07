@@ -57,6 +57,6 @@ Ported into `copper-morph` (fork branch `governance`), each with tests that chec
 | Ghosts and site search | `place_shoving`, `place_near_partners` | Born full size; the shove engine moves copper recursively |
 | Net-length caps | inside `translate_shoving` / `translate_warping` | `max(1.25 L0, L0 + 4 mm)`; did not bind on the test board |
 | Driver | `MoveOracle::settle`, `copperroute settle` | Gentlest move first: warp, then shove, then push, then group |
-| Escape-driven targets (new) | `--backend nudge` | Bluebuzz 18 → 17 by moving J4 0.5 mm (approved) |
+| Escape-driven targets (new) | `--backend nudge` | The 6-layer board 18 → 17 by moving J4 0.5 mm (approved) |
 
 Not ported: length springs (pull-back below the cap), part mobility weights, trajectory snapshots and animation, the KiCad emit/refill/gate pipeline (the DRC on the re-imported session plays the gate's role).

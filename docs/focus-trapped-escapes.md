@@ -3,8 +3,8 @@
 Set by the user on 2026-10-25, to stand until they say otherwise: explore, as comprehensively as
 the time allows, every way of freeing connections trapped at a fine-pitch part's pads, and their
 permutations, until the simple earring routes. When the earring gets stuck, route the other boards
-(bluebuzz first) for what they show. Record every experiment in the lab (`tools/lab.py`); the
-judge is KiCad's DRC after a refill: unconnected items and errors.
+(the 6-layer board first) for what they show. Record every experiment in the lab (`tools/lab.py`);
+the judge is KiCad's DRC after a refill: unconnected items and errors.
 
 ## The problem
 
@@ -204,7 +204,7 @@ second pass over undone tries.
   --shove-patience 8 --tighten`, one round of five seeds).
 - Loose ends: dangling vias and tracks left on finished boards (cosmetic warnings); the cleanup's
   1500 pruned pieces a run; merge the pre-fanout code into `integrate` and then main, so one
-  router does all of it; then the other boards (bluebuzz).
+  router does all of it; then the other boards.
 - Pre-fanout merged into `integrate` (135 tests pass). The integrator found the merged router's
   default seed ending at 0 open but 4 KiCad clearance errors (the In2 3V3 pour against tracks
   between U1's thermal vias, after the refill; seeds 1 and 2 clean), and bisected it to the
@@ -219,20 +219,21 @@ second pass over undone tries.
   portfolio of 4-6 gives a clean full route of either job today. Next: keep tracks out of the
   gaps between U1's thermal vias on refilled-pour layers; let the plough search finish seeds
   left at 1 open.
-- 2026-10-26, bluebuzz (agy, worktree `agy-bluebuzz`, audited): `bluebuzz-rm2` routes with
-  `--prefanout`, from bare pads and with its locked copper, 0 unconnected and 0 KiCad errors on
-  seeds 0-3 each (lab `bluebuzz-check-2`; its .kicad_pro makes dangling copper an error).
+- 2026-10-26, the 6-layer board (agy, audited): its latest revision routes with `--prefanout`,
+  from bare pads and with its locked copper, 0 unconnected and 0 KiCad errors on seeds 0-3 each
+  (its .kicad_pro makes dangling copper an error).
   Without pre-fanout it ends at 9 open. agy's cleanup fix (a via no longer counts as covering a
   track, overhanging stubs past a T-joint are trimmed) is merged; on the earring it removes nearly
   all dangling warnings and leaves the open count before and after cleanup unchanged (lab
   `cleanup-agy-18`, one thread per run: stripped 0 0 1 0 3 2, locked 1 0 0 1 1 0).
-- Bluebuzz on main (lab `bluebuzz-main-19`, 2 threads): stripped and locked both 0 unconnected
+- The 6-layer board on main (2 threads): stripped and locked both 0 unconnected
   and 0 KiCad violations on seeds 0-3. On one thread (as in the browser) seed 0 left a 0.11 mm
   XOUT piece on In1.Cu running from the route's end into the side of a fan-out stub, which KiCad
-  calls dangling (an error under bluebuzz's rules). The cleanup now drops a track whose both
+  calls dangling (an error under that board's rules). The cleanup now drops a track whose both
   ends lie inside other tracks of its net when nothing needs it, unless it meets a via
-  (taking those stranded vias in a first try). Lab `redundant-20`, one thread: bluebuzz 8 of 8
-  clean; earring unchanged. Best bluebuzz kept as job `bluebuzz-routed` (seed 3, 232 vias against the hand-routed board's 331, 1348 mm).
+  (taking those stranded vias in a first try). Lab `redundant-20`, one thread: the 6-layer board 8
+  of 8 clean; earring unchanged. Its best: seed 3, 232 vias against the hand-routed board's 331,
+  1348 mm.
 - 2026-10-26, differential pairs (`--diff-pairs`, grid/src/pairs.rs): pairs found by name (one P
   against N/M, or + against -), ends as pin pairs, each run between them routed as one centreline
   wide enough for both tracks and the gap on a single layer, then laid as two offset tracks; the
@@ -241,23 +242,23 @@ second pass over undone tries.
   The cleanup now cuts a track loose at both ends back to its outermost joints (pair runs
   crossing their legs' vias) and cuts a tail back to a joint that already lies inside it. Lab
   `diffpairs-24`, one thread: earring stripped 0 0 0 0 2 3 unconnected (was 0 0 1 0 4 2), no
-  pair copper dangling; locked 0 1 1 1 0 0; bluebuzz 0 on all 6. Coupling (`pair_check`):
-  earring USB_DP/DM 78-92%, USB_C 17-38%; bluebuzz USB_DP/DM 72-83% (hand-routed 31%), its 4
-  mm USB_D*_C pair uncoupled. Jobs earring-routed, earring-locked-routed and bluebuzz-routed
-  re-solved with pairs.
-- 2026-10-26, length matching and the short pair. Pins of a pair whose ends share a layer are
-  left out of the fan-out; each run's layer is chosen by cost (length, 2 mm per via its ends
-  need, the start ring's radius), each layer from its nearest start ring that lays; pair runs
-  may cross pours, kept block planes included, to be refilled round them (bluebuzz's 1V1 block
-  pour had cut USB_D*_C off F.Cu). After the cleanup, `grid::match_lengths` measures each net
-  end to end along its copper and bumps the shorter one, one bump at a time, tallest that lays,
-  uncoupled tracks first, undoing any bump that does not reduce the skew. Lab `diffpairs-26`,
-  one thread: earring stripped 1 0 0 0 0 0 unconnected, locked 0 0 0 0 1 0, bluebuzz 0 0 0 0
-  0 1; skew after tuning mostly 0.00-0.16 mm (earring seed 2, a 19.8 mm detour, ends at 6.5
-  mm); bluebuzz's short pair now 54-60% coupled on F.Cu with no via, 0.08-0.25 mm apart (too
-  short for a bump). The earring's USB_DP/DM side-by-side share falls to 35-59%: about as much
-  is coupled as before, but the matching bumps add length. Jobs re-solved; job.json `args`
-  now carries the seed the studio routes each job with (earring-kicad 5, bluebuzz-kicad 2).
+  pair copper dangling; locked 0 1 1 1 0 0; the 6-layer board 0 on all 6. Coupling (`pair_check`):
+  earring USB_DP/DM 78-92%, USB_C 17-38%; the 6-layer board's USB_DP/DM 72-83% (hand-routed
+  31%), its 4 mm USB_D*_C pair uncoupled. Jobs earring-routed and earring-locked-routed re-solved
+  with pairs.
+- 2026-10-26, length matching and the short pair. Pins of a pair whose ends share a layer are left
+  out of the fan-out; each run's layer is chosen by cost (length, 2 mm per via its ends need, the
+  start ring's radius), each layer from its nearest start ring that lays; pair runs may cross pours,
+  kept block planes included, to be refilled round them (the 6-layer board's 1V1 block pour had cut
+  USB_D*_C off F.Cu). After the cleanup, `grid::match_lengths` measures each net end to end along
+  its copper and bumps the shorter one, one bump at a time, tallest that lays, uncoupled tracks
+  first, undoing any bump that does not reduce the skew. Lab `diffpairs-26`, one thread: earring
+  stripped 1 0 0 0 0 0 unconnected, locked 0 0 0 0 1 0, the 6-layer board 0 0 0 0 0 1; skew after
+  tuning mostly 0.00-0.16 mm (earring seed 2, a 19.8 mm detour, ends at 6.5 mm); the 6-layer board's
+  short pair now 54-60% coupled on F.Cu with no via, 0.08-0.25 mm apart (too short for a bump). The
+  earring's USB_DP/DM side-by-side share falls to 35-59%: about as much is coupled as before, but
+  the matching bumps add length. Jobs re-solved; job.json `args` now carries the seed the studio
+  routes each job with (earring-kicad 5).
 - 2026-10-26, the in-tab worker pool (from agy-webgpu, audited). Merged with its speedups (native
   boards byte-identical, 10-25% faster on one thread); its nudge and push changes left out. As
   merged, the pool was slower than none (65 s against 55 s on the earring): every connection of
@@ -268,7 +269,8 @@ second pass over undone tries.
   s without, the same copper. The in-tab router always negotiates in Jacobi rounds, as native
   `--threads 2+` does, so its boards match the server's and any native multi-thread run of the
   same time limit (results depend on `--timeout`, which later stages share out). Seeds for it
-  from lab `jacobi-27`: earring-kicad 1, bluebuzz-kicad 4, both clean in the browser.
+  from lab `jacobi-27`: earring-kicad 1, and 4 for the 6-layer board, both clean in the
+  browser.
 - 2026-10-26, inner power planes for easy_pcb (`--planes In1.Cu,In2.Cu`, job easy2350): a
   board-wide rule area per plane layer keeps tracks off it (vias pass, refilled round), a
   plane's pour joins its net in connectivity and in the cleanup, and plane-net pads off their

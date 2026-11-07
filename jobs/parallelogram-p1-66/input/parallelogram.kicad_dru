@@ -1,0 +1,145 @@
+(version 1)
+
+# 4-layer JLCPCB JLC04161H-7628 rules for parallelogram/p1-66.
+
+# 0.5 A USB input, IPC-2221 outer 1 oz
+(rule "VBUS current width"
+  (condition "A.NetName == 'VBUS'")
+  (constraint track_width (min 0.25mm)))
+
+# 340 mA avg system rail (IPC-2152 0.09 mm; 0.16 mm enters 0.20 mm AW20198 PVCC/VCC pads cleanly)
+(rule "VSYS current width"
+  (condition "A.NetName == 'VSYS'")
+  (constraint track_width (min 0.16mm)))
+
+# 0.34 A avg, 1 A peak battery rail
+(rule "VBAT current width"
+  (condition "A.NetName == 'VBAT'")
+  (constraint track_width (min 0.25mm)))
+
+# cell minus protection path
+(rule "/Power/BAT_N current width"
+  (condition "A.NetName == '/Power/BAT_N'")
+  (constraint track_width (min 0.25mm)))
+
+# 150 mA max logic rail (IPC-2152 0.09 mm)
+(rule "+3V3 current width"
+  (condition "A.NetName == '+3V3'")
+  (constraint track_width (min 0.15mm)))
+
+(rule "/Driver 1 and matrix/SW1_1 width"
+  (condition "A.NetName == '/Driver 1 and matrix/SW1_1'")
+  (constraint track_width (min 0.10mm)))
+
+(rule "/Driver 1 and matrix/SW1_10 width"
+  (condition "A.NetName == '/Driver 1 and matrix/SW1_10'")
+  (constraint track_width (min 0.10mm)))
+
+(rule "/Driver 1 and matrix/SW1_11 width"
+  (condition "A.NetName == '/Driver 1 and matrix/SW1_11'")
+  (constraint track_width (min 0.10mm)))
+
+(rule "/Driver 1 and matrix/SW1_2 width"
+  (condition "A.NetName == '/Driver 1 and matrix/SW1_2'")
+  (constraint track_width (min 0.10mm)))
+
+(rule "/Driver 1 and matrix/SW1_3 width"
+  (condition "A.NetName == '/Driver 1 and matrix/SW1_3'")
+  (constraint track_width (min 0.10mm)))
+
+(rule "/Driver 1 and matrix/SW1_4 width"
+  (condition "A.NetName == '/Driver 1 and matrix/SW1_4'")
+  (constraint track_width (min 0.10mm)))
+
+(rule "/Driver 1 and matrix/SW1_5 width"
+  (condition "A.NetName == '/Driver 1 and matrix/SW1_5'")
+  (constraint track_width (min 0.10mm)))
+
+(rule "/Driver 1 and matrix/SW1_6 width"
+  (condition "A.NetName == '/Driver 1 and matrix/SW1_6'")
+  (constraint track_width (min 0.10mm)))
+
+(rule "/Driver 1 and matrix/SW1_7 width"
+  (condition "A.NetName == '/Driver 1 and matrix/SW1_7'")
+  (constraint track_width (min 0.10mm)))
+
+(rule "/Driver 1 and matrix/SW1_8 width"
+  (condition "A.NetName == '/Driver 1 and matrix/SW1_8'")
+  (constraint track_width (min 0.10mm)))
+
+(rule "/Driver 1 and matrix/SW1_9 width"
+  (condition "A.NetName == '/Driver 1 and matrix/SW1_9'")
+  (constraint track_width (min 0.10mm)))
+
+(rule "/MCU/QSPI_SCLK length"
+  (condition "A.NetName == '/MCU/QSPI_SCLK'")
+  (constraint length (max 25mm)))
+(rule "/MCU/QSPI_SD0 length"
+  (condition "A.NetName == '/MCU/QSPI_SD0'")
+  (constraint length (max 25mm)))
+(rule "/MCU/QSPI_SD1 length"
+  (condition "A.NetName == '/MCU/QSPI_SD1'")
+  (constraint length (max 25mm)))
+(rule "/MCU/QSPI_SD2 length"
+  (condition "A.NetName == '/MCU/QSPI_SD2'")
+  (constraint length (max 25mm)))
+(rule "/MCU/QSPI_SD3 length"
+  (condition "A.NetName == '/MCU/QSPI_SD3'")
+  (constraint length (max 25mm)))
+(rule "/MCU/QSPI_SS length"
+  (condition "A.NetName == '/MCU/QSPI_SS'")
+  (constraint length (max 25mm)))
+(rule "Net-(C24-Pad1) length"
+  (condition "A.NetName == 'Net-(C24-Pad1)'")
+  (constraint length (max 11mm)))
+(rule "Net-(C24-Pad1) no vias"
+  (condition "A.NetName == 'Net-(C24-Pad1)'")
+  (constraint via_count (max 0)))
+(rule "Net-(U3-XIN) length"
+  (condition "A.NetName == 'Net-(U3-XIN)'")
+  (constraint length (max 11mm)))
+(rule "Net-(U3-XIN) no vias"
+  (condition "A.NetName == 'Net-(U3-XIN)'")
+  (constraint via_count (max 0)))
+(rule "Net-(U3-XOUT) length"
+  (condition "A.NetName == 'Net-(U3-XOUT)'")
+  (constraint length (max 11mm)))
+(rule "Net-(U3-XOUT) no vias"
+  (condition "A.NetName == 'Net-(U3-XOUT)'")
+  (constraint via_count (max 0)))
+(rule "U3 solid EP foreign"
+  (condition "A.intersectsArea('U3 solid EP') && A.NetName != 'GND'")
+  (constraint disallow track via))
+
+(rule "U5 solid EP foreign"
+  (condition "A.intersectsArea('U5 solid EP') && A.NetName != 'GND'")
+  (constraint disallow track via))
+
+(rule "U1 solid EP foreign"
+  (condition "A.intersectsArea('U1 solid EP') && A.NetName != 'GND'")
+  (constraint disallow track via))
+
+(rule "U3 ring foreign vias"
+  (condition "A.intersectsArea('U3 ring vias') && A.NetName != '+1V1' && A.NetName != 'GND'")
+  (constraint disallow via))
+(rule "U3 ring foreign tracks"
+  (condition "A.intersectsArea('U3 ring') && A.NetName != '+3V3' && A.NetName != '+1V1' && A.NetName != 'GND'")
+  (constraint disallow track))
+(rule "reg corner foreign"
+  (condition "A.intersectsArea('reg corner') && A.NetName != '/MCU/VREG_LX' && A.NetName != '+1V1' && A.NetName != '+3V3' && A.NetName != 'GND' && A.NetName != '/MCU/VREG_AVDD'")
+  (constraint disallow track via))
+(rule "L1 window foreign"
+  (condition "A.intersectsArea('L1 window') && A.NetName != '/MCU/VREG_LX' && A.NetName != '+1V1'")
+  (constraint disallow track via))
+(rule "vendor +1V1 area foreign"
+  (condition "A.intersectsArea('vendor +1V1 area') && A.NetName != '+1V1'")
+  (constraint disallow track via))
+(rule "vendor GND area foreign"
+  (condition "A.intersectsArea('vendor GND area') && A.NetName != 'GND'")
+  (constraint disallow track via))
+(rule "vendor VREG_LX area foreign"
+  (condition "A.intersectsArea('vendor /MCU/VREG_LX area') && A.NetName != '/MCU/VREG_LX'")
+  (constraint disallow track via))
+(rule "vendor +3V3 area foreign"
+  (condition "A.intersectsArea('vendor +3V3 area') && A.NetName != '+3V3'")
+  (constraint disallow track via))

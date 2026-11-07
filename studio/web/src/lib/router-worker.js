@@ -23,8 +23,8 @@ const ready = init();
 let poolPromise = null;
 
 // Sub-workers the device's memory allows. Each holds its own copy of the router, whose memory
-// grows with the board and never shrinks, all in the page's one renderer process: on bluebuzz
-// eight of them took the tab to 1.4 GB, more than a phone lets a tab keep. `deviceMemory` is in
+// grows with the board and never shrinks, all in the page's one renderer process: on a 6-layer
+// board eight of them took the tab to 1.4 GB, more than a phone lets a tab keep. `deviceMemory` is in
 // GB, at most 8 in Chrome; absent elsewhere.
 function memoryCap() {
   if (typeof navigator === 'undefined') return 4;

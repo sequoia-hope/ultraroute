@@ -2,8 +2,8 @@
 """Summarise every experiment into experiments.json for the project page.
 
 Route jobs come from jobs/*/leaderboard.csv (ranked best first by route_job.py) and best/recipe.json;
-morph runs from morph-frames/runs.json (written by check-frames.py); PCBench corpus experiments
-from the reports listed in CORPUS, whose verdicts are written by hand when each report is read.
+PCBench corpus experiments from the reports listed in CORPUS, whose verdicts are written by hand
+when each report is read.
 """
 import csv
 import json
@@ -16,9 +16,7 @@ REPORTS = "copperroute/benchmark/reports"
 OUTLINE_FIX = "2026-10-23T04:29"
 
 JOBS = {
-    "bluebuzz": "The priority board: route.py's tamed DSN, 3 routable layers, J1, U7 and U20–U23 locked.",
     "simple_earring": "LED earring, latest rev; every LED, J1, SW1 and SW2 locked.",
-    "bluebuzz-ripped": "Bluebuzz with route.py's scripted copper removed.",
     "simple_earring-ripped": "The earring with route.py's scripted copper removed.",
 }
 
@@ -75,33 +73,9 @@ def when(path):
     return datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="minutes")
 
 
-def morph_runs():
-    path = ROOT / "morph-frames" / "runs.json"
-    if not path.exists():
-        return []
-    out = []
-    for name, run in sorted(json.loads(path.read_text()).items()):
-        s = run.get("summary")
-        if not s:
-            continue
-        ops = ", ".join(f"{op.split('/')[-1]} {n}" for op, n in s["operators"].items())
-        change = "no connection opened" if not s["opened"] else f"{len(s['opened'])} connection(s) opened"
-        out.append({
-            "when": run.get("when") or when(ROOT / "morph-frames" / name / "frames.jsonl"),
-            "title": name,
-            "about": run["args"],
-            "result": f"{s['moves']} moves of {s['parts']} parts ({ops}); {change}",
-            "detail": f"open {s['open_start']} → {s['open_end']}",
-            "links": [{"label": "watch", "href": f"morph-frames/?run={name}"}],
-        })
-    return out
-
-
 def main():
     groups = [
         {"title": "Route jobs", "items": route_jobs()},
-        {"title": "Morph runs on bluebuzz", "items": morph_runs(),
-         "link": {"label": "viewer", "href": "morph-frames/"}},
         {"title": "PCBench corpus", "items": corpus()},
     ]
     for group in groups:

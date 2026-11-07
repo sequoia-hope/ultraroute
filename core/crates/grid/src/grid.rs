@@ -1659,7 +1659,7 @@ mod tests {
             map
         };
         let same = |a: &ObstacleMap, b: &ObstacleMap| a.owner == b.owner && a.via_owner == b.via_owner;
-        for name in ["earring.kicad_pcb", "bluebuzz-rm2.kicad_pcb"] {
+        for name in ["earring.kicad_pcb", "parallelogram-p1-66.kicad_pcb"] {
             let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures").join(name);
             let mut board = Board::load(&path).unwrap().0;
             for net in [1, 2] {
@@ -1998,7 +1998,7 @@ mod tests {
             map.stamp_unclaimed_masks(board, skip, &Deadline::default());
             map
         };
-        for name in ["earring.kicad_pcb", "bluebuzz-rm2.kicad_pcb"] {
+        for name in ["earring.kicad_pcb", "parallelogram-p1-66.kicad_pcb"] {
             let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures").join(name);
             let mut board = Board::load(&path).unwrap().0;
             let base = ObstacleMap::new(&board, Profile::for_net(&board, 1), 50_000, false);

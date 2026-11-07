@@ -50,7 +50,7 @@ there (costly, not unsafe). A layer-scoped width rule is taken at its widest on 
 On ten `~/pcb` boards with rule files, routed from bare pads and judged by kicad-cli with their
 own rules (`tools/rulebench.py`), every rule violation the old router left is gone: rp2040 motor 44 hole
 clearance errors, servodrive 178 track width errors, the pendant's 45 antenna keep-out errors and
-bluebuzz's 11 layer-limit errors, all to none. Open connections rose by one or two on four boards
+the 6-layer board's 11 layer-limit errors, all to none. Open connections rose by one or two on four boards
 where a rule now closes space the old router used.
 
 ## Board and project: ranked gaps

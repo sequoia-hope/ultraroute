@@ -1141,7 +1141,7 @@ fn via_costs(a: &Args, board: &Board) -> ViaCosts {
     };
     let height = board.via_height as f64 * 1e-6;
     // Only where every via counts its height (`Board::vias_cost_length`); with inner layers to
-    // route on, dear vias drove bluebuzz's WL_DATA 10 mm out of its way for vias KiCad counts as
+    // route on, dear vias drove one 6-layer board's WL_DATA 10 mm out of its way for vias KiCad counts as
     // nothing.
     let limited: Vec<u32> = if board.vias_cost_length() { (1..board.nets.len() as u32).filter(|&n| board.net_maximum("length", n).is_some()).collect() } else { Vec::new() };
     let dear = |mm: f64| limited.iter().map(|&n| (n, at(mm.max(VIA_COST_MM) + height))).collect::<HashMap<u32, u32>>();
@@ -1738,7 +1738,7 @@ fn prepare(a: &Args, board: &mut Board, ledger: &mut Ledger) {
     }
     // An inner layer one net's pour all but fills is a plane in all but name: signals routed
     // across it cut its return paths. With --auto-planes it is taken as one; otherwise said.
-    // (Reserving every such layer costs some boards connections: bluebuzz has three.)
+    // (Reserving every such layer costs some boards connections: one 6-layer board lost three.)
     let mut a_planes_found: Vec<String> = Vec::new();
     if a.planes.is_empty() {
         for (l, net) in board.plane_layers(PLANE_SHARE) {

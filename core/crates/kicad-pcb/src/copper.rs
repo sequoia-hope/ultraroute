@@ -811,11 +811,19 @@ fn read_pad(p: &Node, footprint: usize, index: usize, fp: &Footprint) -> Result<
     let size = model.size;
     // The file stores a pad's angle on the board, not relative to its footprint.
     let angle = p.find("at").and_then(|a| a.args().get(2)).map(Node::number).transpose()?.unwrap_or(0.0);
+    // `(chamfer top_left ...)` cuts those corners straight, `chamfer_ratio` of the shorter side
+    // back along each edge; the others keep their rounding (KiCad 9 writes such a pad as a
+    // roundrect with the chamfer beside it).
+    let chamfered: [bool; 4] = {
+        let named: Vec<&str> = p.find("chamfer").map(|c| c.args().iter().filter_map(Node::text).collect()).unwrap_or_default();
+        ["bottom_right", "bottom_left", "top_left", "top_right"].map(|c| named.contains(&c))
+    };
+    let chamfer = ratio("chamfer_ratio") * size[0].min(size[1]);
     let local_outline = match &shape {
         PadShape::Circle => None,
-        PadShape::Rect | PadShape::ChamferedRect { .. } => Some(vec![rect(size)]),
+        PadShape::Rect | PadShape::ChamferedRect { .. } => Some(vec![corners(size, 0.0, chamfer, chamfered)]),
         PadShape::Oval => Some(vec![stadium(size)]),
-        PadShape::RoundRect { ratio } => Some(vec![rounded(size, ratio * size[0].min(size[1]))]),
+        PadShape::RoundRect { ratio } => Some(vec![corners(size, ratio * size[0].min(size[1]), chamfer, chamfered)]),
         PadShape::Trapezoid { delta } => {
             let [w, h] = [size[0] / 2.0, size[1] / 2.0];
             let [dx, dy] = [delta[0] / 2.0, delta[1] / 2.0];
@@ -976,6 +984,29 @@ fn rounded(size: [f64; 2], r: f64) -> Vec<[f64; 2]> {
     out
 }
 
+/// A rectangle whose corners (bottom right, bottom left, top left, top right in the pad's frame,
+/// y down) are each cut by `c` where `cut` says so, and rounded by `r` otherwise.
+fn corners(size: [f64; 2], r: f64, c: f64, cut: [bool; 4]) -> Vec<[f64; 2]> {
+    let [w, h] = [size[0] / 2.0, size[1] / 2.0];
+    let c = c.min(w).min(h);
+    if c <= 0.0 || !cut.contains(&true) {
+        return rounded(size, r);
+    }
+    let round = rounded(size, r);
+    // `rounded` gives each corner the same number of points, in this order; a plain rectangle one.
+    let per = round.len() / 4;
+    let cuts = [[[w, h - c], [w - c, h]], [[-w + c, h], [-w, h - c]], [[-w, -h + c], [-w + c, -h]], [[w - c, -h], [w, -h + c]]];
+    let mut out = Vec::new();
+    for k in 0..4 {
+        if cut[k] {
+            out.extend(cuts[k]);
+        } else {
+            out.extend_from_slice(&round[k * per..(k + 1) * per]);
+        }
+    }
+    out
+}
+
 fn stadium(size: [f64; 2]) -> Vec<[f64; 2]> {
     rounded(size, size[0].min(size[1]) / 2.0)
 }
@@ -1120,6 +1151,20 @@ fn uuid(n: &Node) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_chamfered_corner_is_cut_and_the_others_keep_their_rounding() {
+        // An RP2350 QFN corner pin: 0.875 x 0.2 mm, roundrect 0.25, top-left chamfered 0.25.
+        let poly = super::corners([0.875e-3, 0.2e-3], 0.05e-3, 0.05e-3, [false, false, true, false]);
+        let (w, h) = (0.4375e-3, 0.1e-3);
+        assert!(poly.contains(&[-w, -h + 0.05e-3]) && poly.contains(&[-w + 0.05e-3, -h]), "{poly:?}");
+        // Nothing reaches into the cut corner's triangle.
+        assert!(poly.iter().all(|p| (p[0] + w) + (p[1] + h) >= 0.05e-3 - 1e-12), "{poly:?}");
+        // The rounded corners are as `rounded` draws them.
+        let round = super::rounded([0.875e-3, 0.2e-3], 0.05e-3);
+        assert_eq!(poly.len(), round.len() / 4 * 3 + 2);
+        assert_eq!(super::corners([0.875e-3, 0.2e-3], 0.05e-3, 0.05e-3, [false; 4]), round);
+    }
+
     #[test]
     fn copper_text_of_several_lines_is_as_wide_as_its_longest() {
         let (_, copper) = crate::parse_board_with(

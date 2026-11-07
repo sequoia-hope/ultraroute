@@ -110,8 +110,8 @@ The brief above covers diffusion only for *placement*. Upstream CopperRoute alre
 
 | Technique | Upstream verdict | Our status |
 |---|---|---|
-| Ripup **history term** (PathFinder negotiated congestion). The router currently forgets every ripup between passes | Pursue (E3) | **Prototyped** as `COPPERROUTE_RIPUP_HISTORY`, a per-net factor that is off by default. Being measured on the corpus and bluebuzz |
-| **Obstacle-aware admissible heuristic** (portal / true-distance). The current A* estimate ignores keepouts ("corridor blindness") | Pursue (E1), highest conviction | Next. Bluebuzz, with 696 keepouts, is exactly this case |
+| Ripup **history term** (PathFinder negotiated congestion). The router currently forgets every ripup between passes | Pursue (E3) | **Prototyped** as `COPPERROUTE_RIPUP_HISTORY`, a per-net factor that is off by default. Being measured on the corpus and the 6-layer board |
+| **Obstacle-aware admissible heuristic** (portal / true-distance). The current A* estimate ignores keepouts ("corridor blindness") | Pursue (E1), highest conviction | Next. The 6-layer board, with 696 keepouts, is exactly this case |
 | **Windowed search-and-repair** with violation history (TritonRoute / OpenROAD drt) | Pursue (E2) | Queued |
 | **Pin-access reservation** for unrouted nets | Pursue | Queued. Targets dense boards whose last connections get walled in |
 | Cost-weight scheduling (arXiv 2512.03594, without the RL) | Pursue | Queued with E3 |

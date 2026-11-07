@@ -1486,7 +1486,7 @@ mod tests {
             board.insert(Item { kind, net: 1, layers: 1, shape: Shape::Capsule { a, b, r }, hole: None, locked: false, span: None })
         };
         let pad = || Kind::Pad { footprint: 0, number: "1".into(), plated: false };
-        // bluebuzz's XOUT on In1.Cu, less (101.9, 116.6) mm: a fan-out stub from one pad, a
+        // A crystal net's XOUT on In1.Cu, less (101.9, 116.6) mm: a fan-out stub from one pad, a
         // route from the other that crosses the stub's tip, and the route's last short piece
         // ending in the stub's side.
         put(pad(), Point::new(90_000, 20_000), Point::new(90_000, 20_000), 100_000);

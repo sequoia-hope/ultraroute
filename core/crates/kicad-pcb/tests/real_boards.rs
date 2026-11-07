@@ -17,7 +17,7 @@ fn count(text: &str, form: &str) -> usize {
 
 #[test]
 fn every_track_via_and_zone_is_read() {
-    for name in ["bluebuzz-rm2.kicad_pcb", "earring.kicad_pcb"] {
+    for name in ["parallelogram-p1-66.kicad_pcb", "earring.kicad_pcb"] {
         let (pcb, copper, text) = board(name);
         assert_eq!(copper.tracks.len(), count(&text, "segment"), "{name}");
         assert_eq!(copper.arcs.len(), count(&text, "arc"), "{name}");
@@ -31,16 +31,16 @@ fn every_track_via_and_zone_is_read() {
 
 #[test]
 fn copper_layers_run_front_to_back() {
-    let (_, copper, _) = board("bluebuzz-rm2.kicad_pcb");
+    let (_, copper, _) = board("parallelogram-p1-66.kicad_pcb");
     let names: Vec<&str> = copper.layers.iter().map(|l| l.name.as_str()).collect();
-    assert_eq!(names, ["F.Cu", "In1.Cu", "In2.Cu", "In3.Cu", "In4.Cu", "B.Cu"]);
-    assert_eq!(copper.expand(&["*.Cu".to_string()]).len(), 6);
+    assert_eq!(names, ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);
+    assert_eq!(copper.expand(&["*.Cu".to_string()]).len(), 4);
     assert_eq!(copper.expand(&["F.Cu".to_string(), "F.Mask".to_string()]), ["F.Cu"]);
 }
 
 #[test]
 fn spans_cover_exactly_their_item() {
-    let (_, copper, text) = board("bluebuzz-rm2.kicad_pcb");
+    let (_, copper, text) = board("parallelogram-p1-66.kicad_pcb");
     for t in copper.tracks.iter().take(50) {
         let s = &text[t.span.start..t.span.end];
         assert!(s.starts_with("(segment") && s.ends_with(')') && s.contains(&t.uuid), "{s}");
@@ -77,7 +77,7 @@ fn segment_distance(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
 /// pad placement and rotation agree with where the designer's copper actually meets the pads.
 #[test]
 fn tracks_end_inside_the_pads_they_meet() {
-    for name in ["bluebuzz-rm2.kicad_pcb", "earring.kicad_pcb"] {
+    for name in ["parallelogram-p1-66.kicad_pcb", "earring.kicad_pcb"] {
         let (pcb, copper, _) = board(name);
         let pads: Vec<(&PadCopper, u32)> = copper
             .pads
@@ -90,9 +90,19 @@ fn tracks_end_inside_the_pads_they_meet() {
                 (at[0] - p[0]).hypot(at[1] - p[1]) < 0.3e-3
             })
         };
+        // Where two tracks of a net end together, they meet each other there, wherever a pad is.
+        let joint = |i: usize, p: [f64; 2]| {
+            let t = &copper.tracks[i];
+            copper.tracks.iter().enumerate().any(|(j, u)| {
+                j != i && u.net == t.net && u.layer == t.layer && [u.start, u.end].iter().any(|q| (q[0] - p[0]).hypot(q[1] - p[1]) < t.width / 2.0)
+            })
+        };
         let (mut checked, mut inside_count) = (0, 0);
-        for t in &copper.tracks {
+        for (i, t) in copper.tracks.iter().enumerate() {
             for end in [t.start, t.end] {
+                if joint(i, end) {
+                    continue;
+                }
                 if let Some(pad) = near(end, t.net) {
                     checked += 1;
                     inside_count += inside(&pad.outline, end, t.width / 2.0) as usize;
@@ -106,7 +116,7 @@ fn tracks_end_inside_the_pads_they_meet() {
 
 #[test]
 fn rule_areas_say_what_they_forbid() {
-    let (_, copper, _) = board("bluebuzz-rm2.kicad_pcb");
+    let (_, copper, _) = board("parallelogram-p1-66.kicad_pcb");
     let keepouts: Vec<&Zone> = copper.zones.iter().filter(|z| z.keepout.is_some()).collect();
     assert!(!keepouts.is_empty());
     assert!(keepouts.iter().any(|z| z.keepout.unwrap().tracks));
@@ -134,7 +144,7 @@ fn key(start: [f64; 2], end: [f64; 2], width: f64, layer: &str, net: u32) -> Str
 /// in the file moves.
 #[test]
 fn copper_written_back_reads_the_same() {
-    let (pcb, copper, text) = board("bluebuzz-rm2.kicad_pcb");
+    let (pcb, copper, text) = board("parallelogram-p1-66.kicad_pcb");
     let edit = Edit {
         remove: copper.tracks.iter().map(|t| t.span).chain(copper.vias.iter().map(|v| v.span)).collect(),
         tracks: copper
@@ -176,7 +186,7 @@ fn copper_written_back_reads_the_same() {
 /// hair inside their own pads (the earring's USON-8), so 95%, not all, are asked for.
 #[test]
 fn most_footprints_have_a_courtyard_around_their_pads() {
-    for name in ["bluebuzz-rm2.kicad_pcb", "earring.kicad_pcb"] {
+    for name in ["parallelogram-p1-66.kicad_pcb", "earring.kicad_pcb"] {
         let (pcb, copper, _) = board(name);
         let with: Vec<usize> = (0..pcb.footprints.len()).filter(|&i| copper.courtyards[i].is_some()).collect();
         assert!(with.len() * 10 >= pcb.footprints.len() * 8, "{name}: {} of {}", with.len(), pcb.footprints.len());

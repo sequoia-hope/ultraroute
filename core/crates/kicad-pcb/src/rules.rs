@@ -341,15 +341,18 @@ mod tests {
 
     #[test]
     fn classes_come_from_patterns_then_default() {
-        let rules = Rules::read(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/bluebuzz-rm2.kicad_pro")).unwrap();
+        let rules = Rules::read(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/parallelogram-p1-66.kicad_pro")).unwrap();
         let near = |a: f64, b: f64| assert!((a - b).abs() < 1e-12, "{a} vs {b}");
-        near(rules.min_clearance, 0.127e-3);
-        near(rules.min_copper_edge_clearance, 0.3e-3);
-        assert_eq!(rules.class_of("VBUS").unwrap().name, "Vbus");
-        near(rules.class_of("VBUS").unwrap().track_width, 0.65e-3);
-        assert_eq!(rules.class_of("GND").unwrap().name, "Power");
+        near(rules.min_clearance, 0.1e-3);
+        near(rules.min_copper_edge_clearance, 0.25e-3);
+        assert_eq!(rules.class_of("VBUS").unwrap().name, "USB_POWER");
+        near(rules.class_of("VBUS").unwrap().track_width, 0.25e-3);
+        assert_eq!(rules.class_of("GND").unwrap().name, "POWER");
+        assert_eq!(rules.class_of("Net-(U3-XIN)").unwrap().name, "CLOCK");
         assert_eq!(rules.class_of("SOMETHING_ELSE").unwrap().name, "Default");
-        near(rules.clearance("GND", "VBUS"), 0.127e-3);
+        near(rules.clearance("GND", "VBUS"), 0.1e-3);
+        // Two classes keep the larger of their clearances apart.
+        near(rules.clearance("GND", "Net-(U3-XIN)"), 0.15e-3);
     }
 
     #[test]

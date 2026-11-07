@@ -1,13 +1,5 @@
 [
  {
-  "file": "bluebuzz-kicad--prefanout-pairs-t2-seed4.jsonl.gz",
-  "job": "bluebuzz-kicad",
-  "recipe": "prefanout-pairs-t2-seed4",
-  "open": 0,
-  "seconds": 65.082,
-  "bytes": 1601259
- },
- {
   "file": "earring-kicad--prefanout-pairs-t2-seed1.jsonl.gz",
   "job": "earring-kicad",
   "recipe": "prefanout-pairs-t2-seed1",

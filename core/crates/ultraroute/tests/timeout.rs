@@ -8,7 +8,7 @@ use std::sync::Arc;
 use board::Board;
 
 fn routed_within(timeout: f64, limit: f64) {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/bluebuzz-rm2.kicad_pcb");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/parallelogram-p1-66.kicad_pcb");
     let mut args: Vec<String> = ["route", path.to_str().unwrap(), "-o", "unused.kicad_pcb", "--strip-all", "--seed", "0", "--threads", "1"].map(String::from).to_vec();
     args.extend(["--recipe".to_string(), "default".to_string()]);
     args.extend(["--timeout".to_string(), timeout.to_string()]);

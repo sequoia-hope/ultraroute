@@ -1,5 +1,6 @@
 Real boards for tests, copied unchanged from their repositories:
-  bluebuzz-rm2.kicad_pcb, .kicad_pro   github.com/sequoia-hope/bluebuzz        out/ at bf235b5
+  parallelogram-p1-66.kicad_pcb, .kicad_pro, .kicad_dru
+                                       github.com/sequoia-hope/round-pendant   hw/parallelogram/p1-66/parallelogram.* at 4768646
   earring.kicad_pcb, .kicad_pro        github.com/sequoia-hope/simple-earring  out/ at 1300fe6
 
 Copied from this repository, frozen here so that a refreshed job input cannot change a test:

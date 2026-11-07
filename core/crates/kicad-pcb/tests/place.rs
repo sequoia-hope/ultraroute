@@ -41,7 +41,7 @@ fn footprints_hash(text: &str) -> String {
 #[test]
 fn every_footprint_comes_out_as_pcbnew_saves_it() {
     let hashes: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir("tests/golden/place/hashes.json")).unwrap()).unwrap();
-    for board in ["earring", "bluebuzz-rm2", "earring-locked"] {
+    for board in ["earring", "parallelogram-p1-66", "earring-locked"] {
         let mut text = std::fs::read_to_string(dir("../../fixtures").join(format!("{board}.kicad_pcb"))).unwrap();
         for round in 1..=2 {
             let name = format!("{board}.r{round}");
