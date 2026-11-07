@@ -1470,6 +1470,188 @@ pub fn pull_tight_watch(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &De
     stats
 }
 
+/// The least a cut must shorten a chain by to be kept, in nm: below it a bend wrapping round
+/// copper would be cut ever finer for nothing anyone could see.
+const TAUT_GAIN: f64 = 50_000.0;
+
+/// How many rounds of cuts a chain gets: each round cuts every bend once, the bends a cut makes
+/// included, so a chain that wraps round an obstacle nears it in a few.
+const TAUT_ROUNDS: usize = 4;
+
+/// Pulls the router's chains taut, as a rubber band: where [`pull_tight`] can only join two of a
+/// chain's points, this cuts each bend from a point on one of its tracks to a point on the other,
+/// as deep as no rule is broken and nothing the chain goes round lies in the corner cut off. The
+/// chain bends anew where the cut meets copper, round after round, so it comes to lie along what
+/// it wraps (Dense Square's SW2_9 on In4.Cu ran 2.4 mm past a via before turning back down to
+/// pass under it). Chains not reached by `deadline` stay as they are.
+pub fn pull_taut_watch(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &Deadline, watch: &mut TightWatch) -> CleanStats {
+    let _b = board::work::enter(board::work::Bucket::Geometry);
+    let soft_set: HashSet<ItemId> = soft.iter().copied().filter(|id| board.item(*id).is_some()).collect();
+    let mut stats = CleanStats::default();
+    let mut replaced: HashSet<ItemId> = HashSet::new();
+    let mut added: HashSet<ItemId> = HashSet::new();
+    for chain in chains(board, &soft_set) {
+        if deadline.expired() {
+            break;
+        }
+        let ct0 = board::work::timed_run_ns();
+        stats.chains += 1;
+        stats.segments_before += chain.tracks.len();
+        stats.length_before += length(&chain.points);
+        let (mut points, mut tracks) = (chain.points.clone(), chain.tracks.clone());
+        let (mut old, mut new): (Vec<Item>, Vec<ItemId>) = (Vec::new(), Vec::new());
+        for _ in 0..TAUT_ROUNDS {
+            let before = length(&points);
+            let mut k = 1;
+            while k + 1 < points.len() && !deadline.expired() {
+                match cut_bend(board, &chain, &points, &tracks, k) {
+                    Some((cut, pieces, taken)) => {
+                        for t in &tracks[k - 1..=k] {
+                            if !added.remove(t) {
+                                replaced.insert(*t);
+                            }
+                        }
+                        new.retain(|n| !tracks[k - 1..=k].contains(n));
+                        old.extend(taken);
+                        added.extend(&pieces);
+                        new.extend(&pieces);
+                        let step = cut.len();
+                        points.splice(k..=k, cut);
+                        tracks.splice(k - 1..=k, pieces);
+                        k += step;
+                    }
+                    None => k += 1,
+                }
+            }
+            if before - length(&points) < TAUT_GAIN * 1e-6 {
+                break;
+            }
+        }
+        stats.segments_after += tracks.len();
+        stats.length_after += length(&points);
+        if !new.is_empty() {
+            watch(board, chain.net, &old, &new);
+            stats.kept_ns = stats.kept_ns.saturating_add(board::work::timed_run_ns().saturating_sub(ct0));
+        } else {
+            stats.unchanged_ns = stats.unchanged_ns.saturating_add(board::work::timed_run_ns().saturating_sub(ct0));
+        }
+    }
+    soft.retain(|id| !replaced.contains(id) && board.item(*id).is_some());
+    soft.extend(added.into_iter().filter(|id| board.item(*id).is_some()));
+    stats
+}
+
+/// The deepest cut of the bend at `points[k]`: from a point on the track before it to a point on
+/// the track after, searched symmetrically and then each side on its own. The bend's new points,
+/// the pieces now between `points[k - 1]` and `points[k + 1]`, and the tracks they replaced; the
+/// board is left as it was if no cut shortens the chain by [`TAUT_GAIN`].
+fn cut_bend(board: &mut Board, chain: &Chain, points: &[Point], tracks: &[ItemId], k: usize) -> Option<(Vec<Point>, Vec<ItemId>, Vec<Item>)> {
+    let (u, p, w) = (points[k - 1], points[k], points[k + 1]);
+    if board::point_segment(p, u, w) < 1_000.0 {
+        return None;
+    }
+    let at = |from: Point, to: Point, t: f64| Point::new(from.x + ((to.x - from.x) as f64 * t).round() as Nm, from.y + ((to.y - from.y) as f64 * t).round() as Nm);
+    let cut = |ta: f64, tb: f64| (at(p, u, ta), at(p, w, tb));
+    let fits = |board: &mut Board, ta: f64, tb: f64| {
+        let (a, b) = cut(ta, tb);
+        try_cut(board, chain, tracks, k, u, a, p, b, w, false).is_some()
+    };
+    // The largest of `lo..=hi` that fits, `lo` fitting, as `fits_at` grows.
+    let deepest = |board: &mut Board, fits_at: &mut dyn FnMut(&mut Board, f64) -> bool, lo: f64, hi: f64| {
+        if fits_at(board, hi) {
+            return hi;
+        }
+        let (mut lo, mut hi) = (lo, hi);
+        for _ in 0..7 {
+            let mid = (lo + hi) / 2.0;
+            if fits_at(board, mid) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        lo
+    };
+    let t = deepest(board, &mut |b, t| fits(b, t, t), 0.0, 1.0);
+    let ta = deepest(board, &mut |b, x| fits(b, x, t), t, 1.0);
+    let tb = deepest(board, &mut |b, x| fits(b, ta, x), t, 1.0);
+    let (a, b) = cut(ta, tb);
+    let gain = u.distance(p) + p.distance(w) - (u.distance(a) + a.distance(b) + b.distance(w));
+    if gain < TAUT_GAIN {
+        return None;
+    }
+    let (pieces, taken) = try_cut(board, chain, tracks, k, u, a, p, b, w, true)?;
+    let mut bends: Vec<Point> = [a, b].into_iter().filter(|&q| q != u && q != w).collect();
+    bends.dedup();
+    Some((bends, pieces, taken))
+}
+
+/// Cuts the bend `p` between `u` and `w` from `a` to `b`, where the triangle cut off holds
+/// nothing of another net, no hole and no edge, whatever joined the two tracks still joins the
+/// pieces or the tracks either side, and no piece breaks a rule. The pieces and the tracks taken
+/// out if `keep`; else, or if it does not fit, the board is left as it was.
+#[allow(clippy::too_many_arguments)]
+fn try_cut(board: &mut Board, chain: &Chain, tracks: &[ItemId], k: usize, u: Point, a: Point, p: Point, b: Point, w: Point, keep: bool) -> Option<(Vec<ItemId>, Vec<Item>)> {
+    let layer = chain.layer.trailing_zeros() as usize;
+    if !sweep_clear(board, chain.net, layer, a, p, b) {
+        return None;
+    }
+    let span = &tracks[k - 1..=k];
+    let mut partners: Vec<ItemId> = Vec::new();
+    for &t in span {
+        let Some(track) = board.item(t) else { return None };
+        for other in board.near(layer, track.shape.bbox()) {
+            if !span.contains(&other) && board.item(other).is_some_and(|o| o.net == chain.net) && joined(board, t, other) {
+                partners.push(other);
+            }
+        }
+    }
+    partners.sort_unstable();
+    partners.dedup();
+    let sides: Vec<ItemId> = [k.checked_sub(2).map(|i| tracks[i]), tracks.get(k + 1).copied()].into_iter().flatten().collect();
+    let removed: Vec<(ItemId, Item)> = span.iter().filter_map(|t| Some((*t, board.remove(*t)?))).collect();
+    let mut pieces = Vec::new();
+    let mut ok = removed.len() == 2;
+    for (x, y) in [(u, a), (a, b), (b, w)] {
+        if x == y || !ok {
+            continue;
+        }
+        let id = board.insert(Item { kind: Kind::Track, net: chain.net, layers: chain.layer, shape: Shape::Capsule { a: x, b: y, r: chain.half_width }, hole: None, locked: false, span: None });
+        pieces.push(id);
+        ok = check_item(board, id).is_empty();
+    }
+    ok = ok && partners.iter().all(|&o| pieces.iter().chain(&sides).any(|&s| s == o || joined(board, o, s)));
+    if ok && keep {
+        return Some((pieces, removed.into_iter().map(|(_, it)| it).collect()));
+    }
+    for id in pieces {
+        board.discard(id);
+    }
+    for (id, item) in removed {
+        board.restore(id, item);
+    }
+    ok.then(|| (Vec::new(), Vec::new()))
+}
+
+/// Whether the triangle `a`, `p`, `b` on `layer` holds nothing a chain of `net` must go round:
+/// another net's copper but a pour that is refilled, a keepout, a hole or the board's edge. A
+/// cut across it then slides the chain over empty board, keeping it on the same side of all else.
+fn sweep_clear(board: &Board, net: u32, layer: usize, a: Point, p: Point, b: Point) -> bool {
+    let tri = Shape::Polygon(vec![a, p, b]);
+    let bbox = board::BBox::of([a, p, b]);
+    let blocks = |o: &Item| match o.kind {
+        Kind::Spoke { .. } => false,
+        Kind::Pour { .. } if o.refilled() => false,
+        Kind::Keepout { .. } => true,
+        _ => o.net != net || net == 0,
+    };
+    let edge = board.outline_edges.iter().any(|(x, y, bb, _)| bb.overlaps(bbox) && tri.gap(&Shape::Capsule { a: *x, b: *y, r: 0 }) == 0.0);
+    let copper = board.near(layer, bbox).into_iter().filter_map(|o| board.item(o)).any(|o| o.on(layer) && blocks(o) && o.shape.gap_within(&tri, 0.0) == 0.0);
+    let holes = board.layers.len();
+    let hole = board.near(holes, bbox).into_iter().any(|o| board.item(o).and_then(|it| board.hole_shape(o, it)).is_some_and(|h| h.gap_within(&tri, 0.0) == 0.0));
+    !edge && !copper && !hole
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1869,6 +2051,38 @@ mod tests {
         let piece = board.item(laid[1]).expect("the piece").clone();
         let Shape::Capsule { a, b, r } = piece.shape else { panic!("a track") };
         assert_eq!((a, b, r), (Point::new(0, -360_000), Point::new(0, 0), 100_000), "from the track to the centre, at its width");
+    }
+
+    #[test]
+    fn a_chain_that_overshoots_a_via_is_pulled_taut_round_it() {
+        // Dense Square's SW2_9 on In4.Cu: up past a via of another net and back down to pass
+        // under it, 2.4 mm out of its way. Joining two of its points crosses the via, so pulling
+        // tight keeps it; pulled taut it bends round the via, the via on the side it was.
+        let (pcb, copper) = kicad_pcb::parse_board(
+            "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal)) (net 0 \"\") (net 1 \"N1\") (net 2 \"N2\"))",
+        )
+        .unwrap();
+        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+        let (p0, p1, p2) = (Point::new(0, 0), Point::new(0, -4_000_000), Point::new(2_700_000, -2_650_000));
+        for at in [p0, p2] {
+            board.insert(Item { kind: Kind::Pad { footprint: 0, number: "1".into(), plated: false }, net: 1, layers: 1, shape: Shape::Capsule { a: at, b: at, r: 150_000 }, hole: None, locked: true, span: None });
+        }
+        let o = Point::new(1_350_000, -1_325_000);
+        board.insert(Item { kind: Kind::Via, net: 2, layers: 1, shape: Shape::Capsule { a: o, b: o, r: 300_000 }, hole: Some((o, 150_000)), locked: true, span: None });
+        let mut soft = vec![board.insert(seg(p0, p1)), board.insert(seg(p1, p2))];
+        let before = pull_tight(&mut board, &mut soft, &Default::default());
+        assert_eq!(before.segments_after, 2, "no two of its points can be joined");
+        let taut = pull_taut_watch(&mut board, &mut soft, &Default::default(), &mut |_, _, _, _| {});
+        assert!(taut.length_after < 4.5, "{taut:?}");
+        assert!(board::check(&board).is_empty(), "{:?}", board::check(&board));
+        assert!(board::connectivity(&board).airlines.is_empty());
+        // Every piece passes the via on its left, walking from p0, as the chain did.
+        for id in &soft {
+            let Shape::Capsule { a, b, .. } = board.item(*id).expect("laid").shape else { panic!("a track") };
+            let (a, b) = if a.distance(p0) < b.distance(p0) { (a, b) } else { (b, a) };
+            let cross = (b.x - a.x) as f64 * (o.y - a.y) as f64 - (b.y - a.y) as f64 * (o.x - a.x) as f64;
+            assert!(cross > 0.0, "{a:?} -> {b:?} passes the via on its other side");
+        }
     }
 
     #[test]
