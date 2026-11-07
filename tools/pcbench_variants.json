@@ -1,0 +1,12 @@
+{
+ "why": "Boards of our own made from a PCBench board by one stated edit, prepared and routed as the others are (pcbench.py reads this file). The edit names what it removes exactly; preparing fails if it matches anything but `count` items. A variant joins the tiers it names.",
+ "variants": [
+  {
+   "id": "SPEX_HAB_Mainboard_Hardware_Power-no-mask-text",
+   "base": "SPEX_HAB_Mainboard_Hardware_Power",
+   "remove": {"head": "gr_text", "contains": "Exsisto nimis", "layer": "F.Mask", "count": 1},
+   "why": "The F.Mask text beside U103 overlaps pins 8, 9 and 11 and bares pads of many nets, so no track leaves those pins without a mask bridge: the designer's own routing adds them (tools/netcheck.py). Without the text the board routes clean (2026-11-06: 12 s at 120 s, 78 vias).",
+   "tiers": ["guard"]
+  }
+ ]
+}
