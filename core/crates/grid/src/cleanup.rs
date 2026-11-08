@@ -1715,6 +1715,11 @@ pub fn octilinear_watch(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &De
     bent
 }
 
+/// The most of a chain's tracks [`octilinear_round`] lays one way in place of: a run pulled taut
+/// lies in pieces each a little off the last, and bent one by one they step aside by slivers,
+/// a ladder of doglegs (stm32_nucleo's GND, four steps of 40 um down 12 mm).
+const OCTILINEAR_SPAN: usize = 8;
+
 fn octilinear_round(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &Deadline, watch: &mut TightWatch) -> usize {
     let soft_set: HashSet<ItemId> = soft.iter().copied().filter(|id| board.item(*id).is_some()).collect();
     let mut replaced: HashSet<ItemId> = HashSet::new();
@@ -1726,43 +1731,84 @@ fn octilinear_round(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &Deadli
         }
         let (mut points, mut tracks) = (chain.points.clone(), chain.tracks.clone());
         let (mut old, mut new): (Vec<Item>, Vec<ItemId>) = (Vec::new(), Vec::new());
-        let mut k = 0;
-        while k < tracks.len() {
-            let (s, e) = (points[k], points[k + 1]);
-            let Some(mut ways) = octilinear_ways(s, e) else {
-                k += 1;
-                continue;
-            };
-            // A knee whose first piece carries on the track before, or whose last carries on
-            // into the track after, first: one bend fewer.
-            let carries = |q: Point| (k > 0 && same_heading(points[k - 1], s, s, q)) || (k + 2 < points.len() && same_heading(q, e, e, points[k + 2]));
-            if carries(ways[1][0]) && !carries(ways[0][0]) {
-                ways.swap(0, 1);
-            }
-            let fit = ways.into_iter().find(|way| try_way(board, &chain, &tracks, k, s, way, e, false).is_some());
-            match fit.and_then(|way| Some((try_way(board, &chain, &tracks, k, s, &way, e, true)?, way))) {
-                Some(((pieces, taken), way)) => {
-                    let t = tracks[k];
-                    match added.iter().position(|a| *a == t) {
-                        Some(i) => {
-                            added.remove(i);
-                        }
-                        None => {
-                            replaced.insert(t);
+        let mut i = 0;
+        while i < tracks.len() {
+            let mut laid = None;
+            // The longest run from track `i` holding a track off 45 degrees first, as pulling tight
+            // takes the longest straight.
+            for j in (i + 1..=tracks.len().min(i + OCTILINEAR_SPAN)).rev() {
+                if !(i..j).any(|k| octilinear_ways(points[k], points[k + 1]).is_some()) {
+                    continue;
+                }
+                let (s, e) = (points[i], points[j]);
+                // First an end in a pad slid within it onto the line from the other end: no bend,
+                // and no sliver of a step beside the pad leaving a slot between (stm32_nucleo's
+                // /PA2). Then the run straight, if it lines up; else the knees and Zs.
+                let mut paths: Vec<(Vec<Point>, Option<ItemId>)> = Vec::new();
+                if i == 0 {
+                    paths.extend(slides(board, &chain, e, s).into_iter().map(|(q, pad)| (vec![q, e], Some(pad))));
+                }
+                if j == tracks.len() {
+                    paths.extend(slides(board, &chain, s, e).into_iter().map(|(q, pad)| (vec![s, q], Some(pad))));
+                }
+                let moved = |path: &[Point]| path[0].distance(s) + path[path.len() - 1].distance(e);
+                paths.sort_by(|a, b| moved(&a.0).total_cmp(&moved(&b.0)));
+                // Then from the ends where they are, and last to the centre of a pad an end lies
+                // in: the router ends tracks anywhere in a pad, and a 45-degree piece through an
+                // end far off a round pad's centre meets its rim at a slant, a slot; into the
+                // centre it meets the rim square on, as a designer draws it.
+                let mut ends = vec![(s, e, None)];
+                let s_pad = if i == 0 { pad_centre(board, &chain, s) } else { None };
+                let e_pad = if j == tracks.len() { pad_centre(board, &chain, e) } else { None };
+                if let Some((c, pad)) = s_pad {
+                    ends.push((c, e, Some(pad)));
+                }
+                if let Some((c, pad)) = e_pad {
+                    ends.push((s, c, Some(pad)));
+                }
+                for (s, e, pad) in ends {
+                    match octilinear_ways(s, e) {
+                        None => paths.push((vec![s, e], pad)),
+                        Some(mut ways) => {
+                            // A knee whose first piece carries on the track before, or whose last
+                            // carries on into the track after, first: one bend fewer.
+                            let carries = |q: Point| (i > 0 && same_heading(points[i - 1], s, s, q)) || (j + 1 < points.len() && same_heading(q, e, e, points[j + 1]));
+                            if carries(ways[1][0]) && !carries(ways[0][0]) {
+                                ways.swap(0, 1);
+                            }
+                            paths.extend(ways.into_iter().map(|way| (std::iter::once(s).chain(way).chain(std::iter::once(e)).collect(), pad)));
                         }
                     }
-                    new.retain(|n| *n != t);
-                    old.extend(taken);
-                    added.extend(&pieces);
-                    new.extend(&pieces);
-                    let step = pieces.len();
-                    points.splice(k + 1..k + 1, way);
-                    tracks.splice(k..=k, pieces);
-                    bent += 1;
-                    k += step;
                 }
-                None => k += 1,
+                let fit = paths.into_iter().find(|(path, pad)| try_way(board, &chain, &tracks, i, j, path, *pad, false).is_some());
+                if let Some(done) = fit.and_then(|(path, pad)| Some((try_way(board, &chain, &tracks, i, j, &path, pad, true)?, path, j))) {
+                    laid = Some(done);
+                    break;
+                }
             }
+            let Some(((pieces, taken), path, j)) = laid else {
+                i += 1;
+                continue;
+            };
+            for t in &tracks[i..j] {
+                match added.iter().position(|a| a == t) {
+                    Some(at) => {
+                        added.remove(at);
+                    }
+                    None => {
+                        replaced.insert(*t);
+                    }
+                }
+            }
+            new.retain(|n| !tracks[i..j].contains(n));
+            old.extend(taken);
+            added.extend(&pieces);
+            new.extend(&pieces);
+            let step = pieces.len();
+            points.splice(i..=j, path);
+            tracks.splice(i..j, pieces);
+            bent += 1;
+            i += step;
         }
         if !new.is_empty() {
             watch(board, chain.net, &old, &new);
@@ -1773,16 +1819,90 @@ fn octilinear_round(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &Deadli
     bent
 }
 
-/// Lays the track `tracks[k]` from `s` to `e` through the points `way`, as [`try_cut`] cuts a
-/// bend: no piece across the board's edge, whatever joined the track joined to
-/// the pieces or the tracks either side, no piece of a Z shorter than the track is wide, and none
-/// breaking a rule or grazing its net's copper. The pieces and the track taken out if `keep`; else, or if it does
-/// not fit, the board is left as it was. Tried without keeping, the pieces are [`TAUT_MARGIN`]
-/// wider.
-#[allow(clippy::too_many_arguments)]
-fn try_way(board: &mut Board, chain: &Chain, tracks: &[ItemId], k: usize, s: Point, way: &[Point], e: Point, keep: bool) -> Option<(Vec<ItemId>, Vec<Item>)> {
+/// Whether the pieces leave a slot, an acid trap (tools/dfm.py): a piece beside its net's other
+/// copper on its layer, nearer than the clearance without touching it, or running into a pad of
+/// its net so near the pad's rim that its edge and the rim part at a sliver. Squaring the
+/// gate's boards without asking added two thirds to their slots (Atreus 65 -> 157, the same
+/// binary with and without), most of them these two.
+fn leaves_slot(board: &Board, chain: &Chain, pieces: &[ItemId]) -> bool {
     let layer = chain.layer.trailing_zeros() as usize;
-    let path: Vec<Point> = std::iter::once(s).chain(way.iter().copied()).chain(std::iter::once(e)).collect();
+    let gap = board.clearance(chain.net, chain.net) as f64;
+    pieces.iter().any(|&id| {
+        let Some(piece) = board.item(id) else { return false };
+        let Shape::Capsule { a, b, .. } = piece.shape else { return false };
+        let reach = piece.shape.bbox().grow(gap as Nm);
+        board.near(layer, reach).into_iter().any(|o| {
+            if pieces.contains(&o) {
+                return false;
+            }
+            let Some(other) = board.item(o) else { return false };
+            if other.net != chain.net || !other.on(layer) || matches!(other.kind, Kind::Pour { .. } | Kind::Keepout { .. } | Kind::Spoke { .. }) {
+                return false;
+            }
+            let apart = piece.shape.gap(&other.shape);
+            if apart > 0.0 {
+                return apart < gap;
+            }
+            // Into a pad: its centre line's nearest point to the pad's centre at least half as
+            // deep in as the centre, so the edge crosses the rim steeply, not along it (Microdox's
+            // COL4 into a switch's round pad, 0.83 mm off the centre of 1.14).
+            if !matches!(other.kind, Kind::Pad { .. }) {
+                return false;
+            }
+            let bb = other.shape.bbox();
+            let centre = Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2);
+            let (_, m) = closest_on_segment(a, b, centre);
+            other.shape.depth(m) < other.shape.depth(centre) / 2.0
+        })
+    })
+}
+
+/// The centre of the pad of the chain's net the point `p` lies in, when it is not `p` and lies
+/// in the pad, and the pad.
+fn pad_centre(board: &Board, chain: &Chain, p: Point) -> Option<(Point, ItemId)> {
+    let layer = chain.layer.trailing_zeros() as usize;
+    let pad = board.near(layer, board::BBox::of([p])).into_iter().find(|&o| board.item(o).is_some_and(|it| matches!(it.kind, Kind::Pad { .. }) && it.net == chain.net && it.on(layer) && it.shape.contains(p)))?;
+    let shape = &board.item(pad)?.shape;
+    let bb = shape.bbox();
+    let c = Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2);
+    (c != p && shape.contains(c)).then_some((c, pad))
+}
+
+/// Where the end `e` of a track from `s` may slide within the pad of its net it lies in, onto
+/// a line from `s` at a multiple of 45 degrees (along either axis or the nearer diagonal), and the
+/// pad: the points deep enough inside it.
+fn slides(board: &Board, chain: &Chain, s: Point, e: Point) -> Vec<(Point, ItemId)> {
+    let layer = chain.layer.trailing_zeros() as usize;
+    let Some(pad) = board.near(layer, board::BBox::of([e])).into_iter().find(|&o| board.item(o).is_some_and(|it| matches!(it.kind, Kind::Pad { .. }) && it.net == chain.net && it.on(layer) && it.shape.contains(e))) else {
+        return Vec::new();
+    };
+    let shape = &board.item(pad).expect("found").shape;
+    // Deep enough that the track's round end stays in the pad (or as deep as it was, in a pad
+    // too small for that), and half as deep as it was: an end slid towards the pad's rim leaves
+    // a slot between the track and the pad's curve (ErgoDone's ROW lines into its switches'
+    // round pads, slid 0.9 mm off their centres).
+    let was = shape.depth(e);
+    let deep = (chain.half_width as f64).min(was).max(was / 2.0);
+    let (dx, dy) = (e.x - s.x, e.y - s.y);
+    let (sx, sy) = (dx.signum(), dy.signum());
+    let t = (dx * sx + dy * sy) / 2;
+    [Point::new(e.x, s.y), Point::new(s.x, e.y), Point::new(s.x + sx * t, s.y + sy * t)]
+        .into_iter()
+        .filter(|&q| q != e && q != s && shape.depth(q) >= deep)
+        .map(|q| (q, pad))
+        .collect()
+}
+
+/// Lays the tracks `tracks[i..j]` along `path` (their ends, or one slid within the pad `pad`, and
+/// the points between), as [`try_cut`] cuts a bend: no piece across the board's edge, whatever
+/// joined the tracks joined to the pieces or the tracks either side, no piece of a Z shorter than
+/// the track is wide, and none breaking a rule or grazing its net's copper. The pieces and the
+/// tracks taken out if `keep`; else, or if it does not fit, the board is left as it was. Tried
+/// without keeping, the pieces are [`TAUT_MARGIN`] wider.
+#[allow(clippy::too_many_arguments)]
+fn try_way(board: &mut Board, chain: &Chain, tracks: &[ItemId], i: usize, j: usize, path: &[Point], pad: Option<ItemId>, keep: bool) -> Option<(Vec<ItemId>, Vec<Item>)> {
+    let layer = chain.layer.trailing_zeros() as usize;
+    let way = &path[1..path.len() - 1];
     // A Z's piece shorter than the track is wide leaves the pieces either side overlapping
     // without meeting end to end, a graze; a knee's two pieces always meet end to end, so a
     // knee may step aside by a sliver (a track off straight by 40 um over 4 mm, its ends'
@@ -1801,17 +1921,17 @@ fn try_way(board: &mut Board, chain: &Chain, tracks: &[ItemId], k: usize, s: Poi
     if off_edge {
         return None;
     }
-    let t = tracks[k];
-    let track = board.item(t)?;
-    let mut partners: Vec<ItemId> = board
-        .near(layer, track.shape.bbox())
-        .into_iter()
-        .filter(|&o| o != t && board.item(o).is_some_and(|it| it.net == chain.net) && joined(board, t, o))
-        .collect();
+    let span = &tracks[i..j];
+    let mut partners: Vec<ItemId> = Vec::new();
+    for &t in span {
+        let track = board.item(t)?;
+        partners.extend(board.near(layer, track.shape.bbox()).into_iter().filter(|&o| !span.contains(&o) && board.item(o).is_some_and(|it| it.net == chain.net) && joined(board, t, o)));
+    }
     partners.sort_unstable();
     partners.dedup();
-    let sides: Vec<ItemId> = [k.checked_sub(1).map(|i| tracks[i]), tracks.get(k + 1).copied()].into_iter().flatten().collect();
-    let item = board.remove(t)?;
+    // An end slid within its pad: what met the track there meets the pad.
+    let sides: Vec<ItemId> = [i.checked_sub(1).map(|k| tracks[k]), tracks.get(j).copied(), pad].into_iter().flatten().collect();
+    let removed: Vec<(ItemId, Item)> = span.iter().filter_map(|t| Some((*t, board.remove(*t)?))).collect();
     let r = if keep { chain.half_width } else { chain.half_width + TAUT_MARGIN };
     let mut pieces = Vec::new();
     let mut ok = true;
@@ -1825,13 +1945,17 @@ fn try_way(board: &mut Board, chain: &Chain, tracks: &[ItemId], k: usize, s: Poi
     }
     ok = ok && partners.iter().all(|&o| pieces.iter().chain(&sides).any(|&p| p == o || joined(board, o, p)));
     ok = ok && grazes(board, &pieces).is_empty();
+    ok = ok && !leaves_slot(board, chain, &pieces);
+    ok = ok && removed.len() == span.len();
     if ok && keep {
-        return Some((pieces, vec![item]));
+        return Some((pieces, removed.into_iter().map(|(_, it)| it).collect()));
     }
     for id in pieces {
         board.discard(id);
     }
-    board.restore(t, item);
+    for (id, item) in removed {
+        board.restore(id, item);
+    }
     ok.then(|| (Vec::new(), Vec::new()))
 }
 
