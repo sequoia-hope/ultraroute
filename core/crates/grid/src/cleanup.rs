@@ -1746,10 +1746,10 @@ fn octilinear_round(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &Deadli
                 // /PA2). Then the run straight, if it lines up; else the knees and Zs.
                 let mut paths: Vec<(Vec<Point>, Option<ItemId>)> = Vec::new();
                 if i == 0 {
-                    paths.extend(slides(board, &chain, e, s).into_iter().map(|(q, pad)| (vec![q, e], Some(pad))));
+                    paths.extend(slides(board, &chain, tracks[i], e, s).into_iter().map(|(q, pad)| (vec![q, e], Some(pad))));
                 }
                 if j == tracks.len() {
-                    paths.extend(slides(board, &chain, s, e).into_iter().map(|(q, pad)| (vec![s, q], Some(pad))));
+                    paths.extend(slides(board, &chain, tracks[j - 1], s, e).into_iter().map(|(q, pad)| (vec![s, q], Some(pad))));
                 }
                 let moved = |path: &[Point]| path[0].distance(s) + path[path.len() - 1].distance(e);
                 paths.sort_by(|a, b| moved(&a.0).total_cmp(&moved(&b.0)));
@@ -1758,8 +1758,8 @@ fn octilinear_round(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &Deadli
                 // end far off a round pad's centre meets its rim at a slant, a slot; into the
                 // centre it meets the rim square on, as a designer draws it.
                 let mut ends = vec![(s, e, None)];
-                let s_pad = if i == 0 { pad_centre(board, &chain, s) } else { None };
-                let e_pad = if j == tracks.len() { pad_centre(board, &chain, e) } else { None };
+                let s_pad = if i == 0 { pad_centre(board, &chain, tracks[i], s) } else { None };
+                let e_pad = if j == tracks.len() { pad_centre(board, &chain, tracks[j - 1], e) } else { None };
                 if let Some((c, pad)) = s_pad {
                     ends.push((c, e, Some(pad)));
                 }
@@ -1781,10 +1781,24 @@ fn octilinear_round(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &Deadli
                     }
                 }
                 let fit = paths.into_iter().find(|(path, pad)| try_way(board, &chain, &tracks, i, j, path, *pad, false).is_some());
-                if let Some(done) = fit.and_then(|(path, pad)| Some((try_way(board, &chain, &tracks, i, j, &path, pad, true)?, path, j))) {
-                    laid = Some(done);
-                    break;
+                let Some((path, pad)) = fit else { continue };
+                // The net's own count of what is open, before and after: the joins asked of a way
+                // are a track's, and the connectivity's are stricter (a track within a pad, its
+                // end moved off another track's).
+                let open = |board: &Board| board::net_connectivity(board, chain.net, true).airlines.len();
+                let before = open(board);
+                let Some((pieces, taken)) = try_way(board, &chain, &tracks, i, j, &path, pad, true) else { continue };
+                if open(board) > before {
+                    for id in pieces {
+                        board.discard(id);
+                    }
+                    for (id, item) in taken {
+                        board.restore(id, item);
+                    }
+                    continue;
                 }
+                laid = Some(((pieces, taken.into_iter().map(|(_, it)| it).collect::<Vec<Item>>()), path, j));
+                break;
             }
             let Some(((pieces, taken), path, j)) = laid else {
                 i += 1;
@@ -1857,23 +1871,35 @@ fn leaves_slot(board: &Board, chain: &Chain, pieces: &[ItemId]) -> bool {
     })
 }
 
-/// The centre of the pad of the chain's net the point `p` lies in, when it is not `p` and lies
-/// in the pad, and the pad.
-fn pad_centre(board: &Board, chain: &Chain, p: Point) -> Option<(Point, ItemId)> {
+/// The pad of the chain's net its end `p` lies in, the track `track` ending there, if nothing
+/// else lies there: an end only the pad holds can move within it, but one where other copper
+/// meets the track too would leave that copper behind (wifi_pants' GND, a track within a pad
+/// to where another joins it, slid away from the joint and three connections opened).
+fn pad_alone_at(board: &Board, chain: &Chain, track: ItemId, p: Point) -> Option<ItemId> {
     let layer = chain.layer.trailing_zeros() as usize;
-    let pad = board.near(layer, board::BBox::of([p])).into_iter().find(|&o| board.item(o).is_some_and(|it| matches!(it.kind, Kind::Pad { .. }) && it.net == chain.net && it.on(layer) && it.shape.contains(p)))?;
+    let at: Vec<ItemId> = board.near(layer, board::BBox::of([p])).into_iter().filter(|&o| o != track && board.item(o).is_some_and(|it| it.is_copper() && it.on(layer) && it.shape.contains(p))).collect();
+    match at[..] {
+        [pad] if board.item(pad).is_some_and(|it| matches!(it.kind, Kind::Pad { .. }) && it.net == chain.net) => Some(pad),
+        _ => None,
+    }
+}
+
+/// The centre of the pad of the chain's net its end `p` lies in alone ([`pad_alone_at`]), when
+/// it is not `p` and lies in the pad, and the pad.
+fn pad_centre(board: &Board, chain: &Chain, track: ItemId, p: Point) -> Option<(Point, ItemId)> {
+    let pad = pad_alone_at(board, chain, track, p)?;
     let shape = &board.item(pad)?.shape;
     let bb = shape.bbox();
     let c = Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2);
     (c != p && shape.contains(c)).then_some((c, pad))
 }
 
-/// Where the end `e` of a track from `s` may slide within the pad of its net it lies in, onto
+/// Where the end `e` of the track `track` from `s` may slide within the pad of its net it lies in
+/// alone ([`pad_alone_at`]), onto
 /// a line from `s` at a multiple of 45 degrees (along either axis or the nearer diagonal), and the
 /// pad: the points deep enough inside it.
-fn slides(board: &Board, chain: &Chain, s: Point, e: Point) -> Vec<(Point, ItemId)> {
-    let layer = chain.layer.trailing_zeros() as usize;
-    let Some(pad) = board.near(layer, board::BBox::of([e])).into_iter().find(|&o| board.item(o).is_some_and(|it| matches!(it.kind, Kind::Pad { .. }) && it.net == chain.net && it.on(layer) && it.shape.contains(e))) else {
+fn slides(board: &Board, chain: &Chain, track: ItemId, s: Point, e: Point) -> Vec<(Point, ItemId)> {
+    let Some(pad) = pad_alone_at(board, chain, track, e) else {
         return Vec::new();
     };
     let shape = &board.item(pad).expect("found").shape;
@@ -1897,10 +1923,10 @@ fn slides(board: &Board, chain: &Chain, s: Point, e: Point) -> Vec<(Point, ItemI
 /// the points between), as [`try_cut`] cuts a bend: no piece across the board's edge, whatever
 /// joined the tracks joined to the pieces or the tracks either side, no piece of a Z shorter than
 /// the track is wide, and none breaking a rule or grazing its net's copper. The pieces and the
-/// tracks taken out if `keep`; else, or if it does not fit, the board is left as it was. Tried
-/// without keeping, the pieces are [`TAUT_MARGIN`] wider.
+/// tracks taken out (with their ids, to put back) if `keep`; else, or if it does not fit, the
+/// board is left as it was. Tried without keeping, the pieces are [`TAUT_MARGIN`] wider.
 #[allow(clippy::too_many_arguments)]
-fn try_way(board: &mut Board, chain: &Chain, tracks: &[ItemId], i: usize, j: usize, path: &[Point], pad: Option<ItemId>, keep: bool) -> Option<(Vec<ItemId>, Vec<Item>)> {
+fn try_way(board: &mut Board, chain: &Chain, tracks: &[ItemId], i: usize, j: usize, path: &[Point], pad: Option<ItemId>, keep: bool) -> Option<(Vec<ItemId>, Vec<(ItemId, Item)>)> {
     let layer = chain.layer.trailing_zeros() as usize;
     let way = &path[1..path.len() - 1];
     // A Z's piece shorter than the track is wide leaves the pieces either side overlapping
@@ -1948,7 +1974,7 @@ fn try_way(board: &mut Board, chain: &Chain, tracks: &[ItemId], i: usize, j: usi
     ok = ok && !leaves_slot(board, chain, &pieces);
     ok = ok && removed.len() == span.len();
     if ok && keep {
-        return Some((pieces, removed.into_iter().map(|(_, it)| it).collect()));
+        return Some((pieces, removed));
     }
     for id in pieces {
         board.discard(id);
