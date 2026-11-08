@@ -43,7 +43,10 @@ NECK times the board's minimum track width (KiCad's connection width check at wa
 the joints a router leaves where tracks meet only where their round ends overlap; KiCad's own DRC
 passes them, as PCBench's boards set no connection width. It counts acid traps the same way
 (tools/dfm.py): tracks meeting at an acute angle, and slots where a net's copper comes within the
-board's clearance of itself without joining. When KiCad itself fails (the zone refill or the DRC), the board gets
+board's clearance of itself without joining. And it scores how tidy the tracks are (tools/tidy.py):
+the share of straight length off 45 degrees, the share running bundled beside another net (and,
+for buses, beside their own bus), turns, doglegs and detour; `compare` adds them up over the
+boards clean in both runs. Judged by this judge, the `designer` run scores the designers' tracks. When KiCad itself fails (the zone refill or the DRC), the board gets
 `referee_error` and no verdict: the referee failed, not the router. When the router fails (a
 crash, which writes the input board back, a refusal or a hang), its file is not judged: the
 board fails, and `compare` counts it apart and never as noise. Wirelength is the routed tracks' length and vias their count, as the
@@ -134,8 +137,9 @@ def referee(name, cmd):
 
 
 # What the judge asks of a board beyond its own rules; reports judged by an older one are judged
-# again by `rejudge`. 2: necks counted (`neck_rule`); 3: acid traps too (`acid_traps`).
-JUDGE = 3
+# again by `rejudge`. 2: necks counted (`neck_rule`); 3: acid traps too (`acid_traps`); 4: and
+# how tidy the tracks are (`tidiness`).
+JUDGE = 4
 # A neck is copper narrower than this share of the board's minimum track width: under KiCad's
 # reading of a track drawn at exactly the minimum (about 0.88 of it), over the necks a router's
 # overlapping round ends leave (the earring's 0.05 mm on 0.15 mm track, a third).
@@ -160,6 +164,16 @@ def acid_traps(pcb):
     """{"acute": N, "slots": N} for a routed board (tools/dfm.py), or {} when the check fails:
     a manufacturing count, never a verdict, so its failure fails nothing."""
     r = subprocess.run([sys.executable, str(ROOT / "tools/dfm.py"), str(pcb), "--json"], capture_output=True, text=True, timeout=600)
+    try:
+        return json.loads(r.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return {}
+
+
+def tidiness(pcb):
+    """{"tidy": {...}} for a routed board (tools/tidy.py: 45-degree discipline, bundling, turns,
+    doglegs, detour), or {} when the check fails: a score, never a verdict."""
+    r = subprocess.run([sys.executable, str(ROOT / "tools/tidy.py"), str(pcb), "--json"], capture_output=True, text=True, timeout=900)
     try:
         return json.loads(r.stdout.strip().splitlines()[-1])
     except (ValueError, IndexError):
@@ -334,6 +348,7 @@ def route_one(b, run_dir, recipe, timeout, seed, router=ROUTER, clock="cpu"):
             drc(out, d, "out")
             score(res, run_dir, b)
             res.update(acid_traps(out))
+            res.update(tidiness(out))
             res["judge"] = JUDGE
         except RefereeError as e:
             res["referee_error"] = str(e)
@@ -408,11 +423,13 @@ def rejudge_one(run_dir, b):
         return res
     res.pop("referee_error", None)
     try:
-        # A run judged for necks lacks only the acid traps; an older one asks KiCad again.
+        # A run judged for necks lacks only what came after; an older one asks KiCad again.
         if res.get("judge", 1) < 2:
             drc(out, run_dir / b, "out")
             score(res, run_dir, b)
-        res.update(acid_traps(out))
+        if res.get("judge", 1) < 3:
+            res.update(acid_traps(out))
+        res.update(tidiness(out))
         res["judge"] = JUDGE
     except RefereeError as e:
         res["referee_error"] = str(e)
@@ -437,7 +454,29 @@ def rejudge(a):
             meta.write_text(json.dumps(info, indent=1))
             necks = [r.get("necks", 0) for r in results]
             acute, slots = sum(r.get("acute", 0) for r in results), sum(r.get("slots", 0) for r in results)
-            print(f"{name}: {sum(bool(r.get('success')) for r in results)} of {len(results)} succeeded; {sum(necks)} necks on {sum(n > 0 for n in necks)} boards; acid traps: {acute} acute, {slots} slots")
+            print(f"{name}: {sum(bool(r.get('success')) for r in results)} of {len(results)} succeeded; {sum(necks)} necks on {sum(n > 0 for n in necks)} boards; acid traps: {acute} acute, {slots} slots; tidiness {tidy_line([r for r in results if r.get('success')])}")
+
+
+TIDY_SUMS = ("track_mm", "straight_mm", "turned_quarters", "off45_mm", "doglegs", "detour_routed_mm", "detour_tree_mm", "bundled_mm", "bus_nets", "bus_mm", "bus_bundled_mm")
+# How each ratio reads: (label, tidier when lower). off45 and bundled tell a designer's tracks from
+# ours; the rest watch that 45-degree routing doesn't buy its look with staircases and detours.
+TIDY_RATIOS = {"off45": ("off 45 degrees", True), "bundled": ("bundled", False), "bus_bundled": ("bus bundled", False),
+               "turns": ("turns /10 mm", True), "doglegs_per_m": ("doglegs /m", True), "detour": ("detour", True)}
+
+
+def tidy_sum(results):
+    """tidy.py's ratios over a set of results, from their raw numbers added up."""
+    sys.path.insert(0, str(ROOT / "tools"))
+    from tidy import ratios
+    held = [r["tidy"] for r in results if r.get("tidy")]
+    return ratios({k: sum(t.get(k, 0) for t in held) for k in TIDY_SUMS}) if held else None
+
+
+def tidy_line(results):
+    t = tidy_sum(results)
+    if t is None:
+        return "not judged"
+    return ", ".join(f"{label} {'-' if t[k] is None else f'{100 * t[k]:.0f}%' if k in ('off45', 'bundled', 'bus_bundled') else t[k]}" for k, (label, _) in TIDY_RATIOS.items())
 
 
 def prepare(a):
@@ -900,6 +939,18 @@ def compare(a):
             for kind in ("acute", "slots"):
                 more = sorted((i for i in trapped if new[i].get(kind, 0) > base[i].get(kind, 0)), key=lambda i: base[i].get(kind, 0) - new[i].get(kind, 0))
                 print(f"   {kind} (acid traps) on {len(trapped)} boards: {sum(base[i].get(kind, 0) for i in trapped)} -> {sum(new[i].get(kind, 0) for i in trapped)}, more on {len(more)}" + "".join(f"\n      {i}: {base[i].get(kind, 0)} -> {new[i].get(kind, 0)}" for i in more[:5]))
+        tidied = [i for i in common if base[i].get("success") and new[i].get("success") and base[i].get("tidy") and new[i].get("tidy")]
+        if tidied:
+            t0, t1 = tidy_sum([base[i] for i in tidied]), tidy_sum([new[i] for i in tidied])
+            parts = []
+            for k, (label, lower) in TIDY_RATIOS.items():
+                if t0[k] is None or t1[k] is None:
+                    continue
+                pct = k in ("off45", "bundled", "bus_bundled")
+                fmt = (lambda v: f"{100 * v:.1f}%") if pct else (lambda v: f"{v:.3f}")
+                tidier = sum((new[i]["tidy"].get(k) or 0) < (base[i]["tidy"].get(k) or 0) if lower else (new[i]["tidy"].get(k) or 0) > (base[i]["tidy"].get(k) or 0) for i in tidied)
+                parts.append(f"{label} {fmt(t0[k])} -> {fmt(t1[k])} (tidier on {tidier})")
+            print(f"   tidiness on {len(tidied)} boards clean in both (a score, apart from the verdict): " + "; ".join(parts))
         print(f"   referee failures: {len(refs[0])} -> {len(refs[1])}" + "".join(f"\n      {i}: {new[i]['referee_error'][:120]!r}" for i in refs[1]))
         broke = [[i for i in common if router_failed(rs[i])] for rs in (base, new)]
         newly_broke = [i for i in broke[1] if i not in broke[0]]
@@ -989,6 +1040,9 @@ def report(a):
         traps = [b for b in ids if results[b].get("judge", 1) >= 3]
         if traps:
             print(f"   acid traps (apart from the verdict): {sum(results[b].get('acute', 0) for b in traps)} acute angles, {sum(results[b].get('slots', 0) for b in traps)} slots, on {len(traps)} boards judged for them")
+        tidied = [results[b] for b in ours if results[b].get("tidy")]
+        if tidied:
+            print(f"   tidiness on {len(tidied)} clean boards (apart from the verdict): {tidy_line(tidied)}")
 
 
 def main():
