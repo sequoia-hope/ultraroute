@@ -1780,6 +1780,12 @@ fn octilinear_round(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &Deadli
                         }
                     }
                 }
+                // No way stepping aside by more doglegs than the run did, with the tracks either
+                // side: a Z or knee a sliver long between two runs the same way is a wiggle,
+                // not tidier than the slant it squares (LimeSDR's GND, 8 doglegs to 89).
+                let around = |path: &[Point]| -> Vec<Point> { (i > 0).then(|| points[i - 1]).into_iter().chain(path.iter().copied()).chain((j + 1 < points.len()).then(|| points[j + 1])).collect() };
+                let was = doglegs(&around(&points[i..=j]), chain.half_width);
+                paths.retain(|(path, _)| doglegs(&around(path), chain.half_width) <= was);
                 let fit = paths.into_iter().find(|(path, pad)| try_way(board, &chain, &tracks, i, j, path, *pad, false).is_some());
                 let Some((path, pad)) = fit else { continue };
                 // The net's own count of what is open, before and after: the joins asked of a way
@@ -1833,6 +1839,30 @@ fn octilinear_round(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &Deadli
     bent
 }
 
+/// Under this a straight piece between two runs heading the same way is a dogleg (tools/tidy.py).
+const DOGLEG: f64 = 1_000_000.0;
+
+/// The doglegs along the line through `points`, as tools/tidy.py counts them: a piece shorter
+/// than [`DOGLEG`], bent off at both ends, between pieces heading the same way, stepping the
+/// track over by half its width or more.
+fn doglegs(points: &[Point], half_width: Nm) -> usize {
+    let heading = |p: Point, q: Point| ((q.y - p.y) as f64).atan2((q.x - p.x) as f64);
+    let turn = |a: f64, b: f64| {
+        let d = (a - b).abs() % std::f64::consts::TAU;
+        d.min(std::f64::consts::TAU - d)
+    };
+    let straight = 5f64.to_radians();
+    points
+        .windows(4)
+        .filter(|w| {
+            let (before, mid, after) = (heading(w[0], w[1]), heading(w[1], w[2]), heading(w[2], w[3]));
+            let (dx, dy) = ((w[2].x - w[1].x) as f64, (w[2].y - w[1].y) as f64);
+            let step = (after.cos() * dy - after.sin() * dx).abs();
+            w[1].distance(w[2]) <= DOGLEG && turn(before, mid) >= straight && turn(mid, after) >= straight && turn(before, after) < straight && step >= half_width as f64
+        })
+        .count()
+}
+
 /// Whether the pieces leave a slot, an acid trap (tools/dfm.py): a piece beside its net's other
 /// copper on its layer, nearer than the clearance without touching it, or running into a pad of
 /// its net so near the pad's rim that its edge and the rim part at a sliver. Squaring the
@@ -1866,9 +1896,71 @@ fn leaves_slot(board: &Board, chain: &Chain, pieces: &[ItemId]) -> bool {
             let bb = other.shape.bbox();
             let centre = Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2);
             let (_, m) = closest_on_segment(a, b, centre);
-            other.shape.depth(m) < other.shape.depth(centre) / 2.0
+            other.shape.depth(m) < other.shape.depth(centre) / 2.0 || slants_into(a, b, &other.shape)
         })
     })
+}
+
+/// `ULTRAROUTE_SQUARE_TRACE=X,Y` (mm): each way squaring tries within 1 mm of there, printed
+/// with what refused it (a rule, a join lost, a graze, a slot) or that it fits.
+fn square_trace() -> Option<Point> {
+    static AT: std::sync::OnceLock<Option<Point>> = std::sync::OnceLock::new();
+    *AT.get_or_init(|| {
+        let v: Vec<f64> = std::env::var("ULTRAROUTE_SQUARE_TRACE").ok()?.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+        (v.len() == 2).then(|| Point::new((v[0] * 1e6).round() as Nm, (v[1] * 1e6).round() as Nm))
+    })
+}
+
+/// The least angle at which a track may cross a pad's rim, from along it: square on, but for
+/// the rounding of the rim's corners.
+const SQUARE_ON: f64 = 67.5;
+
+/// Whether the centre line `a` to `b` crosses the rim of `pad` at a slant, so the track's edge
+/// and the rim part at a sharp wedge on one side: a 45-degree piece into the long side of a
+/// rectangular or oval pad, run to its centre (PICA's EXP1 and Q4, a wedge of 3165 um2 at
+/// each, a third of the slots squaring added on the gate's boards). A designer runs the last
+/// piece in square to the side.
+fn slants_into(a: Point, b: Point, pad: &Shape) -> bool {
+    let u = ((b.x - a.x) as f64, (b.y - a.y) as f64);
+    let lu = u.0.hypot(u.1);
+    if lu == 0.0 {
+        return false;
+    }
+    // The sine of the angle between the piece and the rim's direction there.
+    let steep = SQUARE_ON.to_radians().sin();
+    match pad {
+        Shape::Polygon(p) => (0..p.len()).any(|k| {
+            let (c, d) = (p[k], p[(k + 1) % p.len()]);
+            let v = ((d.x - c.x) as f64, (d.y - c.y) as f64);
+            let lv = v.0.hypot(v.1);
+            lv > 0.0 && board::geom::segments_cross(a, b, c, d) && (u.0 * v.1 - u.1 * v.0).abs() < steep * lu * lv
+        }),
+        Shape::Capsule { a: pa, b: pb, r } => {
+            // Where the centre line leaves the pad, from the end inside it: the rim's normal
+            // runs from the pad's spine to there.
+            let (inside, outside) = match (pad.contains(a), pad.contains(b)) {
+                (true, false) => (a, b),
+                (false, true) => (b, a),
+                _ => return false,
+            };
+            let (mut lo, mut hi) = (0.0, 1.0);
+            for _ in 0..40 {
+                let t = (lo + hi) / 2.0;
+                let q = Point::new(inside.x + ((outside.x - inside.x) as f64 * t).round() as Nm, inside.y + ((outside.y - inside.y) as f64 * t).round() as Nm);
+                if pad.contains(q) {
+                    lo = t;
+                } else {
+                    hi = t;
+                }
+            }
+            let q = (inside.x as f64 + (outside.x - inside.x) as f64 * lo, inside.y as f64 + (outside.y - inside.y) as f64 * lo);
+            let (_, m) = closest_on_segment(*pa, *pb, Point::new(q.0.round() as Nm, q.1.round() as Nm));
+            let n = (q.0 - m.x as f64, q.1 - m.y as f64);
+            let ln = n.0.hypot(n.1);
+            // Along the normal is square on: the cosine to the normal is the sine to the rim.
+            *r > 0 && ln > 0.0 && (u.0 * n.0 + u.1 * n.1).abs() < steep * lu * ln
+        }
+    }
 }
 
 /// The pad of the chain's net its end `p` lies in, the track `track` ending there, if nothing
@@ -1969,10 +2061,26 @@ fn try_way(board: &mut Board, chain: &Chain, tracks: &[ItemId], i: usize, j: usi
         pieces.push(id);
         ok = check_item(board, id).is_empty();
     }
+    let rule = ok;
     ok = ok && partners.iter().all(|&o| pieces.iter().chain(&sides).any(|&p| p == o || joined(board, o, p)));
+    let join = ok;
     ok = ok && grazes(board, &pieces).is_empty();
+    let graze = ok;
     ok = ok && !leaves_slot(board, chain, &pieces);
     ok = ok && removed.len() == span.len();
+    if let Some(at) = square_trace() {
+        if path.windows(2).any(|w| board::point_segment(at, w[0], w[1]) < 1e6) || removed.iter().any(|(_, it)| it.shape.bbox().grow(500_000).contains(at)) {
+            let mm = |p: &Point| format!("({:.3},{:.3})", p.x as f64 / 1e6, p.y as f64 / 1e6);
+            let why = match (rule, join, graze, ok) {
+                (false, ..) => format!("rule {:?}", pieces.last().and_then(|&id| check_item(board, id).into_iter().next())),
+                (_, false, ..) => "join".into(),
+                (_, _, false, _) => "graze".into(),
+                (.., false) => "slot".into(),
+                _ => "fits".into(),
+            };
+            eprintln!("squaring {}{} -> {why}", path.iter().map(mm).collect::<Vec<_>>().join(" "), if keep { " (laid)" } else { "" });
+        }
+    }
     if ok && keep {
         return Some((pieces, removed));
     }
@@ -2463,6 +2571,33 @@ mod tests {
         assert_eq!(ends, vec![(s, Point::new(1_500_000, 1_500_000)), (Point::new(1_500_000, 1_500_000), e)]);
         // A track already on 45 degrees is left alone.
         assert_eq!(octilinear_watch(&mut board, &mut soft, &Default::default(), &mut |_, _, _, _| {}), 0);
+    }
+
+    #[test]
+    fn a_piece_slants_into_a_pad_crossing_its_long_side_at_45_degrees() {
+        let mm = |x: f64, y: f64| Point::new((x * 1e6) as Nm, (y * 1e6) as Nm);
+        let rect = Shape::Polygon(vec![mm(-1.0, -0.5), mm(1.0, -0.5), mm(1.0, 0.5), mm(-1.0, 0.5)]);
+        let oval = Shape::Capsule { a: mm(-1.0, 0.0), b: mm(1.0, 0.0), r: 500_000 };
+        let round = Shape::Capsule { a: mm(0.0, 0.0), b: mm(0.0, 0.0), r: 500_000 };
+        for pad in [&rect, &oval] {
+            assert!(slants_into(mm(-2.0, -2.0), mm(0.0, 0.0), pad));
+            assert!(!slants_into(mm(0.0, -2.0), mm(0.0, 0.0), pad));
+            assert!(!slants_into(mm(-3.0, 0.0), mm(0.0, 0.0), pad));
+        }
+        // Into a round pad's centre at any angle is square on.
+        assert!(!slants_into(mm(-2.0, -2.0), mm(0.0, 0.0), &round));
+        assert!(slants_into(mm(-2.0, -2.0), mm(0.3, 0.0), &round));
+    }
+
+    #[test]
+    fn doglegs_are_short_steps_between_runs_heading_the_same_way() {
+        let mm = |x: f64, y: f64| Point::new((x * 1e6) as Nm, (y * 1e6) as Nm);
+        let hw = 125_000;
+        assert_eq!(doglegs(&[mm(0.0, 0.0), mm(5.0, 0.0), mm(5.5, 0.5), mm(10.0, 0.5)], hw), 1);
+        // A long step, a knee and a step too small to show are none.
+        assert_eq!(doglegs(&[mm(0.0, 0.0), mm(5.0, 0.0), mm(7.0, 2.0), mm(10.0, 2.0)], hw), 0);
+        assert_eq!(doglegs(&[mm(0.0, 0.0), mm(5.0, 0.0), mm(5.5, 0.5), mm(5.5, 3.0)], hw), 0);
+        assert_eq!(doglegs(&[mm(0.0, 0.0), mm(5.0, 0.0), mm(5.05, 0.05), mm(10.0, 0.05)], hw), 0);
     }
 
     #[test]
