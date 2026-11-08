@@ -90,6 +90,7 @@ A stage runs only when its flag or the board asks for it.
 | `tightening` | `--tighten` | the run's time |
 | `vias` | the router laid copper | the run's time; it keeps 10% of `--timeout` back from the routing time |
 | `cleaning` | always, whatever the time | no limit |
+| `squaring` | `--tighten`, not `--any-angle`: the router's tracks put on 45-degree multiples (a pair's left as they are), after everything is routed | no limit (a few tries a track) |
 | `length matching` | `--diff-pairs` | the run's time |
 | `result` | always: what is left open, with `--blame` what blocks it | no limit |
 | `write` | always | no limit |
@@ -148,7 +149,8 @@ lengths, the deadline, and, of kind `rule`, every project or custom rule left ou
 | `--guard-ties`, `--no-guard-ties` | refuse a shove tie move that leaves a newly opened connection boxed in around its end |
 | `--shove-cascade N` | connections a try knocked loose that are ploughed in turn (default 0) |
 | `--nudge` | move unlocked parts aside for connections nothing else could route; not in the default (it moves the designer's parts) |
-| `--tighten` | straighten the routed copper |
+| `--tighten` | straighten the routed copper, then put it on 45-degree multiples where the rules allow (the `squaring` stage) |
+| `--any-angle` | leave the tightened copper at whatever angles it lies, as before `squaring` |
 | `--arcs MM` | when writing, round the corners of the router's tracks with arcs of radius up to MM (0.05 to 10), each as wide as the rules let it be; not in the default |
 
 ### Costs, pours and planes

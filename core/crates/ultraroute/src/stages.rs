@@ -977,6 +977,9 @@ impl Stage for Tightening {
         let deadline = ctx.deadline();
         let watch = &mut *ctx.watch;
         let c = tighten(ctx.board, &mut ctx.ledger.laid, &deadline, watch);
+        if !ctx.args.any_angle {
+            grid::octilinear_watch(ctx.board, &mut ctx.ledger.laid, &deadline, &mut |b, net, old, new| watch.tight(b, net, old, new));
+        }
         ctx.effort_ns = (0, c.kept_ns, c.unchanged_ns);
         let detail = tight_json(&c);
         ctx.ledger.tightened = Some(c);
@@ -1198,6 +1201,39 @@ impl Stage for Corridors {
             eprintln!("corridors: {corridor} connections narrowed across tight gaps, open {before} -> {after}, {:.1} s", ctx.elapsed());
         }
         json!({"corridor": corridor, "stretches": stretches.len(), "open_before": before, "open_after": after})
+    }
+}
+
+/// Once the copper is settled, the router's tracks put on 45-degree multiples, as a designer draws
+/// them (`grid::octilinear_watch`): pulled tight and taut, and smoothed, about three quarters of
+/// their length lay at other angles. A pair's tracks are left as they are, which bending one leg
+/// alone would uncouple. Last but for the length matching, so nothing routed after is missed and
+/// nothing routed before is denied the room an angled track leaves; a bounded number of tries a
+/// track, whatever the time, so a board is written as tidy run to run.
+pub struct Squaring;
+
+impl Stage for Squaring {
+    fn name(&self) -> &'static str {
+        "squaring"
+    }
+
+    fn enabled(&self, a: &Args, _: &Board, _: &Ledger) -> bool {
+        a.tighten && !a.any_angle
+    }
+
+    fn run(&self, ctx: &mut StageCtx) -> Value {
+        let (board, ledger) = (&mut *ctx.board, &mut *ctx.ledger);
+        let pairs: HashSet<ItemId> = ledger.pairs.iter().copied().collect();
+        let mut soft: Vec<ItemId> = ledger.laid.iter().copied().filter(|id| !pairs.contains(id)).collect();
+        let watch = &mut *ctx.watch;
+        let bent = grid::octilinear_watch(board, &mut soft, &Default::default(), &mut |b, net, old, new| watch.tight(b, net, old, new));
+        if bent > 0 {
+            ledger.laid.retain(|id| pairs.contains(id));
+            ledger.laid.extend(soft);
+            ctx.say("squaring", format!("{bent} tracks put on 45-degree multiples"));
+            eprintln!("squared {bent} tracks onto 45 degrees, {:.1} s", ctx.elapsed());
+        }
+        json!({"bent": bent})
     }
 }
 

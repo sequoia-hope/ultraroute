@@ -39,7 +39,7 @@ pub use stages::{Ledger, Stage, StageCtx};
 pub use stats::{Finding, RunStats, StageStats};
 pub use watch::{Cleaned, Flow, StageEvent, Unwatched, Watch};
 
-pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--plane-via-reach MM] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--negotiate-jacobi] [--negotiate-reroute-all] [--diff-pairs] [--prefanout] [--escape-room|--no-escape-room] [--prefanout-mode stub|dogbone|grid|inner|same] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--negotiate] [--rip-up] [--rip-boxed|--no-rip-boxed] [--nudge] [--tighten] [--arcs MM] [--via-cost MM[,OPEN_MM]] [--gpu] \
+pub const USAGE: &str = "usage: ultraroute route IN.kicad_pcb -o OUT.kicad_pcb [--strip] [--strip-all] [--planes LAYER,...] [--auto-planes] [--plane-via-reach MM] [--negotiate-rounds N] [--negotiate-patience N] [--negotiate-growth G] [--negotiate-repasses N] [--negotiate-jacobi] [--negotiate-reroute-all] [--diff-pairs] [--prefanout] [--escape-room|--no-escape-room] [--prefanout-mode stub|dogbone|grid|inner|same] [--prefanout-order round|inner|trapped] [--prefanout-ring MM] [--negotiate] [--rip-up] [--rip-boxed|--no-rip-boxed] [--nudge] [--tighten] [--any-angle] [--arcs MM] [--via-cost MM[,OPEN_MM]] [--gpu] \
 [--timeout SECONDS] [--cpu-clock] [--cell MM] [--shove] [--shove-plough rip|region] [--shove-reach MM] [--shove-repair S] [--shove-passes N] [--shove-ties] [--guard-ties|--no-guard-ties] [--shove-cascade N] [--shove-patience N] [--rip-region X,Y,R]... [--via-avoid X0,Y0,X1,Y1]... [--via-avoid-cost N] [--regions FILE] [--power-width MM|--no-power-width] [--narrow-signals] [--pad-clearances] [--pour-cost W] [--seed N] [--retries N|--no-retries] [--attempt K] [--uuid-seed N] [--adopt] [--verbose] [--place REF=X,Y]... [--lock REF,...] [--pours-block] [--no-route] [--threads N] [--max-memory MB] [--estimate] \
 [--recipe default|bench|minimal] [--live PATH|-] [--live-fps N] [--live-step MS] [--blame] [--stats|--report FILE] [--timing|--no-timing] [-h|--help]
 --place, --rip-region and --via-avoid take millimetres in KiCad's frame, y pointing down, as KiCad shows them.
@@ -121,6 +121,8 @@ pub struct Args {
     /// window, and held while what they ripped is rerouted (`grid::RipOptions::rip_boxed`).
     pub rip_boxed: bool,
     pub tighten: bool,
+    /// Tracks left at whatever angle tightening leaves them, not put on 45-degree multiples.
+    pub any_angle: bool,
     /// Corners of the router's tracks rounded, by arcs of at most this radius.
     pub arcs: Option<Nm>,
     /// Via prices in millimetres of straight track: negotiation's, and that of routing one
@@ -284,6 +286,7 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
         rip_up: false,
         rip_boxed: false,
         tighten: false,
+        any_angle: false,
         arcs: None,
         via_cost: None,
         nudge: false,
@@ -395,6 +398,7 @@ fn parse_flags(args: &[String]) -> Result<Args, String> {
             "--rip-boxed" => a.rip_boxed = true,
             "--no-rip-boxed" => a.rip_boxed = false,
             "--tighten" => a.tighten = true,
+            "--any-angle" => a.any_angle = true,
             "--arcs" => {
                 let mm: f64 = value()?.parse().map_err(|e| format!("--arcs: {e}"))?;
                 if !(0.05..=10.0).contains(&mm) {
@@ -1262,6 +1266,7 @@ pub const STAGES: &[Entry] = &[
     row(&stages::Cleaning, Clock::Always, Budget::Untimed, None),
     row(&stages::Refinish, Clock::Timed, Budget::Run, None),
     row(&stages::Corridors, Clock::Timed, Budget::Run, None),
+    row(&stages::Squaring, Clock::Always, Budget::Untimed, None),
     row(&stages::LengthMatching, Clock::Timed, Budget::Run, None),
     row(&stages::Widening, Clock::Untold, Budget::Untimed, None),
     row(&stages::Outcome, Clock::Untold, Budget::Untimed, None),

@@ -1654,6 +1654,187 @@ fn try_cut(board: &mut Board, chain: &Chain, tracks: &[ItemId], k: usize, u: Poi
     ok.then(|| (Vec::new(), Vec::new()))
 }
 
+/// The ways from `s` to `e` along 45-degree multiples, as the points between: a straight piece
+/// and a diagonal one meeting at a knee (straight first, then diagonal first), then Zs, the
+/// diagonal partway along the straight (half, a quarter, three quarters) or the straight partway
+/// along the diagonal (half), each lying closer to the line than a knee. None when `s` to `e`
+/// already runs at a multiple of 45 degrees.
+fn octilinear_ways(s: Point, e: Point) -> Option<Vec<Vec<Point>>> {
+    let (dx, dy) = (e.x - s.x, e.y - s.y);
+    let (ax, ay) = (dx.abs(), dy.abs());
+    if dx == 0 || dy == 0 || ax == ay {
+        return None;
+    }
+    let (sx, sy) = (dx.signum(), dy.signum());
+    // The straight run and the diagonal one, as (x, y) steps.
+    let (straight, diagonal) = if ax > ay { ((sx * (ax - ay), 0), (sx * ay, sy * ay)) } else { ((0, sy * (ay - ax)), (sx * ax, sy * ax)) };
+    let step = |p: Point, v: (Nm, Nm), f: f64| Point::new(p.x + (v.0 as f64 * f).round() as Nm, p.y + (v.1 as f64 * f).round() as Nm);
+    let mut ways = vec![vec![step(s, straight, 1.0)], vec![step(s, diagonal, 1.0)]];
+    for f in [0.5, 0.25, 0.75] {
+        let q = step(s, straight, f);
+        ways.push(vec![q, step(q, diagonal, 1.0)]);
+        if f == 0.5 {
+            // A diagonal's steps are as long on both axes: halve one and keep them so.
+            let h = (diagonal.0.abs() / 2) as Nm;
+            let q = Point::new(s.x + diagonal.0.signum() * h, s.y + diagonal.1.signum() * h);
+            ways.push(vec![q, step(q, straight, 1.0)]);
+        }
+    }
+    Some(ways)
+}
+
+/// Whether `a` to `b` heads as `c` to `d` does.
+fn same_heading(a: Point, b: Point, c: Point, d: Point) -> bool {
+    let (u, v) = (((b.x - a.x) as f64, (b.y - a.y) as f64), ((d.x - c.x) as f64, (d.y - c.y) as f64));
+    let (lu, lv) = (u.0.hypot(u.1), v.0.hypot(v.1));
+    lu > 0.0 && lv > 0.0 && (u.0 * v.1 - u.1 * v.0).abs() < 1e-6 * lu * lv && u.0 * v.0 + u.1 * v.1 > 0.0
+}
+
+/// How many rounds [`octilinear_watch`] takes: a track bent can make room for its neighbour,
+/// which lay too close beside it to bend first (two tracks running side by side at an angle).
+const OCTILINEAR_ROUNDS: usize = 3;
+
+/// Puts the router's tracks on 45-degree multiples, as a designer draws them: each track at
+/// another angle becomes straight and diagonal pieces ([`octilinear_ways`], the way carrying on
+/// as a neighbouring track runs tried first), where whatever joined the track still joins the
+/// pieces and no piece breaks a rule, grazes its net's copper or crosses the board's edge (a way
+/// passing a via on its other side breaks nothing, so unlike [`try_cut`] it may). A track no way fits stays as it is, so nothing is lost to the
+/// look. About three quarters of the length pulled taut ran at other angles (the gate's boards,
+/// tools/tidy.py); a designer's runs at none. Chains not reached by `deadline` stay as they are.
+/// How many tracks it bent.
+pub fn octilinear_watch(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &Deadline, watch: &mut TightWatch) -> usize {
+    let _b = board::work::enter(board::work::Bucket::Geometry);
+    let mut bent = 0;
+    for _ in 0..OCTILINEAR_ROUNDS {
+        let round = octilinear_round(board, soft, deadline, watch);
+        bent += round;
+        if round == 0 || deadline.expired() {
+            break;
+        }
+    }
+    bent
+}
+
+fn octilinear_round(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &Deadline, watch: &mut TightWatch) -> usize {
+    let soft_set: HashSet<ItemId> = soft.iter().copied().filter(|id| board.item(*id).is_some()).collect();
+    let mut replaced: HashSet<ItemId> = HashSet::new();
+    let mut added: Vec<ItemId> = Vec::new();
+    let mut bent = 0;
+    for chain in chains(board, &soft_set) {
+        if deadline.expired() {
+            break;
+        }
+        let (mut points, mut tracks) = (chain.points.clone(), chain.tracks.clone());
+        let (mut old, mut new): (Vec<Item>, Vec<ItemId>) = (Vec::new(), Vec::new());
+        let mut k = 0;
+        while k < tracks.len() {
+            let (s, e) = (points[k], points[k + 1]);
+            let Some(mut ways) = octilinear_ways(s, e) else {
+                k += 1;
+                continue;
+            };
+            // A knee whose first piece carries on the track before, or whose last carries on
+            // into the track after, first: one bend fewer.
+            let carries = |q: Point| (k > 0 && same_heading(points[k - 1], s, s, q)) || (k + 2 < points.len() && same_heading(q, e, e, points[k + 2]));
+            if carries(ways[1][0]) && !carries(ways[0][0]) {
+                ways.swap(0, 1);
+            }
+            let fit = ways.into_iter().find(|way| try_way(board, &chain, &tracks, k, s, way, e, false).is_some());
+            match fit.and_then(|way| Some((try_way(board, &chain, &tracks, k, s, &way, e, true)?, way))) {
+                Some(((pieces, taken), way)) => {
+                    let t = tracks[k];
+                    match added.iter().position(|a| *a == t) {
+                        Some(i) => {
+                            added.remove(i);
+                        }
+                        None => {
+                            replaced.insert(t);
+                        }
+                    }
+                    new.retain(|n| *n != t);
+                    old.extend(taken);
+                    added.extend(&pieces);
+                    new.extend(&pieces);
+                    let step = pieces.len();
+                    points.splice(k + 1..k + 1, way);
+                    tracks.splice(k..=k, pieces);
+                    bent += 1;
+                    k += step;
+                }
+                None => k += 1,
+            }
+        }
+        if !new.is_empty() {
+            watch(board, chain.net, &old, &new);
+        }
+    }
+    soft.retain(|id| !replaced.contains(id) && board.item(*id).is_some());
+    soft.extend(added);
+    bent
+}
+
+/// Lays the track `tracks[k]` from `s` to `e` through the points `way`, as [`try_cut`] cuts a
+/// bend: no piece across the board's edge, whatever joined the track joined to
+/// the pieces or the tracks either side, no piece of a Z shorter than the track is wide, and none
+/// breaking a rule or grazing its net's copper. The pieces and the track taken out if `keep`; else, or if it does
+/// not fit, the board is left as it was. Tried without keeping, the pieces are [`TAUT_MARGIN`]
+/// wider.
+#[allow(clippy::too_many_arguments)]
+fn try_way(board: &mut Board, chain: &Chain, tracks: &[ItemId], k: usize, s: Point, way: &[Point], e: Point, keep: bool) -> Option<(Vec<ItemId>, Vec<Item>)> {
+    let layer = chain.layer.trailing_zeros() as usize;
+    let path: Vec<Point> = std::iter::once(s).chain(way.iter().copied()).chain(std::iter::once(e)).collect();
+    // A Z's piece shorter than the track is wide leaves the pieces either side overlapping
+    // without meeting end to end, a graze; a knee's two pieces always meet end to end, so a
+    // knee may step aside by a sliver (a track off straight by 40 um over 4 mm, its ends'
+    // pads not quite in line).
+    if way.len() > 1 && path.windows(2).any(|w| w[0].distance(w[1]) < (2 * chain.half_width) as f64) {
+        return None;
+    }
+    // Off the board's edge: the rules would find a piece too near it, but not one wholly past a
+    // notch. What lies between the track and the way can stay: the way passes it on the other
+    // side, which the rules allow as they allow any route.
+    let off_edge = path.windows(2).any(|w| {
+        let piece = Shape::Capsule { a: w[0], b: w[1], r: 0 };
+        let bbox = piece.bbox();
+        board.outline_edges.iter().any(|(x, y, bb, _)| bb.overlaps(bbox) && piece.gap(&Shape::Capsule { a: *x, b: *y, r: 0 }) == 0.0)
+    });
+    if off_edge {
+        return None;
+    }
+    let t = tracks[k];
+    let track = board.item(t)?;
+    let mut partners: Vec<ItemId> = board
+        .near(layer, track.shape.bbox())
+        .into_iter()
+        .filter(|&o| o != t && board.item(o).is_some_and(|it| it.net == chain.net) && joined(board, t, o))
+        .collect();
+    partners.sort_unstable();
+    partners.dedup();
+    let sides: Vec<ItemId> = [k.checked_sub(1).map(|i| tracks[i]), tracks.get(k + 1).copied()].into_iter().flatten().collect();
+    let item = board.remove(t)?;
+    let r = if keep { chain.half_width } else { chain.half_width + TAUT_MARGIN };
+    let mut pieces = Vec::new();
+    let mut ok = true;
+    for w in path.windows(2) {
+        if !ok {
+            break;
+        }
+        let id = board.insert(Item { kind: Kind::Track, net: chain.net, layers: chain.layer, shape: Shape::Capsule { a: w[0], b: w[1], r }, hole: None, locked: false, span: None });
+        pieces.push(id);
+        ok = check_item(board, id).is_empty();
+    }
+    ok = ok && partners.iter().all(|&o| pieces.iter().chain(&sides).any(|&p| p == o || joined(board, o, p)));
+    ok = ok && grazes(board, &pieces).is_empty();
+    if ok && keep {
+        return Some((pieces, vec![item]));
+    }
+    for id in pieces {
+        board.discard(id);
+    }
+    board.restore(t, item);
+    ok.then(|| (Vec::new(), Vec::new()))
+}
+
 /// Whether the triangle `a`, `p`, `b` on `layer` holds nothing a chain of `net` must go round:
 /// another net's copper but a pour that is refilled, a keepout, a hole or the board's edge. A
 /// cut across it then slides the chain over empty board, keeping it on the same side of all else.
@@ -2104,6 +2285,34 @@ mod tests {
             let cross = (b.x - a.x) as f64 * (o.y - a.y) as f64 - (b.y - a.y) as f64 * (o.x - a.x) as f64;
             assert!(cross > 0.0, "{a:?} -> {b:?} passes the via on its other side");
         }
+    }
+
+    #[test]
+    fn a_track_at_an_odd_angle_is_bent_onto_45_degrees_on_the_side_that_fits() {
+        // Pad to pad 4 mm across and 1.5 mm down: straight first, the knee at (2.5, 0), passes a
+        // via of another net too close, so the knee goes diagonal first, at (1.5, 1.5).
+        let (pcb, copper) = kicad_pcb::parse_board(
+            "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal)) (net 0 \"\") (net 1 \"N1\") (net 2 \"N2\"))",
+        )
+        .unwrap();
+        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+        let (s, e) = (Point::new(0, 0), Point::new(4_000_000, 1_500_000));
+        for at in [s, e] {
+            board.insert(Item { kind: Kind::Pad { footprint: 0, number: "1".into(), plated: false }, net: 1, layers: 1, shape: Shape::Capsule { a: at, b: at, r: 150_000 }, hole: None, locked: true, span: None });
+        }
+        let o = Point::new(2_300_000, 300_000);
+        board.insert(Item { kind: Kind::Via, net: 2, layers: 1, shape: Shape::Capsule { a: o, b: o, r: 100_000 }, hole: Some((o, 50_000)), locked: true, span: None });
+        let mut soft = vec![board.insert(seg(s, e))];
+        assert!(board::check(&board).is_empty());
+        let bent = octilinear_watch(&mut board, &mut soft, &Default::default(), &mut |_, _, _, _| {});
+        assert_eq!(bent, 1);
+        assert!(board::check(&board).is_empty(), "{:?}", board::check(&board));
+        assert!(board::connectivity(&board).airlines.is_empty());
+        let mut ends: Vec<(Point, Point)> = soft.iter().map(|id| match board.item(*id).expect("laid").shape { Shape::Capsule { a, b, .. } => (a, b), _ => panic!("a track") }).collect();
+        ends.sort_by_key(|(a, b)| (a.x.min(b.x), a.y.min(b.y)));
+        assert_eq!(ends, vec![(s, Point::new(1_500_000, 1_500_000)), (Point::new(1_500_000, 1_500_000), e)]);
+        // A track already on 45 degrees is left alone.
+        assert_eq!(octilinear_watch(&mut board, &mut soft, &Default::default(), &mut |_, _, _, _| {}), 0);
     }
 
     #[test]
