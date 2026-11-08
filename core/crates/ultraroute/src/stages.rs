@@ -1217,8 +1217,8 @@ impl Stage for Squaring {
         "squaring"
     }
 
-    fn enabled(&self, a: &Args, _: &Board, _: &Ledger) -> bool {
-        a.tighten && !a.any_angle
+    fn enabled(&self, a: &Args, _: &Board, ledger: &Ledger) -> bool {
+        a.tighten && !a.any_angle && !ledger.laid.is_empty()
     }
 
     fn run(&self, ctx: &mut StageCtx) -> Value {
