@@ -527,6 +527,8 @@ its share of `--timeout`. A command line naming no stage gets `ultraroute::RECIP
 9. **`vias`** (the router laid copper): `reduce_vias`, then `pull_tight` again when it dropped any.
 10. **`cleaning`** (always, whatever the time): pair copper joins `laid`; `drop_duplicates`;
     `prune_dangling`.
+10a. **`squaring`** (`--tighten`, not `--any-angle`, after `refinishing` and `corridors`): `octilinear_watch`
+    puts the router's tracks, but the pairs', on 45-degree multiples where the rules allow.
 11. **`length matching`** (`--diff-pairs`): `match_lengths`, for the pairs a `skew` rule limits.
 12. **`result`** (always): the open count, and with `--blame` what blocks each open connection.
 13. **`write`** (always): `split_at_joins`, the regions' and necks' reports, moved parts'
