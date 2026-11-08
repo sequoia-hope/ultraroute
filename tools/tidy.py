@@ -15,9 +15,10 @@
             more side by side: a bus); bus_bundled is the share of their straight length running
             alongside another net of the same bus, as bundled measures it
 
-    tidy.py BOARD.kicad_pcb [--clearance MM] [--list] [--json]
+    tidy.py BOARD.kicad_pcb [--clearance MM] [--list] [--json] [--svg OUT.svg]
 
-Prints the numbers, and with --list each dogleg and the buses; with --json, {"tidy": {...}}
+Prints the numbers, and with --list each dogleg and the buses; with --svg, draws the tracks
+coloured by what it found (bundled beside their bus, beside another net, off 45 degrees); with --json, {"tidy": {...}}
 alone, the raw sums beside the ratios so a set of boards can be added up (`pcbench.py`, JUDGE 4,
 counts them on every routed board, apart from the verdict). Run on a board as its designer
 routed it, it scores the designer: the measure to beat on a board with room.
@@ -26,6 +27,7 @@ import argparse
 import json
 import math
 from collections import defaultdict
+from pathlib import Path
 
 import pcbnew
 
@@ -119,7 +121,8 @@ def pads_of(b):
 
 def bundled(segs, gap_of, group):
     """(straight length, length alongside another net's track, length of bus nets, length of bus
-    nets alongside their own bus) over the straight segments (net, layer, (x0, y0), (x1, y1), w)."""
+    nets alongside their own bus, each segment's (alongside, alongside its bus)) over the straight
+    segments (net, layer, (x0, y0), (x1, y1), w)."""
     cell = int(2 * MM)
     grid = defaultdict(list)
     for i, (_, layer, a, z, _) in enumerate(segs):
@@ -127,6 +130,7 @@ def bundled(segs, gap_of, group):
             for cy in range(min(a[1], z[1]) // cell - 1, max(a[1], z[1]) // cell + 2):
                 grid[(layer, cx, cy)].append(i)
     total = beside = bus_total = bus_beside = 0.0
+    each = []
     for i, (net, layer, a, z, w) in enumerate(segs):
         length = math.hypot(z[0] - a[0], z[1] - a[1])
         ux, uy = (z[0] - a[0]) / length, (z[1] - a[1]) / length
@@ -154,10 +158,11 @@ def bundled(segs, gap_of, group):
                     own.append((lo, hi))
         total += length
         beside += covered(spans)
+        each.append((covered(spans), covered(own)))
         if net in group:
             bus_total += length
             bus_beside += covered(own)
-    return total, beside, bus_total, bus_beside
+    return total, beside, bus_total, bus_beside, each
 
 
 def covered(spans):
@@ -176,6 +181,7 @@ def main():
     ap.add_argument("--clearance", type=float, default=None)
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--svg", help="draw the tracks to this file, coloured by what tidy.py finds")
     a = ap.parse_args()
     b = pcbnew.LoadBoard(a.board)
     gap_mm = a.clearance if a.clearance is not None else pcbnew.ToMM(b.GetDesignSettings().m_MinClearance)
@@ -259,7 +265,7 @@ def main():
         tree += mst([(c.x, c.y) for _, c in pads])
         routed += length[net]
     group = buses(b)
-    total, beside, bus_total, bus_beside = bundled(segs, gap, group)
+    total, beside, bus_total, bus_beside, each = bundled(segs, gap, group)
     all_len = sum(length.values())
     out = {
         "track_mm": round(all_len / MM, 3),
@@ -275,6 +281,8 @@ def main():
         "bus_bundled_mm": round(bus_beside / MM, 3),
     }
     out.update(ratios(out))
+    if a.svg:
+        draw(a.svg, b, pieces, segs, each, doglegs, group)
     if a.json:
         print(json.dumps({"tidy": out}))
         return
@@ -287,6 +295,39 @@ def main():
             members[g].append(net)
         for g in sorted(members):
             print(f"  bus {g}:", " ".join(sorted(members[g])))
+
+
+def draw(path, b, pieces, segs, each, doglegs, group):
+    """An SVG of the board's tracks: green bundled beside their own bus, blue bundled beside another
+    net, orange off 45 degrees, grey the rest (arcs too); red rings the doglegs, pads in outline."""
+    box = b.GetBoardEdgesBoundingBox()
+    if box.GetWidth() == 0:
+        box = b.ComputeBoundingBox(False)
+    x0, y0, w, h = box.GetX() / MM, box.GetY() / MM, box.GetWidth() / MM, box.GetHeight() / MM
+    out = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{x0 - 1:.3f} {y0 - 1:.3f} {w + 2:.3f} {h + 2:.3f}" style="background:#111">']
+    for fp in b.Footprints():
+        for p in fp.Pads():
+            c, sz = p.GetCenter(), p.GetBoundingBox()
+            out.append(f'<rect x="{sz.GetX() / MM:.3f}" y="{sz.GetY() / MM:.3f}" width="{sz.GetWidth() / MM:.3f}" height="{sz.GetHeight() / MM:.3f}" fill="none" stroke="#666" stroke-width="0.03"/>')
+    line = lambda a, z, wd, col, op: f'<line x1="{a[0] / MM:.4f}" y1="{a[1] / MM:.4f}" x2="{z[0] / MM:.4f}" y2="{z[1] / MM:.4f}" stroke="{col}" stroke-width="{wd / MM:.4f}" stroke-linecap="round" opacity="{op}"/>'
+    back = {pcbnew.F_Cu: 1.0}
+    for (net, layer), ps in pieces.items():
+        for s, e, wd, straight in ps:
+            if not straight:
+                out.append(line((s[0] * SNAP, s[1] * SNAP), (e[0] * SNAP, e[1] * SNAP), wd, "#999", back.get(layer, 0.55)))
+    for (net, layer, a, z, wd), (beside, own) in zip(segs, each):
+        length = math.hypot(z[0] - a[0], z[1] - a[1])
+        hd = math.degrees(heading(z[0] - a[0], z[1] - a[1])) % 45
+        col = "#3c3" if own > length / 2 else "#39f" if beside > length / 2 else "#f93" if min(hd, 45 - hd) > 0.5 else "#999"
+        out.append(line(a, z, wd, col, back.get(layer, 0.55)))
+    for t in b.GetTracks():
+        if t.GetClass() == "PCB_VIA":
+            c = t.GetPosition()
+            out.append(f'<circle cx="{c.x / MM:.3f}" cy="{c.y / MM:.3f}" r="{t.GetWidth(pcbnew.F_Cu) / MM / 2:.3f}" fill="#777"/>')
+    for _, _, (x, y) in doglegs:
+        out.append(f'<circle cx="{x}" cy="{y}" r="0.35" fill="none" stroke="#f33" stroke-width="0.08"/>')
+    out.append("</svg>")
+    Path(path).write_text("\n".join(out))
 
 
 def ratios(t):
