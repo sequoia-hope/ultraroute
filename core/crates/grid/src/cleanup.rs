@@ -1616,7 +1616,7 @@ fn try_cut(board: &mut Board, chain: &Chain, tracks: &[ItemId], k: usize, u: Poi
     let span = &tracks[k - 1..=k];
     let mut partners: Vec<ItemId> = Vec::new();
     for &t in span {
-        let Some(track) = board.item(t) else { return None };
+        let track = board.item(t)?;
         for other in board.near(layer, track.shape.bbox()) {
             if !span.contains(&other) && board.item(other).is_some_and(|o| o.net == chain.net) && joined(board, t, other) {
                 partners.push(other);
@@ -1683,6 +1683,52 @@ fn octilinear_ways(s: Point, e: Point) -> Option<Vec<Vec<Point>>> {
     Some(ways)
 }
 
+/// Further Z ways from `s` to `e` whose middle piece is longer than [`DOGLEG`], split by length
+/// from each end as well as finer fractions: on a 16 mm run a quarter is 4 mm out, missing a
+/// clear gap just past the pad (PICA's VCC), and along the diagonal [`octilinear_ways`] tries only
+/// the midpoint even when the straight middle exceeds [`DOGLEG`] so every split is dogleg-free.
+fn extra_z_ways(s: Point, e: Point, half_width: Nm) -> Vec<Vec<Point>> {
+    let (dx, dy) = (e.x - s.x, e.y - s.y);
+    let (ax, ay) = (dx.abs(), dy.abs());
+    if dx == 0 || dy == 0 || ax == ay {
+        return Vec::new();
+    }
+    let (sx, sy) = (dx.signum(), dy.signum());
+    let (st_len, dg_step, st_dir) = if ax > ay { (ax - ay, ay, (sx, 0)) } else { (ay - ax, ax, (0, sy)) };
+    let straight = (st_dir.0 * st_len, st_dir.1 * st_len);
+    let diagonal = (sx * dg_step, sy * dg_step);
+    let min_end = 2 * half_width + 2_000;
+    let over_dogleg = DOGLEG as Nm + 10_000;
+    let mut ways = Vec::new();
+    if (dg_step as f64) * std::f64::consts::SQRT_2 > DOGLEG && st_len >= 2 * min_end {
+        let mut ks: Vec<Nm> = [min_end, st_len - min_end, over_dogleg, st_len - over_dogleg, 2_000_000, st_len - 2_000_000, st_len / 8, st_len - st_len / 8]
+            .into_iter()
+            .filter(|&k| k >= min_end && k <= st_len - min_end)
+            .collect();
+        ks.sort_by_key(|&k| k.min(st_len - k));
+        ks.dedup();
+        for k in ks {
+            let q = Point::new(s.x + st_dir.0 * k, s.y + st_dir.1 * k);
+            ways.push(vec![q, Point::new(q.x + diagonal.0, q.y + diagonal.1)]);
+        }
+    }
+    let min_d = ((min_end as f64) / std::f64::consts::SQRT_2).ceil() as Nm;
+    let dog_d = (DOGLEG / std::f64::consts::SQRT_2).ceil() as Nm + 10_000;
+    if (st_len as f64) > DOGLEG && dg_step >= 2 * min_d {
+        let mut hs: Vec<Nm> = [dg_step / 4, dg_step - dg_step / 4, dg_step / 8, dg_step - dg_step / 8, min_d, dg_step - min_d, dog_d, dg_step - dog_d, 1_500_000, dg_step - 1_500_000]
+            .into_iter()
+            .filter(|&h| h >= min_d && h <= dg_step - min_d)
+            .collect();
+        hs.sort_by_key(|&h| (h - dg_step / 2).abs());
+        hs.dedup();
+        for h in hs {
+            let q = Point::new(s.x + sx * h, s.y + sy * h);
+            ways.push(vec![q, Point::new(q.x + straight.0, q.y + straight.1)]);
+        }
+    }
+    ways
+}
+
 /// Whether `a` to `b` heads as `c` to `d` does.
 fn same_heading(a: Point, b: Point, c: Point, d: Point) -> bool {
     let (u, v) = (((b.x - a.x) as f64, (b.y - a.y) as f64), ((d.x - c.x) as f64, (d.y - c.y) as f64));
@@ -1741,34 +1787,50 @@ fn octilinear_round(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &Deadli
                     continue;
                 }
                 let (s, e) = (points[i], points[j]);
+                let s_pad = if i == 0 { pad_centre(board, &chain, tracks[i], s) } else { None };
+                let e_pad = if j == tracks.len() { pad_centre(board, &chain, tracks[j - 1], e) } else { None };
                 // First an end in a pad slid within it onto the line from the other end: no bend,
                 // and no sliver of a step beside the pad leaving a slot between (stm32_nucleo's
-                // /PA2). Then the run straight, if it lines up; else the knees and Zs.
-                let mut paths: Vec<(Vec<Point>, Option<ItemId>)> = Vec::new();
+                // /PA2). When both ends lie in pads, both may slide to meet on one line too. Then
+                // the run straight, if it lines up; else the knees and Zs.
+                let mut paths: Vec<(Vec<Point>, [Option<ItemId>; 2])> = Vec::new();
                 if i == 0 {
-                    paths.extend(slides(board, &chain, tracks[i], e, s).into_iter().map(|(q, pad)| (vec![q, e], Some(pad))));
+                    paths.extend(slides(board, &chain, tracks[i], e, s).into_iter().map(|(q, pad)| (vec![q, e], [Some(pad), None])));
                 }
                 if j == tracks.len() {
-                    paths.extend(slides(board, &chain, tracks[j - 1], s, e).into_iter().map(|(q, pad)| (vec![s, q], Some(pad))));
+                    paths.extend(slides(board, &chain, tracks[j - 1], s, e).into_iter().map(|(q, pad)| (vec![s, q], [None, Some(pad)])));
+                }
+                if i == 0 && j == tracks.len() {
+                    paths.extend(two_slides(board, &chain, tracks[i], s, tracks[j - 1], e).into_iter().map(|([a, b], pads)| (vec![a, b], pads)));
+                    if let Some((ce, pe)) = e_pad {
+                        paths.extend(slides(board, &chain, tracks[i], ce, s).into_iter().filter(|&(_, ps)| ps != pe).map(|(q, ps)| (vec![q, ce], [Some(ps), Some(pe)])));
+                    }
+                    if let Some((cs, ps)) = s_pad {
+                        paths.extend(slides(board, &chain, tracks[j - 1], cs, e).into_iter().filter(|&(_, pe)| ps != pe).map(|(q, pe)| (vec![cs, q], [Some(ps), Some(pe)])));
+                    }
                 }
                 let moved = |path: &[Point]| path[0].distance(s) + path[path.len() - 1].distance(e);
                 paths.sort_by(|a, b| moved(&a.0).total_cmp(&moved(&b.0)));
                 // Then from the ends where they are, and last to the centre of a pad an end lies
-                // in: the router ends tracks anywhere in a pad, and a 45-degree piece through an
-                // end far off a round pad's centre meets its rim at a slant, a slot; into the
-                // centre it meets the rim square on, as a designer draws it.
-                let mut ends = vec![(s, e, None)];
-                let s_pad = if i == 0 { pad_centre(board, &chain, tracks[i], s) } else { None };
-                let e_pad = if j == tracks.len() { pad_centre(board, &chain, tracks[j - 1], e) } else { None };
+                // in (one end, or both when both lay near their rims): the router ends tracks
+                // anywhere in a pad, and a 45-degree piece through an end far off a round pad's
+                // centre meets its rim at a slant, a slot; into the centre it meets the rim
+                // square on, as a designer draws it.
+                let mut ends = vec![(s, e, [None, None])];
                 if let Some((c, pad)) = s_pad {
-                    ends.push((c, e, Some(pad)));
+                    ends.push((c, e, [Some(pad), None]));
                 }
                 if let Some((c, pad)) = e_pad {
-                    ends.push((s, c, Some(pad)));
+                    ends.push((s, c, [None, Some(pad)]));
                 }
-                for (s, e, pad) in ends {
+                if let (Some((cs, ps)), Some((ce, pe))) = (s_pad, e_pad) {
+                    if ps != pe && cs != ce {
+                        ends.push((cs, ce, [Some(ps), Some(pe)]));
+                    }
+                }
+                for &(s, e, pads) in &ends {
                     match octilinear_ways(s, e) {
-                        None => paths.push((vec![s, e], pad)),
+                        None => paths.push((vec![s, e], pads)),
                         Some(mut ways) => {
                             // A knee whose first piece carries on the track before, or whose last
                             // carries on into the track after, first: one bend fewer.
@@ -1776,35 +1838,71 @@ fn octilinear_round(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &Deadli
                             if carries(ways[1][0]) && !carries(ways[0][0]) {
                                 ways.swap(0, 1);
                             }
-                            paths.extend(ways.into_iter().map(|way| (std::iter::once(s).chain(way).chain(std::iter::once(e)).collect(), pad)));
+                            paths.extend(ways.into_iter().map(|way| (std::iter::once(s).chain(way).chain(std::iter::once(e)).collect(), pads)));
                         }
                     }
                 }
                 // No way stepping aside by more doglegs than the run did, with the tracks either
-                // side: a Z or knee a sliver long between two runs the same way is a wiggle,
-                // not tidier than the slant it squares (LimeSDR's GND, 8 doglegs to 89).
-                let around = |path: &[Point]| -> Vec<Point> { (i > 0).then(|| points[i - 1]).into_iter().chain(path.iter().copied()).chain((j + 1 < points.len()).then(|| points[j + 1])).collect() };
+                // side (two points each way, as a dogleg spans three pieces): a Z or knee a sliver
+                // long between two runs the same way, or turning a neighbour piece into one, is a
+                // wiggle, not tidier than the slant it squares (LimeSDR's GND, 8 doglegs to 89).
+                let around = |path: &[Point]| -> Vec<Point> {
+                    points[i.saturating_sub(2)..i]
+                        .iter()
+                        .copied()
+                        .chain(path.iter().copied())
+                        .chain(points[(j + 1).min(points.len())..(j + 3).min(points.len())].iter().copied())
+                        .collect()
+                };
                 let was = doglegs(&around(&points[i..=j]), chain.half_width);
-                paths.retain(|(path, _)| doglegs(&around(path), chain.half_width) <= was);
-                let fit = paths.into_iter().find(|(path, pad)| try_way(board, &chain, &tracks, i, j, path, *pad, false).is_some());
-                let Some((path, pad)) = fit else { continue };
                 // The net's own count of what is open, before and after: the joins asked of a way
                 // are a track's, and the connectivity's are stricter (a track within a pad, its
-                // end moved off another track's).
+                // end moved off another track's). When a way with margin fails at its true width
+                // or opens a join, the rest of `paths` are still tried; only when none fits are
+                // length-picked Z splits and three-piece square pad exits built.
                 let open = |board: &Board| board::net_connectivity(board, chain.net, true).airlines.len();
-                let before = open(board);
-                let Some((pieces, taken)) = try_way(board, &chain, &tracks, i, j, &path, pad, true) else { continue };
-                if open(board) > before {
-                    for id in pieces {
-                        board.discard(id);
+                let mut before = None;
+                for wave in 0..3 {
+                    let mut batch = match wave {
+                        0 => std::mem::take(&mut paths),
+                        1 => ends
+                            .iter()
+                            .flat_map(|&(s, e, pads)| {
+                                extra_z_ways(s, e, chain.half_width)
+                                    .into_iter()
+                                    .map(move |way| (std::iter::once(s).chain(way).chain(std::iter::once(e)).collect(), pads))
+                            })
+                            .collect(),
+                        _ => pad_exit_ways(board, &chain, &points, &tracks, i, j),
+                    };
+                    batch.retain(|(path, _)| doglegs(&around(path), chain.half_width) <= was);
+                    for (path, pads) in batch {
+                        if try_way(board, &chain, &points, &tracks, i, j, &path, pads, false).is_none() {
+                            continue;
+                        }
+                        let before = *before.get_or_insert_with(|| open(board));
+                        let Some((pieces, taken)) = try_way(board, &chain, &points, &tracks, i, j, &path, pads, true) else {
+                            continue;
+                        };
+                        if open(board) > before {
+                            for id in pieces {
+                                board.discard(id);
+                            }
+                            for (id, item) in taken {
+                                board.restore(id, item);
+                            }
+                            continue;
+                        }
+                        laid = Some(((pieces, taken.into_iter().map(|(_, it)| it).collect::<Vec<Item>>()), path, j));
+                        break;
                     }
-                    for (id, item) in taken {
-                        board.restore(id, item);
+                    if laid.is_some() {
+                        break;
                     }
-                    continue;
                 }
-                laid = Some(((pieces, taken.into_iter().map(|(_, it)| it).collect::<Vec<Item>>()), path, j));
-                break;
+                if laid.is_some() {
+                    break;
+                }
             }
             let Some(((pieces, taken), path, j)) = laid else {
                 i += 1;
@@ -1868,12 +1966,12 @@ fn doglegs(points: &[Point], half_width: Nm) -> usize {
 /// its net so near the pad's rim that its edge and the rim part at a sliver. Squaring the
 /// gate's boards without asking added two thirds to their slots (Atreus 65 -> 157, the same
 /// binary with and without), most of them these two.
-fn leaves_slot(board: &Board, chain: &Chain, pieces: &[ItemId]) -> bool {
+fn leaves_slot(board: &Board, chain: &Chain, pieces: &[ItemId], same_ends: &[Option<Point>; 2]) -> bool {
     let layer = chain.layer.trailing_zeros() as usize;
     let gap = board.clearance(chain.net, chain.net) as f64;
     pieces.iter().any(|&id| {
         let Some(piece) = board.item(id) else { return false };
-        let Shape::Capsule { a, b, .. } = piece.shape else { return false };
+        let Shape::Capsule { a, b, r: r1 } = piece.shape else { return false };
         let reach = piece.shape.bbox().grow(gap as Nm);
         board.near(layer, reach).into_iter().any(|o| {
             if pieces.contains(&o) {
@@ -1887,18 +1985,100 @@ fn leaves_slot(board: &Board, chain: &Chain, pieces: &[ItemId]) -> bool {
             if apart > 0.0 {
                 return apart < gap;
             }
-            // Into a pad: its centre line's nearest point to the pad's centre at least half as
-            // deep in as the centre, so the edge crosses the rim steeply, not along it (Microdox's
-            // COL4 into a switch's round pad, 0.83 mm off the centre of 1.14).
-            if !matches!(other.kind, Kind::Pad { .. }) {
+            if let (Kind::Track, Shape::Capsule { a: c, b: d, r: r2 }) = (&other.kind, &other.shape) {
+                return track_leaves_slot(board, layer, chain.net, gap, (a, b, r1), (*c, *d, *r2), same_ends);
+            }
+            // Into a pad or a via's round land: its centre line's nearest point to the centre at
+            // least half as deep in as the centre, so the edge crosses the rim steeply, not along
+            // it (Microdox's COL4 into a switch's round pad, 0.83 mm off the centre of 1.14;
+            // FireMC's +12V bending right on a 0.7 mm via's rim). On a round or capsule shape, an
+            // end inside it (deep enough or unchanged from before squaring, as Atreus's diodes have
+            // copper at the centre) heading out square to the rim (`!slants_into`) already crosses
+            // steeply without passing near the centre.
+            if !matches!(other.kind, Kind::Pad { .. } | Kind::Via) {
                 return false;
+            }
+            if slants_into(a, b, &other.shape) {
+                return true;
+            }
+            if matches!(other.shape, Shape::Capsule { .. }) {
+                let end_ok = |p: Point| other.shape.depth(p) >= chain.half_width as f64 || same_ends.iter().flatten().any(|&e| e == p);
+                match (other.shape.contains(a), other.shape.contains(b)) {
+                    (true, false) if end_ok(a) => return false,
+                    (false, true) if end_ok(b) => return false,
+                    (true, true) if end_ok(a) && end_ok(b) => return false,
+                    _ => {}
+                }
             }
             let bb = other.shape.bbox();
             let centre = Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2);
             let (_, m) = closest_on_segment(a, b, centre);
-            other.shape.depth(m) < other.shape.depth(centre) / 2.0 || slants_into(a, b, &other.shape)
+            other.shape.depth(m) < other.shape.depth(centre) / 2.0
         })
     })
+}
+
+/// Whether two touching tracks `a..b` (radius `r1`) and `c..d` (radius `r2`) of `net` on `layer`
+/// part at a sharp wedge or kiss at their sides: a piece peeling off another track of its net at
+/// 45 degrees leaves a 3165 um2 acid trap in the fork (PICA's /HE1_D, BUF-DiffToSE's GNDA), unless
+/// a pad of the net covers the fork out to where the edges clear by `gap`.
+fn track_leaves_slot(board: &Board, layer: usize, net: u32, gap: f64, (a, b, r1): (Point, Point, Nm), (c, d, r2): (Point, Point, Nm), same_ends: &[Option<Point>; 2]) -> bool {
+    if a == b || c == d {
+        return false;
+    }
+    let sep = board::geom::segment_segment(a, b, c, d);
+    if sep <= 2_000.0 && (same_heading(a, b, c, d) || same_heading(a, b, d, c)) {
+        return false;
+    }
+    let (ux, uy) = ((b.x - a.x) as f64, (b.y - a.y) as f64);
+    let (vx, vy) = ((d.x - c.x) as f64, (d.y - c.y) as f64);
+    let cross = ux * vy - uy * vx;
+    let (p, q) = if board::geom::segments_cross(a, b, c, d) && cross.abs() > 1e-6 {
+        let t = (((c.x - a.x) as f64 * vy - (c.y - a.y) as f64 * vx) / cross).clamp(0.0, 1.0);
+        let at = Point::new(a.x + (t * ux).round() as Nm, a.y + (t * uy).round() as Nm);
+        (at, at)
+    } else {
+        [(a, closest_on_segment(c, d, a).1), (b, closest_on_segment(c, d, b).1), (closest_on_segment(a, b, c).1, c), (closest_on_segment(a, b, d).1, d)]
+            .into_iter()
+            .min_by(|(p1, q1), (p2, q2)| p1.distance(*q1).total_cmp(&p2.distance(*q2)))
+            .expect("four pairs")
+    };
+    let arm_min = r1.max(r2) as f64;
+    let kept_end = same_ends.iter().flatten().any(|&e| e.distance(p) <= arm_min + 2_000.0);
+    if p.distance(q) > r1.min(r2) as f64 && !kept_end {
+        return true;
+    }
+    let arms = |from: Point, ends: [Point; 2]| -> Vec<((f64, f64), f64)> {
+        ends.into_iter()
+            .filter_map(|to| {
+                let len = from.distance(to);
+                (len > arm_min).then(|| (((to.x - from.x) as f64 / len, (to.y - from.y) as f64 / len), len))
+            })
+            .collect()
+    };
+    let sharp = 85f64.to_radians().cos();
+    let u_arms = arms(p, [a, b]);
+    let v_arms = arms(q, [c, d]);
+    for &(u, lu) in &u_arms {
+        for &(v, lv) in &v_arms {
+            let cos = (u.0 * v.0 + u.1 * v.1).clamp(-1.0, 1.0);
+            if cos <= sharp {
+                continue;
+            }
+            let half_sin = ((1.0 - cos) / 2.0).sqrt().max(0.05);
+            let crotch = (r1 as f64 + r2 as f64 + gap) / (2.0 * half_sin);
+            let (du, dv) = (crotch.min(lu), crotch.min(lv));
+            let pu = Point::new(p.x + (u.0 * du).round() as Nm, p.y + (u.1 * du).round() as Nm);
+            let qv = Point::new(q.x + (v.0 * dv).round() as Nm, q.y + (v.1 * dv).round() as Nm);
+            let covered = board.near(layer, board::BBox::of([pu, qv])).into_iter().any(|id| {
+                board.item(id).is_some_and(|it| it.net == net && it.on(layer) && matches!(it.kind, Kind::Pad { .. }) && it.shape.depth(pu) >= r1 as f64 && it.shape.depth(qv) >= r2 as f64)
+            });
+            if !covered {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// `ULTRAROUTE_SQUARE_TRACE=X,Y` (mm): each way squaring tries within 1 mm of there, printed
@@ -1977,13 +2157,194 @@ fn pad_alone_at(board: &Board, chain: &Chain, track: ItemId, p: Point) -> Option
 }
 
 /// The centre of the pad of the chain's net its end `p` lies in alone ([`pad_alone_at`]), when
-/// it is not `p` and lies in the pad, and the pad.
+/// that centre is not already `p` and lies in the pad, and the pad.
 fn pad_centre(board: &Board, chain: &Chain, track: ItemId, p: Point) -> Option<(Point, ItemId)> {
     let pad = pad_alone_at(board, chain, track, p)?;
     let shape = &board.item(pad)?.shape;
     let bb = shape.bbox();
     let c = Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2);
     (c != p && shape.contains(c)).then_some((c, pad))
+}
+
+/// The pad centre `(c, moved_pad, pad)` from which [`pad_exit_ways`] may leave or enter at `p`:
+/// either `p` itself when `p` is already the pad's centre (`moved_pad` is `None`, so [`try_way`]
+/// keeps every joint at `p` even when another track of the net meets there too), or [`pad_centre`]
+/// when `p` lies alone off-centre in the pad.
+fn pad_for_exit(board: &Board, chain: &Chain, track: ItemId, p: Point) -> Option<(Point, Option<ItemId>, ItemId)> {
+    let layer = chain.layer.trailing_zeros() as usize;
+    for pad in board.near(layer, board::BBox::of([p])) {
+        let Some(it) = board.item(pad) else { continue };
+        if !matches!(it.kind, Kind::Pad { .. }) || it.net != chain.net || !it.on(layer) || !it.shape.contains(p) {
+            continue;
+        }
+        let bb = it.shape.bbox();
+        if Point::new((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2) == p {
+            return Some((p, None, pad));
+        }
+    }
+    pad_centre(board, chain, track, p).map(|(c, pad)| (c, Some(pad), pad))
+}
+
+/// Points just outside `pad` reached from its centre `c` along 45-degree multiples that cross its
+/// rim square on ([`slants_into`]), far enough out that the next piece turning away clears `pad`
+/// by the net's clearance (no slot at the rim, 1Bitsy's /PA4) and leaves neither knee piece to
+/// `toward` shorter than the track is wide.
+fn pad_exits(board: &Board, chain: &Chain, pad: ItemId, c: Point, toward: Point) -> Vec<Point> {
+    let Some(item) = board.item(pad) else { return Vec::new() };
+    let shape = &item.shape;
+    let need = (chain.half_width + TAUT_MARGIN + board.clearance(chain.net, chain.net) + 2_000) as f64;
+    let least = (2 * chain.half_width + 2_000) as f64;
+    let max_k: Nm = 5_000_000;
+    let mut out = Vec::new();
+    for (sx, sy) in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)] {
+        if (toward.x - c.x) as f64 * (sx as f64) + (toward.y - c.y) as f64 * (sy as f64) < -1_000.0 {
+            continue;
+        }
+        let far = Point::new(c.x + sx * 10_000_000, c.y + sy * 10_000_000);
+        if slants_into(c, far, shape) {
+            continue;
+        }
+        let clear = |k: Nm| {
+            let q = Point::new(c.x + sx * k, c.y + sy * k);
+            point_gap(shape, q) >= need && c.distance(q) >= least
+        };
+        if !clear(max_k) {
+            continue;
+        }
+        let (mut lo, mut hi) = (1, max_k);
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if clear(mid) {
+                hi = mid;
+            } else {
+                lo = mid + 1;
+            }
+        }
+        let mut k = lo;
+        let q = Point::new(c.x + sx * k, c.y + sy * k);
+        let (dx, dy) = ((toward.x - q.x).abs(), (toward.y - q.y).abs());
+        let diff = (dx - dy).abs();
+        if diff > 0 && (diff as f64) < least {
+            let bump = (least as Nm - diff) + 1_000;
+            let q2 = Point::new(c.x + sx * (k + bump), c.y + sy * (k + bump));
+            if ((toward.x - q2.x).abs() - (toward.y - q2.y).abs()).abs() as f64 >= least {
+                k += bump;
+            }
+        } else if dx.min(dy) > 0 && (dx.min(dy) as f64 * std::f64::consts::SQRT_2) < least {
+            let need_d = (least / std::f64::consts::SQRT_2).ceil() as Nm;
+            let bump = (need_d - dx.min(dy)).max(0) + 1_000;
+            let q2 = Point::new(c.x + sx * (k + bump), c.y + sy * (k + bump));
+            if (toward.x - q2.x).abs().min((toward.y - q2.y).abs()) as f64 * std::f64::consts::SQRT_2 >= least {
+                k += bump;
+            }
+        }
+        out.push(Point::new(c.x + sx * k, c.y + sy * k));
+    }
+    out.sort_by(|a, b| a.distance(toward).total_cmp(&b.distance(toward)));
+    out.truncate(3);
+    out
+}
+
+/// Three- and four-piece ways that leave or enter an end's pad along [`pad_exits`], square to its
+/// side and past its rim before turning onto a knee: a track from a long SMD pad to a point off
+/// its side has no two-piece way when the diagonal slants across the long side and the axial run
+/// hits the neighbouring pin in the row. Gentle 135-degree bends come before right-angle ones, and
+/// acute bends are left out.
+fn pad_exit_ways(board: &Board, chain: &Chain, points: &[Point], tracks: &[ItemId], i: usize, j: usize) -> Vec<(Vec<Point>, [Option<ItemId>; 2])> {
+    let (s, e) = (points[i], points[j]);
+    let s_pad = (i == 0).then(|| pad_for_exit(board, chain, tracks[i], s)).flatten();
+    let e_pad = (j == tracks.len()).then(|| pad_for_exit(board, chain, tracks[j - 1], e)).flatten();
+    if s_pad.is_none() && e_pad.is_none() {
+        return Vec::new();
+    }
+    let knees = |a: Point, b: Point| -> Vec<Vec<Point>> {
+        match octilinear_ways(a, b) {
+            None => vec![vec![a, b]],
+            Some(mut ws) => {
+                ws.truncate(2);
+                ws.into_iter().map(|w| std::iter::once(a).chain(w).chain(std::iter::once(b)).collect()).collect()
+            }
+        }
+    };
+    let mut raw: Vec<(Vec<Point>, [Option<ItemId>; 2])> = Vec::new();
+    if let Some((cs, ms, ps)) = s_pad {
+        let mut ends = vec![(e, None)];
+        if let Some((ce, me, pe)) = e_pad {
+            if pe != ps && ce != e {
+                ends.push((ce, me));
+            }
+        }
+        for (end, end_pad) in ends {
+            for p in pad_exits(board, chain, ps, cs, end) {
+                for tail in knees(p, end) {
+                    let mut path = vec![cs];
+                    path.extend(tail);
+                    raw.push((path, [ms, end_pad]));
+                }
+            }
+        }
+    }
+    if let Some((ce, me, pe)) = e_pad {
+        let mut starts = vec![(s, None)];
+        if let Some((cs, ms, ps)) = s_pad {
+            if ps != pe && cs != s {
+                starts.push((cs, ms));
+            }
+        }
+        for (start, start_pad) in starts {
+            for q in pad_exits(board, chain, pe, ce, start) {
+                for mut head in knees(start, q) {
+                    head.push(ce);
+                    raw.push((head, [start_pad, me]));
+                }
+            }
+        }
+    }
+    if let (Some((cs, ms, ps)), Some((ce, me, pe))) = (s_pad, e_pad) {
+        if ps != pe {
+            let ps_out = pad_exits(board, chain, ps, cs, ce);
+            let pe_out = pad_exits(board, chain, pe, ce, cs);
+            for &p in ps_out.iter().take(2) {
+                for &q in pe_out.iter().take(2) {
+                    for mid in knees(p, q) {
+                        let mut path = vec![cs];
+                        path.extend(mid);
+                        path.push(ce);
+                        raw.push((path, [ms, me]));
+                    }
+                }
+            }
+        }
+    }
+    let non_acute = |a: Point, b: Point, c: Point| -> Option<usize> {
+        let (u, v) = (((b.x - a.x) as f64, (b.y - a.y) as f64), ((c.x - b.x) as f64, (c.y - b.y) as f64));
+        let (lu, lv) = (u.0.hypot(u.1), v.0.hypot(v.1));
+        if lu == 0.0 || lv == 0.0 {
+            return None;
+        }
+        let dot = u.0 * v.0 + u.1 * v.1;
+        (dot >= -1e-6 * lu * lv).then_some(usize::from(dot <= 1e-6 * lu * lv))
+    };
+    let mut scored = Vec::new();
+    for (path, pads) in raw {
+        if path.len() <= 2 || path.windows(3).any(|w| same_heading(w[0], w[1], w[1], w[2])) {
+            continue;
+        }
+        let Some(rights) = path.windows(3).try_fold(0usize, |acc, w| Some(acc + non_acute(w[0], w[1], w[2])?)) else {
+            continue;
+        };
+        if i > 0 && non_acute(points[i - 1], path[0], path[1]).is_none() {
+            continue;
+        }
+        if j < tracks.len() && non_acute(path[path.len() - 2], path[path.len() - 1], points[j + 1]).is_none() {
+            continue;
+        }
+        let len_nm: i64 = path.windows(2).map(|w| w[0].distance(w[1]) as i64).sum();
+        scored.push(((rights, path.len(), len_nm), path, pads));
+    }
+    scored.sort_by_key(|x| x.0);
+    let mut seen: HashSet<Vec<Point>> = HashSet::new();
+    scored.into_iter().filter(|(_, p, _)| seen.insert(p.clone())).map(|(_, p, pads)| (p, pads)).collect()
 }
 
 /// Where the end `e` of the track `track` from `s` may slide within the pad of its net it lies in
@@ -2011,14 +2372,85 @@ fn slides(board: &Board, chain: &Chain, track: ItemId, s: Point, e: Point) -> Ve
         .collect()
 }
 
-/// Lays the tracks `tracks[i..j]` along `path` (their ends, or one slid within the pad `pad`, and
+/// Where both ends `s` and `e` of a chain lie alone in distinct pads of its net
+/// ([`pad_alone_at`]), the pairs of points inside those pads that meet on one straight or
+/// 45-degree line halfway between `s` and `e`, each deep enough inside its pad.
+fn two_slides(board: &Board, chain: &Chain, first: ItemId, s: Point, last: ItemId, e: Point) -> Vec<([Point; 2], [Option<ItemId>; 2])> {
+    let (Some(ps), Some(pe)) = (pad_alone_at(board, chain, first, s), pad_alone_at(board, chain, last, e)) else {
+        return Vec::new();
+    };
+    if ps == pe {
+        return Vec::new();
+    }
+    let (ss, se) = (&board.item(ps).expect("found").shape, &board.item(pe).expect("found").shape);
+    let (ws, we) = (ss.depth(s), se.depth(e));
+    let deep_s = (chain.half_width as f64).min(ws).max(ws / 2.0);
+    let deep_e = (chain.half_width as f64).min(we).max(we / 2.0);
+    let (xm, ym) = ((s.x + e.x) / 2, (s.y + e.y) / 2);
+    let (dx, dy) = (e.x - s.x, e.y - s.y);
+    let (sx, sy) = (dx.signum(), dy.signum());
+    let d = (dx * sx - dy * sy) / 4;
+    let qs = Point::new(s.x + sx * d, s.y - sy * d);
+    let t = ((e.x - qs.x) * sx + (e.y - qs.y) * sy) / 2;
+    let qe = Point::new(qs.x + sx * t, qs.y + sy * t);
+    [(Point::new(s.x, ym), Point::new(e.x, ym)), (Point::new(xm, s.y), Point::new(xm, e.y)), (qs, qe)]
+        .into_iter()
+        .filter(|&(a, b)| a != b && (a != s || b != e) && ss.depth(a) >= deep_s && se.depth(b) >= deep_e)
+        .map(|(a, b)| ([a, b], [Some(ps), Some(pe)]))
+        .collect()
+}
+
+/// Whether the overlap of `g` lies wholly inside other connected copper of `net` on `layer`
+/// (a pad, via, kept pour, or an adjacent track of the way or chain bridged to `g.other`), so no
+/// narrow sliver is left exposed on the copper outline (Biscay's C18-2, a piece from a pad's
+/// centre overlapping a via whose land stands outside the pad's centre but deep inside its rim).
+fn graze_covered(board: &Board, layer: usize, net: u32, r1: Nm, pieces: &[ItemId], sides: &[ItemId], g: &Graze) -> bool {
+    let Some(other) = board.item(g.other) else { return false };
+    let (Kind::Track | Kind::Via, Shape::Capsule { r: r2, .. }) = (&other.kind, &other.shape) else {
+        return false;
+    };
+    let d = g.from.distance(g.to);
+    if d <= 0.0 {
+        return false;
+    }
+    let along = |dist: f64| {
+        Point::new(
+            g.from.x + ((g.to.x - g.from.x) as f64 * (dist / d)).round() as Nm,
+            g.from.y + ((g.to.y - g.from.y) as f64 * (dist / d)).round() as Nm,
+        )
+    };
+    let (p_rim, q_rim) = (along((r1 as f64).min(d)), along((d - *r2 as f64).max(0.0)));
+    board.near(layer, board::BBox::of([p_rim, q_rim])).into_iter().any(|c_id| {
+        if c_id == g.track || c_id == g.other {
+            return false;
+        }
+        let Some(c) = board.item(c_id) else { return false };
+        if c.net != net || !c.on(layer) || !c.shape.contains(p_rim) || !c.shape.contains(q_rim) {
+            return false;
+        }
+        match c.kind {
+            Kind::Pad { .. } | Kind::Via | Kind::Pour { kept: true, .. } => true,
+            Kind::Track => {
+                (pieces.contains(&c_id) || sides.contains(&c_id))
+                    && firmly_joined(board, c_id, g.track)
+                    && (firmly_joined(board, c_id, g.other) || bridged(board, layer, c_id, c, g.other, other))
+            }
+            _ => false,
+        }
+    })
+}
+
+type WayOut = (Vec<ItemId>, Vec<(ItemId, Item)>);
+
+/// Lays the tracks `tracks[i..j]` along `path` (their ends, or ends slid within `pads`, and
 /// the points between), as [`try_cut`] cuts a bend: no piece across the board's edge, whatever
 /// joined the tracks joined to the pieces or the tracks either side, no piece of a Z shorter than
-/// the track is wide, and none breaking a rule or grazing its net's copper. The pieces and the
-/// tracks taken out (with their ids, to put back) if `keep`; else, or if it does not fit, the
-/// board is left as it was. Tried without keeping, the pieces are [`TAUT_MARGIN`] wider.
+/// the track is wide, and none breaking a rule or pulling into a new graze with its net's copper.
+/// The pieces and the tracks taken out (with their ids, to put back) if `keep`; else, or if it
+/// does not fit, the board is left as it was. Tried without keeping, the pieces are [`TAUT_MARGIN`]
+/// wider.
 #[allow(clippy::too_many_arguments)]
-fn try_way(board: &mut Board, chain: &Chain, tracks: &[ItemId], i: usize, j: usize, path: &[Point], pad: Option<ItemId>, keep: bool) -> Option<(Vec<ItemId>, Vec<(ItemId, Item)>)> {
+fn try_way(board: &mut Board, chain: &Chain, points: &[Point], tracks: &[ItemId], i: usize, j: usize, path: &[Point], pads: [Option<ItemId>; 2], keep: bool) -> Option<WayOut> {
     let layer = chain.layer.trailing_zeros() as usize;
     let way = &path[1..path.len() - 1];
     // A Z's piece shorter than the track is wide leaves the pieces either side overlapping
@@ -2048,7 +2480,7 @@ fn try_way(board: &mut Board, chain: &Chain, tracks: &[ItemId], i: usize, j: usi
     partners.sort_unstable();
     partners.dedup();
     // An end slid within its pad: what met the track there meets the pad.
-    let sides: Vec<ItemId> = [i.checked_sub(1).map(|k| tracks[k]), tracks.get(j).copied(), pad].into_iter().flatten().collect();
+    let sides: Vec<ItemId> = [i.checked_sub(1).map(|k| tracks[k]), tracks.get(j).copied(), pads[0], pads[1]].into_iter().flatten().collect();
     let removed: Vec<(ItemId, Item)> = span.iter().filter_map(|t| Some((*t, board.remove(*t)?))).collect();
     let r = if keep { chain.half_width } else { chain.half_width + TAUT_MARGIN };
     let mut pieces = Vec::new();
@@ -2064,9 +2496,41 @@ fn try_way(board: &mut Board, chain: &Chain, tracks: &[ItemId], i: usize, j: usi
     let rule = ok;
     ok = ok && partners.iter().all(|&o| pieces.iter().chain(&sides).any(|&p| p == o || joined(board, o, p)));
     let join = ok;
-    ok = ok && grazes(board, &pieces).is_empty();
+    let same_ends: [Option<Point>; 2] = [(path[0] == points[i]).then_some(path[0]), (path[path.len() - 1] == points[j]).then_some(path[path.len() - 1])];
+    if ok {
+        // An unchanged end that met another track only by overlapping round ends before squaring
+        // (`mend_joints` mends it in write, 1Bitsy's /PA4) is no worse after; a new graze pulled
+        // against copper mid-run is refused.
+        let gs = grazes(board, &pieces);
+        if !gs.is_empty() {
+            let mut old_gs: Option<Vec<Graze>> = None;
+            ok = gs.iter().all(|g| {
+                if graze_covered(board, layer, chain.net, r, &pieces, &sides, g) {
+                    return true;
+                }
+                let Some(end) = same_ends.iter().flatten().copied().find(|&p| g.from.distance(p) <= r as f64) else {
+                    return false;
+                };
+                let old = old_gs.get_or_insert_with(|| {
+                    let held: Vec<(ItemId, Item)> = pieces.iter().filter_map(|&id| Some((id, board.remove(id)?))).collect();
+                    for (id, it) in &removed {
+                        board.restore(*id, it.clone());
+                    }
+                    let found = grazes(board, span);
+                    for &(id, _) in &removed {
+                        board.remove(id);
+                    }
+                    for (id, it) in held {
+                        board.restore(id, it);
+                    }
+                    found
+                });
+                old.iter().any(|og| og.other == g.other && og.from.distance(end) <= r as f64 && g.overlap + 1_000.0 >= og.overlap)
+            });
+        }
+    }
     let graze = ok;
-    ok = ok && !leaves_slot(board, chain, &pieces);
+    ok = ok && !leaves_slot(board, chain, &pieces, &same_ends);
     ok = ok && removed.len() == span.len();
     if let Some(at) = square_trace() {
         if path.windows(2).any(|w| board::point_segment(at, w[0], w[1]) < 1e6) || removed.iter().any(|(_, it)| it.shape.bbox().grow(500_000).contains(at)) {
@@ -2846,5 +3310,341 @@ mod tests {
         assert!(board.item(s1).is_none(), "net 1's stub goes");
         assert!(board.item(s2).is_some(), "net 2's stub was not picked");
         assert_eq!(soft, vec![s2]);
+    }
+
+    #[test]
+    fn a_track_with_both_ends_off_centre_in_its_pads_moves_both_ends_to_square() {
+        let mut board = empty_board();
+        let pad = |x, y, r| Item {
+            kind: Kind::Pad { footprint: 0, number: "1".into(), plated: false },
+            net: 1,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(x, y), b: Point::new(x, y), r },
+            hole: None,
+            locked: true,
+            span: None,
+        };
+        // Both ends lie near opposite rims of 0.8 mm round pads: moving one end alone leaves the
+        // other shallow enough to form a slot, so both move to their pads' centres.
+        board.insert(pad(0, 0, 400_000));
+        board.insert(pad(4_000_000, 1_500_000, 400_000));
+        let mut soft = vec![board.insert(seg(Point::new(0, -320_000), Point::new(4_000_000, 1_820_000)))];
+        let bent = octilinear_watch(&mut board, &mut soft, &Default::default(), &mut |_, _, _, _| {});
+        assert_eq!(bent, 1);
+        assert_eq!(soft.len(), 2);
+        assert!(board::check(&board).is_empty());
+        assert!(board::connectivity(&board).airlines.is_empty());
+        let mut ends: Vec<(Point, Point)> = soft.iter().map(|&id| match board.item(id).unwrap().shape { Shape::Capsule { a, b, .. } => (a, b), _ => panic!() }).collect();
+        ends.sort_by_key(|(a, b)| (a.x.min(b.x), a.y.min(b.y)));
+        assert_eq!(ends, vec![(Point::new(0, 0), Point::new(2_500_000, 0)), (Point::new(2_500_000, 0), Point::new(4_000_000, 1_500_000))]);
+
+        // Two pads offset by 0.16 mm in y: neither pad's centre line stays deep enough in the
+        // other, while sliding both ends to y = 0 lays one straight track with no bend.
+        let mut board = empty_board();
+        board.insert(pad(0, 80_000, 250_000));
+        board.insert(pad(4_000_000, -80_000, 250_000));
+        let mut soft = vec![board.insert(Item { shape: Shape::Capsule { a: Point::new(0, 200_000), b: Point::new(4_000_000, -200_000), r: 75_000 }, ..seg(Point::new(0, 0), Point::new(0, 0)) })];
+        assert_eq!(octilinear_watch(&mut board, &mut soft, &Default::default(), &mut |_, _, _, _| {}), 1);
+        assert_eq!(soft.len(), 1, "one straight track without a knee: {soft:?}");
+        assert_eq!(board.item(soft[0]).unwrap().shape, Shape::Capsule { a: Point::new(0, 0), b: Point::new(4_000_000, 0), r: 75_000 });
+        assert!(board::connectivity(&board).airlines.is_empty());
+    }
+
+    #[test]
+    fn a_graze_already_at_an_unchanged_end_allows_squaring_while_a_new_graze_refuses_it() {
+        // 1Bitsy's /PA4: a slanted track ending 0.07 mm from a locked escape's start, joined by
+        // overlapping round ends that `mend_joints` mends on write.
+        let (pcb, copper) = kicad_pcb::parse_board(
+            "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal)) (net 0 \"\") (net 1 \"N1\") (net 2 \"N2\"))",
+        )
+        .unwrap();
+        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+        pad_at(&mut board, 0, 0);
+        pad_at(&mut board, 9_000_000, 6_225_000);
+        board.insert(Item {
+            kind: Kind::Track,
+            net: 1,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(7_085_000, 6_225_000), b: Point::new(9_000_000, 6_225_000), r: 75_000 },
+            hole: None,
+            locked: true,
+            span: None,
+        });
+        let slanted = board.insert(Item {
+            shape: Shape::Capsule { a: Point::new(0, 0), b: Point::new(7_015_000, 6_225_000), r: 75_000 },
+            ..seg(Point::new(0, 0), Point::new(0, 0))
+        });
+        assert_eq!(grazes(&board, &[slanted]).len(), 1, "the round ends already graze");
+        let mut soft = vec![slanted];
+        assert_eq!(octilinear_watch(&mut board, &mut soft, &Default::default(), &mut |_, _, _, _| {}), 1);
+        assert_eq!(soft.len(), 2);
+        assert!(board::connectivity(&board).airlines.is_empty());
+
+        // A way that pulls a track into a new mid-run graze against a pad's edge is still refused.
+        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+        pad_at(&mut board, 0, 0);
+        pad_at(&mut board, 4_000_000, 1_500_000);
+        board.insert(Item {
+            kind: Kind::Pad { footprint: 0, number: "2".into(), plated: false },
+            net: 1,
+            layers: 1,
+            shape: Shape::Polygon(vec![Point::new(1_200_000, -265_000), Point::new(1_400_000, -265_000), Point::new(1_400_000, -65_000), Point::new(1_200_000, -65_000)]),
+            hole: None,
+            locked: true,
+            span: None,
+        });
+        for (x, y) in [(1_000_000, 1_000_000), (2_000_000, 750_000), (1_500_000, 300_000), (2_600_000, 750_000)] {
+            let at = Point::new(x, y);
+            board.insert(Item { kind: Kind::Via, net: 2, layers: 1, shape: Shape::Capsule { a: at, b: at, r: 250_000 }, hole: Some((at, 125_000)), locked: true, span: None });
+        }
+        let slanted = board.insert(Item { shape: Shape::Capsule { a: Point::new(0, 0), b: Point::new(4_000_000, 1_500_000), r: 75_000 }, ..seg(Point::new(0, 0), Point::new(0, 0)) });
+        assert!(grazes(&board, &[slanted]).is_empty());
+        let mut soft = vec![slanted];
+        assert_eq!(octilinear_watch(&mut board, &mut soft, &Default::default(), &mut |_, _, _, _| {}), 0);
+    }
+
+    #[test]
+    fn a_slanted_track_into_a_long_pad_exits_square_to_its_side() {
+        let (pcb, copper) = kicad_pcb::parse_board(
+            "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal)) (net 0 \"\") (net 1 \"N1\") (net 2 \"N2\"))",
+        )
+        .unwrap();
+        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+        let rect_pad = |net, x0, x1, y0, y1| Item {
+            kind: Kind::Pad { footprint: 0, number: "1".into(), plated: false },
+            net,
+            layers: 1,
+            shape: Shape::Polygon(vec![Point::new(x0, y0), Point::new(x1, y0), Point::new(x1, y1), Point::new(x0, y1)]),
+            hole: None,
+            locked: true,
+            span: None,
+        };
+        // A vertical SMD pad in a row: going East hits the neighbouring pin, and going NE at 45
+        // degrees crosses the vertical long side at a slant; leaving North out the pad's end, then
+        // NE, then East squares the track in three pieces with no slot or dogleg.
+        board.insert(rect_pad(1, -250_000, 250_000, -750_000, 750_000));
+        board.insert(rect_pad(2, 550_000, 1_050_000, -750_000, 750_000));
+        pad_at(&mut board, 4_500_000, 2_000_000);
+        let mut soft = vec![board.insert(Item {
+            shape: Shape::Capsule { a: Point::new(0, 0), b: Point::new(4_500_000, 2_000_000), r: 75_000 },
+            ..seg(Point::new(0, 0), Point::new(0, 0))
+        })];
+        assert_eq!(octilinear_watch(&mut board, &mut soft, &Default::default(), &mut |_, _, _, _| {}), 1);
+        assert_eq!(soft.len(), 3, "north exit, diagonal, east straight: {soft:?}");
+        for &id in &soft {
+            let Shape::Capsule { a, b, .. } = board.item(id).unwrap().shape else { panic!() };
+            assert!(octilinear_ways(a, b).is_none(), "off-45 piece left: {a:?} -> {b:?}");
+        }
+        assert!(board::check(&board).is_empty());
+        assert!(board::connectivity(&board).airlines.is_empty());
+
+        // A round pad with foreign copper at its centre (Atreus's diodes): an unchanged end near
+        // the East rim exiting straight East crosses the rim square on without passing the centre.
+        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+        board.insert(Item {
+            kind: Kind::Pad { footprint: 0, number: "1".into(), plated: false },
+            net: 1,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(0, 0), b: Point::new(0, 0), r: 800_000 },
+            hole: None,
+            locked: true,
+            span: None,
+        });
+        board.insert(Item {
+            kind: Kind::Track,
+            net: 2,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(0, 0), b: Point::new(0, -1_500_000), r: 250_000 },
+            hole: None,
+            locked: true,
+            span: None,
+        });
+        board.insert(Item {
+            kind: Kind::Via,
+            net: 2,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(2_500_000, 0), b: Point::new(2_500_000, 0), r: 250_000 },
+            hole: Some((Point::new(2_500_000, 0), 125_000)),
+            locked: true,
+            span: None,
+        });
+        pad_at(&mut board, 5_000_000, 2_000_000);
+        let mut soft = vec![board.insert(Item {
+            shape: Shape::Capsule { a: Point::new(780_000, 0), b: Point::new(5_000_000, 2_000_000), r: 75_000 },
+            ..seg(Point::new(0, 0), Point::new(0, 0))
+        })];
+        assert_eq!(octilinear_watch(&mut board, &mut soft, &Default::default(), &mut |_, _, _, _| {}), 1);
+        for &id in &soft {
+            let Shape::Capsule { a, b, .. } = board.item(id).unwrap().shape else { panic!() };
+            assert!(octilinear_ways(a, b).is_none(), "off-45 piece left: {a:?} -> {b:?}");
+            assert!(check_item(&board, id).is_empty());
+        }
+        assert!(board::net_connectivity(&board, 1, true).airlines.is_empty());
+    }
+
+    #[test]
+    fn a_45_degree_track_fork_is_refused_while_a_shared_pad_centre_still_exits_square() {
+        let (pcb, copper) = kicad_pcb::parse_board(
+            "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal)) (net 0 \"\") (net 1 \"N1\") (net 2 \"N2\"))",
+        )
+        .unwrap();
+        let pad_at = |board: &mut Board, x: Nm, y: Nm| {
+            board.insert(Item {
+                kind: Kind::Pad { footprint: 0, number: "p".into(), plated: false },
+                net: 1,
+                layers: 1,
+                shape: Shape::Capsule { a: Point::new(x, y), b: Point::new(x, y), r: 150_000 },
+                hole: None,
+                locked: true,
+                span: None,
+            })
+        };
+
+        // A branch off the middle of an East track to (2.5, 3.0): when the 90-degree South leg is
+        // blocked, every remaining 45-degree knee or Z peels off the East track at 45 degrees.
+        let fork_board = |block_south: bool| {
+            let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+            pad_at(&mut board, 0, 0);
+            pad_at(&mut board, 4_000_000, 0);
+            pad_at(&mut board, 2_500_000, 3_000_000);
+            board.insert(Item {
+                kind: Kind::Track,
+                net: 1,
+                layers: 1,
+                shape: Shape::Capsule { a: Point::new(0, 0), b: Point::new(4_000_000, 0), r: 75_000 },
+                hole: None,
+                locked: true,
+                span: None,
+            });
+            if block_south {
+                board.insert(Item {
+                    kind: Kind::Via,
+                    net: 2,
+                    layers: 1,
+                    shape: Shape::Capsule { a: Point::new(1_000_000, 700_000), b: Point::new(1_000_000, 700_000), r: 200_000 },
+                    hole: Some((Point::new(1_000_000, 700_000), 100_000)),
+                    locked: true,
+                    span: None,
+                });
+            }
+            let soft = vec![board.insert(Item {
+                shape: Shape::Capsule { a: Point::new(1_000_000, 0), b: Point::new(2_500_000, 3_000_000), r: 75_000 },
+                ..seg(Point::new(0, 0), Point::new(0, 0))
+            })];
+            (board, soft)
+        };
+        let (mut board, mut soft) = fork_board(true);
+        assert_eq!(octilinear_watch(&mut board, &mut soft, &Default::default(), &mut |_, _, _, _| {}), 0);
+        let (mut board, mut soft) = fork_board(false);
+        assert_eq!(octilinear_watch(&mut board, &mut soft, &Default::default(), &mut |_, _, _, _| {}), 1);
+
+        // Two daisy-chain tracks meeting at a long pad's centre (1Bitsy's X3-3): one goes South,
+        // and the slanted one still leaves East square to the long side without losing the joint.
+        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+        board.insert(Item {
+            kind: Kind::Pad { footprint: 0, number: "1".into(), plated: false },
+            net: 1,
+            layers: 1,
+            shape: Shape::Polygon(vec![Point::new(-370_000, -1_400_000), Point::new(370_000, -1_400_000), Point::new(370_000, 1_400_000), Point::new(-370_000, 1_400_000)]),
+            hole: None,
+            locked: true,
+            span: None,
+        });
+        pad_at(&mut board, 0, 3_000_000);
+        pad_at(&mut board, 3_500_000, -1_500_000);
+        board.insert(Item {
+            kind: Kind::Track,
+            net: 1,
+            layers: 1,
+            shape: Shape::Capsule { a: Point::new(0, 0), b: Point::new(0, 3_000_000), r: 75_000 },
+            hole: None,
+            locked: true,
+            span: None,
+        });
+        let mut soft = vec![board.insert(Item {
+            shape: Shape::Capsule { a: Point::new(0, 0), b: Point::new(3_500_000, -1_500_000), r: 75_000 },
+            ..seg(Point::new(0, 0), Point::new(0, 0))
+        })];
+        assert_eq!(octilinear_watch(&mut board, &mut soft, &Default::default(), &mut |_, _, _, _| {}), 1);
+        assert!(board::check(&board).is_empty());
+        assert!(board::connectivity(&board).airlines.is_empty());
+    }
+
+    #[test]
+    fn length_picked_z_splits_thread_a_corridor_without_doglegs() {
+        let (pcb, copper) = kicad_pcb::parse_board(
+            "(kicad_pcb (version 20240101) (general (thickness 1.6)) (layers (0 \"F.Cu\" signal)) (net 0 \"\") (net 1 \"N1\") (net 2 \"N2\"))",
+        )
+        .unwrap();
+        let pad_at = |board: &mut Board, x: Nm, y: Nm| {
+            board.insert(Item {
+                kind: Kind::Pad { footprint: 0, number: "p".into(), plated: false },
+                net: 1,
+                layers: 1,
+                shape: Shape::Capsule { a: Point::new(x, y), b: Point::new(x, y), r: 150_000 },
+                hole: None,
+                locked: true,
+                span: None,
+            })
+        };
+        let block = |board: &mut Board, x: Nm, y: Nm, r: Nm| {
+            board.insert(Item {
+                kind: Kind::Via,
+                net: 2,
+                layers: 1,
+                shape: Shape::Capsule { a: Point::new(x, y), b: Point::new(x, y), r },
+                hole: Some((Point::new(x, y), r / 2)),
+                locked: true,
+                span: None,
+            })
+        };
+
+        // Diagonal offset 0.6 mm (< DOGLEG, so every straight-split Z is a dogleg) and straight
+        // run 2.4 mm (> DOGLEG): blocking both knees and the 0.5 diagonal split leaves only an
+        // off-midpoint diagonal split (y = 0.15 mm) clear.
+        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+        pad_at(&mut board, 0, 0);
+        pad_at(&mut board, 3_000_000, 600_000);
+        block(&mut board, 1_500_000, 650_000, 150_000);
+        block(&mut board, 2_200_000, -300_000, 150_000);
+        let mut soft = vec![board.insert(Item {
+            shape: Shape::Capsule { a: Point::new(0, 0), b: Point::new(3_000_000, 600_000), r: 75_000 },
+            ..seg(Point::new(0, 0), Point::new(0, 0))
+        })];
+        assert_eq!(octilinear_watch(&mut board, &mut soft, &Default::default(), &mut |_, _, _, _| {}), 1);
+        assert_eq!(soft.len(), 3);
+        let mut pts = vec![Point::new(0, 0)];
+        for &id in &soft {
+            let Shape::Capsule { a, b, .. } = board.item(id).unwrap().shape else { panic!() };
+            assert!(octilinear_ways(a, b).is_none(), "off-45 piece left: {a:?} -> {b:?}");
+            pts.push(b);
+        }
+        assert_eq!(doglegs(&pts, 75_000), 0);
+        assert!(board::check(&board).is_empty());
+        assert!(board::net_connectivity(&board, 1, true).airlines.is_empty());
+
+        // Long 16 mm straight run with 1.0 mm vertical offset (diagonal 1.414 mm > DOGLEG):
+        // blocking both knees and the 0.25/0.5/0.75 splits leaves the 1.01 mm length-picked gap.
+        let mut board = Board::new(&pcb, &copper, kicad_pcb::Rules::parse("{}").unwrap());
+        pad_at(&mut board, 0, 0);
+        pad_at(&mut board, 16_000_000, 1_000_000);
+        for &(x, y) in &[(1_000_000, 1_000_000), (14_000_000, -250_000), (4_250_000, 500_000), (8_000_000, 500_000), (11_750_000, 500_000)] {
+            block(&mut board, x, y, 150_000);
+        }
+        let mut soft = vec![board.insert(Item {
+            shape: Shape::Capsule { a: Point::new(0, 0), b: Point::new(16_000_000, 1_000_000), r: 75_000 },
+            ..seg(Point::new(0, 0), Point::new(0, 0))
+        })];
+        assert_eq!(octilinear_watch(&mut board, &mut soft, &Default::default(), &mut |_, _, _, _| {}), 1);
+        assert_eq!(soft.len(), 3);
+        let mut pts = vec![Point::new(0, 0)];
+        for &id in &soft {
+            let Shape::Capsule { a, b, .. } = board.item(id).unwrap().shape else { panic!() };
+            assert!(octilinear_ways(a, b).is_none(), "off-45 piece left: {a:?} -> {b:?}");
+            pts.push(b);
+        }
+        assert_eq!(doglegs(&pts, 75_000), 0);
+        assert!(board::check(&board).is_empty());
+        assert!(board::net_connectivity(&board, 1, true).airlines.is_empty());
     }
 }
