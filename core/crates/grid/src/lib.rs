@@ -2,6 +2,7 @@
 //! cost field from the sources and a walk back down it, laid as tracks and vias.
 
 pub mod arcs;
+pub mod bundle;
 #[cfg(feature = "gpu")]
 pub mod gpu;
 pub mod islands;

@@ -1481,7 +1481,7 @@ const TAUT_ROUNDS: usize = 4;
 /// How much wider than they are a cut's pieces are tried, in nm: a cut is pulled as deep as it
 /// fits, which is against what it wraps, where the check's slack would let KiCad find it short
 /// (23 boards of the gate tier, each 0.5 um inside a clearance).
-const TAUT_MARGIN: Nm = 2_000;
+pub(crate) const TAUT_MARGIN: Nm = 2_000;
 
 /// Pulls the router's chains taut, as a rubber band: where [`pull_tight`] can only join two of a
 /// chain's points, this cuts each bend from a point on one of its tracks to a point on the other,
@@ -1730,7 +1730,7 @@ fn extra_z_ways(s: Point, e: Point, half_width: Nm) -> Vec<Vec<Point>> {
 }
 
 /// Whether `a` to `b` heads as `c` to `d` does.
-fn same_heading(a: Point, b: Point, c: Point, d: Point) -> bool {
+pub(crate) fn same_heading(a: Point, b: Point, c: Point, d: Point) -> bool {
     let (u, v) = (((b.x - a.x) as f64, (b.y - a.y) as f64), ((d.x - c.x) as f64, (d.y - c.y) as f64));
     let (lu, lv) = (u.0.hypot(u.1), v.0.hypot(v.1));
     lu > 0.0 && lv > 0.0 && (u.0 * v.1 - u.1 * v.0).abs() < 1e-6 * lu * lv && u.0 * v.0 + u.1 * v.1 > 0.0
@@ -1750,13 +1750,19 @@ const OCTILINEAR_ROUNDS: usize = 3;
 /// How many tracks it bent.
 pub fn octilinear_watch(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &Deadline, watch: &mut TightWatch) -> usize {
     let _b = board::work::enter(board::work::Bucket::Geometry);
-    let mut bent = 0;
+    let mut bent = crate::bundle::square_bundles(board, soft, deadline, watch);
     for _ in 0..OCTILINEAR_ROUNDS {
+        if deadline.expired() {
+            break;
+        }
         let round = octilinear_round(board, soft, deadline, watch);
         bent += round;
         if round == 0 || deadline.expired() {
             break;
         }
+    }
+    if !deadline.expired() {
+        bent += crate::bundle::square_bundles(board, soft, deadline, watch);
     }
     bent
 }
@@ -1764,7 +1770,7 @@ pub fn octilinear_watch(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &De
 /// The most of a chain's tracks [`octilinear_round`] lays one way in place of: a run pulled taut
 /// lies in pieces each a little off the last, and bent one by one they step aside by slivers,
 /// a ladder of doglegs (stm32_nucleo's GND, four steps of 40 um down 12 mm).
-const OCTILINEAR_SPAN: usize = 8;
+pub(crate) const OCTILINEAR_SPAN: usize = 8;
 
 fn octilinear_round(board: &mut Board, soft: &mut Vec<ItemId>, deadline: &Deadline, watch: &mut TightWatch) -> usize {
     let soft_set: HashSet<ItemId> = soft.iter().copied().filter(|id| board.item(*id).is_some()).collect();
@@ -1943,7 +1949,7 @@ const DOGLEG: f64 = 1_000_000.0;
 /// The doglegs along the line through `points`, as tools/tidy.py counts them: a piece shorter
 /// than [`DOGLEG`], bent off at both ends, between pieces heading the same way, stepping the
 /// track over by half its width or more.
-fn doglegs(points: &[Point], half_width: Nm) -> usize {
+pub(crate) fn doglegs(points: &[Point], half_width: Nm) -> usize {
     let heading = |p: Point, q: Point| ((q.y - p.y) as f64).atan2((q.x - p.x) as f64);
     let turn = |a: f64, b: f64| {
         let d = (a - b).abs() % std::f64::consts::TAU;
@@ -1966,7 +1972,7 @@ fn doglegs(points: &[Point], half_width: Nm) -> usize {
 /// its net so near the pad's rim that its edge and the rim part at a sliver. Squaring the
 /// gate's boards without asking added two thirds to their slots (Atreus 65 -> 157, the same
 /// binary with and without), most of them these two.
-fn leaves_slot(board: &Board, chain: &Chain, pieces: &[ItemId], same_ends: &[Option<Point>; 2]) -> bool {
+pub(crate) fn leaves_slot(board: &Board, chain: &Chain, pieces: &[ItemId], same_ends: &[Option<Point>; 2]) -> bool {
     let layer = chain.layer.trailing_zeros() as usize;
     let gap = board.clearance(chain.net, chain.net) as f64;
     pieces.iter().any(|&id| {
@@ -2083,7 +2089,7 @@ fn track_leaves_slot(board: &Board, layer: usize, net: u32, gap: f64, (a, b, r1)
 
 /// `ULTRAROUTE_SQUARE_TRACE=X,Y` (mm): each way squaring tries within 1 mm of there, printed
 /// with what refused it (a rule, a join lost, a graze, a slot) or that it fits.
-fn square_trace() -> Option<Point> {
+pub(crate) fn square_trace() -> Option<Point> {
     static AT: std::sync::OnceLock<Option<Point>> = std::sync::OnceLock::new();
     *AT.get_or_init(|| {
         let v: Vec<f64> = std::env::var("ULTRAROUTE_SQUARE_TRACE").ok()?.split(',').filter_map(|x| x.trim().parse().ok()).collect();
@@ -2158,7 +2164,7 @@ fn pad_alone_at(board: &Board, chain: &Chain, track: ItemId, p: Point) -> Option
 
 /// The centre of the pad of the chain's net its end `p` lies in alone ([`pad_alone_at`]), when
 /// that centre is not already `p` and lies in the pad, and the pad.
-fn pad_centre(board: &Board, chain: &Chain, track: ItemId, p: Point) -> Option<(Point, ItemId)> {
+pub(crate) fn pad_centre(board: &Board, chain: &Chain, track: ItemId, p: Point) -> Option<(Point, ItemId)> {
     let pad = pad_alone_at(board, chain, track, p)?;
     let shape = &board.item(pad)?.shape;
     let bb = shape.bbox();
