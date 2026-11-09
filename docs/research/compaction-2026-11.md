@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-Compaction v2 (code commit [`6a98397`](https://github.com/sequoia-hope/ultraroute/commit/6a98397) on `explore/compaction`, merged with `main` [`8b71912`](https://github.com/sequoia-hope/ultraroute/commit/8b71912)) has been compiled, debugged across iterative fix commits (`2bf3234`, `8ab60c3`, `a4fceaf`, `7487bae`, `16cdd97`, `9cd2a92`, `cdec619`, `5bee4a0`, `6a98397`), verified for `ultraroute route` byte-identity against `main` (`8b71912`), tested against `v1` (`7d0462d`), and benchmarked end-to-end on `sequoia-server` across Experiments A, B, and C plus a 24-board PCBench generalization suite.
+Compaction v2 (code commit [`6a98397`](https://github.com/sequoia-hope/ultraroute/commit/6a98397) on `explore/compaction`, merged with `main` [`8b71912`](https://github.com/sequoia-hope/ultraroute/commit/8b71912)) has been compiled, debugged across iterative fix commits (`2bf3234`, `8ab60c3`, `a4fceaf`, `7487bae`, `16cdd97`, `9cd2a92`, `cdec619`, `5bee4a0`, `6a98397`), verified for `ultraroute route` byte-identity against `main` (`8b71912`), tested against `v1` (`7d0462d`), and benchmarked end-to-end on the build server across Experiments A, B, and C plus a 24-board PCBench generalization suite.
 
 Every feature rule holds across all runs without exception:
 - **No ripping or rerouting**: `compact` preserves route homotopy; its sole topological move is [`slide_pinched_vias`](core/crates/morph/src/compact.rs#L3770-L4408) along a via's own net.
@@ -26,7 +26,7 @@ Every feature rule holds across all runs without exception:
 
 ### 1.1 Step 1: What Broke When the Previous Agent's Untested Code (`1a865d5`) First Compiled and Ran
 
-Building the merged untested tree (`1a865d5` = `30328a0` + `main` `8b71912`) on `sequoia-server` succeeded cleanly under `cargo build --release -p ultraroute -p kicad-text` and `cargo clippy --workspace --all-targets -- -D warnings` (`0` warnings), and 386 of 392 workspace tests passed, **but 6 of 18 unit tests in `morph` failed** (`exit code 101`):
+Building the merged untested tree (`1a865d5` = `30328a0` + `main` `8b71912`) on the build server succeeded cleanly under `cargo build --release -p ultraroute -p kicad-text` and `cargo clippy --workspace --all-targets -- -D warnings` (`0` warnings), and 386 of 392 workspace tests passed, **but 6 of 18 unit tests in `morph` failed** (`exit code 101`):
 
 1. `scale::tests::scale_expands_outline_parts_and_copper_while_keeping_part_sizes_and_joints` (`zero DRC violations after 1.1x scale`)
 2. `compact::tests::compact_bends_a_straight_track_around_an_obstacle_pad_without_ripping` (`steps_accepted: 0 != 15`)
@@ -44,7 +44,7 @@ On final commit `6a98397`, **`cargo test --release --workspace --no-fail-fast` p
 
 ### 1.2 Step 2: `ultraroute route` Byte-Identity Against `main` (`8b71912`)
 
-`main` (`8b71912`) and `explore/compaction` (`6a98397`) were built in separate detached worktrees on `sequoia-server` (`/home/sequoia/ab/8b71912` and `/home/sequoia/ab/compact-6a98397`), each with its own `CARGO_BUILD_BUILD_DIR=$PWD/target/build`:
+`main` (`8b71912`) and `explore/compaction` (`6a98397`) were built in separate detached worktrees on the build server (`~/ab/8b71912` and `~/ab/compact-6a98397`), each with its own `CARGO_BUILD_BUILD_DIR=$PWD/target/build`:
 - `main` (`8b71912`): inode `6564235`, `5,311,864` bytes, SHA-256 `2f01283ea24176bbb64388b88acaeac6a46d003eae8e67bdc5249f26f58c206d`
 - `explore/compaction` (`6a98397`): inode `6698913`, `6,265,432` bytes, SHA-256 `2bd76fada9238bde5d518c6dae064ff924837347ad8d9973ff2ea1f0ec47b5d4` (`cmp -s` confirmed distinct binaries)
 

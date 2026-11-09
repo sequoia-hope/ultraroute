@@ -25,12 +25,12 @@ uuid a fresh one (KiCad 5 numbers footprints 0, 1, ...).
 **The clock.** Since 2026-11-03 `--timeout` counts the router's CPU seconds (`--cpu-clock`; with
 `--threads 1` that is one core's), so a board routes as far on a loaded machine as on an idle one.
 On the wall clock the verdicts followed the load: 12 of 34 time-limited near misses of
-s1-padvia3 (sequoia-server, 15 routes at once) routed clean at 120 s on an idle loaf. Each
+s1-padvia3 (build server, 15 routes at once) routed clean at 120 s on an idle dev machine. Each
 result records `cpu_seconds` beside `seconds` (wall), and run.json `clock`. `--wall-clock` times
 a run the old way, and is needed for a binary built before `--cpu-clock`; `compare` says when two
 runs' clocks differ, and their verdicts are then not comparable on time-limited boards.
 
-A two-board check of the command line (2026-10-30, loaf, the Stage 11 build):
+A two-board check of the command line (2026-10-30, dev machine, the Stage 11 build):
 
     ~/.claude/bin/reserve -c 2 -l pcbench -- python3 tools/pcbench.py run remed-11-walkthrough --only 1-Wire-Wing-pcb_1-Wire_Wing,1Bitsy_1bitsy
     [1/2] 1-Wire-Wing-pcb_1-Wire_Wing: ok open 0 new {} 1.5 s
@@ -53,7 +53,7 @@ route one tier. Made on 2026-11-02 from the sixteen seed-1 full runs since s1-ma
 | all | 1182 | 12.2 | | before a merge to main |
 
 The ladder: smoke after every change (`ab`, about a minute on 12 cores), focus while working on a
-failure class, gate before claiming a gain (about 25 minutes of `ab` on sequoia-server's 15
+failure class, gate before claiming a gain (about 25 minutes of `ab` on the build server's 15
 cores), the full corpus once before merging. Remake the tiers after a merge moves many boards
 between classes.
 
@@ -63,7 +63,7 @@ between classes.
 `ab BASE NEW --base-bin BIN` routes the same boards with `BIN` (run BASE) and this checkout's
 router (run NEW, `ULTRAROUTE_BIN`) in one pool, each board's two routes started together, then
 runs `compare BASE NEW`. Two runs started side by side with half the workers each are not equal:
-on sequoia-server the side with 8 workers ran about 1.6x slower than the side with 7 and lost
+on the build server the side with 8 workers ran about 1.6x slower than the side with 7 and lost
 about 7 time-limited boards for it. Both binaries the same on smoke (2026-11-02): 40 of 48 clean
 on each side, 0 of 48 boards differ.
 
@@ -95,7 +95,7 @@ differs between `remed-0-base-s0` and `remed-0-base-s0b` (the 200-board subset, 
 
 `ultraroute route IN -o OUT` naming no stage runs `ultraroute::RECIPE`, the recipe these runs use
 (`--recipe default`; `--recipe minimal` runs only the grid router). Two candidates were measured
-against it on the 200-board sample (sequoia-server, 2026-10-30, against `srv-46e1f7d`), and neither
+against it on the 200-board sample (build server, 2026-10-30, against `srv-46e1f7d`), and neither
 joined it:
 
 | added to the default | clean | lost / won | vias (clean in both) | at the limit | decision |

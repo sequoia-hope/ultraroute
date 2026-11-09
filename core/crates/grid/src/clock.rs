@@ -32,7 +32,7 @@ fn cpu_time() -> Duration {
 /// From now on the deadlines count the process's CPU time instead of the wall's: a run given
 /// `--timeout` gets as much work done on a loaded machine as on an idle one, so a benchmark's
 /// verdicts stop depending on what else the machine runs (12 of 34 near misses routed clean at
-/// 120 s on an idle loaf and failed on sequoia-server running 15 routes, 2026-11-02). With
+/// 120 s on an idle dev machine and failed on the build server running 15 routes, 2026-11-02). With
 /// several threads the clock runs that many times faster. Not in a browser, which has no CPU
 /// clock: there it stays the wall's.
 pub fn use_cpu_time() {

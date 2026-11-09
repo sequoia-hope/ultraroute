@@ -1,6 +1,6 @@
 # Our routing against the designers': first corpus run
 
-Nov 5, 2026. `tools/designer.py --run full-1e935fc` on sequoia-server: the 1009 boards that run
+Nov 5, 2026. `tools/designer.py --run full-1e935fc` on the build server: the 1009 boards that run
 routed clean (KiCad DRC, 120 s), each compared with the designer's own routing of the same
 board (`ultraroute-lab/pcbench/boards/<id>/board.kicad_pcb`). This is the first check of the
 Examiner's "no worse than the designer" (docs/spec/verification.md). It needs no intent: what

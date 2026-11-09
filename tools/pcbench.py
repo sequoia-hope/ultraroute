@@ -615,7 +615,7 @@ def chosen(a):
 
 # What `--timeout` counts. The CPU's (the router's `--cpu-clock`) unless `--wall-clock`: on the wall
 # clock a board's verdict depended on the machine's load (12 of 34 near misses failed on
-# sequoia-server running 15 routes and routed clean on an idle loaf, 2026-11-02).
+# the build server running 15 routes and routed clean on an idle dev machine, 2026-11-02).
 def clock_of(a, router):
     if a.wall_clock:
         return "wall"
@@ -798,7 +798,7 @@ def need_text(a, routers):
 def ab(a):
     """Routes the same boards with two routers in one pool, each board's two routes side by side,
     then compares them. Two runs started at once each with half the workers are not equal: on
-    sequoia-server the side with 8 workers ran about 1.6x slower than the side with 7, which cost
+    the build server the side with 8 workers ran about 1.6x slower than the side with 7, which cost
     it about 7 time-limited boards. Here both see the same load at the same moment."""
     ids = chosen(a)
     workers = int(os.environ.get("RESERVED_CORES", "4"))

@@ -10,13 +10,13 @@
  {
   "name": "cr-maze",
   "router": "copperroute",
-  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-dev/release/copperroute",
+  "binary": "copperroute/target-dev/release/copperroute",
   "args": []
  },
  {
   "name": "cr-gridneg005-nofan",
   "router": "copperroute",
-  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-dev/release/copperroute",
+  "binary": "copperroute/target-dev/release/copperroute",
   "args": [
    "--backend",
    "grid",
@@ -31,7 +31,7 @@
  {
   "name": "cr-tnudge-gridneg005-lock",
   "router": "copperroute",
-  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-dev/release/copperroute",
+  "binary": "copperroute/target-dev/release/copperroute",
   "log_level": "info",
   "args": [
    "--backend",

@@ -1,5 +1,5 @@
 {
- "why": "Boards that fail at the run's --timeout only for want of time: each routed clean at the time given here (run srvdbl-770ef73, 2026-11-01, main 770ef73, sequoia-server, 15 at once), so `pcbench.py run` gives them that instead. A board is listed only once it has routed clean at its time.",
+ "why": "Boards that fail at the run's --timeout only for want of time: each routed clean at the time given here (run srvdbl-770ef73, 2026-11-01, main 770ef73, build server, 15 at once), so `pcbench.py run` gives them that instead. A board is listed only once it has routed clean at its time.",
  "timeouts": {
   "ATmega32_ExploreUltraAvrDevKit__autosave-MCU_BaseBoard": 240,
   "BLDC-controller_BLDC_controller": 240,

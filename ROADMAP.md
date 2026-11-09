@@ -13,10 +13,10 @@ stage's measurements are in `~/Software/ultraroute-lab/pcbench/runs/remed-N-note
 200-board PCBench sample (`--sample 200 --sample-seed 1`, 120 s a board, one thread, judged by
 KiCad 9):
 
-- Stage 0 baseline (commit 184f640, on loaf, four runs): 160 to 161 boards clean. The same
+- Stage 0 baseline (commit 184f640, on the dev machine, four runs): 160 to 161 boards clean. The same
   binary and seed twice disagreed on 3 boards, all at the time limit. The slowest board took
   648 s against the 120 s limit; 22 took over 125 s.
-- Latest (Stage 9, commit 5192519, run `srv9-5192519` on sequoia-server): 164 clean; the slowest
+- Latest (Stage 9, commit 5192519, run `srv9-5192519` on the build server): 164 clean; the slowest
   board took 122 s (the harness's wall clock, loading and writing included), and 20 were at the
   limit. Stage 8's run (`srv8-120cd2f`) is also 164.
 - Along the way: one deadline the whole run keeps (Stage 3); runs untouched by the deadline are

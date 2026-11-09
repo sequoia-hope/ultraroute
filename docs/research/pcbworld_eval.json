@@ -2632,16 +2632,16 @@
     }
   },
   "ultraroute_provenance": {
-    "router_binary": "/home/sequoia/ab/pcbworld-ur/core/target/release/ultraroute",
+    "router_binary": "~/ab/pcbworld-ur/core/target/release/ultraroute",
     "router_sha256": "221e2c8c1efb5f545420c92e8b99f54f5e53c8fd9f4beea4e9ac8bdf2f09f3a5",
-    "text_helper": "/home/sequoia/ab/pcbworld-ur/core/target/release/kicad-text",
+    "text_helper": "~/ab/pcbworld-ur/core/target/release/kicad-text",
     "text_helper_sha256": "a7a1bb1797ccccbbccab8ae5bfc3abb4ec2f9197c8526bd9802500cd395956ef",
-    "hostname": "sequoia-server",
+    "hostname": "<host>",
     "workers": 5,
     "timestamp": "2026-11-05T23:12:42+0000"
   },
   "d3_build_diff": {
-    "csv": "/home/sequoia/ab/pcbworld-runs/datasets/pcbench/exacad_sorted/pcb_characteristics_exacad_sorted.csv",
+    "csv": "~/ab/pcbworld-runs/datasets/pcbench/exacad_sorted/pcb_characteristics_exacad_sorted.csv",
     "splits": {
       "easy.train": {
         "shipped_count": 99,

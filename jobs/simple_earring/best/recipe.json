@@ -3,7 +3,7 @@
     "name": "cr-tnudge-gridneg005-lock",
     "router": "copperroute",
     "log_level": "info",
-    "binary": "/home/sequoia/Software/ultraroute/copperroute/target-dev/release/copperroute",
+    "binary": "copperroute/target-dev/release/copperroute",
     "args": [
       "--backend",
       "nudge",
@@ -34,6 +34,6 @@
     "length_mm": "1045.3"
   },
   "input_dsn": "earring.dsn",
-  "copperroute": "/home/sequoia/Software/ultraroute/copperroute/target/release/copperroute",
-  "freerouting": "/home/sequoia/Software/ultraroute/freerouting/build/libs/freerouting-current-executable.jar"
+  "copperroute": "copperroute/target/release/copperroute",
+  "freerouting": "freerouting/build/libs/freerouting-current-executable.jar"
 }

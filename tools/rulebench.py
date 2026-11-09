@@ -17,7 +17,7 @@ refill, then kicad-cli DRC, counting violations that involve routed copper.
 
 Several of these boards run to the 120 s limit, so what they route depends on how busy the
 machine is: compare two binaries in runs made side by side, under the same load (on 2026-10-30
-dancing_forest left 8, 20 and 70 connections open with one binary as loaf's load changed).
+dancing_forest left 8, 20 and 70 connections open with one binary as the dev machine's load changed).
 """
 
 import argparse

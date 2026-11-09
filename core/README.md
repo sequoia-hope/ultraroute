@@ -29,7 +29,7 @@ target/release/ultraroute route fixtures/earring.kicad_pcb -o /tmp/earring/route
 
 The `.kicad_pro` (and `.kicad_dru`) beside the input supply the rules. The run prints a line per
 stage to standard error; near the end, `routed 0 more, 1 failed, 0 open, 20.5 s` counts the
-connections left open (that is the earring on loaf, 2026-10-30: 21 s, 227 MB peak). Pours are
+connections left open (that is the earring on the dev machine, 2026-10-30: 21 s, 227 MB peak). Pours are
 left as they were, for KiCad to refill. To judge the result as the benchmark does, refill the
 zones and run KiCad's DRC with the project file beside the board:
 

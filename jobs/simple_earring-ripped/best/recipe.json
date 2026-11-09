@@ -2,7 +2,7 @@
   "config": {
     "name": "cr-maze",
     "router": "copperroute",
-    "binary": "/home/sequoia/Software/ultraroute/copperroute/target-dev/release/copperroute",
+    "binary": "copperroute/target-dev/release/copperroute",
     "args": []
   },
   "score": {
@@ -21,6 +21,6 @@
     "length_mm": "1218.5"
   },
   "input_dsn": "earring.dsn",
-  "copperroute": "/home/sequoia/Software/ultraroute/copperroute/target/release/copperroute",
-  "freerouting": "/home/sequoia/Software/ultraroute/freerouting/build/libs/freerouting-current-executable.jar"
+  "copperroute": "copperroute/target/release/copperroute",
+  "freerouting": "freerouting/build/libs/freerouting-current-executable.jar"
 }

@@ -3,7 +3,7 @@
   "name": "cr-gridneg005-nofan-lock",
   "router": "copperroute",
   "log_level": "info",
-  "binary": "/home/sequoia/Software/ultraroute/copperroute/target-dev/release/copperroute",
+  "binary": "copperroute/target-dev/release/copperroute",
   "args": [
    "--backend",
    "grid",
