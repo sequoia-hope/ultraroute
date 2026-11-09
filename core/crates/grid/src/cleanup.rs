@@ -2051,7 +2051,18 @@ fn track_leaves_slot(board: &Board, layer: usize, net: u32, gap: f64, (a, b, r1)
     };
     let arm_min = r1.max(r2) as f64;
     let kept_end = same_ends.iter().flatten().any(|&e| e.distance(p) <= arm_min + 2_000.0);
-    if p.distance(q) > r1.min(r2) as f64 && !kept_end {
+    // Ends overlapping because a piece of the net shorter than they are wide runs from one to the
+    // other are a bend, not a kiss: judged by its angle below (a bus knee's last piece, 0.399 mm
+    // for 0.4 mm tracks).
+    let bend = p != q
+        && (p == a || p == b)
+        && (q == c || q == d)
+        && board.near(layer, board::BBox::of([p, q])).into_iter().any(|id| {
+            board.item(id).is_some_and(|it| {
+                it.net == net && it.on(layer) && matches!(it.kind, Kind::Track) && matches!(it.shape, Shape::Capsule { a: x, b: y, .. } if (x == p && y == q) || (x == q && y == p))
+            })
+        });
+    if p.distance(q) > r1.min(r2) as f64 && !kept_end && !bend {
         return true;
     }
     let arms = |from: Point, ends: [Point; 2]| -> Vec<((f64, f64), f64)> {
