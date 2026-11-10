@@ -1,9 +1,15 @@
 # Planned routing: intent, bundles, lanes, frames and one copper writer
 
-Status: proposed 2026-11-09. Phase 6 in `ROADMAP.md`. This spec answers two things together:
+Status: proposed 2026-11-09; on hold since 2026-11-10 (see below). Phase 6 in `ROADMAP.md`. This spec answers two things together:
 the requests in the round-pendant notes (`docs/research/round-pendant-user-notes-2026-11.md`,
 a copy of the round-pendant project's own requests file) and why our boards look
 worse than a designer's when both are DRC-clean. The two have the same root.
+
+**On hold since 2026-11-10.** Phase 6 is paused until it is replanned with a stronger model. The
+first round of agent branches (plan/hygiene, plan/intent, plan/layers, plan/bundles, plan/frames)
+stays unmerged in its worktrees (`.claude/worktrees/plan-*`); their audits are in
+`ultraroute-lab/planned/*/AUDIT.md`. Nothing from them is on main. The order of work below is
+the latest thinking, not a commitment.
 
 ## 1. The root
 

@@ -261,6 +261,12 @@ MIT core has no such limit: the studio links it, natively and as WASM.
 
 ## Phase 6 — Planned routing: intent, bundles, lanes, frames, one copper writer
 
+**On hold since 2026-11-10.** Phase 6 is paused until it is replanned with a stronger model. The
+first round of agent branches (plan/hygiene, plan/intent, plan/layers, plan/bundles, plan/frames)
+stays unmerged in its worktrees (`.claude/worktrees/plan-*`); their audits are in
+`ultraroute-lab/planned/*/AUDIT.md`. Nothing from them is on main. The order of work below is
+the latest thinking, not a commitment.
+
 Spec: `docs/spec/planned-routing.md` (2026-11-09). The router plans nothing above one connection
 and keeps no wire model below the cell path, so quality is patched after the fact: the
 round-pendant requests (`docs/research/round-pendant-user-notes-2026-11.md`) and the spaghetti
