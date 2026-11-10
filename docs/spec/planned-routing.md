@@ -83,7 +83,8 @@ What each net is, from the board's own data first (net classes, `.kicad_dru`, `-
 - **Priority:** length-limited and `via_count (max 0)` nets, crystals, clocks and diff pairs
   route first (fixes request 3: `ledger.first` filled from rules as well as `--regions`).
 - **Owned areas:** a small non-plane zone (under ~5 mm²) on its layer belongs to its net; other
-  nets treat it as an obstacle unless allowed (request 6). A zone that joins items counts as a
+  nets pay a price to cross it, never meet a wall, unless a written rule (`.kicad_dru`, a keepout,
+  `routing.json` `never`) forbids them (request 6). A zone that joins items counts as a
   connection before anything is called open (request 8).
 
 Intent never makes a routable board fail: roles change order and price, hard limits come only
@@ -272,28 +273,48 @@ Tidiness and hygiene become scores in pcbench next to clean count, for ours and 
 
 ## 8. Order of work
 
-Each step lands alone, opt-in until its gate passes, A/B on the gate tier against main. A
-quality step passes when it loses no board, costs under 10% CPU, and moves its own measure.
+Each step lands alone, behind a flag, byte-identical without it, A/B on the gate tier against
+main before it may be turned on. A quality step passes when it loses no board, costs under 10%
+CPU, and moves its own measure. A report that has not run the gate tier says so in its first line.
 
-- **P0. Copper writer and hygiene (4.5) and the request audit.** Every ask in the notes checked
-  against main and either fixed or marked fixed with the commit. Goal: the round-pendant cleanup
-  script has nothing left to do on p1-66, p2-132-usb6 and round-pendant-e.
-- **P1. Intent (4.1).** Roles, groups, priority from rules, owned small zones, zone connections.
+**Revised 2026-11-10** after the audits of the first plan/* branches
+(`ultraroute-lab/planned/*/AUDIT.md`). P0 built as more final mending passes (plan/hygiene) grew
+`cleanup.rs` by about 2,400 lines, was quadratic (Write 0.8 s -> 51 s on p2-132-xl1615) and still
+left 218 neck repairs on p1-66: without a wire model, hygiene can only be another local patch,
+which is the root in section 1. So the wire model and one writer now come before any hygiene
+fix, and P0 is measurement only. P1's owned zones landed as walls and cost connections; they
+are a price now (4.1). Step labels are unchanged; the order below is the order of work.
+
+- **P0. Request audit and hygiene measure.** Every ask in the notes checked against main and
+  either fixed or marked fixed with the commit. The hygiene audit (section 7) in the router's
+  report and in pcbench, for ours and the designer's. No new mending passes.
+- **P6a. Wire model and one copper writer (4.4, 4.5), brought forward.** A wire record per
+  connection (end items, vertices, layer per piece, vias) kept from the search to Write; one
+  writer makes all router copper from it with section 4.5's rules (exact ends, collinear merge,
+  no zero-length pieces, prune). Existing passes are adapted at first (they read wires, their
+  copper edits are folded back into wires) so the writer is the only source of copper; flag
+  until its gate passes. Score: the hygiene audit. P0's goal (the round-pendant cleanup script
+  has nothing left to do on p1-66, p2-132-usb6 and round-pendant-e) becomes P6's goal.
+- **P1. Intent (4.1).** Roles and groups first (P3 and P5 need them); priority from rules;
+  owned small zones as a price; zone connections. Small independent fixes (length-limited via
+  cost, zone-joined items connected) land as their own commits.
 - **P2. Layer roles (4.2).** Per-layer direction on every board with 3+ signal layers, kept
   through negotiation; score: layer coherence and vias.
 - **P3. Bundles with lanes (4.2, 4.3).** Groups route consecutively in pin order with a lane
   discount alongside the previous member; score: bus_bundled, crossings, bundle continuity.
-- **P4. Relaxation (5, geometry).** Elastic-band spacing and alignment after squaring.
+  A bundle is laid as offsets of one spine once P6a's wires exist.
+- **P6b. Passes as edits of wires.** Tightening, via removal, squaring and mending move wire
+  vertices instead of adding copper, one pass at a time, each A/B; necks mended by moving the
+  wire; the old copper-editing code deleted as each pass moves.
+- **P4. Relaxation (5, geometry).** Elastic-band spacing and alignment after squaring, on wires.
 - **P5. The plan proper.** Edge bundling over airlines and regions/channels from `topo`; bundle
   trees with layer assignment per bundle; the run budget as part of the plan.
-- **P6. Wire model end to end (4.4).** Tightening, squaring and repairs as edits of wires; the
-  copper writer as the only place copper is made.
 - **P7. Frames (4.6).** The frame abstraction behind layer direction, squaring and tidy.py;
   a polar frame with arcs written for tangential runs. First step, landable early: the search's
   direction price and squaring read a frame, cartesian by default (byte-identical), polar by flag.
 - **P8. Symmetry and similarity (4.6).** Detect or read the group; route a fundamental domain and
   copy; repeated sub-circuits routed once.
 
-P0, P2, P3, P4 and P7's first step are independent enough to run at once; P5 builds on P1 and P3;
-P6 is the refactor that makes P0's fixes structural rather than a final pass; P8 builds on P5 and
-P7.
+P0, P2, P6a and P7's first step are independent enough to run at once; P1's roles and groups
+can run beside them. P3 builds on P1's groups; P4 and P6b on P6a; P5 on P1, P3 and P6a; P8 on
+P5 and P7.

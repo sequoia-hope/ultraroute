@@ -267,17 +267,22 @@ round-pendant requests (`docs/research/round-pendant-user-notes-2026-11.md`) and
 look of clean boards share that root. Each step is opt-in until its gate passes (no board lost,
 under 10% CPU, its own score moved).
 
-- [ ] P0 copper writer and hygiene: exact ends at via centres and shrunk pads, necks judged on
-      merged copper, repairs that replace, whole-board prune, collinear merge; every request in
-      the round-pendant notes checked against main.
+Order revised 2026-11-10 after the plan/* audits: the wire model and one writer come before any
+hygiene fix (mending passes without it were another local patch); owned zones are a price, not a
+wall. Labels kept; listed in order of work.
+
+- [ ] P0 request audit and hygiene measure: every request in the round-pendant notes checked
+      against main; the hygiene audit in the report and pcbench. No new mending passes.
+- [ ] P6a wire model and one copper writer, brought forward: a wire record per connection from
+      search to Write; all router copper written from it with exact ends, collinear merge, prune.
 - [ ] P1 intent: net roles, groups (buses, matrices), priority from `.kicad_dru` length and
-      via-count rules, small zones owned, zone-joined items counted as connected.
+      via-count rules, small zones owned (priced, not walled), zone-joined items connected.
 - [ ] P2 layer roles: per-layer direction on 3+ signal layer boards, kept through negotiation.
 - [ ] P3 bundles with lanes: groups routed together in pin order, sibling lane discount.
+- [ ] P6b passes as edits of wires: tightening, via removal, squaring, mending move vertices.
 - [ ] P4 relaxation: elastic-band spacing and alignment within channels (the "springs").
 - [ ] P5 the plan: force-directed edge bundling over airlines, regions and channels from `topo`,
       bundle trees, layer assignment per bundle, the run budget.
-- [ ] P6 wire model end to end: every later pass edits wires; one writer makes copper.
 - [ ] P7 frames: direction price, squaring and scores read a frame (cartesian default, polar with
       arcs for round boards).
 - [ ] P8 symmetry and similarity: route a fundamental domain (sector) and copy; repeated
