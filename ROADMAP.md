@@ -258,3 +258,29 @@ derivative of freerouting, with parts of KiCad's DRC), and so is everything adde
 fork. The studio reaches copperroute only across a process boundary (the live stream); linking
 copperroute into the studio, including a WASM build in the web client, would make it GPL. The
 MIT core has no such limit: the studio links it, natively and as WASM.
+
+## Phase 6 — Planned routing: intent, bundles, lanes, frames, one copper writer
+
+Spec: `docs/spec/planned-routing.md` (2026-11-09). The router plans nothing above one connection
+and keeps no wire model below the cell path, so quality is patched after the fact: the
+round-pendant requests (`docs/research/round-pendant-user-notes-2026-11.md`) and the spaghetti
+look of clean boards share that root. Each step is opt-in until its gate passes (no board lost,
+under 10% CPU, its own score moved).
+
+- [ ] P0 copper writer and hygiene: exact ends at via centres and shrunk pads, necks judged on
+      merged copper, repairs that replace, whole-board prune, collinear merge; every request in
+      the round-pendant notes checked against main.
+- [ ] P1 intent: net roles, groups (buses, matrices), priority from `.kicad_dru` length and
+      via-count rules, small zones owned, zone-joined items counted as connected.
+- [ ] P2 layer roles: per-layer direction on 3+ signal layer boards, kept through negotiation.
+- [ ] P3 bundles with lanes: groups routed together in pin order, sibling lane discount.
+- [ ] P4 relaxation: elastic-band spacing and alignment within channels (the "springs").
+- [ ] P5 the plan: force-directed edge bundling over airlines, regions and channels from `topo`,
+      bundle trees, layer assignment per bundle, the run budget.
+- [ ] P6 wire model end to end: every later pass edits wires; one writer makes copper.
+- [ ] P7 frames: direction price, squaring and scores read a frame (cartesian default, polar with
+      arcs for round boards).
+- [ ] P8 symmetry and similarity: route a fundamental domain (sector) and copy; repeated
+      sub-circuits routed once.
+- [ ] Scores in pcbench: layer coherence, crossings, bundle continuity, vias per bus member,
+      symmetry share, and the hygiene audit.
