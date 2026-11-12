@@ -1,0 +1,73 @@
+{
+ "about": "The look set of docs/spec/structured-routing.md (S0): boards every stage is reviewed on by eye, the designer's routing beside ours, per copper layer. A board is either a PCBench id (taken from two pcbench runs) or a pair of board files (paths from the lab directory, or absolute).",
+ "boards": [
+  {
+   "id": "pierre",
+   "title": "pierre (Own-Mailbox)",
+   "why": "4 layers, DDR3 bus, BGA; our inner layers run the same way",
+   "pcbench": "Own-Mailbox-Hardware_pierre"
+  },
+  {
+   "id": "cal430fr",
+   "title": "CAL430FR",
+   "why": "2 layers, QFP with buses the designer bundles by channel",
+   "pcbench": "CAL430FR_CAL430F"
+  },
+  {
+   "id": "fmcw-mcu",
+   "title": "FMCW radar, MCU board",
+   "why": "mixed signal, MCU with pairs and a bus",
+   "pcbench": "FMCW_RADAR_Radar MCU"
+  },
+  {
+   "id": "matrix",
+   "title": "RGB matrix panel CPLD backpack",
+   "why": "a matrix connector fanned to a CPLD",
+   "pcbench": "RGBMatrixPanelCPLD-PhotonBackpack_RGBMatrixPanel_CPLD_negative"
+  },
+  {
+   "id": "shift-in",
+   "title": "Shift-in 32 (HC165)",
+   "why": "repeated cells and parallel buses, no vias in the designer's",
+   "pcbench": "Shift-in-32-HC165_shift-in"
+  },
+  {
+   "id": "ulpi",
+   "title": "ULPI Pmod",
+   "why": "one short fast bus between two parts",
+   "pcbench": "ULPI-Pmod_ULPI-Pmod"
+  },
+  {
+   "id": "f4fc",
+   "title": "f4fc flight controller",
+   "why": "dense small MCU board",
+   "pcbench": "f4fc_f4fc"
+  },
+  {
+   "id": "1bitsy",
+   "title": "1Bitsy",
+   "why": "MCU breakout: a ring of pins out to two headers",
+   "pcbench": "1Bitsy_1bitsy"
+  },
+  {
+   "id": "synthetic",
+   "title": "Synthetic bus board",
+   "why": "two buses on an empty board: the easy case",
+   "designer": "planned/bundles/synthetic_designer.kicad_pcb",
+   "ours": "planned/ribbon-spike/synthetic/base.kicad_pcb",
+   "ours_note": "routed 2026-11-12 by the spike binary without --ribbons (main's code at ed4d369), not from the named run"
+  },
+  {
+   "id": "motionhexa",
+   "title": "motionhexa (unified, addressable pixels)",
+   "why": "hexagonal board, 271 SK9822 pixels, hand-routed along the hexagon's own directions: the reference for sector frames",
+   "designer": "~/Software/ultraroute/jobs/motionhexa-unified/input/unified_pcb.kicad_pcb",
+   "ours": "planned/lookset/routes/main-9512c88/motionhexa.kicad_pcb",
+   "ours_note": "ours: one run from bare pads by main's binary (sqpad-9512c88), default recipe, seed 0, 120 CPU s; not from the named run. Designer's board: motionhexa origin/main at b205798."
+  }
+ ],
+ "not_yet": [
+  "easy2350: its reference is a FreeRouting route, not a designer's; needs a route with the job's recipe",
+  "earring, round pendant: no hand-routed reference; to be shown ours-only once they route in one run"
+ ]
+}
