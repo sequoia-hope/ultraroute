@@ -136,15 +136,50 @@ Each step leaves Boardroom building and its tests passing.
 
 Steps 4 and 5 can overlap; step 6 starts as soon as step 4's scoreboards exist.
 
-## Questions for the user
+## Answers from the user (2026-11-12)
 
-1. One binary `boardroom` with `compose`, `route`, `check` commands (recommended), or keep
-   `ccomp` and `ultraroute` as command names?
-2. Board repositories that pin the old ultraroute and pcbview: leave them on the old
-   repositories until the new router is ready (recommended), or re-point them at cutover?
-3. pcbview (Python, the viewer the skill uses): keep it as an outside tool for now
-   (recommended) and replace it later with the web view, or bring it in?
-4. Composer's `boards/` (178 MB, eight boards): become Boardroom projects and examples
-   (recommended), not part of the source tree?
-5. UltraRoute's public Pages site (the replay site): keep it on the old repository as a
-   record of the old router (recommended), or rebuild it in Boardroom later?
+1. One binary `boardroom` with `compose`, `route`, `check` commands: yes.
+2. Board repositories stay pinned to the old repositories until the new router is ready: yes.
+3. pcbview is brought in too (not kept outside): it lives in this repository, as the `view`
+   command of the one binary; its Python stays as it is at first.
+4. Composer's eight boards become Boardroom projects, not source: yes. How projects are
+   stored is the next section.
+5. UltraRoute's public replay site stays on the old repository as a record: yes.
+
+## Projects: where boards live (proposal, not yet agreed)
+
+What the user wants: a board, or several, lives in its own repository; every project
+carries at least its board view; Boardroom on a machine knows its projects from a config
+file in the home directory that points at folders; sample boards may live in the Boardroom
+repository, and other boards are linked somehow.
+
+Proposed:
+
+- **A project is a folder with a `boardroom.toml` at its root.** It can be a whole
+  repository or a folder inside one, and it can hold several boards
+  (`hw/<board>/<variant>/`, as today). The file names the boards and the Boardroom version
+  the project was last built with. It replaces `pcbview.toml` and the scattered per-tool
+  settings over time.
+- **The machine's list is `~/.config/boardroom/projects.toml`:** paths to project folders,
+  managed by `boardroom add`, `remove` and `list` (these commands exist already). Boardroom
+  never requires a project to be inside its own repository.
+- **A project holds data, not tools.** Board repositories stop vendoring the router and the
+  viewer as submodules and stop carrying copies of the scripts. They use the installed
+  `boardroom` binary and record its version in `boardroom.toml`. This is what ends the
+  problem of old pins and mirrors.
+- **Every project carries its view as output:** the static `viewer/` folder that
+  `boardroom view` builds is committed in the project, so the board can be looked at on
+  GitHub or Pages with nothing installed. That is the "at least the board view" each
+  project has, without the viewer's source in it.
+- **Each mode writes only its own folder,** as now: KiCad files in `hw/`, Composer's in
+  `compose/`, the router's in `route/`, the shared outline in `interface/`, the design
+  record in `design/`. KiCad files remain the shared truth.
+- **Sample boards:** a few small ones live in Boardroom's `examples/` because Boardroom's
+  own tests and demos need them. Real boards that are also used as samples are listed in
+  `examples.toml` by repository URL and revision and cloned on demand into a cache
+  (the file exists today, listing simple-earring by repository). No git submodules: a
+  listed URL with a revision gives the same pin without detached checkouts inside the
+  Boardroom tree, and Boardroom does not have to be updated when a board moves on.
+- **Composer's eight boards:** the ones that are real designs (earrings, flight controller,
+  motor controller) become projects in their own repositories; any that exist only as
+  fixtures are cut down and kept under `examples/` or `bench/`.
