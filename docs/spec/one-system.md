@@ -173,7 +173,30 @@ something a person asks for directly. Proposed, not agreed:
 - Today's `morph` crate (7,700 lines in one file, moving finished copper directly) is not
   brought over as it is; what it can do is the list of operations `reshape` must offer.
 
-## Projects: where boards live (proposal, not yet agreed)
+## Every stage can be seen (user, 2026-11-12)
+
+The user asked that what exists before copper is laid be kept, be something a board can be
+changed in, and be drawn, "so I can see it and so you can see it so you can debug it".
+So each stage's result is a saved file with a picture, in the app and as static pages in the
+look set, and looking at those pictures is part of every review:
+
+- **Understanding:** nets coloured by role, blocks outlined, repeats marked with their
+  cell, each region's frame drawn as its axes, the layer plan (plane or signal, and which
+  way).
+- **Plan:** the gaps between obstacles as a graph, each gap with its room and how much is
+  used (full gaps in red), and every connection as a strand through its gaps in order: the
+  board as a rubber-band sketch, before any copper.
+- **Copper:** the drawn wires, with each wire traceable back to its strand.
+- **Differences:** the same three for the designer's board beside ours, and before and
+  after a reshape.
+
+The plan is kept with the board (`route/<board>/plan.json`) and is what reshaping works on.
+
+## Projects: where boards live (agreed in outline 2026-11-12)
+
+A project may depend on Boardroom being installed; a small script in each project installs
+it when it is missing. How tidy that is has low priority at first.
+
 
 What the user wants: a board, or several, lives in its own repository; every project
 carries at least its board view; Boardroom on a machine knows its projects from a config
