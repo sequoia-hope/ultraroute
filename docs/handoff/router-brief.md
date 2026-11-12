@@ -212,7 +212,7 @@ works" when "works" was measured by the faulty benchmark; proposing a second dat
 Still true and relevant: restart-from-fundamentals, planned-routing (its last sections),
 boardroom-monorepo, completion-first-intent-scored, time-budget, router-change-rules,
 pcbench-general-check, kicad-coverage, fixed-copper-and-kicad-check, kicad10-flatpak,
-memory-capped-runs, sequoia-server, verification-examiner, net-widths, circuit-composer,
+memory-capped-runs, the second-machine note, verification-examiner, net-widths, circuit-composer,
 user-notes-2026-11, phone-review-links, lab-page, test-boards (the boards, not the recipes),
 easy2350-boardroom, roadmap (as history).
 

@@ -16,3 +16,6 @@ __pycache__/
 
 target-topo*/
 /core/target-*/
+
+# Another person's board, used as a look-set reference; never committed.
+/jobs/motionhexa-unified/

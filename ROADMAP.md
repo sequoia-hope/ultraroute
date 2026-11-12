@@ -7,7 +7,7 @@ Work proceeds one phase at a time; each phase ends with its scores on the test b
 
 The MIT core (Phase 2c) is the router: the command, the studio and the benchmark all run it,
 and copperroute is a legacy reference, its tools under `legacy/`. Stages 0 to 11 of a staged
-remediation plan (`REMEDIATION.md`, not tracked) are merged; Stage 12 (a global routing stage)
+remediation plan (`docs/review/REMEDIATION-2026-10-28.md`) are merged; Stage 12 (a global routing stage)
 was measured and stopped (more vias, fewer clean boards; branch `remed/12-global` kept). Each
 stage's measurements are in `~/Software/ultraroute-lab/pcbench/runs/remed-N-notes.md`. On the
 200-board PCBench sample (`--sample 200 --sample-seed 1`, 120 s a board, one thread, judged by
