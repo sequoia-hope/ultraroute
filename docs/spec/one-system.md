@@ -73,6 +73,7 @@ boardroom/
     plan/         the whole-board plan: which gaps each connection passes, in what order
     draw/         wires, frames, the wire fit, one writer
     route/        plan, repeats, draw, check, as one call
+    reshape/      change a routed board and keep it routed: holes, outline, squeeze (open)
 
     # Judging
     examine/      the two scoreboards: like the designers, and sound (Composer verify, the
@@ -145,6 +146,32 @@ Steps 4 and 5 can overlap; step 6 starts as soon as step 4's scoreboards exist.
 4. Composer's eight boards become Boardroom projects, not source: yes. How projects are
    stored is the next section.
 5. UltraRoute's public replay site stays on the old repository as a record: yes.
+
+## Everything board-related is Boardroom (user, 2026-11-12)
+
+- **pcbview:** Boardroom's copy becomes the standard and the old repository is deprecated.
+  At cutover the `pcb-design` skill installed on the user's machine, the board projects'
+  view scripts and anything else that names the old pcbview folder are pointed at
+  Boardroom's.
+- The same holds for every tool here: experiments, benchmarks and boards all run from
+  Boardroom.
+
+## Reshaping: a tool of its own (open; the user has not settled where it sits)
+
+The morph operations (make room for a mounting hole with the dipole, change a board's
+outline, squeeze or compact a routed board) are used by the router as tools but are also
+something a person asks for directly. Proposed, not agreed:
+
+- A crate `reshape/` beside the router's crates, and a Reshape tool in the app, usable from
+  Compose and from Route. Not part of `route/`.
+- In the from-zero design a reshape is not a repair pass. A routed board keeps its plan
+  (which gaps each wire passes, in what order). Moving a part, adding a hole or changing the
+  outline changes the geometry and leaves the plan; the copper is drawn again from the same
+  plan, and only the wires whose gap no longer has room are planned again. So reshaping is
+  the first real customer of keeping the plan with the board, and a reason to store it
+  (`route/<board>/plan.json`).
+- Today's `morph` crate (7,700 lines in one file, moving finished copper directly) is not
+  brought over as it is; what it can do is the list of operations `reshape` must offer.
 
 ## Projects: where boards live (proposal, not yet agreed)
 
