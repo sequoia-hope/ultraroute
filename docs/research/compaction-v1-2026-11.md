@@ -63,7 +63,7 @@ Every board reported below was judged under `runs/` with KiCad 9 (`kicad-cli`) a
 
 ### Sanity Check on the Scratchpad Input Board
 
-Before trusting the compacted output, we judged the provided scratchpad board (`/tmp/claude-1000/-home-sequoia-Software-ultraroute/15ef73cf-be07-496d-af7b-986f94da11b4/scratchpad/earring-routed.kicad_pcb`) directly with KiCad:
+Before trusting the compacted output, we judged the provided scratchpad board (`<scratchpad>/earring-routed.kicad_pcb`) directly with KiCad:
 
 - It has **`0` KiCad DRC errors**, **`283` vias**, **`945` segments**, **`1032.609016 mm` track length**, and **`86` post-pour acid traps** (`11` acute, `75` slots), on a **`30.5 x 35.75 mm`** outline.
 - However, the scratchpad input board **already has `10` unconnected items** (`20` unconnected endpoints across `SWCLK`, `SWDIO`, `USB_DM`, `USB_DP`, `LED_EN_L`, `QSPI_SD2`, `CHRG`, `VBUS`, `LIGHT`, and `VSYS`). Note also that the scratchpad directory only has `earring-routed.kicad_pro` (no `.kicad_dru` beside it).
