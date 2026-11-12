@@ -149,8 +149,12 @@ directions a wire may run in there:
 - *Cartesian*: u, v = x, y; directions every 45 degrees.
 - *Polar* about a centre: u along the ring, v along the spoke. A run along u is written as an
   arc, along v as a spoke.
-- *Sector*: one wedge of an n-fold board with its own axes; a hexagon's sectors use
-  directions every 60 degrees (and the 30-degree set between them) in place of every 45.
+- *Turned*: the cartesian frame rotated by an angle, directions still every 45 degrees. This
+  is what a hexagonal board hand-routed by its designer uses (motionhexa, below), and what a
+  rotated part needs around it.
+- *Sector*: one wedge of an n-fold board with its own axes; a hexagon's sectors may use
+  directions every 60 degrees (and the 30-degree set between them) in place of every 45. No
+  board in hand needs this yet; the turned frame comes first.
 - *Spine*: u is distance along a centre curve, v the distance from it along its normal. Lines
   of constant v are parallel curves of the spine, so spacing across the strip stays true. A
   sine-wave strip is a spine frame; so is any curved flex tail. It holds only where the
@@ -169,6 +173,22 @@ outward), so pitch and clearance are always judged on the board.
 
 Symmetry and similarity (route one sector or one repeated cell, copy by the group's motions,
 check each copy) are as in `planned-routing.md` 4.6 and work on wires.
+
+**What motionhexa shows** (the designer's own routing, `jobs/motionhexa-unified/input`,
+motionhexa main at b205798: a hexagon, 271 SK9822 pixels on a hexagonal lattice, 4 layers;
+in the look set; measured 2026-11-12):
+
+- It is a turned lattice, not six sectors. In1.Cu carries one pair of tracks per pixel column
+  straight across the board parallel to a hexagon edge, with one 45-degree kink: 86% of the
+  layer's length in one direction (120 degrees), 8% at 45 degrees from it. F.Cu is 79% in two
+  directions 45 degrees apart (165 and 120). So the frame is cartesian turned to the lattice,
+  with the usual 45-degree set, and the layer has a direction in that frame.
+- Two frames on one board: the pixel field, and the controller corner, where the MCU sits
+  rotated and its tracks follow its own axes. B.Cu's edge tracks follow the outline. This is
+  frames by region, taken from how the parts sit.
+- Similarity does most of the work. F.Cu is one short zigzag between neighbouring pixels
+  repeated about 270 times by the lattice's translations. Route one cell, stamp it along the
+  lattice, check each copy, route what is left.
 
 ## 4. The cost model
 
@@ -263,8 +283,28 @@ reading. "Existing passes are adapted" applies only to passes that survive S2.
   board, CAL430FR and pierre's DDR3 bus, judged by eye and by whether CAL430FR's two open
   connections and pierre's DDR3 close. This is the least proven idea here. If the spike does
   not produce ribbons that look right on those three boards, do not build it; write up why.
-- Then: candidates from geometry, ordered escapes, halving fallback, ribbons as objects in
-  rip-up and shove.
+- **Spike result, 2026-11-12** (branch `spike/ribbons`, throwaway; pictures and logs in
+  `ultraroute-lab/planned/ribbon-spike/`; one seed, three boards, not a gate result). The
+  spine and the lanes hold: the synthetic board's two buses (24 connections) were laid by
+  construction in 3.4 s, clean in KiCad, no vias, 744 mm against the designer's 735. On the
+  real boards the ends failed: CAL430FR kept 1 ribbon of 4 members from 13 candidates and went
+  from 0 open to 1; pierre kept 4 ribbons of 3 from 52 candidates, 2 open either way, its
+  DDR3 spines found (15 and 13 wide) and then dropped because 14 of 15 and 12 of 13 legs
+  found no way to their pins. So 3.4 is **not built as written**. What changes:
+  - step 4 (end joins) is the real work: all members of an end solved together, via rows
+    planned with the spine, pad exit stubs, and room for the fan reserved by the spine search;
+  - step 1: grouping by pin row finds only 13 to 16% of connections; candidates need a rough
+    global route (who shares a channel mid-way), not end geometry;
+  - step 3: order by projection works for pin rows, not for a BGA, where order comes out of
+    the escape;
+  - "never worse than routing alone" is false for locked ribbons laid first: ribbons must
+    take part in rip-up and negotiation;
+  - pitch should follow the pads or the role, not the minimum.
+- **Next, after S1+S2** (the ends need exact pad exits): a second spike on ordered escapes
+  alone, one pin row or BGA side to a line of lane ends with a via row, on pierre's DDR3 and
+  CAL430FR's QFP. S4 is built only if that spike closes those ends.
+- Then: candidates from shared channels, ordered escapes, halving fallback, ribbons as objects
+  in rip-up and shove.
 - Gate: no board lost; `bundled` 10% or more; bus members beside a sibling 25% or more; shove
   and rip-up time down on boards with ribbons.
 
@@ -290,9 +330,11 @@ reading. "Existing passes are adapted" applies only to passes that survive S2.
 ### S7. Frames, symmetry, similarity
 
 The frame interface and the polar frame come earlier (3.6, S2b). This stage adds the rest:
-sector frames with 60-degree directions (motionhexa), the spine frame (a synthetic sine-wave
-strip as its test board), frames by region, and symmetry and similarity as
-`planned-routing.md` 4.6.
+the turned frame and frames by region with similarity by translation (motionhexa: the pixel
+field's cell stamped along the lattice, the controller corner in its own frame; judged
+against the designer's layers in the look set), then the spine frame (a synthetic sine-wave
+strip as its test board), sector frames with 60-degree directions if a board calls for
+them, and symmetry by rotation as `planned-routing.md` 4.6.
 
 ### Simplification that falls out
 
