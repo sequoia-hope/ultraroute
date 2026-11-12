@@ -1,7 +1,7 @@
 # One system: moved
 
 The agreed spec is in the Boardroom repository: `boardroom/docs/one-system-spec.md`
-(commit 10a744f on Boardroom's main, 2026-11-12). It merges this repository's draft
+(Boardroom main, first committed as 10a744f on 2026-11-12, revised since). It merges this repository's draft
 (last version here: commit f558eb6) with the Boardroom session's, and is the one spec.
 
 What stays in this repository: the frozen router as the benchmark's baseline, and until the
