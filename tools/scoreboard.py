@@ -141,10 +141,10 @@ def main():
     rows = "".join(
         f"<tr><td>{e(label)}</td><td>{e(target)}</td><td>{show(cols['designers'][k], how)}</td><td>{show(cols['ours'][k], how)}</td></tr>"
         for k, label, target, how in ROWS)
-    (out / "index.html").write_text(f"""<!doctype html><meta charset="utf-8"><title>Structured routing scoreboard</title>
+    (out / "index.html").write_text(f"""<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><p><a href="../">← Structured routing review</a></p><title>Structured routing scoreboard</title>
 <style>body{{font:15px/1.5 system-ui;margin:2rem auto;max-width:60rem;padding:0 1rem;background:#111;color:#ddd}}
 table{{border-collapse:collapse;width:100%}}td,th{{padding:.35rem .6rem;border-bottom:1px solid #333;text-align:left}}
-td:nth-child(n+3),th:nth-child(n+3){{text-align:right;font-variant-numeric:tabular-nums}}code{{color:#9cf}}</style>
+td:nth-child(n+3),th:nth-child(n+3){{text-align:right;font-variant-numeric:tabular-nums}}code{{color:#9cf}}a{{color:#9cf}}</style>
 <h1>Structured routing scoreboard</h1>
 <p>Run <code>{e(a.ours)}</code> (commit {e(str(info.get('commit')))}, tier {e(str(info.get('tier')))}): {data['clean_in_run']} of {len(ids)} boards clean.
 The table compares the {len(both)} boards that both this run and the designers' run <code>{e(a.designer)}</code> wrote,

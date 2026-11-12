@@ -1,6 +1,8 @@
 # Structured routing: specification and roadmap
 
-Status: agreed by the user 2026-11-12 with the decisions in section 7. Nothing here is built. It is the
+Status: superseded in its order of work by `docs/spec/from-zero.md` (2026-11-12, the same day): the
+router is to be rebuilt from zero, plan first, and no further stage is built into the current
+pipeline. Sections 3 (wire, writer, fit, ribbon, role, frame) and 4 still describe the model. Nothing here is built. It is the
 replanning of Phase 6 that `docs/spec/planned-routing.md` was put on hold for, and would replace
 that spec's sections 4.2 to 4.5 and its order of work. Its sections 4.1 (intent) and 4.6
 (frames, symmetry) stand and are scheduled last here. The reasons are in
@@ -229,6 +231,18 @@ No router behaviour changes.
 - **Scores added to pcbench:** layer coherence, crossings, repairs at write (from the log),
   any-angle share by cause, share of length at minimum clearance where more room exists. With
   the existing ones these become a scoreboard with the designers' figures beside ours.
+- **The benchmark hides the designers' planes** (found 2026-11-12 from the user's remark on
+  1Bitsy in the look set). PCBench's `processed.kicad_pcb` is the raw board with its pours
+  removed. Of the gate tier's 314 compared boards, 283 had pours in the raw board, 43 on an
+  inner layer, and 40 of the 57 boards with tracks on three or more layers. 1Bitsy's raw
+  board has GND pours on F, In1 and B and a +3V3 pour on In2; the designer laid 19 mm of
+  track on In2 and 99 mm on In1, we laid 188 and 227 because nothing told the router those
+  layers were planes. So on multi-layer boards we cut up layers the designer kept whole, and
+  every comparison there (vias, layer coherence, length by layer) is of unlike things.
+  To do in S0: a prepared form of each board with the raw board's pour outlines restored,
+  unfilled, as the placement-level intent they are; route it with planes kept
+  (`--auto-planes` or its successor in roles); add "track length on a layer the designer
+  poured" to the scoreboard; rerun main's gate as the baseline for S1 onward.
 - Done when: the page and the scoreboard exist for main, and the branch list is empty or
   decided.
 
@@ -274,6 +288,9 @@ reading. "Existing passes are adapted" applies only to passes that survive S2.
   same axis designers 20.3%, ours 23.4%. The gap pierre shows is not general, so the layer
   direction term has little to win on this tier and should be judged by vias and crossings
   (designers 7.7, ours 9.9 per 100 mm), not by coherence.
+  Not to be relied on: 40 of those 57 boards had inner-layer pours that the benchmark input
+  drops (S0), so many of the layers compared are planes in the designer's board and signal
+  layers in ours. Measure again on the boards with pours restored.
 - Kill rule per term: a term that loses a board is made a tie-break (applied only between
   equal-cost paths) or dropped. plan/layers' sweep is not reused; it was not run on its code.
 

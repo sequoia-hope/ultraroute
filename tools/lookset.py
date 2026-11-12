@@ -132,12 +132,12 @@ def page(out, a, boards, infos, run_info):
         parts.append(f'<section id="{e(b["id"])}"><h2>{e(b["title"])}</h2><p>{e(b["why"])}</p>{note}'
                      f'<table><tr><th></th><th>Designer</th><th>Ours</th></tr>{rows}</table>{layers}</section>')
     nav = " · ".join(f'<a href="#{e(b["id"])}">{e(b["title"])}</a>' for b in boards)
-    (out / "index.html").write_text(f"""<!doctype html><meta charset="utf-8"><title>Look set: {e(a.label)}</title>
+    (out / "index.html").write_text(f"""<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><p><a href="../../">← Structured routing review</a></p><title>Look set: {e(a.label)}</title>
 <style>body{{font:15px/1.5 system-ui;margin:1.5rem auto;max-width:110rem;padding:0 1rem;background:#111;color:#ddd}}
 a{{color:#9cf}}table{{border-collapse:collapse;margin:.5rem 0}}td,th{{padding:.2rem .8rem;border-bottom:1px solid #333;text-align:right}}
 td:first-child{{text-align:left}}.pair{{display:grid;grid-template-columns:1fr 1fr;gap:1rem}}figure{{margin:0}}
 figcaption{{text-transform:capitalize;color:#aaa}}img{{width:100%;background:#fff}}section{{border-top:1px solid #444;margin-top:2rem}}
-.note,.none{{color:#ca8}}</style>
+.note,.none{{color:#ca8}}@media(max-width:700px){{.pair{{grid-template-columns:1fr}}}}</style>
 <h1>Look set: {e(a.label)}</h1>
 <p>The designer's routing beside ours, one row per copper layer that carries tracks. Ours is pcbench run <code>{e(a.ours)}</code>
 (commit {e(str(run_info.get('commit')))}); the designers' is run <code>{e(a.designer)}</code>. Click a picture for its SVG.
