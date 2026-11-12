@@ -62,8 +62,9 @@ One per connection, kept from the moment it is routed until the board is written
 
 Invariants the type enforces, so no pass can break them:
 
-- every piece is at 0, 45 or 90 degrees in the wire's frame (cartesian for now), unless the
-  wire is marked any-angle by a written reason (a pad exit that has no legal octilinear way);
+- every piece runs in one of its frame's directions (3.6; for the cartesian frame 0, 45 or 90
+  degrees), unless the wire is marked any-angle by a written reason (a pad exit that has no
+  legal way in the frame's directions);
 - an end lies at its anchor: a via's centre, a point inside the pad at least half the track
   width from its edge, a vertex of the wire it joins;
 - no zero-length piece, no two collinear neighbours, no vertex visited twice.
@@ -134,6 +135,41 @@ and only sets: route order, whether the net may join a ribbon, its spacing to ot
 via price, and whether its length is a goal. Hard limits still come only from written rules
 (completion first, intent scored).
 
+### 3.6 Frame
+
+Asked for by the user (2026-11-09 and 2026-11-12): polar routing on round boards, 60-degree
+sectors on hexagons, and in general boards whose "along" and "across" are curves, such as a
+thick strip shaped like a sine wave. So no part of the wire model speaks of x and y. It speaks
+of a frame, and the frame is in the interface from the first stage, with cartesian as the
+only implementation at first.
+
+A frame is a map between board space and a flat canonical space (u, v), plus the set of
+directions a wire may run in there:
+
+- *Cartesian*: u, v = x, y; directions every 45 degrees.
+- *Polar* about a centre: u along the ring, v along the spoke. A run along u is written as an
+  arc, along v as a spoke.
+- *Sector*: one wedge of an n-fold board with its own axes; a hexagon's sectors use
+  directions every 60 degrees (and the 30-degree set between them) in place of every 45.
+- *Spine*: u is distance along a centre curve, v the distance from it along its normal. Lines
+  of constant v are parallel curves of the spine, so spacing across the strip stays true. A
+  sine-wave strip is a spine frame; so is any curved flex tail. It holds only where the
+  spine's radius of curvature exceeds the strip's half-width. A ribbon (3.4) is the same
+  object at a smaller scale: a spine and offsets.
+- A board may carry several frames by region. The frame comes from where the parts sit and
+  how they are turned, or from written intent, not from the outline alone: plan/frames found
+  that a polar frame on a round board whose parts sit on an x/y grid costs vias and doglegs.
+
+How it is used: the wire fit (3.3) maps its corridor into (u, v), fits there with the frame's
+directions, and maps the result back; the writer draws each piece as the line, arc or
+polyline its frame makes of it. The whole-board search, the obstacle maps and the checker stay
+cartesian and exact; the search takes the frame only as the local axis for its direction
+price. Spacing in (u, v) is not spacing on the board where the map stretches (rings widen
+outward), so pitch and clearance are always judged on the board.
+
+Symmetry and similarity (route one sector or one repeated cell, copy by the group's motions,
+check each copy) are as in `planned-routing.md` 4.6 and work on wires.
+
 ## 4. The cost model
 
 One table, used by the whole-board search, the wire fit and the spacing pass, so they agree.
@@ -198,6 +234,15 @@ reading. "Existing passes are adapted" applies only to passes that survive S2.
 - Kill rule: if off 45 cannot get under 5% without losing boards, stop and report why before
   adding any exception.
 
+### S2b. A second frame (3.6)
+
+- Straight after S1+S2, not last: the polar frame through the wire fit and the writer, on the
+  earring, the round pendant and the synthetic round board. Its purpose is to prove the frame
+  interface is real while the code that uses it is still small. plan/frames' arc writer and
+  round-outline detection are read for what can be reused, with its audit's corrections.
+- Gate: cartesian output unchanged by the interface; on the three boards no connection lost
+  against cartesian, arcs pass KiCad DRC, and the look judged by eye.
+
 ### S3. Objective (section 4)
 
 - Layer direction on every board through every stage, chosen per board; bend price in the
@@ -235,11 +280,19 @@ reading. "Existing passes are adapted" applies only to passes that survive S2.
   width by need. Scored for ours and the designers' through the Examiner
   (`docs/spec/verification.md`).
 - This is where "routed from physical need" becomes checkable instead of implied.
+- **Power sections are not invented here** (user decision 2026-11-12). Known-good layouts for
+  power ICs (the regulator, its capacitors and the copper between them) come from upstream
+  (Circuit Composer) as locked blocks, which ultraroute already accepts as KiCad groups and
+  routes around. ultraroute's part is to score the hot loops (buck: input capacitor to switch
+  and back through ground; boost: output capacitor to output) on ours and the designers', and
+  to let a block be declared in the board so no pre-step such as `add_block.py` is needed.
 
 ### S7. Frames, symmetry, similarity
 
-As `planned-routing.md` 4.6, unchanged, on the wire model: a wire's invariant "octilinear in
-its frame" is where a polar or sector frame plugs in.
+The frame interface and the polar frame come earlier (3.6, S2b). This stage adds the rest:
+sector frames with 60-degree directions (motionhexa), the spine frame (a synthetic sine-wave
+strip as its test board), frames by region, and symmetry and similarity as
+`planned-routing.md` 4.6.
 
 ### Simplification that falls out
 
