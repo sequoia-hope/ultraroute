@@ -15,6 +15,13 @@
             more side by side: a bus); bus_bundled is the share of their straight length running
             alongside another net of the same bus, as bundled measures it
 
+  layers    layer coherence: over the copper layers that carry tracks, the share of the length
+            running across or up-and-down that runs along its layer's own axis (the one of the
+            two that carries more there; 45-degree pieces are left out). same_axis counts the
+            neighbouring pairs of such layers whose axes are the same, of layer_pairs
+  crossings places where a track crosses another net's track on a different layer, per 100 mm of
+            track: what the layers are for, so fewer says nothing; a watch number beside vias
+
     tidy.py BOARD.kicad_pcb [--clearance MM] [--list] [--json] [--svg OUT.svg]
 
 Prints the numbers, and with --list each dogleg and the buses; with --svg, draws the tracks
@@ -165,6 +172,43 @@ def bundled(segs, gap_of, group):
     return total, beside, bus_total, bus_beside, each
 
 
+def layer_axes(b, segs):
+    """(length along each layer's own axis, length across or up-and-down at all, pairs of neighbouring track layers, pairs with the same
+    axis, {layer name: [across, up-and-down, diagonal or other] mm}) over the straight segments."""
+    by = defaultdict(lambda: [0.0, 0.0, 0.0])
+    for _, layer, a, z, _ in segs:
+        d = math.hypot(z[0] - a[0], z[1] - a[1])
+        h = math.degrees(heading(z[0] - a[0], z[1] - a[1])) % 180
+        by[layer][0 if min(h, 180 - h) < 22.5 else 1 if abs(h - 90) < 22.5 else 2] += d
+    order = sorted(by, key=lambda l: (l == pcbnew.B_Cu, l != pcbnew.F_Cu, l))
+    axis = {l: 0 if by[l][0] >= by[l][1] else 1 for l in order}
+    along = sum(by[l][axis[l]] for l in order)
+    same = sum(axis[p] == axis[q] for p, q in zip(order, order[1:]))
+    return along, sum(by[l][0] + by[l][1] for l in order), max(len(order) - 1, 0), same, {b.GetLayerName(l): [round(x / MM, 3) for x in by[l]] for l in order}
+
+
+def crossings(segs):
+    """How many times a straight segment crosses another net's segment on a different layer."""
+    cell = int(2 * MM)
+    grid = defaultdict(list)
+    for i, (_, _, a, z, _) in enumerate(segs):
+        for cx in range(min(a[0], z[0]) // cell, max(a[0], z[0]) // cell + 1):
+            for cy in range(min(a[1], z[1]) // cell, max(a[1], z[1]) // cell + 1):
+                grid[(cx, cy)].append(i)
+    side = lambda p, q, r: (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+    seen = set()
+    for ids in grid.values():
+        for x, i in enumerate(ids):
+            ni, li, a, z, _ = segs[i]
+            for j in ids[x + 1:]:
+                nj, lj, c, d, _ = segs[j]
+                if ni == nj or li == lj or (i, j) in seen:
+                    continue
+                if side(a, z, c) * side(a, z, d) < 0 and side(c, d, a) * side(c, d, z) < 0:
+                    seen.add((i, j))
+    return len(seen)
+
+
 def covered(spans):
     """Length of the union of the intervals."""
     out, end = 0.0, -math.inf
@@ -267,6 +311,7 @@ def main():
     group = buses(b)
     total, beside, bus_total, bus_beside, each = bundled(segs, gap, group)
     all_len = sum(length.values())
+    along, squared, pairs, same, per_layer = layer_axes(b, segs)
     out = {
         "track_mm": round(all_len / MM, 3),
         "straight_mm": round(straight_len / MM, 3),
@@ -279,6 +324,14 @@ def main():
         "bus_nets": len(group),
         "bus_mm": round(bus_total / MM, 3),
         "bus_bundled_mm": round(bus_beside / MM, 3),
+        "axis_mm": round(along / MM, 3),
+        "axis_of_mm": round(squared / MM, 3),
+        "crossed_mm": round(all_len / MM, 3),
+        "track_layers": len(per_layer),
+        "layer_pairs": pairs,
+        "same_axis": same,
+        "crossings": crossings(segs),
+        "per_layer_mm": per_layer,
     }
     out.update(ratios(out))
     if a.svg:
@@ -340,6 +393,10 @@ def ratios(t):
         "detour": per(t["detour_routed_mm"], t["detour_tree_mm"]),
         "bundled": per(t["bundled_mm"], t["straight_mm"]),
         "bus_bundled": per(t["bus_bundled_mm"], t["bus_mm"]),
+        # Absent from boards scored before these were counted.
+        "coherence": per(t.get("axis_mm", 0), t.get("axis_of_mm", 0)),
+        "same_axis": per(t.get("same_axis", 0), t.get("layer_pairs", 0)),
+        "crossings_per_100mm": per(t.get("crossings", 0), t.get("crossed_mm", 0), 100),
     }
 
 

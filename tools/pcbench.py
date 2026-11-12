@@ -457,11 +457,14 @@ def rejudge(a):
             print(f"{name}: {sum(bool(r.get('success')) for r in results)} of {len(results)} succeeded; {sum(necks)} necks on {sum(n > 0 for n in necks)} boards; acid traps: {acute} acute, {slots} slots; tidiness {tidy_line([r for r in results if r.get('success')])}")
 
 
-TIDY_SUMS = ("track_mm", "straight_mm", "turned_quarters", "off45_mm", "doglegs", "detour_routed_mm", "detour_tree_mm", "bundled_mm", "bus_nets", "bus_mm", "bus_bundled_mm")
+TIDY_SUMS = ("track_mm", "straight_mm", "turned_quarters", "off45_mm", "doglegs", "detour_routed_mm", "detour_tree_mm", "bundled_mm", "bus_nets", "bus_mm", "bus_bundled_mm",
+             "axis_mm", "axis_of_mm", "layer_pairs", "same_axis", "crossings", "crossed_mm")
 # How each ratio reads: (label, tidier when lower). off45 and bundled tell a designer's tracks from
 # ours; the rest watch that 45-degree routing doesn't buy its look with staircases and detours.
 TIDY_RATIOS = {"off45": ("off 45 degrees", True), "bundled": ("bundled", False), "bus_bundled": ("bus bundled", False),
-               "turns": ("turns /10 mm", True), "doglegs_per_m": ("doglegs /m", True), "detour": ("detour", True)}
+               "turns": ("turns /10 mm", True), "doglegs_per_m": ("doglegs /m", True), "detour": ("detour", True),
+               "coherence": ("along the layer's axis", False), "same_axis": ("neighbour layers on one axis", True),
+               "crossings_per_100mm": ("crossings /100 mm", True)}
 
 
 def tidy_sum(results):
@@ -476,7 +479,7 @@ def tidy_line(results):
     t = tidy_sum(results)
     if t is None:
         return "not judged"
-    return ", ".join(f"{label} {'-' if t[k] is None else f'{100 * t[k]:.0f}%' if k in ('off45', 'bundled', 'bus_bundled') else t[k]}" for k, (label, _) in TIDY_RATIOS.items())
+    return ", ".join(f"{label} {'-' if t[k] is None else f'{100 * t[k]:.0f}%' if k in ('off45', 'bundled', 'bus_bundled', 'coherence', 'same_axis') else t[k]}" for k, (label, _) in TIDY_RATIOS.items())
 
 
 def prepare(a):
